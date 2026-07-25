@@ -1,0 +1,489 @@
+{
+    "name": "Real Twin 2",
+    "bodyShape": 4,
+    "bodySize": {
+        "x": 0.20000000298023225,
+        "y": 0.09000000357627869,
+        "z": 0.41999998688697817
+    },
+    "bodyColor": {
+        "r": 0.15000000596046449,
+        "g": 0.75,
+        "b": 0.550000011920929,
+        "a": 1.0
+    },
+    "mass": 1.0,
+    "useCompositeMass": true,
+    "steerRate": 480.0,
+    "ackermannPct": 100.0,
+    "imuVibration": 0.10000000149011612,
+    "wheelVelNoiseStd": 0.05000000074505806,
+    "wheelVelQuantCpr": 360,
+    "wheels": [
+        {
+            "name": "wheel_fl",
+            "localPos": {
+                "x": -0.08299999684095383,
+                "y": -0.04500000178813934,
+                "z": 0.15199999511241914
+            },
+            "yaw": 0.0,
+            "radius": 0.032999999821186069,
+            "mirrorGroup": -1,
+            "allowsSteering": true,
+            "reverseSteering": false,
+            "steerAngle": 28.0,
+            "suspStiffness": 300.0,
+            "suspDampingRatio": 0.6499999761581421,
+            "suspTravel": 0.029999999329447748,
+            "suspAngleDeg": 0.0,
+            "gripMult": 1.0,
+            "loadSensitivity": 0.15000000596046449,
+            "balloonPct": 3.0,
+            "massKg": 0.0,
+            "powered": false,
+            "motor": {
+                "maxVoltage": 7.400000095367432,
+                "kt": 0.003000000026077032,
+                "resistance": 0.09000000357627869,
+                "gearRatio": 8.0,
+                "noLoadCurrent": 1.2000000476837159,
+                "viscousDamping": 9.999999974752428e-7,
+                "efficiency": 0.8500000238418579,
+                "maxCurrent": 40.0,
+                "coulombScale": 1.0,
+                "rotorInertia": 0.000004999999873689376,
+                "escPwmSteps": 1024,
+                "escDeadbandV": 0.10000000149011612,
+                "escTimeConstMs": 5.0,
+                "escSlewVPerS": 0.0
+            },
+            "motorDatasheet": {
+                "nominalVoltage": 0.0,
+                "stallTorque": 0.0,
+                "noLoadRpm": 0.0,
+                "noLoadCurrent": 0.0
+            },
+            "motorEntryMode": 0
+        },
+        {
+            "name": "wheel_fr",
+            "localPos": {
+                "x": 0.08299999684095383,
+                "y": -0.04500000178813934,
+                "z": 0.15199999511241914
+            },
+            "yaw": 0.0,
+            "radius": 0.032999999821186069,
+            "mirrorGroup": -1,
+            "allowsSteering": true,
+            "reverseSteering": false,
+            "steerAngle": 28.0,
+            "suspStiffness": 300.0,
+            "suspDampingRatio": 0.6499999761581421,
+            "suspTravel": 0.029999999329447748,
+            "suspAngleDeg": 0.0,
+            "gripMult": 1.0,
+            "loadSensitivity": 0.15000000596046449,
+            "balloonPct": 3.0,
+            "massKg": 0.0,
+            "powered": false,
+            "motor": {
+                "maxVoltage": 7.400000095367432,
+                "kt": 0.003000000026077032,
+                "resistance": 0.09000000357627869,
+                "gearRatio": 8.0,
+                "noLoadCurrent": 1.2000000476837159,
+                "viscousDamping": 9.999999974752428e-7,
+                "efficiency": 0.8500000238418579,
+                "maxCurrent": 40.0,
+                "coulombScale": 1.0,
+                "rotorInertia": 0.000004999999873689376,
+                "escPwmSteps": 1024,
+                "escDeadbandV": 0.10000000149011612,
+                "escTimeConstMs": 5.0,
+                "escSlewVPerS": 0.0
+            },
+            "motorDatasheet": {
+                "nominalVoltage": 0.0,
+                "stallTorque": 0.0,
+                "noLoadRpm": 0.0,
+                "noLoadCurrent": 0.0
+            },
+            "motorEntryMode": 0
+        },
+        {
+            "name": "wheel_rl",
+            "localPos": {
+                "x": -0.08299999684095383,
+                "y": -0.04500000178813934,
+                "z": -0.15199999511241914
+            },
+            "yaw": 0.0,
+            "radius": 0.032999999821186069,
+            "mirrorGroup": -1,
+            "allowsSteering": false,
+            "reverseSteering": false,
+            "steerAngle": 28.0,
+            "suspStiffness": 300.0,
+            "suspDampingRatio": 0.6499999761581421,
+            "suspTravel": 0.029999999329447748,
+            "suspAngleDeg": 0.0,
+            "gripMult": 1.0,
+            "loadSensitivity": 0.15000000596046449,
+            "balloonPct": 3.0,
+            "massKg": 0.0,
+            "powered": true,
+            "motor": {
+                "maxVoltage": 7.400000095367432,
+                "kt": 0.003000000026077032,
+                "resistance": 0.09000000357627869,
+                "gearRatio": 8.0,
+                "noLoadCurrent": 1.2000000476837159,
+                "viscousDamping": 9.999999974752428e-7,
+                "efficiency": 0.8500000238418579,
+                "maxCurrent": 40.0,
+                "coulombScale": 1.0,
+                "rotorInertia": 0.000004999999873689376,
+                "escPwmSteps": 1024,
+                "escDeadbandV": 0.10000000149011612,
+                "escTimeConstMs": 5.0,
+                "escSlewVPerS": 0.0
+            },
+            "motorDatasheet": {
+                "nominalVoltage": 0.0,
+                "stallTorque": 0.0,
+                "noLoadRpm": 0.0,
+                "noLoadCurrent": 0.0
+            },
+            "motorEntryMode": 0
+        },
+        {
+            "name": "wheel_rr",
+            "localPos": {
+                "x": 0.08299999684095383,
+                "y": -0.04500000178813934,
+                "z": -0.15199999511241914
+            },
+            "yaw": 0.0,
+            "radius": 0.032999999821186069,
+            "mirrorGroup": -1,
+            "allowsSteering": false,
+            "reverseSteering": false,
+            "steerAngle": 28.0,
+            "suspStiffness": 300.0,
+            "suspDampingRatio": 0.6499999761581421,
+            "suspTravel": 0.029999999329447748,
+            "suspAngleDeg": 0.0,
+            "gripMult": 1.0,
+            "loadSensitivity": 0.15000000596046449,
+            "balloonPct": 3.0,
+            "massKg": 0.0,
+            "powered": true,
+            "motor": {
+                "maxVoltage": 7.400000095367432,
+                "kt": 0.003000000026077032,
+                "resistance": 0.09000000357627869,
+                "gearRatio": 8.0,
+                "noLoadCurrent": 1.2000000476837159,
+                "viscousDamping": 9.999999974752428e-7,
+                "efficiency": 0.8500000238418579,
+                "maxCurrent": 40.0,
+                "coulombScale": 1.0,
+                "rotorInertia": 0.000004999999873689376,
+                "escPwmSteps": 1024,
+                "escDeadbandV": 0.10000000149011612,
+                "escTimeConstMs": 5.0,
+                "escSlewVPerS": 0.0
+            },
+            "motorDatasheet": {
+                "nominalVoltage": 0.0,
+                "stallTorque": 0.0,
+                "noLoadRpm": 0.0,
+                "noLoadCurrent": 0.0
+            },
+            "motorEntryMode": 0
+        }
+    ],
+    "sensors": [
+        {
+            "name": "cam_front",
+            "kind": 5,
+            "localPos": {
+                "x": 0.0,
+                "y": 0.09000000357627869,
+                "z": 0.05000000074505806
+            },
+            "aimEuler": {
+                "x": 8.0,
+                "y": 0.0,
+                "z": 0.0
+            },
+            "mirrorGroup": -1,
+            "range": 4.0,
+            "coneRays": 1,
+            "coneAngle": 8.0,
+            "wheelIndex": 0,
+            "cprTicks": 360,
+            "encoderGearRatio": 1.0,
+            "massKg": 0.0,
+            "noiseStd": 0.0,
+            "noiseQuant": 0.0,
+            "driftRate": 0.0,
+            "updateRateHz": 0.0,
+            "latencyMs": 0.0,
+            "camWidth": 64,
+            "camHeight": 48,
+            "camFov": 62.0,
+            "camRateHz": 10.0
+        },
+        {
+            "name": "tof_front",
+            "kind": 1,
+            "localPos": {
+                "x": 0.0,
+                "y": 0.029999999329447748,
+                "z": 0.20999999344348908
+            },
+            "aimEuler": {
+                "x": 0.0,
+                "y": 0.0,
+                "z": 0.0
+            },
+            "mirrorGroup": -1,
+            "range": 4.0,
+            "coneRays": 3,
+            "coneAngle": 6.0,
+            "wheelIndex": 0,
+            "cprTicks": 360,
+            "encoderGearRatio": 1.0,
+            "massKg": 0.0,
+            "noiseStd": 0.004000000189989805,
+            "noiseQuant": 0.0,
+            "driftRate": 0.0,
+            "updateRateHz": 50.0,
+            "latencyMs": 20.0,
+            "camWidth": 64,
+            "camHeight": 48,
+            "camFov": 60.0,
+            "camRateHz": 10.0
+        },
+        {
+            "name": "tof_left",
+            "kind": 1,
+            "localPos": {
+                "x": -0.05999999865889549,
+                "y": 0.029999999329447748,
+                "z": 0.1899999976158142
+            },
+            "aimEuler": {
+                "x": 0.0,
+                "y": -32.0,
+                "z": 0.0
+            },
+            "mirrorGroup": -1,
+            "range": 4.0,
+            "coneRays": 1,
+            "coneAngle": 8.0,
+            "wheelIndex": 0,
+            "cprTicks": 360,
+            "encoderGearRatio": 1.0,
+            "massKg": 0.0,
+            "noiseStd": 0.004000000189989805,
+            "noiseQuant": 0.0,
+            "driftRate": 0.0,
+            "updateRateHz": 50.0,
+            "latencyMs": 20.0,
+            "camWidth": 64,
+            "camHeight": 48,
+            "camFov": 60.0,
+            "camRateHz": 10.0
+        },
+        {
+            "name": "tof_right",
+            "kind": 1,
+            "localPos": {
+                "x": 0.05999999865889549,
+                "y": 0.029999999329447748,
+                "z": 0.1899999976158142
+            },
+            "aimEuler": {
+                "x": 0.0,
+                "y": 32.0,
+                "z": 0.0
+            },
+            "mirrorGroup": -1,
+            "range": 4.0,
+            "coneRays": 1,
+            "coneAngle": 8.0,
+            "wheelIndex": 0,
+            "cprTicks": 360,
+            "encoderGearRatio": 1.0,
+            "massKg": 0.0,
+            "noiseStd": 0.004000000189989805,
+            "noiseQuant": 0.0,
+            "driftRate": 0.0,
+            "updateRateHz": 50.0,
+            "latencyMs": 20.0,
+            "camWidth": 64,
+            "camHeight": 48,
+            "camFov": 60.0,
+            "camRateHz": 10.0
+        },
+        {
+            "name": "enc_fl",
+            "kind": 2,
+            "localPos": {
+                "x": 0.0,
+                "y": 0.05000000074505806,
+                "z": 0.18000000715255738
+            },
+            "aimEuler": {
+                "x": 0.0,
+                "y": 0.0,
+                "z": 0.0
+            },
+            "mirrorGroup": -1,
+            "range": 4.0,
+            "coneRays": 1,
+            "coneAngle": 8.0,
+            "wheelIndex": 0,
+            "cprTicks": 360,
+            "encoderGearRatio": 1.0,
+            "massKg": 0.0,
+            "noiseStd": 0.0,
+            "noiseQuant": 0.0,
+            "driftRate": 0.0,
+            "updateRateHz": 100.0,
+            "latencyMs": 0.0,
+            "camWidth": 64,
+            "camHeight": 48,
+            "camFov": 60.0,
+            "camRateHz": 10.0
+        },
+        {
+            "name": "enc_fr",
+            "kind": 2,
+            "localPos": {
+                "x": 0.0,
+                "y": 0.05000000074505806,
+                "z": 0.18000000715255738
+            },
+            "aimEuler": {
+                "x": 0.0,
+                "y": 0.0,
+                "z": 0.0
+            },
+            "mirrorGroup": -1,
+            "range": 4.0,
+            "coneRays": 1,
+            "coneAngle": 8.0,
+            "wheelIndex": 1,
+            "cprTicks": 360,
+            "encoderGearRatio": 1.0,
+            "massKg": 0.0,
+            "noiseStd": 0.0,
+            "noiseQuant": 0.0,
+            "driftRate": 0.0,
+            "updateRateHz": 100.0,
+            "latencyMs": 0.0,
+            "camWidth": 64,
+            "camHeight": 48,
+            "camFov": 60.0,
+            "camRateHz": 10.0
+        },
+        {
+            "name": "enc_rl",
+            "kind": 2,
+            "localPos": {
+                "x": 0.0,
+                "y": 0.05000000074505806,
+                "z": 0.18000000715255738
+            },
+            "aimEuler": {
+                "x": 0.0,
+                "y": 0.0,
+                "z": 0.0
+            },
+            "mirrorGroup": -1,
+            "range": 4.0,
+            "coneRays": 1,
+            "coneAngle": 8.0,
+            "wheelIndex": 2,
+            "cprTicks": 360,
+            "encoderGearRatio": 1.0,
+            "massKg": 0.0,
+            "noiseStd": 0.0,
+            "noiseQuant": 0.0,
+            "driftRate": 0.0,
+            "updateRateHz": 100.0,
+            "latencyMs": 0.0,
+            "camWidth": 64,
+            "camHeight": 48,
+            "camFov": 60.0,
+            "camRateHz": 10.0
+        },
+        {
+            "name": "enc_rr",
+            "kind": 2,
+            "localPos": {
+                "x": 0.0,
+                "y": 0.05000000074505806,
+                "z": 0.18000000715255738
+            },
+            "aimEuler": {
+                "x": 0.0,
+                "y": 0.0,
+                "z": 0.0
+            },
+            "mirrorGroup": -1,
+            "range": 4.0,
+            "coneRays": 1,
+            "coneAngle": 8.0,
+            "wheelIndex": 3,
+            "cprTicks": 360,
+            "encoderGearRatio": 1.0,
+            "massKg": 0.0,
+            "noiseStd": 0.0,
+            "noiseQuant": 0.0,
+            "driftRate": 0.0,
+            "updateRateHz": 100.0,
+            "latencyMs": 0.0,
+            "camWidth": 64,
+            "camHeight": 48,
+            "camFov": 60.0,
+            "camRateHz": 10.0
+        }
+    ],
+    "aero": [
+        {
+            "name": "wing1",
+            "kind": 0,
+            "localPos": {
+                "x": -0.0002781504299491644,
+                "y": 0.05300000309944153,
+                "z": -0.18877185881137849
+            },
+            "yawDeg": 0.0,
+            "mirrorGroup": -1,
+            "angleDeg": 13.965517044067383,
+            "sizeScale": 1.0,
+            "massKg": 0.0
+        }
+    ],
+    "batteries": [
+        {
+            "name": "battery",
+            "localPos": {
+                "x": 0.0,
+                "y": -0.019999999552965165,
+                "z": -0.05000000074505806
+            },
+            "mirrorGroup": -1,
+            "massKg": 0.18000000715255738,
+            "nominalV": 7.400000095367432,
+            "internalR": 0.029999999329447748,
+            "capacitymAh": 0.0
+        }
+    ]
+}

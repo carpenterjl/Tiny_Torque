@@ -1,0 +1,134 @@
+{
+  "$comment": "Machine-readable mirror of sim_mapping.md. tag: P=published, D=derived, E=estimated, C=design choice. This file is documentation, not loaded by the game; the preset lives in Garage/VehiclePresets.cs.",
+  "vehicle": "Opus Vector",
+  "archetype": "F1TENTH-class 1/10 autonomous RC research platform",
+  "generated": "2026-07-24",
+
+  "mass": {
+    "total_kg": 2.1315,
+    "chassis_kg": 1.5685,
+    "modelled_parts_kg": 0.5630,
+    "tag": "D",
+    "source": "mass_budget.md"
+  },
+
+  "geometry": {
+    "body_size_m": [0.200, 0.090, 0.420],
+    "wheelbase_m": 0.300,
+    "track_width_m": 0.172,
+    "wheel_radius_m": 0.033,
+    "tag": "C"
+  },
+
+  "motor_real": {
+    "part": "Castle Creations 1410-3800Kv 4-pole sensored",
+    "source_url": "https://www.castlecreations.com/en/1410-3800kv-sensored-motor-5mm-060-0066-00",
+    "kv_rpm_per_v":     { "value": 3800,       "tag": "P" },
+    "poles":            { "value": 4,          "tag": "P" },
+    "max_rpm":          { "value": 100000,     "tag": "P" },
+    "mass_kg":          { "value": 0.239,      "tag": "P" },
+    "can_length_mm":    { "value": 52.7,       "tag": "P" },
+    "can_diameter_mm":  { "value": 36.0,       "tag": "P" },
+    "kt_nm_per_a":      { "value": 0.0025130,  "tag": "D", "formula": "60/(2*pi*Kv)" },
+    "resistance_ohm":   { "value": 0.030,      "tag": "E", "basis": "15-30 mOhm class-typical line-to-line + ~5 mOhm ESC/wiring" },
+    "no_load_current_a":{ "value": 1.8,        "tag": "E", "basis": "class-typical for a 36 mm can on 2S" },
+    "rotor_inertia_kgm2":{"value": 6.44e-6,    "tag": "D", "formula": "0.5*M*R^2, M from 22 mm x 40 mm cylinder at 7000 kg/m^3" }
+  },
+
+  "motor_sim_per_unit": {
+    "$comment": "Two simulated motors stand in for the one real motor + differential. Extensive quantities are halved; see derived_parameters.md section 4.",
+    "count": 2,
+    "maxVoltage":      { "value": 7.4,       "tag": "P" },
+    "kt":              { "value": 0.0025130, "tag": "D", "split": "intensive" },
+    "resistance":      { "value": 0.060,     "tag": "D", "split": "2x real (parallel paths)" },
+    "gearRatio":       { "value": 11.2,      "tag": "C", "split": "intensive" },
+    "noLoadCurrent":   { "value": 0.9,       "tag": "D", "split": "half" },
+    "maxCurrent":      { "value": 30.0,      "tag": "D", "split": "half of 60 A ESC" },
+    "rotorInertia":    { "value": 3.22e-6,   "tag": "D", "split": "half" },
+    "viscousDamping":  { "value": 1.0e-6,    "tag": "E" },
+    "efficiency":      { "value": 0.85,      "tag": "E" },
+    "coulombScale":    { "value": 1.0,       "tag": "C" },
+    "escPwmSteps":     { "value": 1024,      "tag": "E" },
+    "escDeadbandV":    { "value": 0.10,      "tag": "E" },
+    "escTimeConstMs":  { "value": 5.0,       "tag": "E" }
+  },
+
+  "drivetrain_derived": {
+    "final_drive_ratio":            { "value": 11.2,    "tag": "C", "detail": "15T pinion / 62T spur x 2.71 transmission" },
+    "no_load_motor_rpm_at_7v4":     { "value": 28120,   "tag": "D" },
+    "no_load_road_speed_ms":        { "value": 8.68,    "tag": "D" },
+    "back_emf_v_per_ms":            { "value": 0.8529,  "tag": "D", "formula": "kt*G/r" },
+    "ground_force_n_per_total_amp": { "value": 0.7250,  "tag": "D", "formula": "kt*G*eff/r" },
+    "back_emf_at_cruise_v":         { "value": 3.838,   "tag": "D", "at_speed_ms": 4.5 },
+    "cruise_command_v":             { "value": 4.07,    "tag": "D", "feedforward_fraction": 0.94 },
+    "drag_n":                       { "model": "1.305 + 0.930*v + 0.00546*v^2", "at_4p5_ms": 5.60, "tag": "D" }
+  },
+
+  "steering": {
+    "servo": "Savox SC-1251MG",
+    "source_url": "https://www.savoxusa.com/products/savsc1251mg-low-profile-digital-servo",
+    "speed_s_per_60deg_at_6v": { "value": 0.09,  "tag": "P" },
+    "torque_kgcm_at_6v":       { "value": 9.0,   "tag": "P" },
+    "mass_kg":                 { "value": 0.0445,"tag": "P" },
+    "steer_rate_deg_per_s":    { "value": 600,   "tag": "D", "formula": "667 deg/s no-load, 10% load derate" },
+    "max_steer_angle_deg":     { "value": 28,    "tag": "C" },
+    "ackermann_pct":           { "value": 100,   "tag": "C" }
+  },
+
+  "battery": {
+    "chemistry": "2S LiPo",
+    "nominal_v":      { "value": 7.4,   "tag": "P" },
+    "capacity_mah":   { "value": 5200,  "tag": "E" },
+    "internal_r_ohm": { "value": 0.020, "tag": "E" },
+    "mass_kg":        { "value": 0.265, "tag": "E" }
+  },
+
+  "sensors": {
+    "tof": {
+      "part": "STMicroelectronics VL53L1X",
+      "count": 3,
+      "source_url": "https://www.st.com/en/imaging-and-photonics-solutions/vl53l1x.html",
+      "datasheet": "datasheets/VL53L1X-datasheet.pdf",
+      "max_range_m":       { "value": 4.0,   "tag": "P" },
+      "rate_hz":           { "value": 50,    "tag": "P" },
+      "fov_deg":           { "value": 27,    "tag": "P" },
+      "accuracy_bound_m":  { "value": 0.025, "tag": "P" },
+      "noise_std_m":       { "value": 0.008, "tag": "D", "formula": "accuracy bound treated as 3 sigma" },
+      "latency_ms":        { "value": 20,    "tag": "E" }
+    },
+    "imu": {
+      "part": "Bosch Sensortec BNO055",
+      "datasheet": "datasheets/BST-BNO055-DS000.pdf",
+      "gyro_range_dps":            { "value": 2000,  "tag": "P" },
+      "gyro_noise_density_dps_rthz":{"value": 0.014, "tag": "P" },
+      "gyro_output_noise_dps":     { "value": 0.3,   "tag": "P" },
+      "sim_vibration":             { "value": 0.10,  "tag": "E" }
+    },
+    "encoders": {
+      "type": "magnetic quadrature, 1024 lines",
+      "count": 4,
+      "cpr":                { "value": 4096,     "tag": "E" },
+      "gear_ratio":         { "value": 1.0,      "tag": "C" },
+      "update_rate_hz":     { "value": 0,        "tag": "C", "note": "0 = synchronous hardware counter, the realistic model" },
+      "latency_ms":         { "value": 0,        "tag": "C" },
+      "distance_per_count_m":{"value": 5.062e-5, "tag": "D", "formula": "2*pi*r/CPR" },
+      "odometry_source":     "front pair (enc_fl, enc_fr) - unpowered, so immune to drive wheelspin"
+    },
+    "camera": {
+      "part": "Raspberry Pi Camera Module 3",
+      "width": 64, "height": 48, "fov_deg": 66, "rate_hz": 10, "tag": "P/C"
+    }
+  },
+
+  "mission_targets": {
+    "cruise_speed_ms": 4.5,
+    "leg_a_m": 14.5,
+    "turn_deg": 45.0,
+    "turn_direction": "left",
+    "leg_b_m": 7.5,
+    "brake_m": 1.5,
+    "total_after_turn_m": 9.0,
+    "brake_decel_ms2":  { "value": 6.75, "formula": "v^2/(2*1.5)", "friction_budget_fraction": 0.43 },
+    "turn_lat_accel_ms2":{ "value": 4.0, "radius_m": 5.0625, "yaw_rate_deg_s": 50.9, "kinematic_steer_deg": 3.39 }
+  }
+}

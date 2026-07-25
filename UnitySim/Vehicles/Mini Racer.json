@@ -1,0 +1,552 @@
+{
+    "name": "Mini Racer",
+    "bodyShape": 2,
+    "bodySize": {
+        "x": 0.17512394487857819,
+        "y": 0.10000000149011612,
+        "z": 0.29851236939430239
+    },
+    "bodyColor": {
+        "r": 0.20000000298023225,
+        "g": 0.550000011920929,
+        "b": 0.949999988079071,
+        "a": 1.0
+    },
+    "liveryPng": "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",
+    "mass": 0.30000001192092898,
+    "useCompositeMass": true,
+    "steerRate": 169.09091186523438,
+    "ackermannPct": 0.0,
+    "imuVibration": 0.0,
+    "wheelVelNoiseStd": 0.0,
+    "wheelVelQuantCpr": 0,
+    "wheels": [
+        {
+            "name": "motor1",
+            "localPos": {
+                "x": 0.1068965494632721,
+                "y": -0.050172414630651477,
+                "z": 0.17017240822315217
+            },
+            "yaw": 0.0,
+            "radius": 0.032999999821186069,
+            "wheelStyle": 1,
+            "mirrorGroup": -1,
+            "allowsSteering": true,
+            "reverseSteering": false,
+            "steerAngle": 28.0,
+            "suspStiffness": 300.0,
+            "suspDampingRatio": 0.6499999761581421,
+            "suspTravel": 0.029999999329447748,
+            "suspAngleDeg": 0.0,
+            "suspLength": 0.0,
+            "gripMult": 1.0,
+            "loadSensitivity": 0.0,
+            "balloonPct": 0.0,
+            "massKg": 0.0,
+            "powered": true,
+            "motor": {
+                "maxVoltage": 7.400000095367432,
+                "kt": 0.003000000026077032,
+                "resistance": 0.09000000357627869,
+                "gearRatio": 8.0,
+                "noLoadCurrent": 1.2000000476837159,
+                "viscousDamping": 9.999999974752428e-7,
+                "efficiency": 0.8500000238418579,
+                "maxCurrent": 40.0,
+                "coulombScale": 1.0,
+                "rotorInertia": 0.000004999999873689376,
+                "escPwmSteps": 1024,
+                "escDeadbandV": 0.10000000149011612,
+                "escTimeConstMs": 5.0,
+                "escSlewVPerS": 0.0
+            },
+            "motorDatasheet": {
+                "nominalVoltage": 7.400000095367432,
+                "stallTorque": 0.24666665494441987,
+                "noLoadRpm": 23211.15625,
+                "noLoadCurrent": 1.2000000476837159
+            },
+            "motorEntryMode": 1
+        },
+        {
+            "name": "motor1_m",
+            "localPos": {
+                "x": -0.1068965494632721,
+                "y": -0.050172414630651477,
+                "z": 0.17017240822315217
+            },
+            "yaw": 0.0,
+            "radius": 0.032999999821186069,
+            "wheelStyle": 1,
+            "mirrorGroup": -1,
+            "allowsSteering": true,
+            "reverseSteering": false,
+            "steerAngle": 28.0,
+            "suspStiffness": 300.0,
+            "suspDampingRatio": 0.6499999761581421,
+            "suspTravel": 0.029999999329447748,
+            "suspAngleDeg": 0.0,
+            "suspLength": 0.0,
+            "gripMult": 1.0,
+            "loadSensitivity": 0.0,
+            "balloonPct": 0.0,
+            "massKg": 0.0,
+            "powered": true,
+            "motor": {
+                "maxVoltage": 7.400000095367432,
+                "kt": 0.003000000026077032,
+                "resistance": 0.09000000357627869,
+                "gearRatio": 8.0,
+                "noLoadCurrent": 1.2000000476837159,
+                "viscousDamping": 9.999999974752428e-7,
+                "efficiency": 0.8500000238418579,
+                "maxCurrent": 40.0,
+                "coulombScale": 1.0,
+                "rotorInertia": 0.000004999999873689376,
+                "escPwmSteps": 1024,
+                "escDeadbandV": 0.10000000149011612,
+                "escTimeConstMs": 5.0,
+                "escSlewVPerS": 0.0
+            },
+            "motorDatasheet": {
+                "nominalVoltage": 7.400000095367432,
+                "stallTorque": 0.24666665494441987,
+                "noLoadRpm": 23211.15625,
+                "noLoadCurrent": 1.2000000476837159
+            },
+            "motorEntryMode": 1
+        },
+        {
+            "name": "motor2",
+            "localPos": {
+                "x": 0.09999999403953552,
+                "y": -0.050172414630651477,
+                "z": -0.11999999731779099
+            },
+            "yaw": 0.0,
+            "radius": 0.032999999821186069,
+            "wheelStyle": 0,
+            "mirrorGroup": 2,
+            "allowsSteering": false,
+            "reverseSteering": false,
+            "steerAngle": 28.0,
+            "suspStiffness": 300.0,
+            "suspDampingRatio": 0.6499999761581421,
+            "suspTravel": 0.029999999329447748,
+            "suspAngleDeg": 0.0,
+            "suspLength": 0.0,
+            "gripMult": 1.0,
+            "loadSensitivity": 0.0,
+            "balloonPct": 0.0,
+            "massKg": 0.0,
+            "powered": true,
+            "motor": {
+                "maxVoltage": 7.400000095367432,
+                "kt": 0.003000000026077032,
+                "resistance": 0.09000000357627869,
+                "gearRatio": 8.0,
+                "noLoadCurrent": 1.2000000476837159,
+                "viscousDamping": 9.999999974752428e-7,
+                "efficiency": 0.8500000238418579,
+                "maxCurrent": 40.0,
+                "coulombScale": 1.0,
+                "rotorInertia": 0.000004999999873689376,
+                "escPwmSteps": 1024,
+                "escDeadbandV": 0.10000000149011612,
+                "escTimeConstMs": 5.0,
+                "escSlewVPerS": 0.0
+            },
+            "motorDatasheet": {
+                "nominalVoltage": 7.400000095367432,
+                "stallTorque": 0.24666665494441987,
+                "noLoadRpm": 23211.15625,
+                "noLoadCurrent": 1.2000000476837159
+            },
+            "motorEntryMode": 1
+        },
+        {
+            "name": "motor2_m",
+            "localPos": {
+                "x": -0.09999999403953552,
+                "y": -0.050172414630651477,
+                "z": -0.11999999731779099
+            },
+            "yaw": 0.0,
+            "radius": 0.032999999821186069,
+            "wheelStyle": 0,
+            "mirrorGroup": 2,
+            "allowsSteering": false,
+            "reverseSteering": true,
+            "steerAngle": 28.0,
+            "suspStiffness": 300.0,
+            "suspDampingRatio": 0.6499999761581421,
+            "suspTravel": 0.029999999329447748,
+            "suspAngleDeg": 0.0,
+            "suspLength": 0.0,
+            "gripMult": 1.0,
+            "loadSensitivity": 0.0,
+            "balloonPct": 0.0,
+            "massKg": 0.0,
+            "powered": true,
+            "motor": {
+                "maxVoltage": 7.400000095367432,
+                "kt": 0.003000000026077032,
+                "resistance": 0.09000000357627869,
+                "gearRatio": 8.0,
+                "noLoadCurrent": 1.2000000476837159,
+                "viscousDamping": 9.999999974752428e-7,
+                "efficiency": 0.8500000238418579,
+                "maxCurrent": 40.0,
+                "coulombScale": 1.0,
+                "rotorInertia": 0.000004999999873689376,
+                "escPwmSteps": 1024,
+                "escDeadbandV": 0.10000000149011612,
+                "escTimeConstMs": 5.0,
+                "escSlewVPerS": 0.0
+            },
+            "motorDatasheet": {
+                "nominalVoltage": 7.400000095367432,
+                "stallTorque": 0.24666665494441987,
+                "noLoadRpm": 23211.15625,
+                "noLoadCurrent": 1.2000000476837159
+            },
+            "motorEntryMode": 1
+        }
+    ],
+    "sensors": [
+        {
+            "name": "camera1",
+            "kind": 5,
+            "localPos": {
+                "x": -0.014999999664723874,
+                "y": 0.04999999701976776,
+                "z": 0.1550000011920929
+            },
+            "aimEuler": {
+                "x": 0.0,
+                "y": 0.0,
+                "z": 0.0
+            },
+            "mirrorGroup": -1,
+            "range": 4.0,
+            "coneRays": 1,
+            "coneAngle": 8.0,
+            "wheelIndex": 0,
+            "cprTicks": 360,
+            "encoderGearRatio": 1.0,
+            "massKg": 0.0,
+            "noiseStd": 0.0,
+            "noiseQuant": 0.0,
+            "driftRate": 0.0,
+            "updateRateHz": 0.0,
+            "latencyMs": 0.0,
+            "camWidth": 64,
+            "camHeight": 48,
+            "camFov": 60.0,
+            "camRateHz": 10.0
+        },
+        {
+            "name": "tof1",
+            "kind": 1,
+            "localPos": {
+                "x": 0.0,
+                "y": 0.0,
+                "z": 0.1550000011920929
+            },
+            "aimEuler": {
+                "x": 0.0,
+                "y": 0.0,
+                "z": 0.0
+            },
+            "mirrorGroup": -1,
+            "range": 4.0,
+            "coneRays": 1,
+            "coneAngle": 8.0,
+            "wheelIndex": 0,
+            "cprTicks": 360,
+            "encoderGearRatio": 1.0,
+            "massKg": 0.0,
+            "noiseStd": 0.0,
+            "noiseQuant": 0.0,
+            "driftRate": 0.0,
+            "updateRateHz": 0.0,
+            "latencyMs": 0.0,
+            "camWidth": 64,
+            "camHeight": 48,
+            "camFov": 60.0,
+            "camRateHz": 10.0
+        },
+        {
+            "name": "tof2",
+            "kind": 1,
+            "localPos": {
+                "x": 0.0949999988079071,
+                "y": 0.004999999888241291,
+                "z": 0.14000000059604646
+            },
+            "aimEuler": {
+                "x": 0.0,
+                "y": 31.03448486328125,
+                "z": 0.0
+            },
+            "mirrorGroup": 3,
+            "range": 4.0,
+            "coneRays": 1,
+            "coneAngle": 8.0,
+            "wheelIndex": 0,
+            "cprTicks": 360,
+            "encoderGearRatio": 1.0,
+            "massKg": 0.0,
+            "noiseStd": 0.0,
+            "noiseQuant": 0.0,
+            "driftRate": 0.0,
+            "updateRateHz": 0.0,
+            "latencyMs": 0.0,
+            "camWidth": 64,
+            "camHeight": 48,
+            "camFov": 60.0,
+            "camRateHz": 10.0
+        },
+        {
+            "name": "tof2_m",
+            "kind": 1,
+            "localPos": {
+                "x": -0.0949999988079071,
+                "y": 0.004999999888241291,
+                "z": 0.14000000059604646
+            },
+            "aimEuler": {
+                "x": 0.0,
+                "y": -31.03448486328125,
+                "z": 0.0
+            },
+            "mirrorGroup": 3,
+            "range": 4.0,
+            "coneRays": 1,
+            "coneAngle": 8.0,
+            "wheelIndex": 0,
+            "cprTicks": 360,
+            "encoderGearRatio": 1.0,
+            "massKg": 0.0,
+            "noiseStd": 0.0,
+            "noiseQuant": 0.0,
+            "driftRate": 0.0,
+            "updateRateHz": 0.0,
+            "latencyMs": 0.0,
+            "camWidth": 64,
+            "camHeight": 48,
+            "camFov": 60.0,
+            "camRateHz": 10.0
+        },
+        {
+            "name": "tof3",
+            "kind": 1,
+            "localPos": {
+                "x": -0.0949999988079071,
+                "y": 0.004999999888241291,
+                "z": -0.14000000059604646
+            },
+            "aimEuler": {
+                "x": 0.0,
+                "y": -152.06895446777345,
+                "z": 0.0
+            },
+            "mirrorGroup": 4,
+            "range": 4.0,
+            "coneRays": 1,
+            "coneAngle": 8.0,
+            "wheelIndex": 0,
+            "cprTicks": 360,
+            "encoderGearRatio": 1.0,
+            "massKg": 0.0,
+            "noiseStd": 0.0,
+            "noiseQuant": 0.0,
+            "driftRate": 0.0,
+            "updateRateHz": 0.0,
+            "latencyMs": 0.0,
+            "camWidth": 64,
+            "camHeight": 48,
+            "camFov": 60.0,
+            "camRateHz": 10.0
+        },
+        {
+            "name": "tof3_m",
+            "kind": 1,
+            "localPos": {
+                "x": 0.0949999988079071,
+                "y": 0.004999999888241291,
+                "z": -0.14000000059604646
+            },
+            "aimEuler": {
+                "x": 0.0,
+                "y": 152.06895446777345,
+                "z": 0.0
+            },
+            "mirrorGroup": 4,
+            "range": 4.0,
+            "coneRays": 1,
+            "coneAngle": 8.0,
+            "wheelIndex": 0,
+            "cprTicks": 360,
+            "encoderGearRatio": 1.0,
+            "massKg": 0.0,
+            "noiseStd": 0.0,
+            "noiseQuant": 0.0,
+            "driftRate": 0.0,
+            "updateRateHz": 0.0,
+            "latencyMs": 0.0,
+            "camWidth": 64,
+            "camHeight": 48,
+            "camFov": 60.0,
+            "camRateHz": 10.0
+        },
+        {
+            "name": "tof4",
+            "kind": 1,
+            "localPos": {
+                "x": 0.0,
+                "y": 0.02499999850988388,
+                "z": -0.1550000011920929
+            },
+            "aimEuler": {
+                "x": 0.0,
+                "y": 180.0,
+                "z": 0.0
+            },
+            "mirrorGroup": -1,
+            "range": 4.0,
+            "coneRays": 1,
+            "coneAngle": 8.0,
+            "wheelIndex": 0,
+            "cprTicks": 360,
+            "encoderGearRatio": 1.0,
+            "massKg": 0.0,
+            "noiseStd": 0.0,
+            "noiseQuant": 0.0,
+            "driftRate": 0.0,
+            "updateRateHz": 0.0,
+            "latencyMs": 0.0,
+            "camWidth": 64,
+            "camHeight": 48,
+            "camFov": 60.0,
+            "camRateHz": 10.0
+        }
+    ],
+    "aero": [
+        {
+            "name": "wing1",
+            "kind": 0,
+            "localPos": {
+                "x": 0.0,
+                "y": 0.08068966120481491,
+                "z": -0.12534482777118684
+            },
+            "yawDeg": 0.0,
+            "mirrorGroup": -1,
+            "angleDeg": 4.310344219207764,
+            "sizeScale": 1.4568965435028077,
+            "massKg": 0.0
+        },
+        {
+            "name": "splitter1",
+            "kind": 1,
+            "localPos": {
+                "x": 0.004999999888241291,
+                "y": -0.03017241321504116,
+                "z": 0.1756896674633026
+            },
+            "yawDeg": 0.0,
+            "mirrorGroup": -1,
+            "angleDeg": 8.0,
+            "sizeScale": 1.0,
+            "massKg": 0.0
+        },
+        {
+            "name": "sidedam1",
+            "kind": 2,
+            "localPos": {
+                "x": -0.05775861814618111,
+                "y": -0.02499999850988388,
+                "z": 0.029999999329447748
+            },
+            "yawDeg": 0.0,
+            "mirrorGroup": 5,
+            "angleDeg": 8.0,
+            "sizeScale": 1.0,
+            "massKg": 0.0
+        },
+        {
+            "name": "sidedam1_m",
+            "kind": 2,
+            "localPos": {
+                "x": 0.05775861814618111,
+                "y": -0.02499999850988388,
+                "z": 0.029999999329447748
+            },
+            "yawDeg": 0.0,
+            "mirrorGroup": 5,
+            "angleDeg": 8.0,
+            "sizeScale": 1.0,
+            "massKg": 0.0
+        },
+        {
+            "name": "sidedam2",
+            "kind": 2,
+            "localPos": {
+                "x": -0.05775861814618111,
+                "y": -0.02499999850988388,
+                "z": -0.029999999329447748
+            },
+            "yawDeg": 0.0,
+            "mirrorGroup": 6,
+            "angleDeg": 8.0,
+            "sizeScale": 1.0,
+            "massKg": 0.0
+        },
+        {
+            "name": "sidedam2_m",
+            "kind": 2,
+            "localPos": {
+                "x": 0.05775861814618111,
+                "y": -0.02499999850988388,
+                "z": -0.029999999329447748
+            },
+            "yawDeg": 0.0,
+            "mirrorGroup": 6,
+            "angleDeg": 8.0,
+            "sizeScale": 1.0,
+            "massKg": 0.0
+        }
+    ],
+    "batteries": [
+        {
+            "name": "battery1",
+            "localPos": {
+                "x": 0.0,
+                "y": 0.05999999865889549,
+                "z": -0.054999999701976779
+            },
+            "mirrorGroup": -1,
+            "massKg": 0.18000000715255738,
+            "nominalV": 11.100000381469727,
+            "internalR": 0.029999999329447748,
+            "capacitymAh": 0.0
+        }
+    ],
+    "antennas": [
+        {
+            "name": "antenna1",
+            "localPos": {
+                "x": -0.0017241400200873614,
+                "y": 0.03413793072104454,
+                "z": -0.11913792788982392
+            },
+            "yawDeg": 180.0,
+            "tiltDeg": 45.0,
+            "sizeScale": 1.0,
+            "mirrorGroup": -1,
+            "massKg": 0.0
+        }
+    ]
+}

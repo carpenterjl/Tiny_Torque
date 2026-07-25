@@ -1,0 +1,50 @@
+# ---- Unity ----
+UnitySim/[Ll]ibrary/
+UnitySim/[Tt]emp/
+UnitySim/[Oo]bj/
+UnitySim/[Bb]uild/
+UnitySim/[Bb]uilds/
+UnitySim/[Ll]ogs/
+UnitySim/[Uu]ser[Ss]ettings/
+UnitySim/[Mm]emoryCaptures/
+UnitySim/[Rr]ecordings/
+
+# Generated IDE/project files
+*.csproj
+*.sln
+*.user
+*.userprefs
+.vs/
+.idea/
+.vsconfig
+
+# Built native plugin binaries (produced by Controllers/build.ps1)
+UnitySim/Assets/Plugins/x86_64/*.dll
+UnitySim/Assets/Plugins/x86_64/*.dll.meta
+UnitySim/Assets/Plugins/x86_64/*.pdb
+
+# Runtime output / personal data (settings, profiles, session snapshots)
+UnitySim/TelemetryLogs/
+UnitySim/Saves/
+
+# Installer output (compiled by Inno Setup from UnitySim/Installer/*.iss)
+UnitySim/Installer/Output/
+
+# ---- Native controller build ----
+Controllers/build/
+
+# ---- Blender authoring artifacts (source .blend + .py stay tracked) ----
+Blender/*.blend1
+Blender/*.fbx.bak*
+Blender/renders/
+
+# ---- Local logs / reports at repo root ----
+*.log
+usage-report.html
+
+# ---- Tooling ----
+.claude/
+
+# ---- OS ----
+.DS_Store
+Thumbs.db
