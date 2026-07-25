@@ -402,12 +402,71 @@ size or overruns its triangle budget:
 ```
 UnitySim/       Unity 6 project (host: physics, sensors, telemetry, graphs)
 Controllers/    Portable C firmware + CMake build (the code under test)
+Tools/          Interactive HTML tools — hardware→vehicle, control design, calibration
 Blender/        Editable source (parts.blend) for the 3D part models
 Opus_Car_Spec/  Datasheets, mass budget and calibration log for the Opus Vector
 Docs/           Interface spec and notes
 ```
 
 See `Docs/interface-spec.md` for the host↔controller ABI.
+
+## Interactive tools
+
+`Tools/` holds a set of self-contained HTML pages for getting your real hardware
+into the game and your results back out. Open `Tools/index.html` in any browser —
+there is no server, no build step and no internet connection involved.
+
+| Page | What it does |
+|---|---|
+| **Car Setup** | A wizard from chassis to sensors. Enter the figures off your actual datasheets and export a vehicle JSON the garage can load and drive. |
+| **Control Loop Lab** | Loads a vehicle, derives its plant constants, teaches the transient equations with live plots, then generates compilable C controller files with your tuned gains baked in. |
+| **Calibration Companion** | Walks the measured-calibration procedure — encoder scale, coast-down drag, traction efficiency, brake slip — fits your data and hands you the `#define` block. |
+| **Telemetry Analyzer** | Drop in a CSV from `TelemetryLogs/`. Channel picker, zoomable plots, step-response metrics, and two-run overlay for sim-versus-real comparison. |
+| **Motor Converter** | Kv or a torque/speed datasheet in; `Kt` and `R` out, with the algebra shown and a paste-ready motor block. |
+
+Two things worth knowing:
+
+- **Saving.** On Chrome or Edge the pages can write straight into your Vehicles or
+  Controllers folder once you point them at it (File System Access API). Every
+  other browser downloads the file and shows you the destination path.
+- **Where vehicles go.** `UnitySim/Vehicles/` when running from the editor;
+  `%USERPROFILE%\AppData\LocalLow\<company>\<product>\Vehicles\` for an installed
+  build.
+
+The pages carry their own copy of the game's schema and physics constants, so they
+can drift from the C# and the firmware headers. A dependency-free regression test
+checks them against the real thing — a saved vehicle round-tripping without losing
+a field, the motor algebra reproducing `MotorModel`'s closed forms, the derived
+plant constants landing on the values in `mission_cfg.h`:
+
+```bash
+node Tools/verify.js
+```
+
+Run it after changing `VehicleDesign.cs`, `MotorModel.cs`, or the vehicle constants
+in `mission_cfg.h`, and update `Tools/shared/` to match if it complains.
+
+### JGraph integration (optional)
+
+If [JGraph](../JGraph) is installed, every page that draws a plot can hand its data
+over for interactive figures and further analysis. The pages export a `.m` script
+plus a `data.csv`, and JGraph runs the script headlessly:
+
+```bash
+jgraph -batch "speed_step.m" -showfigures -sd "C:\path\to\exported\folder"
+```
+
+For a live workflow, run the bridge once — it watches `Tools/jgraph-out/` and opens
+any new script automatically, so clicking **Open in JGraph** pops a figure window:
+
+```bash
+powershell -ExecutionPolicy Bypass -File Tools\jgraph-bridge.ps1
+```
+
+Scripts are generated in MATLAB dialect rather than JGS on purpose: JGS's `let`
+requirement and index base come from per-user settings that JGraph honours even in
+batch mode, so a generated JGS script could behave differently on another machine.
+Without JGraph the pages plot everything themselves — none of this is required.
 
 ## Prerequisites
 

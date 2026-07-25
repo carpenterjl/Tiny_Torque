@@ -1,0 +1,532 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Tiny Torque · Telemetry Analyzer</title>
+<link rel="stylesheet" href="shared/tt-style.css">
+<style>
+    .tel-grid { display: grid; grid-template-columns: 290px minmax(340px, 1fr); gap: 16px; align-items: start; }
+    @media (max-width: 1040px) { .tel-grid { grid-template-columns: 1fr; } }
+    .sticky { position: sticky; top: 12px; max-height: calc(100vh - 30px); overflow-y: auto; }
+    #dropZone { border: 2px dashed var(--line); border-radius: 6px; padding: 22px 14px; text-align: center; cursor: pointer; }
+    #dropZone.dragging { border-color: var(--accent); background: rgba(255,158,51,.06); }
+    .chanlist { max-height: 340px; overflow-y: auto; border: 1px solid var(--line-soft); border-radius: 4px; padding: 4px; }
+    .chan {
+        display: flex; align-items: center; gap: 7px; padding: 3px 6px; border-radius: 3px;
+        cursor: pointer; font-size: 12.5px; font-family: var(--mono);
+    }
+    .chan:hover { background: var(--bg-panel-2); }
+    .chan.on { color: var(--fg-bright); }
+    .chan i { width: 11px; height: 3px; border-radius: 2px; display: inline-block; flex: 0 0 11px; background: var(--line); }
+    .chan .rng { margin-left: auto; color: var(--fg-dim); font-size: 11px; }
+    .grouphdr { font-size: 11px; text-transform: uppercase; letter-spacing: .5px; color: var(--accent); padding: 6px 6px 2px; }
+    .plotwrap { margin: 10px 0 4px; }
+    .metrics { display: flex; gap: 18px; flex-wrap: wrap; font-family: var(--mono); font-size: 12.5px; margin-top: 6px; }
+    .metrics b { color: var(--fg-bright); }
+    .metrics span { color: var(--fg-dim); }
+</style>
+</head>
+<body>
+
+<header class="tt-header">
+    <h1><span class="tt-mark">Tiny&nbsp;Torque</span> · Telemetry Analyzer</h1>
+    <span class="tt-tagline">What the run actually did.</span>
+    <nav>
+        <a href="index.html">Hub</a>
+        <a href="car-setup.html">Car Setup</a>
+        <a href="control-lab.html">Control Lab</a>
+        <a href="calibration.html">Calibration</a>
+        <a href="telemetry.html" class="active">Telemetry</a>
+        <a href="motor-converter.html">Motor</a>
+    </nav>
+</header>
+
+<main class="tt-main wide">
+<div class="tel-grid">
+
+    <div class="sticky">
+        <div class="panel">
+            <h2>Load a run</h2>
+            <div id="dropZone">
+                <div><b>Drop a telemetry CSV here</b></div>
+                <div class="tiny muted" style="margin-top:5px">
+                    or click to browse · drop the <code>.json</code> sidecar too and its metadata is shown
+                </div>
+            </div>
+            <div class="tiny muted" style="margin-top:8px">
+                Logs live in <code>UnitySim\TelemetryLogs\</code>.
+                Logging is off by default — turn on “Log sensor/telemetry data” in the game's Options.
+            </div>
+            <div id="fileInfo" class="small" style="margin-top:8px"></div>
+        </div>
+
+        <div class="panel" id="channelPanel" style="display:none">
+            <h2>Channels</h2>
+            <input type="text" id="chanFilter" placeholder="filter…" style="margin-bottom:6px">
+            <div class="chanlist" id="chanList"></div>
+            <div class="btn-row">
+                <button class="small ghost" id="btnClearChans">Clear</button>
+                <button class="small ghost" id="btnPreset">Speed loop</button>
+            </div>
+        </div>
+
+        <div class="panel" id="metaPanel" style="display:none">
+            <h2>Run metadata</h2>
+            <table class="compact" id="metaTable"></table>
+        </div>
+    </div>
+
+    <div id="mainCol">
+        <div class="panel" id="emptyState">
+            <h2>Nothing loaded yet</h2>
+            <p class="small">
+                Drop a CSV on the left and its channels appear. Pick any of them to plot, drag the plot
+                to pan, scroll to zoom, and double-click to reset.
+            </p>
+            <h3>What you can get out of a run</h3>
+            <ul class="small">
+                <li><b>Step-response metrics.</b> Choose a setpoint channel and the measurement that
+                    should follow it, and you get rise time, overshoot, settling time and steady-state
+                    error — computed the same way the game's own overlay computes them, so the numbers
+                    agree.</li>
+                <li><b>Two runs at once.</b> Load a second CSV and both are drawn together. This is the
+                    view for comparing a sim run against a real one, or a gain change against the run
+                    before it.</li>
+                <li><b>Ground truth versus the controller's own belief.</b> Plot
+                    <code>veh/pos_x</code> and <code>veh/pos_z</code> against whatever your firmware
+                    reports as distance. Agreement between them proves the loop closed; agreement with
+                    ground truth proves the calibration is right, and those are not the same claim.</li>
+            </ul>
+        </div>
+    </div>
+
+</div>
+</main>
+
+<script src="shared/tt-schema.js"></script>
+<script src="shared/tt-sim.js"></script>
+<script src="shared/tt-plot.js"></script>
+<script src="shared/tt-ui.js"></script>
+<script src="shared/tt-export.js"></script>
+<script src="shared/tt-jgraph.js"></script>
+<script>
+(function () {
+'use strict';
+const Sim = TT.Sim, U = TT.UI, X = TT.Export, JG = TT.JGraph;
+const el = U.el, $ = U.$;
+
+// runs[0] is the primary; runs[1] is the comparison.
+let runs = [];
+let selected = [];            // channel names being plotted
+let filterText = '';
+let spChannel = '', msChannel = '';
+
+const COLORS = TT.PlotColors;
+
+// ---------------------------------------------------------------- load ----
+
+function addFiles(files) {
+    const csvs = files.filter(function (f) { return /\.csv$/i.test(f.name); });
+    const jsons = files.filter(function (f) { return /\.json$/i.test(f.name); });
+
+    const jobs = csvs.map(function (f) {
+        return X.readTextFile(f).then(function (text) {
+            const parsed = X.parseCsv(text);
+            return { name: f.name, data: parsed, meta: null };
+        });
+    });
+    Promise.all(jobs).then(function (loaded) {
+        loaded.forEach(function (r) {
+            if (runs.length >= 2) runs.shift();      // keep at most two
+            runs.push(r);
+        });
+        return Promise.all(jsons.map(function (f) {
+            return X.readTextFile(f).then(function (t) {
+                try { return { name: f.name, obj: JSON.parse(t) }; } catch (e) { return null; }
+            });
+        }));
+    }).then(function (metas) {
+        (metas || []).filter(Boolean).forEach(function (m) {
+            // Match a sidecar to its CSV by the name the sidecar itself records,
+            // falling back to the shared timestamp prefix.
+            const target = runs.filter(function (r) {
+                return m.obj.csv === r.name || r.name.indexOf(m.name.replace(/\.json$/i, '')) === 0;
+            })[0] || runs[runs.length - 1];
+            if (target) target.meta = m.obj;
+        });
+        if (runs.length && !selected.length) autoSelect();
+        render();
+    });
+}
+
+/* Sensible default: whatever looks like a setpoint/measurement pair. */
+function autoSelect() {
+    const cols = runs[0].data.columns;
+    const pick = function (names) {
+        for (let i = 0; i < names.length; i++) if (cols.indexOf(names[i]) >= 0) return names[i];
+        return '';
+    };
+    spChannel = pick(['dbg/target_speed', 'sp/linear', 'dbg/v_ref']);
+    msChannel = pick(['veh/speed', 'dbg/speed', 'dbg/v_meas']);
+    selected = [spChannel, msChannel].filter(Boolean);
+    if (!selected.length) selected = cols.filter(function (c) { return c !== 'time'; }).slice(0, 2);
+}
+
+// -------------------------------------------------------------- render ----
+
+function render() {
+    if (!runs.length) return;
+    // renderPlots() rebuilds #mainCol wholesale, which removes the empty-state
+    // panel — so it is only there to be hidden on the very first render.
+    const empty = $('#emptyState');
+    if (empty) empty.style.display = 'none';
+    $('#channelPanel').style.display = '';
+    renderFileInfo();
+    renderChannels();
+    renderMeta();
+    renderPlots();
+}
+
+function renderFileInfo() {
+    const box = U.clear($('#fileInfo'));
+    runs.forEach(function (r, i) {
+        const t = r.data.byName['time'] || [];
+        const dur = t.length ? (t[t.length - 1] - t[0]) : 0;
+        const row = el('div', { class: 'part-row', style: 'margin-bottom:5px' }, [
+            el('span', { class: 'dot', style: 'background:' + (i === 0 ? COLORS[0] : COLORS[3]) }),
+            el('span', { class: 'grow', title: r.name, text: r.name }),
+            el('span', { class: 'tiny muted', text: r.data.rows.length + ' rows · ' + dur.toFixed(1) + ' s' })
+        ]);
+        const x = el('button', { class: 'small ghost', text: '✕' });
+        x.addEventListener('click', function () {
+            runs.splice(i, 1);
+            if (!runs.length) { location.reload(); return; }
+            render();
+        });
+        row.appendChild(x);
+        box.appendChild(row);
+    });
+    if (runs.length === 2) {
+        box.appendChild(el('div', { class: 'tiny muted', text:
+            'Comparison mode: the second run is drawn dashed.' }));
+    }
+}
+
+function renderChannels() {
+    const list = U.clear($('#chanList'));
+    const cols = runs[0].data.columns.filter(function (c) { return c !== 'time'; });
+
+    // Group by the channel prefix the game uses, so related signals sit together.
+    const groups = {};
+    cols.forEach(function (c) {
+        if (filterText && c.toLowerCase().indexOf(filterText) < 0) return;
+        const g = c.indexOf('/') > 0 ? c.slice(0, c.indexOf('/')) : 'other';
+        (groups[g] = groups[g] || []).push(c);
+    });
+    const order = ['dbg', 'veh', 'sp', 'cmd', 'sens', 'wheel', 'imu', 'other'];
+    Object.keys(groups).sort(function (a, b) {
+        const ia = order.indexOf(a), ib = order.indexOf(b);
+        return (ia < 0 ? 99 : ia) - (ib < 0 ? 99 : ib);
+    }).forEach(function (g) {
+        list.appendChild(el('div', { class: 'grouphdr', text: g }));
+        groups[g].forEach(function (c) {
+            const on = selected.indexOf(c) >= 0;
+            const vals = runs[0].data.byName[c].filter(isFinite);
+            const lo = vals.length ? Math.min.apply(null, vals) : 0;
+            const hi = vals.length ? Math.max.apply(null, vals) : 0;
+            const row = el('div', { class: 'chan' + (on ? ' on' : '') }, [
+                el('i', { style: on ? 'background:' + COLORS[selected.indexOf(c) % COLORS.length] : '' }),
+                el('span', { text: c }),
+                el('span', { class: 'rng', text: fmtRange(lo, hi) })
+            ]);
+            row.addEventListener('click', function () {
+                const at = selected.indexOf(c);
+                if (at >= 0) selected.splice(at, 1);
+                else if (selected.length < 8) selected.push(c);
+                render();
+            });
+            list.appendChild(row);
+        });
+    });
+}
+
+function fmtRange(lo, hi) {
+    if (!isFinite(lo) || !isFinite(hi)) return '';
+    if (Math.abs(hi - lo) < 1e-9) return lo.toPrecision(3);
+    return lo.toPrecision(3) + '…' + hi.toPrecision(3);
+}
+
+function renderMeta() {
+    const withMeta = runs.filter(function (r) { return r.meta; });
+    if (!withMeta.length) { $('#metaPanel').style.display = 'none'; return; }
+    $('#metaPanel').style.display = '';
+    const t = U.clear($('#metaTable'));
+    const keys = {};
+    withMeta.forEach(function (r) { Object.keys(r.meta).forEach(function (k) { keys[k] = true; }); });
+
+    const explain = {
+        noise_seed: 'Fix this in Options and two runs become bit-identical — the only way to tell a real change from noise.',
+        actuation_delay_ticks: 'Control ticks of delay between command and effect. Every one of them eats phase margin.',
+        controller_loaded: 'False means the run was open-loop; no firmware was driving.',
+        physics_hz: 'Simulation step rate.',
+        control_hz: 'How often your controller was called.'
+    };
+    t.appendChild(el('tr', {}, [el('th', { text: 'Key' })].concat(
+        withMeta.map(function (r, i) { return el('th', { class: 'num', text: 'run ' + (i + 1) }); }))));
+    Object.keys(keys).forEach(function (k) {
+        if (k === 'csv') return;
+        const cells = withMeta.map(function (r) {
+            return el('td', { class: 'num', text: r.meta[k] === undefined ? '—' : String(r.meta[k]) });
+        });
+        const differs = withMeta.length === 2 && withMeta[0].meta[k] !== withMeta[1].meta[k];
+        t.appendChild(el('tr', {}, [el('td', { html: differs ? '<b class="warn">' + k + '</b>' : k })].concat(cells)));
+        if (explain[k]) t.appendChild(el('tr', {}, [el('td', { colspan: 3, class: 'tiny muted', text: explain[k] })]));
+    });
+    if (withMeta.length === 2) {
+        t.appendChild(el('tr', {}, [el('td', { colspan: 3, class: 'tiny muted', text:
+            'Highlighted keys differ between the runs — check those before attributing a change to your gains.' })]));
+    }
+}
+
+// ---------------------------------------------------------------- plots ----
+
+function renderPlots() {
+    const col = U.clear($('#mainCol'));
+
+    // --- the trace plot ---
+    const p1 = el('div', { class: 'panel' });
+    p1.appendChild(el('h2', { text: 'Traces' }));
+    if (!selected.length) {
+        p1.appendChild(el('div', { class: 'callout small', text: 'Pick a channel or two on the left.' }));
+        col.appendChild(p1);
+        return;
+    }
+    const canvas = el('canvas', { class: 'tt-plot' });
+    p1.appendChild(el('div', { class: 'plotwrap' }, [canvas]));
+    const legend = el('div', {});
+    p1.appendChild(legend);
+    p1.appendChild(el('div', { class: 'tiny muted', text:
+        'Drag to pan · scroll to zoom · double-click to reset · hover for values' }));
+    const jg1 = el('div', { class: 'btn-row' });
+    p1.appendChild(jg1);
+    col.appendChild(p1);
+
+    const series = [];
+    runs.forEach(function (r, ri) {
+        const t = r.data.byName['time'] || [];
+        selected.forEach(function (c, ci) {
+            const y = r.data.byName[c];
+            if (!y) return;
+            series.push({
+                name: (runs.length > 1 ? 'run' + (ri + 1) + ' ' : '') + c,
+                x: t, y: y,
+                color: COLORS[ci % COLORS.length],
+                style: ri === 1 ? 'dashed' : 'line',
+                width: ri === 1 ? 1.3 : 1.8
+            });
+        });
+    });
+    const plot = new TT.Plot(canvas, { height: 340, xLabel: 'time (s)', yLabel: selected.join(', ') });
+    plot.setSeries(series).draw();
+    plot.renderLegend(legend);
+
+    jg1.appendChild(JG.button('telemetry', function () {
+        const r = runs[0];
+        return JG.figure('telemetry', 'Telemetry — ' + r.name, r.data.byName['time'] || [],
+            selected.map(function (c) { return { name: c, data: r.data.byName[c] || [] }; }),
+            { xLabel: 'time (s)', yLabel: 'value' });
+    }));
+
+    // --- step metrics ---
+    const p2 = el('div', { class: 'panel' });
+    p2.appendChild(el('h2', { text: 'Step response' }));
+    p2.appendChild(el('p', { class: 'small muted', html:
+        'Pick the channel that was commanded and the one that had to follow it. The most recent clean ' +
+        'step is found automatically — a jump of at least 10 % of the channel\'s range, preceded by half ' +
+        'a second of steady setpoint.' }));
+
+    const cols = runs[0].data.columns.filter(function (c) { return c !== 'time'; });
+    const pickRow = el('div', { class: 'grid2' });
+    pickRow.appendChild(U.selectField({
+        label: 'Setpoint channel',
+        options: [{ value: '', label: '— none —' }].concat(cols.map(function (c) { return { value: c, label: c }; })),
+        get: function () { return spChannel; },
+        set: function (v) { spChannel = v; }, onChange: render
+    }));
+    pickRow.appendChild(U.selectField({
+        label: 'Measured channel',
+        options: [{ value: '', label: '— none —' }].concat(cols.map(function (c) { return { value: c, label: c }; })),
+        get: function () { return msChannel; },
+        set: function (v) { msChannel = v; }, onChange: render
+    }));
+    p2.appendChild(pickRow);
+
+    if (spChannel && msChannel) {
+        runs.forEach(function (r, ri) {
+            const t = r.data.byName['time'] || [];
+            const sp = r.data.byName[spChannel];
+            const ms = r.data.byName[msChannel];
+            if (!sp || !ms) {
+                p2.appendChild(el('div', { class: 'callout warn small', text:
+                    'Run ' + (ri + 1) + ' does not have both of those channels.' }));
+                return;
+            }
+            const m = Sim.stepMetrics(t, sp, ms);
+            const hdr = runs.length > 1 ? 'Run ' + (ri + 1) + ' · ' + r.name : '';
+            if (hdr) p2.appendChild(el('h4', { text: hdr }));
+            if (!m.found) {
+                p2.appendChild(el('div', { class: 'callout small', html:
+                    'No clean step found in <code>' + spChannel + '</code>. Either the setpoint never ' +
+                    'moved much, or it never held still long enough beforehand for the edge to count.' }));
+                return;
+            }
+            p2.appendChild(el('div', { class: 'metrics', html:
+                '<span>step at <b>' + m.stepTime.toFixed(2) + ' s</b></span>' +
+                '<span>from <b>' + m.initial.toFixed(3) + '</b> to <b>' + m.target.toFixed(3) + '</b></span>' +
+                '<span>rise 10–90 % <b>' + (m.riseTime >= 0 ? (m.riseTime * 1000).toFixed(0) + ' ms' : 'not reached') + '</b></span>' +
+                '<span>overshoot <b>' + m.overshootPct.toFixed(1) + ' %</b></span>' +
+                '<span>peak at <b>' + (m.peakTime * 1000).toFixed(0) + ' ms</b></span>' +
+                '<span>settling ±5 % <b>' + (m.settlingTime >= 0 ? (m.settlingTime * 1000).toFixed(0) + ' ms' : 'never settled') + '</b></span>' +
+                '<span>steady-state error <b>' + m.ssError.toFixed(4) + '</b></span>' }));
+
+            const notes = [];
+            if (m.overshootPct > 30) notes.push(['warn',
+                'Overshooting ' + m.overshootPct.toFixed(0) + ' %. On a driven axle that is where traction goes.']);
+            if (m.settlingTime < 0) notes.push(['warn',
+                'It never settled inside ±5 %. Either the loop is oscillating or something is ' +
+                'continuously disturbing it — check whether the run included a corner or a surface change.']);
+            if (Math.abs(m.ssError) > Math.abs(m.target - m.initial) * 0.05) notes.push(['warn',
+                'Steady-state error is over 5 % of the step. With an integrator in the loop that should ' +
+                'not persist, so suspect saturation, a deadband, or an integrator that is being reset.']);
+            notes.forEach(function (n) {
+                p2.appendChild(el('div', { class: 'callout ' + n[0] + ' small', html: n[1] }));
+            });
+
+            // Zoomed view of the step itself.
+            const c2 = el('canvas', { class: 'tt-plot' });
+            p2.appendChild(el('div', { class: 'plotwrap' }, [c2]));
+            const lg2 = el('div', {});
+            p2.appendChild(lg2);
+            const delta = Math.abs(m.target - m.initial);
+            const sp2 = new TT.Plot(c2, {
+                height: 250, xLabel: 'time (s)', yLabel: msChannel,
+                xMin: Math.max(t[0], m.stepTime - 0.5),
+                xMax: Math.min(t[t.length - 1], m.stepTime + Math.max(2, (m.settlingTime > 0 ? m.settlingTime * 2 : 2)))
+            });
+            sp2.setSeries([
+                { name: spChannel, x: t, y: sp, color: '#8d97a6', style: 'dashed' },
+                { name: msChannel, x: t, y: ms }
+            ]).setBands([{ yLo: m.target - 0.05 * delta, yHi: m.target + 0.05 * delta }])
+              .setMarkers([{ x: m.stepTime, label: 'step', color: '#f0c04a' }]).draw();
+            sp2.renderLegend(lg2);
+        });
+
+        if (runs.length === 2) {
+            const a = Sim.stepMetrics(runs[0].data.byName['time'], runs[0].data.byName[spChannel], runs[0].data.byName[msChannel]);
+            const b = Sim.stepMetrics(runs[1].data.byName['time'], runs[1].data.byName[spChannel], runs[1].data.byName[msChannel]);
+            if (a.found && b.found) {
+                p2.appendChild(el('h4', { text: 'Side by side' }));
+                const t2 = el('table', { class: 'compact' });
+                t2.appendChild(el('tr', {}, ['Metric', 'Run 1', 'Run 2', 'Change'].map(function (h) {
+                    return el('th', { class: h === 'Metric' ? '' : 'num', text: h });
+                })));
+                [
+                    ['Rise time (ms)', a.riseTime * 1000, b.riseTime * 1000],
+                    ['Overshoot (%)', a.overshootPct, b.overshootPct],
+                    ['Settling (ms)', a.settlingTime * 1000, b.settlingTime * 1000],
+                    ['Steady-state error', a.ssError, b.ssError]
+                ].forEach(function (r) {
+                    const d = r[2] - r[1];
+                    t2.appendChild(el('tr', {}, [
+                        el('td', { text: r[0] }),
+                        el('td', { class: 'num', text: r[1].toFixed(2) }),
+                        el('td', { class: 'num', text: r[2].toFixed(2) }),
+                        el('td', { class: 'num ' + (Math.abs(d) < 1e-9 ? 'muted' : ''), text: (d >= 0 ? '+' : '') + d.toFixed(2) })
+                    ]));
+                });
+                p2.appendChild(t2);
+            }
+        }
+    }
+    col.appendChild(p2);
+
+    // --- ground truth ---
+    const hasPos = runs[0].data.byName['veh/pos_x'] && runs[0].data.byName['veh/pos_z'];
+    if (hasPos) {
+        const p3 = el('div', { class: 'panel' });
+        p3.appendChild(el('h2', { text: 'Path and ground-truth distance' }));
+        p3.appendChild(el('p', { class: 'small muted', html:
+            'Position is integrated by the simulation itself, so it is the closest thing to a tape ' +
+            'measure you have. Compare it against whatever your firmware believes it travelled.' }));
+        const c3 = el('canvas', { class: 'tt-plot' });
+        p3.appendChild(el('div', { class: 'plotwrap' }, [c3]));
+        const lg3 = el('div', {});
+        p3.appendChild(lg3);
+
+        const pathPlot = new TT.Plot(c3, { height: 300, xLabel: 'x (m)', yLabel: 'z (m)' });
+        pathPlot.setSeries(runs.map(function (r, i) {
+            return {
+                name: 'run ' + (i + 1) + ' path', x: r.data.byName['veh/pos_x'], y: r.data.byName['veh/pos_z'],
+                color: COLORS[i === 0 ? 0 : 3], style: i === 1 ? 'dashed' : 'line'
+            };
+        })).draw();
+        pathPlot.renderLegend(lg3);
+
+        const distRows = runs.map(function (r, i) {
+            const xs = r.data.byName['veh/pos_x'], zs = r.data.byName['veh/pos_z'];
+            let d = 0;
+            for (let k = 1; k < xs.length; k++) {
+                const dx = xs[k] - xs[k - 1], dz = zs[k] - zs[k - 1];
+                if (isFinite(dx) && isFinite(dz)) d += Math.sqrt(dx * dx + dz * dz);
+            }
+            const odo = r.data.byName['dbg/odo_m'];
+            const odoEnd = odo ? odo[odo.length - 1] : null;
+            return { run: i + 1, truth: d, odo: odoEnd };
+        });
+        const t3 = el('table', { class: 'compact' });
+        t3.appendChild(el('tr', {}, [el('th', { text: 'Run' }), el('th', { class: 'num', text: 'Ground truth' }),
+            el('th', { class: 'num', text: 'Firmware odometer' }), el('th', { class: 'num', text: 'Error' })]));
+        distRows.forEach(function (r) {
+            const err = (r.odo !== null && isFinite(r.odo)) ? (r.truth - r.odo) : null;
+            t3.appendChild(el('tr', {}, [
+                el('td', { text: String(r.run) }),
+                el('td', { class: 'num', text: r.truth.toFixed(3) + ' m' }),
+                el('td', { class: 'num', text: r.odo !== null && isFinite(r.odo) ? r.odo.toFixed(3) + ' m' : '—' }),
+                el('td', { class: 'num', text: err !== null ? (err * 1000).toFixed(0) + ' mm' : '—' })
+            ]));
+        });
+        p3.appendChild(t3);
+        if (distRows.some(function (r) { return r.odo !== null && isFinite(r.odo); })) {
+            const r0 = distRows[0];
+            if (r0.odo && Math.abs(r0.truth - r0.odo) / Math.max(1e-6, r0.truth) > 0.01) {
+                p3.appendChild(el('div', { class: 'callout warn small', html:
+                    'The odometer is off by ' + ((r0.truth / r0.odo - 1) * 100).toFixed(2) + ' %. That is a ' +
+                    'scale error, and the <a href="calibration.html">Calibration Companion</a> turns it into ' +
+                    'a <code>CAL_SCALE</code> you can paste into your config header.' }));
+            }
+        }
+        col.appendChild(p3);
+    }
+}
+
+// ----------------------------------------------------------------- boot ----
+
+X.dropZone('dropZone', addFiles, { accept: '.csv,.json', multiple: true });
+
+$('#chanFilter').addEventListener('input', function () {
+    filterText = this.value.toLowerCase();
+    if (runs.length) renderChannels();
+});
+$('#btnClearChans').addEventListener('click', function () { selected = []; render(); });
+$('#btnPreset').addEventListener('click', function () {
+    if (!runs.length) return;
+    autoSelect();
+    render();
+});
+window.addEventListener('resize', function () { if (runs.length) renderPlots(); });
+
+})();
+</script>
+</body>
+</html>

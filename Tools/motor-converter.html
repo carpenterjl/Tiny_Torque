@@ -1,0 +1,297 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Tiny Torque · Motor Datasheet Converter</title>
+<link rel="stylesheet" href="shared/tt-style.css">
+</head>
+<body>
+
+<header class="tt-header">
+    <h1><span class="tt-mark">Tiny&nbsp;Torque</span> · Motor Converter</h1>
+    <span class="tt-tagline">Datasheet figures in, electrical constants out.</span>
+    <nav>
+        <a href="index.html">Hub</a>
+        <a href="car-setup.html">Car Setup</a>
+        <a href="control-lab.html">Control Lab</a>
+        <a href="calibration.html">Calibration</a>
+        <a href="telemetry.html">Telemetry</a>
+        <a href="motor-converter.html" class="active">Motor</a>
+    </nav>
+</header>
+
+<main class="tt-main">
+
+<div class="panel">
+    <h2>Why this conversion exists</h2>
+    <p class="small">
+        The simulation drives motors the way electricity does: you command a <b>voltage</b>, the motor's
+        own rotation generates an opposing back-EMF, and whatever voltage is left over pushes current
+        through the winding resistance to make torque. That needs two numbers almost no vendor prints —
+        the torque constant <code>Kt</code> and the winding resistance <code>R</code>.
+    </p>
+    <p class="small">
+        What vendors <i>do</i> print is Kv, or a stall torque and a no-load speed. Both roads lead to the
+        same pair of constants, and this page walks either one.
+    </p>
+    <div class="eq">
+        I = (V − K<sub>t</sub>·ω<sub>motor</sub>) / R &nbsp;&nbsp;&nbsp; τ = K<sub>t</sub>·I · gear · η
+        <div class="note">Back-EMF rises with speed, so available current — and therefore torque — falls as the car speeds up. That is the whole shape of a DC motor's behaviour.</div>
+    </div>
+</div>
+
+<div class="row">
+<div class="col">
+
+    <div class="panel">
+        <h2>Route A · From Kv</h2>
+        <p class="small muted">
+            The usual brushless case. Kv is revolutions per minute per volt with nothing attached.
+        </p>
+        <div class="field">
+            <label>Kv  (rpm/V)</label>
+            <input type="number" id="kv" value="3800" step="10">
+        </div>
+        <div class="eq">
+            K<sub>t</sub> = 60 / (2π · K<sub>v</sub>) = <b id="ktFromKv">—</b> N·m/A
+            <div class="note">Kt in N·m/A and Ke in V·s/rad are numerically the same constant in SI units — a happy accident of the algebra, and a useful sanity check.</div>
+        </div>
+        <p class="small muted">
+            Kv gives you Kt but says nothing about resistance. Measure R terminal-to-terminal with a
+            milliohm meter, or infer it from a stall test: <code>R ≈ V / I_stall</code>.
+        </p>
+    </div>
+
+    <div class="panel">
+        <h2>Route B · From a torque/speed datasheet</h2>
+        <p class="small muted">
+            Brushed motors and gearmotors are usually specified this way. All four figures must be at
+            the same nominal voltage.
+        </p>
+        <div class="grid2">
+            <div class="field"><label>Nominal voltage  (V)</label><input type="number" id="dsV" value="7.4" step="0.1"></div>
+            <div class="field"><label>Stall torque  (N·m, motor shaft)</label><input type="number" id="dsT" value="0.25" step="0.01"></div>
+            <div class="field"><label>No-load speed  (rpm, motor shaft)</label><input type="number" id="dsRpm" value="23000" step="100"></div>
+            <div class="field"><label>No-load current  (A)</label><input type="number" id="dsI0" value="1.2" step="0.05"></div>
+        </div>
+        <div class="eq">
+            R = V<sub>n</sub>² / (τ<sub>s</sub>·ω<sub>0</sub> + V<sub>n</sub>·I<sub>0</sub>) = <b id="dsR">—</b> Ω<br>
+            K<sub>t</sub> = τ<sub>s</sub>·R / V<sub>n</sub> = <b id="dsKt">—</b> N·m/A
+            <div class="note">
+                At stall the whole rail drops across R, so τ<sub>s</sub> = K<sub>t</sub>·V<sub>n</sub>/R.
+                At no load the rail balances back-EMF plus the idle current's own drop, so
+                V<sub>n</sub> = K<sub>t</sub>·ω<sub>0</sub> + I<sub>0</sub>·R. Two equations, two unknowns.
+            </div>
+        </div>
+        <div id="dsCheck" class="small"></div>
+    </div>
+
+</div>
+<div class="col">
+
+    <div class="panel">
+        <h2>One motor, several simulated ones</h2>
+        <p class="small">
+            The sim gives every driven wheel its own motor. A real car usually has one motor feeding an
+            axle through a differential — so entering your real figures unchanged on two wheels gives the
+            car twice the thrust it should have.
+        </p>
+        <div class="field">
+            <label>Simulated motors standing in for this one real motor</label>
+            <input type="number" id="nMotors" value="2" min="1" max="4" step="1">
+        </div>
+        <table class="compact" id="splitTable"></table>
+        <p class="tiny muted" style="margin-top:8px">
+            Resistance is multiplied because several parallel current paths have to add up to the real
+            winding; the current and inertia figures are divided because they describe one shared
+            physical part. Torque constant, gear ratio and voltage belong to the motor itself and do not
+            change no matter how many models represent it.
+        </p>
+    </div>
+
+    <div class="panel">
+        <h2>The rest of the drivetrain</h2>
+        <div class="grid2">
+            <div class="field"><label>Gear ratio  (motor : wheel)</label><input type="number" id="gear" value="11.2" step="0.1"></div>
+            <div class="field"><label>Wheel radius  (m)</label><input type="number" id="radius" value="0.033" step="0.001"></div>
+            <div class="field"><label>Drivetrain efficiency</label><input type="number" id="eta" value="0.85" step="0.01"></div>
+            <div class="field"><label>Vehicle mass  (kg)</label><input type="number" id="mass" value="2.13" step="0.01"></div>
+            <div class="field"><label>Supply rail  (V)</label><input type="number" id="rail" value="7.4" step="0.1"></div>
+            <div class="field"><label>ESC current limit  (A, 0 = none)</label><input type="number" id="imax" value="60" step="1"></div>
+            <div class="field"><label>Rotor inertia  (µg·m²)</label><input type="number" id="rotor" value="6.44" step="0.01"></div>
+        </div>
+    </div>
+
+    <div class="panel">
+        <h2>What you get</h2>
+        <table class="compact" id="plantTable"></table>
+    </div>
+
+</div>
+</div>
+
+<div class="panel">
+    <h2>Ready to paste</h2>
+    <p class="small">
+        A complete <code>motor</code> block for one <i>simulated</i> motor — already split if you set the
+        motor count above. Paste it over the <code>"motor": { … }</code> object of each powered wheel in
+        a vehicle JSON.
+    </p>
+    <div class="callout warn small">
+        <b>Paste the whole block, never part of it.</b> This object is a struct on the game's side, which
+        means any key you leave out arrives as <b>zero</b> rather than as its default — a partial paste
+        silently gives you a motor with no brake strength and no reverse lockout.
+    </div>
+    <pre><code id="jsonOut"></code></pre>
+    <div class="btn-row">
+        <button class="primary" id="btnCopy">Copy to clipboard</button>
+        <span class="status" id="copyStatus"></span>
+    </div>
+</div>
+
+</main>
+
+<script src="shared/tt-schema.js"></script>
+<script src="shared/tt-motor.js"></script>
+<script src="shared/tt-ui.js"></script>
+<script>
+(function () {
+'use strict';
+const S = TT.Schema, M = TT.Motor, U = TT.UI;
+const $ = U.$, el = U.el;
+
+function num(id) { return Number($('#' + id).value); }
+
+function recompute() {
+    // Route A
+    const kv = num('kv');
+    const ktA = M.ktFromKv(kv);
+    $('#ktFromKv').textContent = kv > 0 ? ktA.toFixed(7) : '—';
+
+    // Route B
+    const ds = { nominalVoltage: num('dsV'), stallTorque: num('dsT'), noLoadRpm: num('dsRpm'), noLoadCurrent: num('dsI0') };
+    const conv = M.applyDatasheet(ds);
+    $('#dsR').textContent = conv.resistance.toFixed(5);
+    $('#dsKt').textContent = conv.kt.toFixed(7);
+
+    // Cross-check the two routes against each other — they should agree if the
+    // datasheet and the Kv describe the same motor.
+    const impliedKv = M.kvFromKt(conv.kt);
+    const chk = $('#dsCheck');
+    if (kv > 0 && conv.kt > 0) {
+        const diff = Math.abs(impliedKv - kv) / kv * 100;
+        chk.innerHTML = 'These datasheet figures imply <b>' + impliedKv.toFixed(0) + ' Kv</b>, which is ' +
+            (diff < 8
+                ? '<span class="ok">within ' + diff.toFixed(0) + ' % of the Kv above — the two routes agree.</span>'
+                : '<span class="warn">' + diff.toFixed(0) + ' % away from the Kv above. One of the two figures is for a different motor, a different voltage, or is measured after the gearbox.</span>');
+    } else chk.textContent = '';
+
+    // The motor being described: the datasheet route wins when it is filled in,
+    // since it pins down R as well as Kt.
+    const useDs = ds.stallTorque > 0 && ds.noLoadRpm > 0 && ds.nominalVoltage > 0;
+    const real = {
+        maxVoltage: num('rail'),
+        kt: useDs ? conv.kt : ktA,
+        resistance: useDs ? conv.resistance : 0.03,
+        gearRatio: num('gear'),
+        noLoadCurrent: ds.noLoadCurrent,
+        efficiency: num('eta'),
+        maxCurrent: num('imax'),
+        rotorInertia: num('rotor') * 1e-6
+    };
+
+    const n = Math.max(1, Math.round(num('nMotors')));
+    const sim = M.splitAcrossMotors(real, n);
+
+    // Split table
+    const st = U.clear($('#splitTable'));
+    st.appendChild(el('tr', {}, [
+        el('th', { text: 'Quantity' }), el('th', { class: 'num', text: 'Real motor' }),
+        el('th', { class: 'num', text: 'Each of ' + n }), el('th', { text: '' })
+    ]));
+    [
+        ['Resistance', real.resistance.toFixed(4) + ' Ω', sim.resistance.toFixed(4) + ' Ω', '× ' + n],
+        ['No-load current', real.noLoadCurrent.toFixed(2) + ' A', sim.noLoadCurrent.toFixed(2) + ' A', '÷ ' + n],
+        ['ESC current limit', real.maxCurrent.toFixed(0) + ' A', sim.maxCurrent.toFixed(1) + ' A', '÷ ' + n],
+        ['Rotor inertia', (real.rotorInertia * 1e6).toFixed(2) + ' µg·m²', (sim.rotorInertia * 1e6).toFixed(2) + ' µg·m²', '÷ ' + n],
+        ['Torque constant', real.kt.toFixed(6), sim.kt.toFixed(6), 'unchanged'],
+        ['Gear ratio', real.gearRatio.toFixed(2), sim.gearRatio.toFixed(2), 'unchanged']
+    ].forEach(function (r) {
+        st.appendChild(el('tr', {}, [
+            el('td', { text: r[0] }), el('td', { class: 'num', text: r[1] }),
+            el('td', { class: 'num', text: r[2] }), el('td', { class: 'tiny muted', text: r[3] })
+        ]));
+    });
+
+    // Plant readout
+    const p = M.plant({
+        kt: sim.kt, gearRatio: sim.gearRatio, wheelRadius: num('radius'),
+        resistance: sim.resistance, efficiency: sim.efficiency, motorCount: n,
+        rotorInertia: sim.rotorInertia, mass: num('mass'),
+        maxVoltage: sim.maxVoltage, maxCurrent: sim.maxCurrent
+    });
+    const back = M.toDatasheet({
+        resistance: sim.resistance, kt: sim.kt, maxVoltage: sim.maxVoltage, noLoadCurrent: sim.noLoadCurrent
+    });
+    const pt = U.clear($('#plantTable'));
+    [
+        ['Back-EMF per road speed', p.bemfVPerMs.toFixed(4) + ' V per m/s',
+            'Command this much per m/s and the motor just holds speed. It is most of any drive command.'],
+        ['Thrust per amp', p.forcePerAmpAll.toFixed(4) + ' N/A',
+            'Force at the contact patch per amp in each motor.'],
+        ['Effective mass', p.massEff.toFixed(3) + ' kg',
+            p.reflectedInertia.toFixed(3) + ' kg of this is rotor inertia reflected through the gearing — mass that never goes anywhere.'],
+        ['Peak thrust', p.stallForceAll.toFixed(1) + ' N',
+            'At the current limit. Grip may well cap it lower.'],
+        ['Launch acceleration', p.launchAccel.toFixed(2) + ' m/s²', 'Ignoring traction limits.'],
+        ['Free speed', p.noLoadSpeed.toFixed(2) + ' m/s',
+            'Where back-EMF alone eats the whole rail. Drag makes the real top speed lower.'],
+        ['Speed-loop time constant', (p.tauMech * 1000).toFixed(0) + ' ms',
+            'Open-loop first-order lag. A closed loop has to be faster than this to be worth having.'],
+        ['Implied stall torque', back.stallTorque.toFixed(4) + ' N·m',
+            'Per simulated motor, at the rail — a sanity check against the datasheet.']
+    ].forEach(function (r) {
+        pt.appendChild(el('tr', {}, [el('td', { text: r[0] }), el('td', { class: 'num nowrap', text: r[1] })]));
+        pt.appendChild(el('tr', {}, [el('td', { colspan: 2, class: 'tiny muted', text: r[2] })]));
+    });
+
+    // JSON fragment — a complete MotorParams object.
+    const motor = Object.assign(S.newMotor(), {
+        maxVoltage: sim.maxVoltage, kt: sim.kt, resistance: sim.resistance,
+        gearRatio: sim.gearRatio, noLoadCurrent: sim.noLoadCurrent,
+        efficiency: sim.efficiency, maxCurrent: sim.maxCurrent, rotorInertia: sim.rotorInertia
+    });
+    const lines = S.MOTOR_FIELDS.map(function (f) {
+        const v = motor[f];
+        return '    "' + f + '": ' + (Number.isInteger(v) && f === 'escPwmSteps' ? v : formatNum(v));
+    });
+    $('#jsonOut').textContent = '"motor": {\n' + lines.join(',\n') + '\n}';
+}
+
+function formatNum(v) {
+    if (!isFinite(v)) return '0.0';
+    if (Number.isInteger(v)) return v.toFixed(1);
+    const s = Number(v.toPrecision(9)).toString();
+    return s.indexOf('.') < 0 && s.indexOf('e') < 0 ? s + '.0' : s;
+}
+
+['kv', 'dsV', 'dsT', 'dsRpm', 'dsI0', 'nMotors', 'gear', 'radius', 'eta', 'mass', 'rail', 'imax', 'rotor']
+    .forEach(function (id) { $('#' + id).addEventListener('input', recompute); });
+
+$('#btnCopy').addEventListener('click', function () {
+    const text = $('#jsonOut').textContent;
+    const done = function (msg, cls) { $('#copyStatus').innerHTML = '<span class="' + cls + '">' + msg + '</span>'; };
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(text).then(function () { done('Copied.', 'ok'); },
+            function () { done('Could not reach the clipboard — select the text above instead.', 'warn'); });
+    } else {
+        done('This browser will not let a local page use the clipboard — select the text above instead.', 'warn');
+    }
+});
+
+recompute();
+})();
+</script>
+</body>
+</html>

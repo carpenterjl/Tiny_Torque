@@ -1,0 +1,158 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Tiny Torque · Interactive Tools</title>
+<link rel="stylesheet" href="shared/tt-style.css">
+</head>
+<body>
+
+<header class="tt-header">
+    <h1><span class="tt-mark">Tiny&nbsp;Torque</span> · Interactive Tools</h1>
+    <span class="tt-tagline">Big physics. Tiny cars. Your code takes the wheel.</span>
+    <nav>
+        <a href="index.html" class="active">Hub</a>
+        <a href="car-setup.html">Car Setup</a>
+        <a href="control-lab.html">Control Lab</a>
+        <a href="calibration.html">Calibration</a>
+        <a href="telemetry.html">Telemetry</a>
+        <a href="motor-converter.html">Motor</a>
+    </nav>
+</header>
+
+<main class="tt-main">
+
+<div class="panel">
+    <h2>Translate your real hardware into the sim — and your sim results back out</h2>
+    <p class="small">
+        These pages are plain HTML. Double-click any of them; there is no server, no build step and no
+        internet connection involved. They read and write the same file formats the game and the C
+        firmware toolchain already use, so anything you produce here drops straight into the project.
+    </p>
+</div>
+
+<div class="cards">
+
+    <a class="card" href="car-setup.html">
+        <span class="icon">🔧</span>
+        <h3>Car Setup</h3>
+        <p>Walk through your chassis, motor, ESC, servo, battery and sensors — entering the numbers off
+           your actual datasheets — and export a vehicle the garage can load and drive.</p>
+    </a>
+
+    <a class="card" href="control-lab.html">
+        <span class="icon">📐</span>
+        <h3>Control Loop Lab</h3>
+        <p>Load a vehicle, see its plant constants derived, work through the transient equations with
+           live plots, then generate compilable C controller files with your tuned gains baked in.</p>
+    </a>
+
+    <a class="card" href="calibration.html">
+        <span class="icon">📏</span>
+        <h3>Calibration Companion</h3>
+        <p>The measured-calibration procedure, step by step: encoder scale, coast-down drag polynomial,
+           traction efficiency, brake slip. Fits your data and hands you the <code>#define</code> block.</p>
+    </a>
+
+    <a class="card" href="telemetry.html">
+        <span class="icon">📊</span>
+        <h3>Telemetry Analyzer</h3>
+        <p>Drop in a CSV from <code>TelemetryLogs</code>. Pick channels, zoom, read off step-response
+           metrics, and overlay two runs — the sim-versus-real comparison in one view.</p>
+    </a>
+
+    <a class="card" href="motor-converter.html">
+        <span class="icon">⚡</span>
+        <h3>Motor Datasheet Converter</h3>
+        <p>Kv, stall torque and no-load figures in; <code>Kt</code> and <code>R</code> out, with the
+           algebra shown. Copies a complete motor block ready to paste into a vehicle JSON.</p>
+    </a>
+
+</div>
+
+<div class="panel" style="margin-top:20px">
+    <h2>How the pieces fit together</h2>
+    <div class="row">
+        <div class="col">
+            <h3>Where vehicles live</h3>
+            <p class="small">
+                A vehicle is one JSON file. The garage lists every file it finds in the Vehicles folder,
+                so saving one there is all it takes to make it selectable in game.
+            </p>
+            <table class="compact">
+                <tr><td>Unity editor</td><td><code>&lt;repo&gt;\UnitySim\Vehicles\</code></td></tr>
+                <tr><td>Installed build</td><td><code>%USERPROFILE%\AppData\LocalLow\&lt;company&gt;\&lt;product&gt;\Vehicles\</code></td></tr>
+            </table>
+            <p class="small muted">
+                On Chrome or Edge the Car Setup page can write there directly once you point it at the
+                folder. Other browsers download the file and show you where to put it.
+            </p>
+        </div>
+        <div class="col">
+            <h3>Where firmware lives</h3>
+            <p class="small">
+                A controller is a folder of portable C plus one adapter file that speaks the ABI. Building
+                it produces a DLL the game loads at run time:
+            </p>
+            <ol class="small">
+                <li>Drop the generated folder in <code>Controllers\</code>.</li>
+                <li>Add its <code>add_controller(...)</code> line to <code>Controllers\CMakeLists.txt</code>.</li>
+                <li>Run <code>build.ps1</code> — the DLL lands in <code>Assets\Plugins\x86_64\</code>.</li>
+                <li>Set <code>controllerDll</code> on your vehicle to that DLL's file name.</li>
+            </ol>
+            <p class="small muted">
+                Building needs a 64-bit toolchain. If you have none,
+                <code>winget install --id BrechtSanders.WinLibs.POSIX.UCRT --exact</code> installs one.
+            </p>
+        </div>
+    </div>
+</div>
+
+<div class="panel">
+    <h2>JGraph integration <span class="badge warn">optional</span></h2>
+    <p class="small">
+        If you have <b>JGraph</b> installed, every page that draws a plot can hand its data over for
+        proper interactive figures and further analysis. The pages export a <code>.m</code> script plus a
+        <code>data.csv</code>, and JGraph runs the script headlessly:
+    </p>
+    <pre><code>jgraph -batch "speed_step.m" -showfigures -sd "C:\path\to\exported\folder"</code></pre>
+    <p class="small">
+        For a live workflow, run the bridge script once. It watches a folder and opens any new script
+        automatically, so clicking <b>Open in JGraph</b> on a page pops a figure window straight away:
+    </p>
+    <pre><code>powershell -ExecutionPolicy Bypass -File Tools\jgraph-bridge.ps1</code></pre>
+    <p class="small muted">
+        It finds <code>jgraph.exe</code> on PATH or in a JGraph source tree by itself; add
+        <code>-DryRun</code> to check that without opening any windows, or <code>-JGraph &lt;path&gt;</code>
+        to point it somewhere specific. The first time you click the button, pick the
+        <code>Tools\jgraph-out</code> folder the bridge is watching — the browser remembers it after that.
+    </p>
+    <p class="small muted">
+        Scripts are generated in MATLAB dialect rather than JGS on purpose: JGS's <code>let</code>
+        requirement and index base are user settings, and a generated script must not depend on how a
+        particular machine is configured. Without JGraph the pages plot everything themselves — nothing
+        here is required.
+    </p>
+</div>
+
+<div class="panel">
+    <h2>Keeping these tools honest</h2>
+    <p class="small">
+        The pages carry their own copy of the game's schema and physics constants, which means they can
+        drift from the C# and the firmware headers. A regression test checks them against the real
+        thing — a saved vehicle round-tripping without losing a field, the motor algebra reproducing
+        <code>MotorModel</code>'s closed forms, the derived plant constants landing on the values in
+        <code>mission_cfg.h</code>:
+    </p>
+    <pre><code>node Tools/verify.js</code></pre>
+    <p class="small muted">
+        Run it after changing <code>VehicleDesign.cs</code>, <code>MotorModel.cs</code>, or the vehicle
+        constants in <code>mission_cfg.h</code>, and update <code>Tools/shared/</code> to match if it
+        complains.
+    </p>
+</div>
+
+</main>
+</body>
+</html>

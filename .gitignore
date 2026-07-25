@@ -45,6 +45,9 @@ usage-report.html
 # ---- Tooling ----
 .claude/
 
+# Scratch folder the JGraph bridge watches (figures exported from Tools/*.html)
+Tools/jgraph-out/
+
 # ---- OS ----
 .DS_Store
 Thumbs.db

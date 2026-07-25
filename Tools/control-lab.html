@@ -1,0 +1,909 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Tiny Torque · Control Loop Lab</title>
+<link rel="stylesheet" href="shared/tt-style.css">
+<style>
+    .lab-grid { display: grid; grid-template-columns: 200px minmax(340px, 1fr); gap: 16px; align-items: start; }
+    @media (max-width: 1000px) { .lab-grid { grid-template-columns: 1fr; } }
+    .sticky { position: sticky; top: 12px; }
+    .plotwrap { margin: 12px 0 4px; }
+    .metrics { display: flex; gap: 18px; flex-wrap: wrap; font-family: var(--mono); font-size: 12.5px; margin-top: 6px; }
+    .metrics b { color: var(--fg-bright); }
+    .metrics span { color: var(--fg-dim); }
+    .filetabs { display: flex; gap: 4px; flex-wrap: wrap; margin-bottom: -1px; }
+    .filetab {
+        padding: 5px 12px; border: 1px solid var(--line); border-bottom: none;
+        border-radius: 4px 4px 0 0; cursor: pointer; font-size: 12.5px;
+        font-family: var(--mono); background: var(--bg-panel-2); color: var(--fg-dim);
+    }
+    .filetab.on { background: var(--bg-input); color: var(--accent); border-color: var(--accent-dim); }
+    #dropZone { border: 2px dashed var(--line); border-radius: 6px; padding: 18px; text-align: center; cursor: pointer; }
+    #dropZone.dragging { border-color: var(--accent); background: rgba(255,158,51,.06); }
+</style>
+</head>
+<body>
+
+<header class="tt-header">
+    <h1><span class="tt-mark">Tiny&nbsp;Torque</span> · Control Loop Lab</h1>
+    <span class="tt-tagline">From the transient equations to firmware that compiles.</span>
+    <nav>
+        <a href="index.html">Hub</a>
+        <a href="car-setup.html">Car Setup</a>
+        <a href="control-lab.html" class="active">Control Lab</a>
+        <a href="calibration.html">Calibration</a>
+        <a href="telemetry.html">Telemetry</a>
+        <a href="motor-converter.html">Motor</a>
+    </nav>
+</header>
+
+<main class="tt-main wide">
+<div class="lab-grid">
+
+    <div class="panel sticky" style="padding:10px 0">
+        <ul class="steps" id="lessonNav"></ul>
+        <div style="padding:8px 12px 2px" class="tiny muted" id="vehicleLabel"></div>
+    </div>
+
+    <div id="lessonBody"></div>
+
+</div>
+</main>
+
+<script src="shared/tt-schema.js"></script>
+<script src="shared/tt-motor.js"></script>
+<script src="shared/tt-sim.js"></script>
+<script src="shared/tt-plot.js"></script>
+<script src="shared/tt-ui.js"></script>
+<script src="shared/tt-export.js"></script>
+<script src="shared/tt-cgen.js"></script>
+<script src="shared/tt-jgraph.js"></script>
+<script>
+(function () {
+'use strict';
+const S = TT.Schema, M = TT.Motor, Sim = TT.Sim, U = TT.UI, X = TT.Export, CG = TT.CGen, JG = TT.JGraph;
+const el = U.el, $ = U.$;
+
+// ---------------------------------------------------------------- state ----
+
+let design = null;
+let lesson = 0;
+
+/* Gains live outside the design: they are the thing being taught, and they
+   end up in the generated config header rather than in the vehicle JSON. */
+let gains = X.loadLocal('labGains', null) || {
+    spdKp: 12, spdKi: 30, spdKd: 0, aMax: 12, vMax: 10,
+    yawKp: 6, yawKi: 8, yawKd: 0.1, yawTrimDeg: 10, yawFilt: 0.25, yawRateMax: 3.5,
+    armSeconds: 1.0, calScale: 0.0, tractionEff: 0.99,
+    dragC0: 0.90, dragC1: 0.38, dragC2: 0.015,
+    // Experiment settings, remembered between visits.
+    useFeedForward: true, antiWindup: true, delayTicks: 0,
+    stepTarget: 4.5, understeer: 0.02, brakeDistance: 1.5, brakeDecel: 6.75
+};
+
+function saveGains() { X.saveLocal('labGains', gains); }
+
+function loadInitialDesign() {
+    const stashed = X.takeDesign();
+    if (stashed) { design = S.normalize(stashed); return; }
+    const saved = X.loadLocal('labDesign', null);
+    design = saved ? S.normalize(saved) : S.stockDesign();
+}
+function setDesign(d) {
+    design = S.normalize(d);
+    X.saveLocal('labDesign', design);
+    render();
+}
+
+/* The plant every lesson is talking about, derived from the loaded vehicle. */
+function plant() {
+    const ex = CG.extract(design, {});
+    return {
+        ex: ex,
+        cfg: {
+            kt: ex.motor.kt, resistance: ex.motor.resistance, gearRatio: ex.motor.gearRatio,
+            wheelRadius: ex.radius, efficiency: ex.motor.efficiency,
+            noLoadCurrent: ex.motor.noLoadCurrent, coulombScale: ex.motor.coulombScale,
+            viscousDamping: ex.motor.viscousDamping, maxCurrent: ex.motor.maxCurrent,
+            maxVoltage: ex.motor.maxVoltage, rotorInertia: ex.motor.rotorInertia,
+            motorCount: Math.max(1, ex.poweredCount), mass: ex.stats.totalMass,
+            dragC0: gains.dragC0, dragC1: gains.dragC1, dragC2: gains.dragC2,
+            tractionEff: gains.tractionEff,
+            escDeadbandV: ex.motor.escDeadbandV, escPwmSteps: ex.motor.escPwmSteps,
+            escTimeConstMs: ex.motor.escTimeConstMs, escSlewVPerS: ex.motor.escSlewVPerS
+        }
+    };
+}
+
+// -------------------------------------------------------------- lessons ----
+
+const LESSONS = [
+    { label: 'The vehicle', render: lessonVehicle },
+    { label: 'The motor transient', render: lessonMotor },
+    { label: 'Speed control', render: lessonSpeed },
+    { label: 'Steering', render: lessonSteer },
+    { label: 'Braking to a mark', render: lessonBrake },
+    { label: 'Generate firmware', render: lessonGenerate }
+];
+
+function render() {
+    const nav = U.clear($('#lessonNav'));
+    LESSONS.forEach(function (l, i) {
+        const li = el('li', { class: i === lesson ? 'active' : '' }, [
+            el('span', { class: 'num', text: String(i + 1) }),
+            el('span', { text: l.label })
+        ]);
+        li.addEventListener('click', function () { lesson = i; render(); });
+        nav.appendChild(li);
+    });
+    $('#vehicleLabel').innerHTML = design
+        ? 'Working on<br><b style="color:var(--fg-bright)">' + design.name + '</b>'
+        : 'No vehicle loaded';
+
+    const body = U.clear($('#lessonBody'));
+    LESSONS[lesson].render(body);
+}
+
+// ---- lesson 1: the vehicle and its derived constants ----------------------
+
+function lessonVehicle(root) {
+    const panel = el('div', { class: 'panel' });
+    panel.appendChild(el('h2', { text: 'The vehicle you are controlling' }));
+
+    const dz = el('div', { id: 'dropZone' }, [
+        el('div', { html: '<b>Drop a vehicle JSON here</b>, or click to browse.' }),
+        el('div', { class: 'tiny muted', text: 'Currently loaded: ' + (design ? design.name : 'nothing') })
+    ]);
+    panel.appendChild(dz);
+    const row = el('div', { class: 'btn-row' });
+    const stockBtn = el('button', { class: 'small', text: 'Use the stock RC car' });
+    stockBtn.addEventListener('click', function () { setDesign(S.stockDesign()); });
+    row.appendChild(stockBtn);
+    const setupBtn = el('button', { class: 'small ghost', text: 'Build one in Car Setup →' });
+    setupBtn.addEventListener('click', function () { location.href = 'car-setup.html'; });
+    row.appendChild(setupBtn);
+    panel.appendChild(row);
+    root.appendChild(panel);
+
+    X.dropZone(dz, function (files) {
+        X.readTextFile(files[0]).then(function (text) {
+            try { setDesign(JSON.parse(text)); }
+            catch (e) { alert('That did not parse as a vehicle JSON: ' + e.message); }
+        });
+    }, { accept: '.json' });
+
+    if (!design) return;
+
+    const p = plant(), ex = p.ex, g = ex.plant;
+
+    const derived = el('div', { class: 'panel' });
+    derived.appendChild(el('h2', { text: 'What the numbers say' }));
+    derived.appendChild(el('p', { class: 'small muted', html:
+        'Every control law below is built on these four quantities. They come from the vehicle ' +
+        'file — nothing here is a guess.' }));
+
+    derived.appendChild(el('div', { class: 'eq', html:
+        'K<sub>t</sub> = ' + ex.motor.kt.toFixed(6) + ' N·m/A &nbsp; gear = ' + ex.motor.gearRatio.toFixed(2) +
+        ' &nbsp; r = ' + ex.radius.toFixed(4) + ' m &nbsp; R = ' + ex.motor.resistance.toFixed(4) + ' Ω' +
+        ' &nbsp; η = ' + ex.motor.efficiency.toFixed(2) + ' &nbsp; × ' + ex.poweredCount + ' motors' }));
+
+    derived.appendChild(el('h3', { text: '1 · Back-EMF per unit road speed' }));
+    derived.appendChild(el('div', { class: 'eq', html:
+        'K<sub>t</sub>·gear / r = ' + ex.motor.kt.toFixed(6) + ' × ' + ex.motor.gearRatio.toFixed(2) +
+        ' / ' + ex.radius.toFixed(4) + ' = <b>' + g.bemfVPerMs.toFixed(4) + ' V per m/s</b>' }));
+    derived.appendChild(el('p', { class: 'small', html:
+        'A motor that is turning generates voltage. At ' + gains.stepTarget.toFixed(1) + ' m/s this car\'s motors ' +
+        'are already producing <b>' + (g.bemfVPerMs * gains.stepTarget).toFixed(2) + ' V</b> of opposition all by ' +
+        'themselves. Command less than that and the car slows down; command exactly that and it holds ' +
+        'speed with no current flowing at all. This one number is why the speed loop below can be ' +
+        'almost entirely feed-forward.' }));
+
+    derived.appendChild(el('h3', { text: '2 · Force per amp' }));
+    derived.appendChild(el('div', { class: 'eq', html:
+        '(K<sub>t</sub>·gear/r) · η · N = ' + g.bemfVPerMs.toFixed(4) + ' × ' + ex.motor.efficiency.toFixed(2) +
+        ' × ' + ex.poweredCount + ' = <b>' + g.forcePerAmpAll.toFixed(4) + ' N per amp</b>' }));
+    derived.appendChild(el('p', { class: 'small', html:
+        'The conversion between the electrical world and the mechanical one. Want ' +
+        '10 N of thrust? Ask for ' + (10 / g.forcePerAmpAll).toFixed(2) + ' A in each motor.' }));
+
+    derived.appendChild(el('h3', { text: '3 · Effective mass' }));
+    derived.appendChild(el('div', { class: 'eq', html:
+        'm + N·J·gear²/r² = ' + ex.stats.totalMass.toFixed(3) + ' + ' + g.reflectedInertia.toFixed(3) +
+        ' = <b>' + g.massEff.toFixed(3) + ' kg</b>' }));
+    derived.appendChild(el('p', { class: 'small', html:
+        'The rotors spin ' + ex.motor.gearRatio.toFixed(1) + '× faster than the wheels, and inertia reflects ' +
+        'through gearing as the <i>square</i> of the ratio. The result is ' +
+        '<b>' + g.reflectedInertia.toFixed(3) + ' kg</b> of apparent mass — ' +
+        (g.reflectedInertia / g.massEff * 100).toFixed(0) + ' % of the total — that never actually travels ' +
+        'anywhere. Use the plain vehicle mass in your force calculations and every acceleration you ' +
+        'command comes out ' + ((g.massEff / Math.max(0.001, ex.stats.totalMass) - 1) * 100).toFixed(0) +
+        ' % short.' }));
+
+    derived.appendChild(el('h3', { text: '4 · How fast the plant can respond' }));
+    derived.appendChild(el('div', { class: 'eq', html:
+        'τ = m<sub>eff</sub>·R / ((K<sub>t</sub>·gear/r)·(force per amp)) = <b>' +
+        (g.tauMech * 1000).toFixed(0) + ' ms</b>' }));
+    derived.appendChild(el('p', { class: 'small', html:
+        'Left alone at a fixed voltage, speed approaches its final value with this time constant — ' +
+        'about ' + (g.tauMech * 3 * 1000).toFixed(0) + ' ms to get most of the way there. A closed loop ' +
+        'is only worth having if it beats that, and it can only beat it by using the voltage headroom ' +
+        'the open-loop response leaves on the table.' }));
+
+    root.appendChild(derived);
+
+    const summary = el('div', { class: 'panel' });
+    summary.appendChild(el('h2', { text: 'Sensors your firmware will have' }));
+    const t = el('table', { class: 'compact' });
+    t.appendChild(el('tr', {}, [el('th', { text: 'Name' }), el('th', { text: 'Type' }), el('th', { text: 'What it gives you' })]));
+    const layouts = {
+        1: '[distance in metres] — reads max range when nothing is in view',
+        2: '[angular velocity rad/s, tick count] — the tick count is the un-noised one',
+        3: '[voltage, current, torque]',
+        5: 'a greyscale frame, not floats',
+        6: '[spring force N, compression 0–1, angle °]',
+        7: '[terminal volts, total amps, state of charge]'
+    };
+    S.normalize(design).sensors.forEach(function (s) {
+        t.appendChild(el('tr', {}, [
+            el('td', { html: '<code>' + s.name + '</code>' }),
+            el('td', { text: S.SensorTypeNames[s.kind] || '?' }),
+            el('td', { class: 'tiny muted', text: layouts[s.kind] || '' })
+        ]));
+    });
+    summary.appendChild(t);
+    if (ex.odoEnc.length) {
+        summary.appendChild(el('div', { class: 'callout good small', html:
+            'Speed will come from <b>' + ex.odoEnc.map(function (s) { return s.name; }).join(', ') + '</b>' +
+            (ex.odoEnc.every(function (s) { return !S.normalize(design).wheels[s.wheelIndex].powered; })
+                ? ' — all free-rolling wheels, which is the right choice: a driven wheel\'s encoder reads wheelspin, not ground speed.'
+                : '. Note some of these are on driven wheels, so they will over-read under acceleration.') }));
+    } else {
+        summary.appendChild(el('div', { class: 'callout warn small', html:
+            'No encoders fitted, so speed will fall back to the ABI <code>wheel_vel</code> channel — which is ' +
+            'derived from the same wheels but re-quantised and re-noised by the host. Fitting encoders gives ' +
+            'you a cleaner measurement.' }));
+    }
+    root.appendChild(summary);
+}
+
+// ---- lesson 2: open-loop motor transient ----------------------------------
+
+function lessonMotor(root) {
+    if (!design) return needVehicle(root);
+    const p = plant(), g = p.ex.plant;
+
+    const panel = el('div', { class: 'panel' });
+    panel.appendChild(el('h2', { text: 'What the motor does on its own' }));
+    panel.appendChild(el('p', { class: 'small', html:
+        'Apply a fixed voltage and let go. The current is whatever the applied voltage has left over ' +
+        'after the back-EMF takes its share, so as the car speeds up the current — and therefore the ' +
+        'force — falls away. That is the entire shape of the response, and it is why a DC motor is a ' +
+        'well-behaved first-order system rather than something that needs taming.' }));
+    panel.appendChild(el('div', { class: 'eq', html:
+        'I = (V − K<sub>t</sub>·ω<sub>motor</sub>) / R &nbsp;&nbsp;&nbsp; ' +
+        'm<sub>eff</sub> · dv/dt = F(I) − drag(v)' }));
+
+    const ctrls = el('div', { class: 'grid3' });
+    const state = { volts: p.ex.motor.maxVoltage };
+    ctrls.appendChild(U.slider({
+        label: 'Applied voltage', unit: 'V', min: 0, max: p.ex.motor.maxVoltage, step: 0.1, dp: 2,
+        get: function () { return state.volts; },
+        set: function (v) { state.volts = v; }, onChange: run
+    }));
+    panel.appendChild(ctrls);
+
+    const canvas = el('canvas', { class: 'tt-plot' });
+    panel.appendChild(el('div', { class: 'plotwrap' }, [canvas]));
+    const legend = el('div', {});
+    panel.appendChild(legend);
+    const readout = el('div', { class: 'metrics' });
+    panel.appendChild(readout);
+    root.appendChild(panel);
+
+    const plot = new TT.Plot(canvas, { height: 260, xLabel: 'time (s)', yLabel: 'speed (m/s)  ·  current (A)' });
+
+    function run() {
+        const sim = new Sim.Plant(p.cfg);
+        sim.reset(0);
+        const t = [], v = [], i = [], vv = [];
+        const dt = 0.005;
+        for (let k = 0; k < 1200; k++) {
+            const s = sim.step(state.volts, dt);
+            t.push(k * dt); v.push(s.v); i.push(s.current); vv.push(s.voltage);
+        }
+        plot.setSeries([
+            { name: 'speed (m/s)', x: t, y: v },
+            { name: 'current (A)', x: t, y: i, color: '#5aa9f0' },
+            { name: 'applied volts', x: t, y: vv, color: '#8d97a6', style: 'dashed' }
+        ]).draw();
+        plot.renderLegend(legend);
+
+        const vFinal = v[v.length - 1];
+        // Time to 63 % of the final value — the measured time constant.
+        let tau = 0;
+        for (let k = 0; k < v.length; k++) { if (v[k] >= 0.632 * vFinal) { tau = t[k]; break; } }
+        readout.innerHTML =
+            '<span>settles at <b>' + vFinal.toFixed(2) + ' m/s</b></span>' +
+            '<span>measured τ <b>' + (tau * 1000).toFixed(0) + ' ms</b></span>' +
+            '<span>predicted τ <b>' + (g.tauMech * 1000).toFixed(0) + ' ms</b></span>' +
+            '<span>peak current <b>' + Math.max.apply(null, i).toFixed(1) + ' A</b></span>' +
+            '<span>current at speed <b>' + i[i.length - 1].toFixed(2) + ' A</b></span>';
+    }
+    run();
+
+    const note = el('div', { class: 'panel sub' });
+    note.appendChild(el('h4', { text: 'What to notice' }));
+    note.appendChild(el('ul', { class: 'small' }, [
+        el('li', { html: 'Current is huge at rest and small at speed. All the heat, and all the ' +
+            'stress on your ESC, lives in the first fraction of a second.' }),
+        el('li', { html: 'The predicted and measured time constants agree, which is the point: the ' +
+            'closed-form τ is trustworthy enough to tune against before you ever run the car.' }),
+        el('li', { html: 'The final speed is below the free speed of ' + g.noLoadSpeed.toFixed(1) +
+            ' m/s because drag takes its cut. Open-loop voltage is not a speed command.' }),
+        el('li', { html: 'Turn the voltage down and the settling time barely changes. A first-order ' +
+            'system\'s speed of response is a property of the plant, not of how hard you push it — ' +
+            'which is exactly what a feedback loop is for.' })
+    ]));
+    root.appendChild(note);
+}
+
+// ---- lesson 3: closed-loop speed ------------------------------------------
+
+function lessonSpeed(root) {
+    if (!design) return needVehicle(root);
+    const p = plant(), g = p.ex.plant;
+
+    const intro = el('div', { class: 'panel' });
+    intro.appendChild(el('h2', { text: 'Holding a speed' }));
+    intro.appendChild(el('p', { class: 'small', html:
+        'The naive approach is to put a PID between the speed error and the voltage and tune until it ' +
+        'behaves. It works, but it makes the controller responsible for discovering things you already ' +
+        'know — like the fact that holding ' + gains.stepTarget.toFixed(1) + ' m/s needs about ' +
+        (g.bemfVPerMs * gains.stepTarget).toFixed(2) + ' V.' }));
+    intro.appendChild(el('p', { class: 'small', html:
+        'Instead, invert the model. Decide on an acceleration, turn it into a force, turn that into a ' +
+        'current, and turn <i>that</i> into a voltage:' }));
+    intro.appendChild(el('div', { class: 'eq', html:
+        'F = m<sub>eff</sub>·a + drag(v) &nbsp;→&nbsp; I = F / (force per amp) &nbsp;→&nbsp; ' +
+        '<b>V = (K<sub>t</sub>·gear/r)·v + R·I</b>' }));
+    const cruiseI = (gains.dragC0 + gains.dragC1 * gains.stepTarget + gains.dragC2 * gains.stepTarget * gains.stepTarget) / g.forcePerAmpAll;
+    const cruiseV = g.bemfVPerMs * gains.stepTarget + p.ex.motor.resistance * cruiseI;
+    intro.appendChild(el('p', { class: 'small', html:
+        'At a steady ' + gains.stepTarget.toFixed(1) + ' m/s that comes to <b>' + cruiseV.toFixed(3) + ' V</b>, of which ' +
+        '<b>' + (g.bemfVPerMs * gains.stepTarget / cruiseV * 100).toFixed(0) + ' %</b> is the back-EMF term. The PID is ' +
+        'left holding the remaining few percent — so it can be gentle and still hold tight. That is the ' +
+        'whole trick, and it is why the gains below are trim gains, not the loop.' }));
+    root.appendChild(intro);
+
+    const panel = el('div', { class: 'panel' });
+    panel.appendChild(el('h3', { text: 'Try it' }));
+
+    const ctrls = el('div', { class: 'grid3' });
+    ctrls.appendChild(U.slider({ label: 'Proportional  k_p', unit: '(m/s²) per (m/s)', min: 0, max: 40, step: 0.5, dp: 1,
+        get: function () { return gains.spdKp; }, set: function (v) { gains.spdKp = v; }, onChange: run }));
+    ctrls.appendChild(U.slider({ label: 'Integral  k_i', unit: '', min: 0, max: 80, step: 1, dp: 1,
+        get: function () { return gains.spdKi; }, set: function (v) { gains.spdKi = v; }, onChange: run }));
+    ctrls.appendChild(U.slider({ label: 'Derivative  k_d', unit: '', min: 0, max: 2, step: 0.05, dp: 2,
+        get: function () { return gains.spdKd; }, set: function (v) { gains.spdKd = v; }, onChange: run }));
+    ctrls.appendChild(U.slider({ label: 'Target speed', unit: 'm/s', min: 0.5, max: 12, step: 0.1, dp: 1,
+        get: function () { return gains.stepTarget; }, set: function (v) { gains.stepTarget = v; }, onChange: run }));
+    ctrls.appendChild(U.slider({ label: 'Acceleration limit', unit: 'm/s²', min: 1, max: 30, step: 0.5, dp: 1,
+        get: function () { return gains.aMax; }, set: function (v) { gains.aMax = v; }, onChange: run }));
+    ctrls.appendChild(U.slider({ label: 'Loop dead time', unit: 'ticks', min: 0, max: 10, step: 1, dp: 0,
+        get: function () { return gains.delayTicks; }, set: function (v) { gains.delayTicks = v; }, onChange: run,
+        hint: 'Sensor latency plus actuation delay, in 10 ms control ticks.' }));
+    panel.appendChild(ctrls);
+
+    const toggles = el('div', { class: 'btn-row' });
+    toggles.appendChild(mkToggle('Feed-forward', function () { return gains.useFeedForward; },
+        function (v) { gains.useFeedForward = v; run(); }));
+    toggles.appendChild(mkToggle('Anti-windup', function () { return gains.antiWindup; },
+        function (v) { gains.antiWindup = v; run(); }));
+    panel.appendChild(toggles);
+
+    const canvas = el('canvas', { class: 'tt-plot' });
+    panel.appendChild(el('div', { class: 'plotwrap' }, [canvas]));
+    const legend = el('div', {});
+    panel.appendChild(legend);
+    const metrics = el('div', { class: 'metrics' });
+    panel.appendChild(metrics);
+    const verdict = el('div', {});
+    panel.appendChild(verdict);
+    const jgRow = el('div', { class: 'btn-row' });
+    panel.appendChild(jgRow);
+    root.appendChild(panel);
+
+    const plot = new TT.Plot(canvas, { height: 280, xLabel: 'time (s)', yLabel: 'speed (m/s)' });
+    let lastRun = null;
+
+    function run() {
+        saveGains();
+        const out = Sim.runSpeedStep({
+            duration: 4, stepTime: 0.4, vStart: 0, vTarget: gains.stepTarget,
+            kp: gains.spdKp, ki: gains.spdKi, kd: gains.spdKd, aMax: gains.aMax,
+            useFeedForward: gains.useFeedForward, antiWindup: gains.antiWindup,
+            delayTicks: gains.delayTicks, plant: p.cfg
+        });
+        lastRun = out;
+        plot.setSeries([
+            { name: 'target', x: out.t, y: out.sp, color: '#8d97a6', style: 'dashed' },
+            { name: 'speed', x: out.t, y: out.v },
+            { name: 'volts', x: out.t, y: out.volt, color: '#4fc98a', axis: 'right' },
+            { name: 'amps', x: out.t, y: out.current, color: '#5aa9f0', axis: 'right' }
+        ]).setBands([{
+            yLo: gains.stepTarget * 0.95, yHi: gains.stepTarget * 1.05,
+            color: 'rgba(255,158,51,0.07)'
+        }]).draw();
+        plot.renderLegend(legend);
+
+        const m = out.metrics;
+        metrics.innerHTML = m.found
+            ? '<span>rise 10–90 % <b>' + (m.riseTime >= 0 ? (m.riseTime * 1000).toFixed(0) + ' ms' : 'n/a') + '</b></span>' +
+              '<span>overshoot <b>' + m.overshootPct.toFixed(1) + ' %</b></span>' +
+              '<span>settling ±5 % <b>' + (m.settlingTime >= 0 ? (m.settlingTime * 1000).toFixed(0) + ' ms' : 'never') + '</b></span>' +
+              '<span>steady-state error <b>' + (m.ssError * 1000).toFixed(0) + ' mm/s</b></span>'
+            : '<span>no clean step found</span>';
+
+        U.clear(verdict);
+        const notes = [];
+        if (!gains.useFeedForward) {
+            notes.push(['warn', 'With feed-forward off the PID has to produce the whole ' + cruiseV.toFixed(2) +
+                ' V by itself, which it can only do by holding a standing error in the integrator. ' +
+                'Watch how much slower it is to settle, and how the response changes completely when you ' +
+                'change the target speed — the gains are now speed-dependent.']);
+        }
+        if (m.found && m.overshootPct > 25) {
+            notes.push(['warn', 'Overshooting ' + m.overshootPct.toFixed(0) + ' %. On a real car that is ' +
+                'the tyres breaking traction on corner exit. Lower k_i, or cap the acceleration.']);
+        }
+        if (m.found && m.riseTime > 0 && m.riseTime < g.tauMech * 0.5) {
+            notes.push(['', 'Rising faster than the open-loop time constant of ' + (g.tauMech * 1000).toFixed(0) +
+                ' ms — the loop is genuinely earning its keep. Check the current trace: this speed is ' +
+                'being bought with amps, and there is a limit.']);
+        }
+        if (gains.delayTicks >= 4 && m.found && m.overshootPct > 15) {
+            notes.push(['bad', 'Dead time is doing this. ' + (gains.delayTicks * 10) + ' ms of delay means the ' +
+                'controller is always reacting to where the car was, not where it is. No amount of ' +
+                'gain fixes that — the fix is a faster sensor or a slower loop.']);
+        }
+        if (!gains.antiWindup) {
+            notes.push(['warn', 'Anti-windup is off. While the output is saturated the integrator keeps ' +
+                'accumulating, so it has to be un-wound before the controller can back off — that is the ' +
+                'long flat overshoot you see.']);
+        }
+        notes.forEach(function (n) {
+            verdict.appendChild(el('div', { class: 'callout ' + n[0] + ' small', html: n[1] }));
+        });
+
+        U.clear(jgRow);
+        jgRow.appendChild(JG.button('speed_step', function () {
+            return JG.figure('speed_step', 'Closed-loop speed step — ' + design.name, out.t, [
+                { name: 'target', data: out.sp },
+                { name: 'speed', data: out.v },
+                { name: 'volts', data: out.volt },
+                { name: 'amps', data: out.current }
+            ], { xLabel: 'time (s)', yLabel: 'm/s, V, A' });
+        }));
+    }
+    run();
+}
+
+// ---- lesson 4: steering ---------------------------------------------------
+
+function lessonSteer(root) {
+    if (!design) return needVehicle(root);
+    const p = plant(), ex = p.ex;
+
+    const intro = el('div', { class: 'panel' });
+    intro.appendChild(el('h2', { text: 'Steering to a yaw rate' }));
+    intro.appendChild(el('p', { class: 'small', html:
+        'Steering angle is not the useful quantity — how fast the car is rotating is. The same ' +
+        'steering angle gives a completely different turn rate at 2 m/s and at 8 m/s, so a controller ' +
+        'that commands angles has to be re-tuned for every speed.' }));
+    intro.appendChild(el('p', { class: 'small', html:
+        'The kinematic bicycle model gives the feed-forward: for a wheelbase L, a steering angle δ at ' +
+        'speed v produces a yaw rate of v·tan(δ)/L. Invert it and you have your angle.' }));
+    intro.appendChild(el('div', { class: 'eq', html:
+        'δ = atan( L · ψ̇<sub>target</sub> / v ) &nbsp;&nbsp; with L = ' + ex.wheelbase.toFixed(3) + ' m' }));
+    intro.appendChild(el('p', { class: 'small', html:
+        'That model assumes the tyres go exactly where they point. Real ones need a slip angle to make ' +
+        'side force, so the car turns less than the geometry promises — understeer. The feed-forward ' +
+        'gets you most of the way; a PID on yaw-rate error absorbs the rest without you ever having to ' +
+        'know the tyre stiffness.' }));
+    root.appendChild(intro);
+
+    const panel = el('div', { class: 'panel' });
+    panel.appendChild(el('h3', { text: 'Try it' }));
+    const ctrls = el('div', { class: 'grid3' });
+    ctrls.appendChild(U.slider({ label: 'Yaw k_p', unit: 'deg per rad/s', min: 0, max: 30, step: 0.5, dp: 1,
+        get: function () { return gains.yawKp; }, set: function (v) { gains.yawKp = v; }, onChange: run }));
+    ctrls.appendChild(U.slider({ label: 'Yaw k_i', unit: '', min: 0, max: 40, step: 0.5, dp: 1,
+        get: function () { return gains.yawKi; }, set: function (v) { gains.yawKi = v; }, onChange: run }));
+    ctrls.appendChild(U.slider({ label: 'Yaw k_d', unit: '', min: 0, max: 1, step: 0.01, dp: 2,
+        get: function () { return gains.yawKd; }, set: function (v) { gains.yawKd = v; }, onChange: run }));
+    ctrls.appendChild(U.slider({ label: 'Speed through the turn', unit: 'm/s', min: 0.5, max: 12, step: 0.1, dp: 1,
+        get: function () { return gains.stepTarget; }, set: function (v) { gains.stepTarget = v; }, onChange: run }));
+    ctrls.appendChild(U.slider({ label: 'Understeer', unit: '', min: 0, max: 0.08, step: 0.002, dp: 3,
+        get: function () { return gains.understeer; }, set: function (v) { gains.understeer = v; }, onChange: run,
+        hint: 'How much the real car falls short of the kinematic prediction. 0 = the model is perfect.' }));
+    ctrls.appendChild(U.slider({ label: 'Trim authority', unit: '°', min: 0, max: 25, step: 0.5, dp: 1,
+        get: function () { return gains.yawTrimDeg; }, set: function (v) { gains.yawTrimDeg = v; }, onChange: run,
+        hint: 'How much steering the PID may add on top of the feed-forward.' }));
+    panel.appendChild(ctrls);
+    panel.appendChild(el('div', { class: 'btn-row' }, [
+        mkToggle('Feed-forward', function () { return gains.useFeedForward; },
+            function (v) { gains.useFeedForward = v; run(); })
+    ]));
+
+    const canvas = el('canvas', { class: 'tt-plot' });
+    panel.appendChild(el('div', { class: 'plotwrap' }, [canvas]));
+    const legend = el('div', {});
+    panel.appendChild(legend);
+    const metrics = el('div', { class: 'metrics' });
+    panel.appendChild(metrics);
+    const verdict = el('div', {});
+    panel.appendChild(verdict);
+    const jgRow = el('div', { class: 'btn-row' });
+    panel.appendChild(jgRow);
+    root.appendChild(panel);
+
+    const plot = new TT.Plot(canvas, { height: 280, xLabel: 'time (s)', yLabel: 'yaw rate (rad/s)' });
+
+    function run() {
+        saveGains();
+        const target = 50 * Math.PI / 180;
+        const out = Sim.runYawStep({
+            duration: 2.5, stepTime: 0.25, speed: gains.stepTarget, yawRateTarget: target,
+            kp: gains.yawKp, ki: gains.yawKi, kd: gains.yawKd, maxTrimDeg: gains.yawTrimDeg,
+            useFeedForward: gains.useFeedForward, understeerGrad: gains.understeer,
+            wheelbase: ex.wheelbase, servoRateDegPerSec: design.steerRate,
+            maxSteerDeg: ex.steerAngle, delayTicks: gains.delayTicks
+        });
+        plot.setSeries([
+            { name: 'target ψ̇', x: out.t, y: out.sp, color: '#8d97a6', style: 'dashed' },
+            { name: 'actual ψ̇', x: out.t, y: out.yawRate },
+            { name: 'steer (°)', x: out.t, y: out.steer, color: '#4fc98a', axis: 'right' },
+            { name: 'feed-forward (°)', x: out.t, y: out.ff, color: '#c58af0', axis: 'right', style: 'dashed' }
+        ]).draw();
+        plot.renderLegend(legend);
+
+        const m = out.metrics;
+        const ffDeg = Math.atan2(ex.wheelbase * target, Math.max(0.5, gains.stepTarget)) * 180 / Math.PI;
+        const radius = gains.stepTarget / Math.max(1e-3, target);
+        const aLat = gains.stepTarget * target;
+        metrics.innerHTML =
+            '<span>feed-forward angle <b>' + ffDeg.toFixed(2) + '°</b></span>' +
+            '<span>final steer <b>' + out.steer[out.steer.length - 1].toFixed(2) + '°</b></span>' +
+            '<span>turn radius <b>' + radius.toFixed(2) + ' m</b></span>' +
+            '<span>lateral accel <b>' + aLat.toFixed(1) + ' m/s² (' + (aLat / 9.81).toFixed(2) + ' g)</b></span>' +
+            (m.found ? '<span>rise <b>' + (m.riseTime * 1000).toFixed(0) + ' ms</b></span>' : '');
+
+        U.clear(verdict);
+        const extra = out.steer[out.steer.length - 1] - ffDeg;
+        if (gains.useFeedForward && Math.abs(extra) > 0.05) {
+            verdict.appendChild(el('div', { class: 'callout small', html:
+                'The PID is holding <b>' + extra.toFixed(2) + '° extra lock</b> beyond what the geometry ' +
+                'predicted. That gap <i>is</i> the understeer — and notice you never had to measure a ' +
+                'tyre to deal with it.' }));
+        }
+        if (!gains.useFeedForward) {
+            verdict.appendChild(el('div', { class: 'callout warn small', html:
+                'Without feed-forward the loop starts from zero steering every time and has to build ' +
+                'the entire ' + ffDeg.toFixed(1) + '° through error. It gets there, but late — and on a ' +
+                'real corner "late" means you have already run wide.' }));
+        }
+        if (aLat / 9.81 > 1.2) {
+            verdict.appendChild(el('div', { class: 'callout bad small', html:
+                'This corner asks for ' + (aLat / 9.81).toFixed(2) + ' g. Sticky RC rubber tops out near ' +
+                '1.1–1.3 g, so on a real car the tyres would let go before the controller ever reached ' +
+                'its target — no gain will fix a request the surface cannot honour.' }));
+        }
+        if (Math.abs(out.steer[out.steer.length - 1]) > ex.steerAngle * 0.95) {
+            verdict.appendChild(el('div', { class: 'callout bad small', html:
+                'Steering is pinned at full lock. Beyond this the loop has no authority left, so it ' +
+                'will simply track worse and worse as you ask for more.' }));
+        }
+
+        U.clear(jgRow);
+        jgRow.appendChild(JG.button('yaw_step', function () {
+            return JG.figure('yaw_step', 'Yaw-rate step — ' + design.name, out.t, [
+                { name: 'target', data: out.sp },
+                { name: 'yaw_rate', data: out.yawRate },
+                { name: 'steer_deg', data: out.steer },
+                { name: 'feedforward_deg', data: out.ff }
+            ], { xLabel: 'time (s)', yLabel: 'rad/s and degrees' });
+        }));
+    }
+    run();
+}
+
+// ---- lesson 5: braking ----------------------------------------------------
+
+function lessonBrake(root) {
+    if (!design) return needVehicle(root);
+    const p = plant();
+
+    const intro = el('div', { class: 'panel' });
+    intro.appendChild(el('h2', { text: 'Stopping on a mark' }));
+    intro.appendChild(el('p', { class: 'small', html:
+        'Stopping quickly is easy. Stopping <i>at a particular place</i> is a different problem, and ' +
+        'the trick is to stop controlling speed against time and start controlling it against distance ' +
+        'remaining.' }));
+    intro.appendChild(el('div', { class: 'eq', html:
+        'v<sub>target</sub> = √( 2 · a · s<sub>remaining</sub> )' }));
+    intro.appendChild(el('p', { class: 'small', html:
+        'Follow that curve and you arrive at zero speed exactly as distance runs out, from wherever ' +
+        'you start and whatever happens on the way. Fall behind it and the controller sees the error ' +
+        'and brakes harder; get ahead and it eases off.' }));
+    intro.appendChild(el('p', { class: 'small', html:
+        'There is a catch, and it is a physical one. A hobby ESC brakes by shorting the motor ' +
+        'windings, so the braking force comes from the back-EMF driving current through the winding ' +
+        'resistance — which means it is <b>proportional to speed</b> and fades to nothing exactly when ' +
+        'you need it most. That is why the last part of the stop needs a friction brake.' }));
+    intro.appendChild(el('div', { class: 'eq', html:
+        'F<sub>ESC</sub> = duty · (N·K<sub>t</sub>²·gear²·η / (R·r²)) · v' +
+        '<div class="note">Strong at speed, zero at rest — and capped by whatever grip the driven axle has left once braking has transferred weight off it.</div>' }));
+    root.appendChild(intro);
+
+    const panel = el('div', { class: 'panel' });
+    panel.appendChild(el('h3', { text: 'Try it' }));
+    const ctrls = el('div', { class: 'grid3' });
+    ctrls.appendChild(U.slider({ label: 'Entry speed', unit: 'm/s', min: 1, max: 12, step: 0.1, dp: 1,
+        get: function () { return gains.stepTarget; }, set: function (v) { gains.stepTarget = v; }, onChange: run }));
+    ctrls.appendChild(U.slider({ label: 'Stopping distance', unit: 'm', min: 0.3, max: 8, step: 0.1, dp: 2,
+        get: function () { return gains.brakeDistance; }, set: function (v) { gains.brakeDistance = v; }, onChange: run }));
+    ctrls.appendChild(U.slider({ label: 'Deceleration', unit: 'm/s²', min: 1, max: 20, step: 0.25, dp: 2,
+        get: function () { return gains.brakeDecel; }, set: function (v) { gains.brakeDecel = v; }, onChange: run,
+        hint: 'Set it to v²/(2·distance) and the profile is consistent with the distance you asked for.' }));
+    panel.appendChild(ctrls);
+
+    const fit = el('div', { class: 'btn-row' });
+    const fitBtn = el('button', { class: 'small', text: 'Match the deceleration to the distance' });
+    fitBtn.addEventListener('click', function () {
+        gains.brakeDecel = gains.stepTarget * gains.stepTarget / (2 * Math.max(0.05, gains.brakeDistance));
+        render();
+    });
+    fit.appendChild(fitBtn);
+    panel.appendChild(fit);
+
+    const canvas = el('canvas', { class: 'tt-plot' });
+    panel.appendChild(el('div', { class: 'plotwrap' }, [canvas]));
+    const legend = el('div', {});
+    panel.appendChild(legend);
+    const metrics = el('div', { class: 'metrics' });
+    panel.appendChild(metrics);
+    const verdict = el('div', {});
+    panel.appendChild(verdict);
+    const jgRow = el('div', { class: 'btn-row' });
+    panel.appendChild(jgRow);
+    root.appendChild(panel);
+
+    const plot = new TT.Plot(canvas, { height: 280, xLabel: 'distance travelled (m)', yLabel: 'speed (m/s)' });
+
+    function run() {
+        saveGains();
+        const out = Sim.runBrakeProfile({
+            v0: gains.stepTarget, distance: gains.brakeDistance, decel: gains.brakeDecel,
+            plant: p.cfg
+        });
+        plot.setSeries([
+            { name: 'profile target', x: out.s, y: out.vref, color: '#8d97a6', style: 'dashed' },
+            { name: 'actual speed', x: out.s, y: out.v },
+            { name: 'ESC brake (N)', x: out.s, y: out.escN, color: '#5aa9f0', axis: 'right' },
+            { name: 'friction brake (N)', x: out.s, y: out.fricN, color: '#f0685a', axis: 'right' }
+        ]).setMarkers([{ x: gains.brakeDistance, label: 'target', color: '#f0c04a' }]).draw();
+        plot.renderLegend(legend);
+
+        metrics.innerHTML =
+            '<span>stopped at <b>' + out.stopDistance.toFixed(3) + ' m</b></span>' +
+            '<span>error <b>' + (out.errorMm >= 0 ? '+' : '') + out.errorMm.toFixed(0) + ' mm</b></span>' +
+            '<span>peak ESC brake <b>' + Math.max.apply(null, out.escN).toFixed(1) + ' N</b></span>' +
+            '<span>peak friction <b>' + Math.max.apply(null, out.fricN).toFixed(1) + ' N</b></span>';
+
+        U.clear(verdict);
+        const gForce = gains.brakeDecel / 9.81;
+        if (gForce > 1.2) {
+            verdict.appendChild(el('div', { class: 'callout bad small', html:
+                'Asking for ' + gForce.toFixed(2) + ' g of deceleration. That is beyond what rubber on ' +
+                'asphalt gives you, so the real car would simply slide past the mark with the wheels locked.' }));
+        } else if (gForce > 0.8) {
+            verdict.appendChild(el('div', { class: 'callout warn small', html:
+                gForce.toFixed(2) + ' g is most of the available grip. It will work on a clean surface ' +
+                'and be unrepeatable on a dusty one.' }));
+        }
+        const escShare = Math.max.apply(null, out.escN) / Math.max(1e-6, Math.max.apply(null, out.totalN));
+        verdict.appendChild(el('div', { class: 'callout small', html:
+            'The motor brake supplied at most <b>' + (escShare * 100).toFixed(0) + ' %</b> of the peak ' +
+            'braking force, and by the end of the stop it was contributing essentially nothing — look at ' +
+            'how the blue trace collapses while the red one has to take over. A controller that assumes ' +
+            'the motor can hold the car still will roll off the mark.' }));
+
+        U.clear(jgRow);
+        jgRow.appendChild(JG.button('brake_profile', function () {
+            return JG.figure('brake_profile', 'Braking to a mark — ' + design.name, out.s, [
+                { name: 'v_ref', data: out.vref },
+                { name: 'v_actual', data: out.v },
+                { name: 'esc_brake_N', data: out.escN },
+                { name: 'friction_N', data: out.fricN }
+            ], { xLabel: 'distance (m)', yLabel: 'm/s and N' });
+        }));
+    }
+    run();
+}
+
+// ---- lesson 6: generate ---------------------------------------------------
+
+let activeFile = 0;
+
+function lessonGenerate(root) {
+    if (!design) return needVehicle(root);
+
+    const gen = CG.generate(design, gains, { name: design.name });
+
+    const intro = el('div', { class: 'panel' });
+    intro.appendChild(el('h2', { text: 'Your firmware' }));
+    intro.appendChild(el('p', { class: 'small', html:
+        'Everything above, written out as C: the plant constants from your vehicle, the gains you ' +
+        'tuned, and the two loops built the way the lessons built them. It is split the way the rest ' +
+        'of this project splits firmware — a portable library that knows nothing about the simulator, ' +
+        'and one thin adapter that does all the talking.' }));
+    intro.appendChild(el('div', { class: 'grid2' }, [
+        el('div', {}, [
+            el('h4', { text: 'Portable — compiles anywhere' }),
+            el('ul', { class: 'small' }, [
+                el('li', { html: '<code>' + gen.id + '_cfg.h</code> — every constant, grouped by whether it is a measurement or a choice.' }),
+                el('li', { html: '<code>' + gen.id + '.h</code> / <code>.c</code> — the control laws, with state in a struct you own. No globals, no allocation.' })
+            ])
+        ]),
+        el('div', {}, [
+            el('h4', { text: 'Host-specific — the only file that knows about the sim' }),
+            el('ul', { class: 'small' }, [
+                el('li', { html: '<code>' + gen.id + '_main.c</code> — binds sensors by name, converts units, writes actuator slots and debug channels.' }),
+                el('li', { html: 'To run the same logic on a microcontroller you replace this one file.' })
+            ])
+        ])
+    ]));
+    root.appendChild(intro);
+
+    const cfgPanel = el('div', { class: 'panel' });
+    cfgPanel.appendChild(el('h3', { text: 'Behaviour settings baked in' }));
+    cfgPanel.appendChild(el('div', { class: 'grid3' }, [
+        U.slider({ label: 'Speed limit', unit: 'm/s', min: 1, max: 20, step: 0.5, dp: 1,
+            get: function () { return gains.vMax; }, set: function (v) { gains.vMax = v; }, onChange: refreshFiles }),
+        U.slider({ label: 'Yaw-rate limit', unit: 'rad/s', min: 0.5, max: 8, step: 0.1, dp: 2,
+            get: function () { return gains.yawRateMax; }, set: function (v) { gains.yawRateMax = v; }, onChange: refreshFiles }),
+        U.slider({ label: 'Yaw-rate filter α', unit: '', min: 0.02, max: 1, step: 0.01, dp: 2,
+            get: function () { return gains.yawFilt; }, set: function (v) { gains.yawFilt = v; }, onChange: refreshFiles,
+            hint: 'Low-pass on the gyro. Lower is smoother but adds lag.' }),
+        U.slider({ label: 'Arming time', unit: 's', min: 0, max: 5, step: 0.1, dp: 1,
+            get: function () { return gains.armSeconds; }, set: function (v) { gains.armSeconds = v; }, onChange: refreshFiles,
+            hint: 'How long it sits still self-checking before it will move.' }),
+        U.slider({ label: 'Encoder scale correction', unit: '', min: -0.05, max: 0.10, step: 0.001, dp: 4,
+            get: function () { return gains.calScale; }, set: function (v) { gains.calScale = v; }, onChange: refreshFiles,
+            hint: 'Measured, not guessed — the Calibration Companion produces this.' }),
+        U.slider({ label: 'Traction efficiency', unit: '', min: 0.5, max: 1, step: 0.01, dp: 2,
+            get: function () { return gains.tractionEff; }, set: function (v) { gains.tractionEff = v; }, onChange: refreshFiles,
+            hint: 'Fraction of commanded force that reaches the road.' })
+    ]));
+    cfgPanel.appendChild(el('div', { class: 'callout warn small', html:
+        '<b>Two of these are placeholders until you measure them.</b> The encoder scale correction and ' +
+        'the drag polynomial can only come from the car itself. Until then the feed-forward is ' +
+        'approximate and the PID is quietly covering for it — which works, right up until you need ' +
+        'accuracy. The <a href="calibration.html">Calibration Companion</a> walks the measurements.' }));
+    root.appendChild(cfgPanel);
+
+    const filePanel = el('div', { class: 'panel' });
+    filePanel.appendChild(el('h3', { text: 'The files' }));
+    const tabs = el('div', { class: 'filetabs' });
+    filePanel.appendChild(tabs);
+    const pre = el('pre', { style: 'margin-top:0;border-radius:0 5px 5px 5px;max-height:520px' });
+    const code = el('code', {});
+    pre.appendChild(code);
+    filePanel.appendChild(pre);
+
+    function refreshFiles() {
+        saveGains();
+        const g2 = CG.generate(design, gains, { name: design.name });
+        U.clear(tabs);
+        g2.files.forEach(function (f, i) {
+            const t = el('span', { class: 'filetab' + (i === activeFile ? ' on' : ''), text: f.name });
+            t.addEventListener('click', function () { activeFile = i; refreshFiles(); });
+            tabs.appendChild(t);
+        });
+        code.textContent = g2.files[Math.min(activeFile, g2.files.length - 1)].text;
+        return g2;
+    }
+    refreshFiles();
+    root.appendChild(filePanel);
+
+    const savePanel = el('div', { class: 'panel' });
+    savePanel.appendChild(el('h3', { text: 'Save and build' }));
+    savePanel.appendChild(el('p', { class: 'small', html: X.pathHelp('controllers') }));
+    const status = el('div', { class: 'status', style: 'margin:8px 0' });
+    const btns = el('div', { class: 'btn-row' });
+
+    if (X.supported) {
+        const pick = el('button', { class: 'primary', text: 'Save into my Controllers folder…' });
+        pick.addEventListener('click', function () {
+            const g2 = CG.generate(design, gains, { name: design.name });
+            status.textContent = 'Waiting for you to choose the Controllers folder…';
+            X.savedDirectory('controllers').then(function (found) {
+                if (found && found.needsPermission) {
+                    return X.requestPermission(found.handle).then(function (ok) {
+                        return ok ? found.handle : X.pickDirectory('controllers');
+                    });
+                }
+                return found || X.pickDirectory('controllers');
+            }).then(function (dir) {
+                // The library files go in their own folder; the adapter belongs
+                // beside the other sim targets.
+                const libFiles = g2.files.filter(function (f) { return f.name.indexOf('_main.c') < 0; });
+                const mainFile = g2.files.filter(function (f) { return f.name.indexOf('_main.c') >= 0; });
+                return X.writeFiles(dir, libFiles, g2.id).then(function () {
+                    return dir.getDirectoryHandle('targets', { create: true })
+                        .then(function (t) { return t.getDirectoryHandle('sim', { create: true }); })
+                        .then(function (sim) { return X.writeFile(sim, mainFile[0].name, mainFile[0].text); });
+                });
+            }).then(function () {
+                status.innerHTML = '<span class="ok">Written.</span> Library in <code>' + gen.id +
+                    '/</code>, adapter in <code>targets/sim/</code>. Now add the CMake lines from ' +
+                    '<code>BUILD.txt</code> and run <code>build.ps1</code>.';
+            }).catch(function (e) {
+                status.innerHTML = '<span class="err">' +
+                    (e && e.name === 'AbortError' ? 'Cancelled.' : (e.message || String(e))) + '</span>';
+            });
+        });
+        btns.appendChild(pick);
+    }
+    const dlAll = el('button', { class: X.supported ? '' : 'primary', text: 'Download all files' });
+    dlAll.addEventListener('click', function () {
+        const g2 = CG.generate(design, gains, { name: design.name });
+        X.downloadAll(g2.files.map(function (f) { return { name: f.name, text: f.text, mime: 'text/plain' }; }));
+        status.innerHTML = '<span class="ok">Downloading ' + g2.files.length + ' files.</span> ' +
+            'See BUILD.txt for where each one goes.';
+    });
+    btns.appendChild(dlAll);
+    savePanel.appendChild(btns);
+    savePanel.appendChild(status);
+
+    savePanel.appendChild(el('h4', { text: 'Then' }));
+    savePanel.appendChild(el('pre', {}, [el('code', { text:
+        'add_library(' + gen.id + 'lib STATIC ' + gen.id + '/' + gen.id + '.c)\n' +
+        'target_include_directories(' + gen.id + 'lib PUBLIC ' + gen.id + ')\n' +
+        'target_link_libraries(' + gen.id + 'lib PUBLIC pidlib)\n\n' +
+        'add_controller(' + gen.id + '_controller targets/sim/' + gen.id + '_main.c ' + gen.id + 'lib)'
+    })]));
+    savePanel.appendChild(el('pre', {}, [el('code', { text: './build.ps1 -Target ' + gen.id + '_controller' })]));
+    savePanel.appendChild(el('p', { class: 'small', html:
+        'Finally, set <code>"controllerDll": "' + gen.id + '_controller.dll"</code> on the vehicle so ' +
+        'autonomous mode loads it.' }));
+    root.appendChild(savePanel);
+}
+
+// ---- helpers ---------------------------------------------------------------
+
+function needVehicle(root) {
+    root.appendChild(el('div', { class: 'panel' }, [
+        el('div', { class: 'callout warn', html:
+            'Load a vehicle first — go back to <b>The vehicle</b>.' })
+    ]));
+}
+
+function mkToggle(label, get, set) {
+    const c = el('span', { class: 'chip' + (get() ? ' on' : ''), text: label });
+    c.addEventListener('click', function () { set(!get()); c.classList.toggle('on', get()); });
+    return c;
+}
+
+// ----------------------------------------------------------------- boot ----
+
+loadInitialDesign();
+render();
+window.addEventListener('resize', function () { render(); });
+
+})();
+</script>
+</body>
+</html>

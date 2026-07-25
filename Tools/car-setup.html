@@ -1,0 +1,1359 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Tiny Torque · Car Setup</title>
+<link rel="stylesheet" href="shared/tt-style.css">
+<style>
+    .setup-grid { display: grid; grid-template-columns: 210px minmax(320px, 1fr) 380px; gap: 16px; align-items: start; }
+    @media (max-width: 1180px) { .setup-grid { grid-template-columns: 1fr; } }
+    .sticky { position: sticky; top: 12px; }
+    .part-row {
+        display: flex; align-items: center; gap: 8px; padding: 6px 8px;
+        border: 1px solid var(--line-soft); border-radius: 4px; margin-bottom: 6px;
+        background: var(--bg-panel-2); font-size: 13px;
+    }
+    .part-row .grow { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .part-row.sel { border-color: var(--accent); }
+    .dot { width: 9px; height: 9px; border-radius: 50%; flex: 0 0 9px; }
+    .preset-card {
+        border: 1px solid var(--line); border-radius: 5px; padding: 9px 11px; cursor: pointer;
+        background: var(--bg-panel-2); margin-bottom: 7px;
+    }
+    .preset-card:hover { border-color: var(--accent); }
+    .preset-card b { color: var(--fg-bright); font-size: 13.5px; }
+    .preset-card div { font-size: 12px; color: var(--fg-dim); }
+</style>
+</head>
+<body>
+
+<header class="tt-header">
+    <h1><span class="tt-mark">Tiny&nbsp;Torque</span> · Car Setup</h1>
+    <span class="tt-tagline">Your hardware, translated into a car the game can drive.</span>
+    <nav>
+        <a href="index.html">Hub</a>
+        <a href="car-setup.html" class="active">Car Setup</a>
+        <a href="control-lab.html">Control Lab</a>
+        <a href="calibration.html">Calibration</a>
+        <a href="telemetry.html">Telemetry</a>
+        <a href="motor-converter.html">Motor</a>
+    </nav>
+</header>
+
+<main class="tt-main wide">
+<div class="setup-grid">
+
+    <!-- ---- step nav ---- -->
+    <div class="panel sticky" style="padding:10px 0">
+        <ul class="steps" id="stepNav"></ul>
+        <div style="padding:10px 12px 2px">
+            <div class="btn-row">
+                <button class="small" id="btnPrev">‹ Back</button>
+                <button class="small primary" id="btnNext">Next ›</button>
+            </div>
+            <hr>
+            <div class="btn-row">
+                <button class="small ghost" id="btnLoad">Import JSON…</button>
+                <button class="small ghost" id="btnReset">Start over</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- ---- step body ---- -->
+    <div>
+        <div class="panel wizard-body" id="stepBody"></div>
+    </div>
+
+    <!-- ---- live preview + stats ---- -->
+    <div class="sticky">
+        <div class="panel">
+            <h2>Layout</h2>
+            <div id="schematic"></div>
+        </div>
+        <div class="panel">
+            <h2>Predicted behaviour</h2>
+            <table class="compact" id="statsTable"></table>
+            <div class="tiny muted" style="margin-top:8px">
+                Computed with the same equations the garage stats panel uses, so these
+                numbers should match what you see in game.
+            </div>
+        </div>
+    </div>
+
+</div>
+</main>
+
+<script src="shared/tt-schema.js"></script>
+<script src="shared/tt-motor.js"></script>
+<script src="shared/tt-sim.js"></script>
+<script src="shared/tt-ui.js"></script>
+<script src="shared/tt-export.js"></script>
+<script>
+(function () {
+'use strict';
+const S = TT.Schema, M = TT.Motor, U = TT.UI, X = TT.Export;
+const el = U.el, $ = U.$;
+
+// ---------------------------------------------------------------- state ----
+
+let design = X.loadLocal('setupDesign', null);
+design = design ? S.normalize(design) : S.stockDesign();
+let step = 0;
+
+function save() { X.saveLocal('setupDesign', design); }
+
+/* One redraw entry point: every edit calls this, so the schematic, the
+   stats and the step body can never show different versions of the car. */
+function refresh(rebuildBody) {
+    if (rebuildBody !== false) renderStep();
+    U.drawSchematic('schematic', design);
+    renderStats();
+    renderNav();
+    save();
+}
+/* Edits that only move a number: skip the form rebuild so the slider the
+   user is dragging keeps focus. */
+function touch() { refresh(false); }
+
+// ---------------------------------------------------------------- steps ----
+
+const STEPS = [
+    { key: 'chassis', label: 'Chassis', render: stepChassis },
+    { key: 'wheels', label: 'Wheels & suspension', render: stepWheels },
+    { key: 'drive', label: 'Drivetrain', render: stepDrive },
+    { key: 'steer', label: 'Steering', render: stepSteer },
+    { key: 'power', label: 'Battery', render: stepPower },
+    { key: 'sensors', label: 'Sensors', render: stepSensors },
+    { key: 'extras', label: 'Aero & firmware', render: stepExtras },
+    { key: 'review', label: 'Review & export', render: stepReview }
+];
+
+function renderNav() {
+    const nav = U.clear($('#stepNav'));
+    STEPS.forEach(function (s, i) {
+        const li = el('li', { class: i === step ? 'active' : '' }, [
+            el('span', { class: 'num', text: String(i + 1) }),
+            el('span', { text: s.label })
+        ]);
+        li.addEventListener('click', function () { step = i; refresh(); });
+        nav.appendChild(li);
+    });
+    $('#btnPrev').disabled = step === 0;
+    $('#btnNext').disabled = step === STEPS.length - 1;
+}
+
+function renderStep() {
+    const body = U.clear($('#stepBody'));
+    STEPS[step].render(body);
+}
+
+// --------------------------------------------------------------- step 1 ----
+
+function stepChassis(root) {
+    root.appendChild(el('h2', { text: '1 · Chassis' }));
+    root.appendChild(el('p', { class: 'small muted', html:
+        'Start with the shell and the bare-chassis mass. Body shape is not just cosmetic — ' +
+        'each silhouette carries its own drag coefficient and built-in downforce.' }));
+
+    root.appendChild(U.textField({
+        label: 'Vehicle name', get: function () { return design.name; },
+        set: function (v) { design.name = v; }, onChange: touch,
+        hint: 'This becomes both the file name and the entry in the garage list.'
+    }));
+
+    root.appendChild(el('h3', { text: 'Body shape' }));
+    const shapes = el('div', {});
+    S.BodyShapeInfo.forEach(function (info) {
+        const card = el('div', {
+            class: 'preset-card' + (design.bodyShape === info.id ? ' sel' : ''),
+            style: design.bodyShape === info.id ? 'border-color:var(--accent)' : ''
+        }, [
+            el('b', { text: info.name }),
+            el('div', { text: info.blurb }),
+            el('div', { class: 'tiny', html: 'C<sub>d</sub> ' + info.cd.toFixed(2) +
+                ' · downforce area ' + info.clA.toFixed(3) + ' m²' })
+        ]);
+        card.addEventListener('click', function () { design.bodyShape = info.id; refresh(); });
+        shapes.appendChild(card);
+    });
+    root.appendChild(shapes);
+
+    root.appendChild(el('h3', { text: 'Dimensions & mass' }));
+    root.appendChild(el('div', { class: 'grid2' }, [
+        mkSlider('Body width', 'm', 'bodySize.x', 0.12, 0.35, 0.001, 3),
+        mkSlider('Body height', 'm', 'bodySize.y', 0.04, 0.18, 0.001, 3),
+        mkSlider('Body length', 'm', 'bodySize.z', 0.25, 0.60, 0.001, 3)
+    ]));
+
+    root.appendChild(U.checkField({
+        label: 'Add up part masses for the total (composite mass model)',
+        get: function () { return design.useCompositeMass; },
+        set: function (v) { design.useCompositeMass = v; }, onChange: function () { refresh(); },
+        hint: 'On: the mass below is the <b>bare chassis</b>, and every wheel, sensor and battery ' +
+              'adds its own mass at its own position — so the centre of mass and the inertia follow ' +
+              'your layout. Off: the mass below is the whole car and the CoM is fixed.'
+    }));
+    root.appendChild(U.slider({
+        label: design.useCompositeMass ? 'Bare chassis mass' : 'Total vehicle mass', unit: 'kg',
+        min: 0.3, max: 5, step: 0.01, dp: 3,
+        get: function () { return design.mass; },
+        set: function (v) { design.mass = v; }, onChange: touch,
+        hint: 'Weigh the car with the battery out and the wheels off, if you can. ' +
+              'Anything above 50 kg is hidden by the garage as legacy full-scale content.'
+    }));
+
+    root.appendChild(el('h3', { text: 'Colour' }));
+    const colour = el('input', { type: 'color', value: U.colorToHex(design.bodyColor) });
+    colour.addEventListener('input', function () {
+        design.bodyColor = U.cssToColor(colour.value);
+        touch();
+    });
+    root.appendChild(el('div', { class: 'field' }, [el('label', { text: 'Body colour' }), colour]));
+}
+
+// --------------------------------------------------------------- step 2 ----
+
+const WHEEL_LAYOUTS = [
+    { key: 'rwd', label: 'Rear-wheel drive', hint: 'Steered front pair, powered rear pair — the 1/10 touring/F1TENTH standard.', steerFront: true, powerFront: false, powerRear: true },
+    { key: 'fwd', label: 'Front-wheel drive', hint: 'The front pair both steers and drives.', steerFront: true, powerFront: true, powerRear: false },
+    { key: 'awd', label: 'All-wheel drive', hint: 'All four powered, fronts steer — buggies and rally cars.', steerFront: true, powerFront: true, powerRear: true },
+    { key: 'skid', label: 'Skid / differential steer', hint: 'No steering servo at all: all four powered, and the firmware turns by commanding different voltages left and right.', steerFront: false, powerFront: true, powerRear: true }
+];
+
+function applyLayout(layout, wheelbase, track, radius) {
+    const names = ['wheel_fl', 'wheel_fr', 'wheel_rl', 'wheel_rr'];
+    const zs = [wheelbase / 2, wheelbase / 2, -wheelbase / 2, -wheelbase / 2];
+    const xs = [-track / 2, track / 2, -track / 2, track / 2];
+    const old = design.wheels;
+    design.wheels = names.map(function (n, i) {
+        // Keep whatever the user already tuned on an existing wheel; only the
+        // geometry and the drive/steer roles come from the layout.
+        const base = old[i] ? S.clone(old[i]) : S.newWheel();
+        base.name = n;
+        base.localPos = S.v3(xs[i], base.localPos.y, zs[i]);
+        base.radius = radius;
+        base.allowsSteering = i < 2 ? layout.steerFront : false;
+        base.powered = i < 2 ? layout.powerFront : layout.powerRear;
+        base.mirrorGroup = i < 2 ? 1 : 2;
+        return base;
+    });
+    // Encoders point at wheel indices, so a rebuilt wheel list must not
+    // leave them dangling.
+    design.sensors.forEach(function (s) {
+        if ((s.kind === S.SensorType.Encoder || s.kind === S.SensorType.Suspension) &&
+            s.wheelIndex >= design.wheels.length) s.wheelIndex = 0;
+    });
+}
+
+function currentLayoutKey() {
+    const w = design.wheels;
+    if (w.length !== 4) return '';
+    const steerFront = w[0].allowsSteering;
+    const powerFront = w[0].powered, powerRear = w[2].powered;
+    const hit = WHEEL_LAYOUTS.filter(function (l) {
+        return l.steerFront === steerFront && l.powerFront === powerFront && l.powerRear === powerRear;
+    });
+    return hit.length ? hit[0].key : '';
+}
+
+function stepWheels(root) {
+    root.appendChild(el('h2', { text: '2 · Wheels & suspension' }));
+
+    root.appendChild(el('h3', { text: 'Layout' }));
+    const layoutBox = el('div', {});
+    WHEEL_LAYOUTS.forEach(function (l) {
+        const card = el('div', {
+            class: 'preset-card',
+            style: currentLayoutKey() === l.key ? 'border-color:var(--accent)' : ''
+        }, [el('b', { text: l.label }), el('div', { text: l.hint })]);
+        card.addEventListener('click', function () {
+            const wb = measuredWheelbase(), tr = measuredTrack(), rad = design.wheels.length ? design.wheels[0].radius : 0.033;
+            applyLayout(l, wb, tr, rad);
+            refresh();
+        });
+        layoutBox.appendChild(card);
+    });
+    root.appendChild(layoutBox);
+
+    root.appendChild(el('h3', { text: 'Geometry' }));
+    root.appendChild(el('p', { class: 'small muted', html:
+        'Measure your car hub-centre to hub-centre. Wheelbase runs front to rear; track runs ' +
+        'left to right across an axle.' }));
+    root.appendChild(el('div', { class: 'grid2' }, [
+        U.slider({
+            label: 'Wheelbase', unit: 'm', min: 0.10, max: 0.60, step: 0.001, dp: 3,
+            get: measuredWheelbase,
+            set: function (v) { setGeometry(v, measuredTrack()); }, onChange: touch
+        }),
+        U.slider({
+            label: 'Track width', unit: 'm', min: 0.06, max: 0.40, step: 0.001, dp: 3,
+            get: measuredTrack,
+            set: function (v) { setGeometry(measuredWheelbase(), v); }, onChange: touch
+        }),
+        U.slider({
+            label: 'Wheel radius', unit: 'm', min: 0.02, max: 0.07, step: 0.0005, dp: 4,
+            get: function () { return design.wheels.length ? design.wheels[0].radius : 0.033; },
+            set: function (v) { design.wheels.forEach(function (w) { w.radius = v; }); }, onChange: touch,
+            hint: 'Half the tyre\'s outside diameter. A 66 mm 1/10 touring tyre is 0.033 m.'
+        }),
+        U.selectField({
+            label: 'Tyre appearance', numeric: true,
+            options: S.WheelStyleNames.map(function (n, i) { return { value: i, label: n }; }),
+            get: function () { return design.wheels.length ? design.wheels[0].wheelStyle : 0; },
+            set: function (v) { design.wheels.forEach(function (w) { w.wheelStyle = v; }); },
+            onChange: touch, hint: 'Cosmetic only — grip comes from the settings below.'
+        })
+    ]));
+
+    root.appendChild(el('h3', { text: 'Suspension' }));
+    root.appendChild(el('p', { class: 'small muted', html:
+        'Applied to all four corners. Spring rate and travel set how much the car moves; the ' +
+        'damping ratio ζ sets how it settles — below 1 it overshoots and oscillates, at 1 it ' +
+        'returns as fast as it can without overshooting. Most RC cars land around 0.6–0.8.' }));
+    root.appendChild(el('div', { class: 'grid2' }, [
+        U.slider({
+            label: 'Spring rate', unit: 'N/m', min: 50, max: 2000, step: 5, dp: 0,
+            get: function () { return firstWheel().suspStiffness; },
+            set: function (v) { design.wheels.forEach(function (w) { w.suspStiffness = v; }); }, onChange: touch
+        }),
+        U.slider({
+            label: 'Damping ratio ζ', unit: '', min: 0.1, max: 2, step: 0.01, dp: 2,
+            get: function () { return firstWheel().suspDampingRatio || 0.65; },
+            set: function (v) { design.wheels.forEach(function (w) { w.suspDampingRatio = v; }); }, onChange: touch
+        }),
+        U.slider({
+            label: 'Travel', unit: 'm', min: 0.01, max: 0.08, step: 0.001, dp: 3,
+            get: function () { return firstWheel().suspTravel; },
+            set: function (v) { design.wheels.forEach(function (w) { w.suspTravel = v; }); }, onChange: touch
+        }),
+        U.slider({
+            label: 'Visible strut length', unit: 'm', min: 0, max: 0.060, step: 0.001, dp: 3,
+            get: function () { return firstWheel().suspLength; },
+            set: function (v) { design.wheels.forEach(function (w) { w.suspLength = v; }); }, onChange: touch,
+            hint: '0 hides the strut and mounts the wheel rigidly. Longer arms lower the ' +
+                  'effective wheel rate and increase travel through the rocker ratio.'
+        })
+    ]));
+
+    root.appendChild(el('h3', { text: 'Tyres' }));
+    root.appendChild(el('div', { class: 'grid2' }, [
+        U.slider({
+            label: 'Grip multiplier', unit: '×', min: 0.3, max: 2, step: 0.01, dp: 2,
+            get: function () { return firstWheel().gripMult; },
+            set: function (v) { design.wheels.forEach(function (w) { w.gripMult = v; }); }, onChange: touch,
+            hint: 'Scales tyre friction. 1 is the reference rubber; drop the rears to make a drifter.'
+        }),
+        U.slider({
+            label: 'Load sensitivity', unit: '', min: 0, max: 0.4, step: 0.01, dp: 2,
+            get: function () { return firstWheel().loadSensitivity; },
+            set: function (v) { design.wheels.forEach(function (w) { w.loadSensitivity = v; }); }, onChange: touch,
+            hint: 'Real tyres lose grip per newton as load rises, which is why weight transfer ' +
+                  'costs total grip. 0 = off; 0.15 is realistic rubber.'
+        }),
+        U.slider({
+            label: 'Tyre ballooning', unit: '%', min: 0, max: 12, step: 0.5, dp: 1,
+            get: function () { return firstWheel().balloonPct; },
+            set: function (v) { design.wheels.forEach(function (w) { w.balloonPct = v; }); }, onChange: touch,
+            hint: 'Growth in rolling radius at speed. Leave 0 on any wheel you take odometry ' +
+                  'from — a growing radius silently corrupts distance.'
+        })
+    ]));
+
+    root.appendChild(el('h3', { text: 'Per-wheel overrides' }));
+    const list = el('div', {});
+    design.wheels.forEach(function (w, i) {
+        list.appendChild(el('div', { class: 'part-row' }, [
+            el('span', { class: 'dot', style: 'background:' + (w.powered ? 'var(--accent)' : '#565d6a') }),
+            el('span', { class: 'grow', text: w.name + '  ·  x ' + w.localPos.x.toFixed(3) + '  z ' + w.localPos.z.toFixed(3) }),
+            el('span', { class: 'tiny muted', text: (w.powered ? 'driven ' : '') + (w.allowsSteering ? 'steered' : '') }),
+            mkToggle('drive', w.powered, function (v) { w.powered = v; refresh(); }),
+            mkToggle('steer', w.allowsSteering, function (v) { w.allowsSteering = v; refresh(); })
+        ]));
+    });
+    root.appendChild(list);
+
+    function firstWheel() { return design.wheels[0] || S.newWheel(); }
+}
+
+function mkToggle(label, on, onChange) {
+    const c = el('span', { class: 'chip' + (on ? ' on' : ''), text: label });
+    c.addEventListener('click', function () { onChange(!on); });
+    return c;
+}
+
+function measuredWheelbase() {
+    if (design.wheels.length < 2) return 0.30;
+    let zF = -Infinity, zR = Infinity;
+    design.wheels.forEach(function (w) { zF = Math.max(zF, w.localPos.z); zR = Math.min(zR, w.localPos.z); });
+    return Math.max(0.01, zF - zR);
+}
+function measuredTrack() {
+    if (design.wheels.length < 2) return 0.166;
+    let xs = design.wheels.map(function (w) { return Math.abs(w.localPos.x); });
+    return Math.max(0.01, 2 * Math.max.apply(null, xs));
+}
+function setGeometry(wheelbase, track) {
+    design.wheels.forEach(function (w) {
+        w.localPos.z = Math.sign(w.localPos.z || 1) * wheelbase / 2;
+        w.localPos.x = Math.sign(w.localPos.x || 1) * track / 2;
+    });
+}
+
+// --------------------------------------------------------------- step 3 ----
+
+function poweredWheels() { return design.wheels.filter(function (w) { return w.powered; }); }
+
+function stepDrive(root) {
+    root.appendChild(el('h2', { text: '3 · Drivetrain' }));
+
+    const n = poweredWheels().length;
+    if (!n) {
+        root.appendChild(el('div', { class: 'callout bad', html:
+            '<b>No powered wheels.</b> Go back to step 2 and mark at least one wheel as driven.' }));
+        return;
+    }
+
+    root.appendChild(el('h3', { text: 'How is the power actually delivered?' }));
+    root.appendChild(el('p', { class: 'small muted', html:
+        'The simulation gives every driven wheel its own motor. Most RC cars have <b>one</b> motor ' +
+        'feeding an axle through a differential — so if you enter your real motor\'s numbers ' +
+        'unchanged on ' + n + ' wheels you get ' + n + '× the real thrust.' }));
+
+    root.appendChild(U.chipRow({
+        label: null,
+        options: [
+            { value: 'shared', label: 'One motor + differential', title: 'A single motor drives all the powered wheels' },
+            { value: 'hub', label: 'A motor per wheel', title: 'Independent hub or in-line motors' }
+        ],
+        get: function () { return X.loadLocal('driveTopology', 'shared'); },
+        set: function (v) { X.saveLocal('driveTopology', v); },
+        onChange: function () { refresh(); }
+    }));
+
+    const shared = X.loadLocal('driveTopology', 'shared') === 'shared';
+    if (shared) {
+        root.appendChild(el('div', { class: 'callout', html:
+            'With one real motor spread across <b>' + n + '</b> simulated ones, the numbers you type ' +
+            'below are your <b>real part\'s</b>. Resistance is multiplied by ' + n + ' (that many parallel ' +
+            'current paths must add up to the real winding), while no-load current, the ESC current ' +
+            'limit and rotor inertia are divided by ' + n + '. Torque constant, gear ratio and voltage ' +
+            'are properties of the motor itself and stay put.' }));
+    }
+
+    root.appendChild(el('h3', { text: 'Pick a starting point' }));
+    const presets = el('div', {});
+    M.MotorPresets.forEach(function (p) {
+        const card = el('div', { class: 'preset-card' }, [
+            el('b', { text: p.name }),
+            el('div', { text: p.blurb }),
+            el('div', { class: 'tiny', text: p.kv + ' Kv · ' + p.resistance + ' Ω · ' +
+                p.noLoadCurrent + ' A idle · ' + p.gearRatio + ':1 · ' + p.note })
+        ]);
+        card.addEventListener('click', function () {
+            const real = M.motorFromPreset(p);
+            applyMotor(real);
+            design.wheels.forEach(function (w) { if (w.powered) w.motorEntryMode = 0; });
+            refresh();
+        });
+        presets.appendChild(card);
+    });
+    root.appendChild(presets);
+
+    // The editable motor is always the REAL part; the split happens on write.
+    const realMotor = readRealMotor();
+
+    root.appendChild(el('h3', { text: 'Your motor' }));
+    root.appendChild(el('div', { class: 'grid2' }, [
+        U.slider({
+            label: 'Kv rating', unit: 'rpm/V', min: 200, max: 8000, step: 10, dp: 0,
+            get: function () { return M.kvFromKt(realMotor.kt); },
+            set: function (v) { realMotor.kt = M.ktFromKv(v); applyMotor(realMotor); }, onChange: touch,
+            hint: 'The headline number on a brushless can. Torque constant follows from it: ' +
+                  'K<sub>t</sub> = 60 / (2π·K<sub>v</sub>).'
+        }),
+        U.slider({
+            label: 'Winding resistance', unit: 'Ω', min: 0.005, max: 1, step: 0.001, dp: 4,
+            get: function () { return realMotor.resistance; },
+            set: function (v) { realMotor.resistance = v; applyMotor(realMotor); }, onChange: touch,
+            hint: 'Rarely published. Measure terminal-to-terminal with a milliohm meter, or estimate ' +
+                  'it from a stall-current test: R ≈ V / I<sub>stall</sub>.'
+        }),
+        U.slider({
+            label: 'Gear ratio', unit: 'motor : wheel', min: 1, max: 30, step: 0.1, dp: 2,
+            get: function () { return realMotor.gearRatio; },
+            set: function (v) { realMotor.gearRatio = v; applyMotor(realMotor); }, onChange: touch,
+            hint: 'Spur ÷ pinion, times any internal transmission ratio.'
+        }),
+        U.slider({
+            label: 'No-load current', unit: 'A', min: 0, max: 5, step: 0.05, dp: 2,
+            get: function () { return realMotor.noLoadCurrent; },
+            set: function (v) { realMotor.noLoadCurrent = v; applyMotor(realMotor); }, onChange: touch,
+            hint: 'What the motor draws spinning free. It sets the friction the motor has to ' +
+                  'overcome before it moves at all.'
+        }),
+        U.slider({
+            label: 'Drivetrain efficiency', unit: '', min: 0.3, max: 1, step: 0.01, dp: 2,
+            get: function () { return realMotor.efficiency; },
+            set: function (v) { realMotor.efficiency = v; applyMotor(realMotor); }, onChange: touch,
+            hint: 'Gears, belt and bearings. 0.85 is a reasonable RC gearbox.'
+        }),
+        U.slider({
+            label: 'Rotor inertia', unit: 'µg·m²', min: 0, max: 40, step: 0.1, dp: 2,
+            get: function () { return realMotor.rotorInertia * 1e6; },
+            set: function (v) { realMotor.rotorInertia = v * 1e-6; applyMotor(realMotor); }, onChange: touch,
+            hint: 'Reflected through the gearing this behaves like extra vehicle mass — often a fifth ' +
+                  'of the total at RC scale. Ignoring it makes every feed-forward gain wrong.'
+        })
+    ]));
+
+    root.appendChild(el('h3', { text: 'ESC' }));
+    root.appendChild(el('div', { class: 'grid2' }, [
+        U.slider({
+            label: 'Supply rail', unit: 'V', min: 3.7, max: 12, step: 0.1, dp: 1,
+            get: function () { return realMotor.maxVoltage; },
+            set: function (v) { realMotor.maxVoltage = v; applyMotor(realMotor); }, onChange: touch,
+            hint: 'Full-throttle voltage — normally your pack\'s nominal voltage.'
+        }),
+        U.slider({
+            label: 'Current limit', unit: 'A', min: 0, max: 100, step: 1, dp: 0,
+            get: function () { return realMotor.maxCurrent; },
+            set: function (v) { realMotor.maxCurrent = v; applyMotor(realMotor); }, onChange: touch,
+            hint: 'The ESC\'s continuous rating. 0 means unlimited, which lets the motor pull its ' +
+                  'full stall current — usually unrealistic.'
+        }),
+        U.slider({
+            label: 'Deadband', unit: 'V', min: 0, max: 0.5, step: 0.01, dp: 2,
+            get: function () { return realMotor.escDeadbandV; },
+            set: function (v) { realMotor.escDeadbandV = v; applyMotor(realMotor); }, onChange: touch,
+            hint: 'Throttle below this does nothing at all — the reason a creep command can leave ' +
+                  'the car sitting still.'
+        }),
+        U.slider({
+            label: 'Response lag', unit: 'ms', min: 0, max: 20, step: 0.5, dp: 1,
+            get: function () { return realMotor.escTimeConstMs; },
+            set: function (v) { realMotor.escTimeConstMs = v; applyMotor(realMotor); }, onChange: touch,
+            hint: 'First-order smoothing between command and output. Small, but it eats phase margin.'
+        }),
+        U.slider({
+            label: 'Drag brake', unit: '%', min: 0, max: 30, step: 1, dp: 0,
+            get: function () { return realMotor.escDragBrakePct; },
+            set: function (v) { realMotor.escDragBrakePct = v; applyMotor(realMotor); }, onChange: touch,
+            hint: 'Braking applied automatically at neutral throttle. 0 = the car coasts.'
+        }),
+        U.slider({
+            label: 'Reverse lockout', unit: 'ms', min: 0, max: 500, step: 10, dp: 0,
+            get: function () { return realMotor.escReverseLockMs; },
+            set: function (v) { realMotor.escReverseLockMs = v; applyMotor(realMotor); }, onChange: touch,
+            hint: 'How long the throttle must sit at neutral before reverse engages — hobby ESCs do ' +
+                  'this so that backing off at speed brakes instead of slamming into reverse.'
+        })
+    ]));
+
+    root.appendChild(el('h3', { text: 'What this drivetrain gives you' }));
+    root.appendChild(drivetrainReadout(realMotor, n, shared));
+}
+
+function readRealMotor() {
+    const pw = poweredWheels();
+    const sim = pw.length ? S.clone(pw[0].motor) : S.newMotor();
+    const shared = X.loadLocal('driveTopology', 'shared') === 'shared';
+    return shared ? M.combineFromMotors(sim, pw.length || 1) : sim;
+}
+
+/* Write the real motor onto every powered wheel, splitting it if one real
+   motor is standing in for several simulated ones. */
+function applyMotor(realMotor) {
+    const pw = poweredWheels();
+    if (!pw.length) return;
+    const shared = X.loadLocal('driveTopology', 'shared') === 'shared';
+    const perWheel = shared ? M.splitAcrossMotors(realMotor, pw.length) : realMotor;
+    pw.forEach(function (w) { w.motor = Object.assign(S.newMotor(), perWheel); });
+}
+
+function drivetrainReadout(realMotor, n, shared) {
+    const pw = poweredWheels();
+    const sim = pw[0].motor;
+    const st = S.stats(design);
+    const p = M.plant({
+        kt: sim.kt, gearRatio: sim.gearRatio, wheelRadius: pw[0].radius,
+        resistance: sim.resistance, efficiency: sim.efficiency, motorCount: pw.length,
+        rotorInertia: sim.rotorInertia, mass: st.totalMass,
+        maxVoltage: sim.maxVoltage, maxCurrent: sim.maxCurrent
+    });
+    const rows = [
+        ['Torque constant K<sub>t</sub>', (realMotor.kt * 1000).toFixed(4) + ' mN·m/A', 'From your Kv. Also the back-EMF constant in V·s/rad.'],
+        ['Back-EMF per road speed', p.bemfVPerMs.toFixed(4) + ' V per m/s', 'The voltage the motor generates just by moving. Feed-forward is built on this.'],
+        ['Thrust per amp', p.forcePerAmpAll.toFixed(4) + ' N/A', 'Force at the contact patch per amp through each motor.'],
+        ['Effective mass', p.massEff.toFixed(3) + ' kg', 'Vehicle mass plus ' + p.reflectedInertia.toFixed(3) + ' kg of reflected rotor inertia that never actually goes anywhere.'],
+        ['Launch acceleration', p.launchAccel.toFixed(2) + ' m/s²', 'At the current limit, before grip is considered.'],
+        ['Top speed', st.estTopSpeedMs.toFixed(2) + ' m/s', 'Where thrust falls to equal aerodynamic drag.'],
+        ['Speed-loop time constant', (p.tauMech * 1000).toFixed(0) + ' ms', 'How quickly speed responds open-loop — the thing your gains have to beat.']
+    ];
+    if (shared && n > 1) {
+        rows.push(['Per-simulated-motor resistance', sim.resistance.toFixed(4) + ' Ω',
+            'Your ' + realMotor.resistance.toFixed(4) + ' Ω motor split across ' + n + ' models.']);
+    }
+    const t = el('table', { class: 'compact' });
+    rows.forEach(function (r) {
+        t.appendChild(el('tr', {}, [
+            el('td', { html: r[0] }),
+            el('td', { class: 'num', text: r[1] }),
+            el('td', { class: 'tiny muted', text: r[2] })
+        ]));
+    });
+    return t;
+}
+
+// --------------------------------------------------------------- step 4 ----
+
+function stepSteer(root) {
+    root.appendChild(el('h2', { text: '4 · Steering' }));
+    if (!design.wheels.some(function (w) { return w.allowsSteering; })) {
+        root.appendChild(el('div', { class: 'callout warn', html:
+            '<b>No steered wheels.</b> That is fine for a skid-steer layout — the firmware turns by ' +
+            'commanding different voltages on each side — but the settings here will have no effect.' }));
+    }
+
+    root.appendChild(el('h3', { text: 'Pick your servo' }));
+    const presets = el('div', {});
+    M.ServoPresets.forEach(function (p) {
+        const card = el('div', { class: 'preset-card' }, [
+            el('b', { text: p.name }),
+            el('div', { text: p.blurb }),
+            el('div', { class: 'tiny', text: p.secPer60 + ' s/60° @ ' + p.voltage + ' V · ' + p.stallKgcm + ' kg·cm stall' })
+        ]);
+        card.addEventListener('click', function () {
+            design.steerRate = M.secPer60ToDegPerSec(p.secPer60);
+            design.servoStallNm = M.kgcmToNm(p.stallKgcm);
+            refresh();
+        });
+        presets.appendChild(card);
+    });
+    root.appendChild(presets);
+
+    root.appendChild(el('h3', { text: 'Servo specification' }));
+    root.appendChild(el('p', { class: 'small muted', html:
+        'Servo datasheets quote speed as <b>seconds per 60°</b> and torque in <b>kg·cm</b>. ' +
+        'Enter them in those units and they are converted for you. Use the figures at the voltage ' +
+        'you actually run — servos get noticeably faster and stronger on higher voltage.' }));
+
+    const secPer60 = el('input', { type: 'number', step: '0.005', value: M.degPerSecToSecPer60(design.steerRate).toFixed(3) });
+    const dps = el('div', { class: 'hint' });
+    function syncSpeed() {
+        dps.innerHTML = '= <b>' + design.steerRate.toFixed(0) + ' °/s</b> no-load slew rate.';
+    }
+    secPer60.addEventListener('change', function () {
+        const v = Number(secPer60.value);
+        if (v > 0) { design.steerRate = M.secPer60ToDegPerSec(v); syncSpeed(); touch(); }
+    });
+    syncSpeed();
+    root.appendChild(el('div', { class: 'field' }, [
+        el('label', { text: 'Speed  (s per 60°)' }), secPer60, dps
+    ]));
+
+    const kgcm = el('input', { type: 'number', step: '0.1', value: (design.servoStallNm > 0 ? M.nmToKgcm(design.servoStallNm) : 0).toFixed(2) });
+    const nmHint = el('div', { class: 'hint' });
+    function syncTorque() {
+        nmHint.innerHTML = design.servoStallNm > 0
+            ? '= <b>' + design.servoStallNm.toFixed(3) + ' N·m</b> stall torque. ' +
+              'As cornering load approaches this the servo slows down and eventually stops adding lock — ' +
+              'which is exactly when you need it most.'
+            : '<b>0 = ideal servo:</b> it holds any angle at full speed regardless of load. Useful as a ' +
+              'baseline, but it hides a real failure mode.';
+    }
+    kgcm.addEventListener('change', function () {
+        const v = Number(kgcm.value);
+        design.servoStallNm = v > 0 ? M.kgcmToNm(v) : 0;
+        syncTorque(); touch();
+    });
+    syncTorque();
+    root.appendChild(el('div', { class: 'field' }, [
+        el('label', { text: 'Stall torque  (kg·cm — 0 for an ideal servo)' }), kgcm, nmHint
+    ]));
+
+    root.appendChild(el('h3', { text: 'Geometry' }));
+    root.appendChild(U.slider({
+        label: 'Maximum steering lock', unit: '°', min: 5, max: 45, step: 1, dp: 0,
+        get: function () {
+            const s = design.wheels.filter(function (w) { return w.allowsSteering; });
+            return s.length ? s[0].steerAngle : 28;
+        },
+        set: function (v) { design.wheels.forEach(function (w) { w.steerAngle = v; }); }, onChange: touch,
+        hint: 'Turn a front wheel to full lock and measure it against straight ahead.'
+    }));
+    root.appendChild(U.slider({
+        label: 'Ackermann', unit: '%', min: 0, max: 100, step: 1, dp: 0,
+        get: function () { return design.ackermannPct; },
+        set: function (v) { design.ackermannPct = v; }, onChange: touch,
+        hint: 'In a turn the inside wheel travels a tighter circle and must point further in. ' +
+              '100 % steers each wheel to its own geometrically correct angle; 0 % points both the ' +
+              'same way, so the inside tyre scrubs. Most RC front ends are close to 100 %.'
+    }));
+
+    const turn = turnRadiusReadout();
+    root.appendChild(el('div', { class: 'callout', html: turn }));
+}
+
+function turnRadiusReadout() {
+    const steered = design.wheels.filter(function (w) { return w.allowsSteering; });
+    if (!steered.length) return 'With no steered wheels the turn radius depends entirely on how your firmware splits motor voltages.';
+    const L = measuredWheelbase();
+    const lock = steered[0].steerAngle * Math.PI / 180;
+    const R = L / Math.tan(lock);
+    const st = S.stats(design);
+    // Lateral acceleration at top speed on that radius, as a fraction of g.
+    const aLat = st.estTopSpeedMs > 0 ? st.estTopSpeedMs * st.estTopSpeedMs / R : 0;
+    return 'At full lock the geometry gives a turn radius of <b>' + R.toFixed(2) + ' m</b> ' +
+        '(wheelbase ' + L.toFixed(3) + ' m ÷ tan ' + steered[0].steerAngle.toFixed(0) + '°). ' +
+        'Holding that circle at the predicted top speed would need ' + aLat.toFixed(1) + ' m/s² of ' +
+        'lateral grip — about ' + (aLat / 9.81).toFixed(1) + ' g, so ' +
+        (aLat / 9.81 > 1.3 ? 'you will run out of tyre long before you run out of lock.'
+                           : 'the tyres can plausibly hold it.');
+}
+
+// --------------------------------------------------------------- step 5 ----
+
+function stepPower(root) {
+    root.appendChild(el('h2', { text: '5 · Battery' }));
+    root.appendChild(el('p', { class: 'small muted', html:
+        'A battery is not just mass. Its internal resistance makes the rail sag under current, so ' +
+        'full throttle at launch delivers less voltage than full throttle at cruise — and your ' +
+        'firmware sees that on the motor feedback channel exactly as it would on hardware.' }));
+
+    if (!design.batteries.length) {
+        root.appendChild(el('div', { class: 'callout warn', html:
+            '<b>No pack fitted.</b> The motors are running off an ideal infinite supply — no sag, ' +
+            'no discharge, no state of charge.' }));
+        const add = el('button', { class: 'primary', text: 'Fit a battery' });
+        add.addEventListener('click', function () { design.batteries.push(S.newBattery()); refresh(); });
+        root.appendChild(add);
+        return;
+    }
+
+    const b = design.batteries[0];
+
+    root.appendChild(el('h3', { text: 'Common packs' }));
+    const presets = el('div', {});
+    M.BatteryPresets.forEach(function (p) {
+        const card = el('div', { class: 'preset-card' }, [
+            el('b', { text: p.name }),
+            el('div', { class: 'tiny', text: p.cells + 'S (' + M.packNominalV(p.cells).toFixed(1) + ' V nominal) · ' +
+                p.capacitymAh + ' mAh · ' + p.internalR + ' Ω · ' + (p.massKg * 1000).toFixed(0) + ' g' })
+        ]);
+        card.addEventListener('click', function () {
+            b.nominalV = M.packNominalV(p.cells);
+            b.capacitymAh = p.capacitymAh;
+            b.internalR = p.internalR;
+            b.massKg = p.massKg;
+            refresh();
+        });
+        presets.appendChild(card);
+    });
+    root.appendChild(presets);
+
+    root.appendChild(el('h3', { text: 'Your pack' }));
+    root.appendChild(U.chipRow({
+        label: 'Cell count',
+        options: [1, 2, 3, 4].map(function (c) {
+            return { value: M.packNominalV(c), label: c + 'S (' + M.packNominalV(c).toFixed(1) + ' V)' };
+        }),
+        get: function () { return b.nominalV; },
+        set: function (v) { b.nominalV = v; }, onChange: function () { refresh(); },
+        hint: 'LiPo cells are 3.7 V nominal, 4.2 V full, 3.0 V empty.'
+    }));
+    root.appendChild(el('div', { class: 'grid2' }, [
+        U.slider({
+            label: 'Capacity', unit: 'mAh', min: 0, max: 8000, step: 50, dp: 0,
+            get: function () { return b.capacitymAh; }, set: function (v) { b.capacitymAh = v; }, onChange: touch,
+            hint: '0 makes the pack infinite — no discharge and no sag from state of charge. ' +
+                  'Set it properly and the car gets slower as the pack drains, like the real thing.'
+        }),
+        U.slider({
+            label: 'Internal resistance', unit: 'Ω', min: 0.005, max: 0.1, step: 0.001, dp: 3,
+            get: function () { return b.internalR; }, set: function (v) { b.internalR = v; }, onChange: touch,
+            hint: 'Pack, leads and connector together. Higher C-rating packs sit lower.'
+        }),
+        U.slider({
+            label: 'Pack mass', unit: 'kg', min: 0.02, max: 0.400, step: 0.005, dp: 3,
+            get: function () { return b.massKg; }, set: function (v) { b.massKg = v; }, onChange: touch
+        }),
+        U.slider({
+            label: 'Position along the car', unit: 'm', min: -0.30, max: 0.30, step: 0.005, dp: 3,
+            get: function () { return b.localPos.z; }, set: function (v) { b.localPos.z = v; }, onChange: touch,
+            hint: 'Positive is toward the nose. The pack is often the heaviest single part, so this ' +
+                  'moves the weight balance more than anything else you can do.'
+        }),
+        U.slider({
+            label: 'Height', unit: 'm', min: -0.06, max: 0.15, step: 0.005, dp: 3,
+            get: function () { return b.localPos.y; }, set: function (v) { b.localPos.y = v; }, onChange: touch,
+            hint: 'Low is good: it cuts weight transfer and body roll.'
+        })
+    ]));
+
+    const st = S.stats(design);
+    const pw = poweredWheels();
+    if (pw.length) {
+        const peakCurrent = pw.length * (pw[0].motor.maxCurrent > 0
+            ? pw[0].motor.maxCurrent : pw[0].motor.maxVoltage / pw[0].motor.resistance);
+        const sag = peakCurrent * b.internalR;
+        root.appendChild(el('div', { class: 'callout' + (sag > b.nominalV * 0.35 ? ' warn' : ''), html:
+            'At the full ' + peakCurrent.toFixed(0) + ' A the drivetrain can pull, this pack sags by ' +
+            '<b>' + sag.toFixed(2) + ' V</b> (' + (sag / b.nominalV * 100).toFixed(0) + ' % of nominal), ' +
+            'leaving about ' + Math.max(0, b.nominalV - sag).toFixed(2) + ' V at the terminals. ' +
+            (sag > b.nominalV * 0.35
+                ? 'That is a lot — a real pack this soft would get hot and the car would feel gutless off the line.'
+                : 'That is a healthy figure for a launch.') }));
+        if (b.capacitymAh > 0) {
+            const cruiseA = Math.max(0.5, st.dragAtTopN / Math.max(1e-6, 0.7) / Math.max(1, pw.length));
+            const minutes = b.capacitymAh / 1000 / Math.max(0.1, cruiseA * pw.length) * 60;
+            root.appendChild(el('div', { class: 'callout small', html:
+                'Very roughly, holding a steady cruise draws around ' + (cruiseA * pw.length).toFixed(1) +
+                ' A, which would empty this pack in about <b>' + minutes.toFixed(0) + ' minutes</b>. ' +
+                'Hard driving will be far shorter.' }));
+        }
+    }
+}
+
+// --------------------------------------------------------------- step 6 ----
+
+const SENSOR_PRESETS = [
+    {
+        label: 'VL53L1X time-of-flight ranger', kind: 1,
+        blurb: 'The 1/10-scale standard. 4 m range, 27° field of view, ±25 mm.',
+        apply: function (s) {
+            s.kind = 1; s.range = 4; s.coneRays = 3; s.coneAngle = 27;
+            s.updateRateHz = 50; s.latencyMs = 20; s.noiseStd = 0.008; s.massKg = 0.002;
+        },
+        note: 'The ±25 mm datasheet figure is treated as a 3σ bound, so σ = 8 mm.'
+    },
+    {
+        label: 'Sharp GP2Y0A analog ranger', kind: 1,
+        blurb: 'Cheap infrared distance sensor. Shorter range, noisier, narrow beam.',
+        apply: function (s) {
+            s.kind = 1; s.range = 1.5; s.coneRays = 1; s.coneAngle = 5;
+            s.updateRateHz = 25; s.latencyMs = 40; s.noiseStd = 0.02; s.massKg = 0.004;
+        }
+    },
+    {
+        label: 'Quadrature wheel encoder (1024 line)', kind: 2,
+        blurb: 'AS5047P / AMT102-class magnetic encoder on a wheel.',
+        apply: function (s) {
+            s.kind = 2; s.cprTicks = 4096; s.encoderGearRatio = 1;
+            s.updateRateHz = 0; s.latencyMs = 0; s.noiseStd = 0; s.massKg = 0.008;
+        },
+        note: 'A 1024-line encoder read in quadrature gives 4096 counts per revolution. ' +
+              'Rate and latency stay at 0 because a hardware counter is read instantly.'
+    },
+    {
+        label: 'Quadrature wheel encoder (360 count)', kind: 2,
+        blurb: 'A modest optical or hall encoder.',
+        apply: function (s) { s.kind = 2; s.cprTicks = 360; s.encoderGearRatio = 1; s.massKg = 0.008; }
+    },
+    {
+        label: 'Pi Camera Module 3', kind: 5,
+        blurb: 'Forward-facing camera streaming greyscale frames to your firmware.',
+        apply: function (s) {
+            s.kind = 5; s.camWidth = 64; s.camHeight = 48; s.camFov = 66; s.camRateHz = 15; s.massKg = 0.015;
+        },
+        note: 'Frames are downscaled — the ABI hands your controller a small greyscale buffer, not a photo.'
+    },
+    {
+        label: 'Suspension travel sensor', kind: 6,
+        blurb: 'Reads spring force, compression and strut angle at one corner.',
+        apply: function (s) { s.kind = 6; s.massKg = 0.006; }
+    },
+    {
+        label: 'Battery monitor', kind: 7,
+        blurb: 'Terminal voltage, total current draw and state of charge.',
+        apply: function (s) { s.kind = 7; s.massKg = 0.005; }
+    }
+];
+
+let selectedSensor = -1;
+
+function stepSensors(root) {
+    root.appendChild(el('h2', { text: '6 · Sensors' }));
+    root.appendChild(el('p', { class: 'small muted', html:
+        'These are what your firmware actually sees. Each one appears in the manifest handed to ' +
+        '<code>ctrl_configure</code> under the name you give it here — so <b>name them the way your ' +
+        'code will look them up</b>. Letters, digits and underscores only, under 32 characters.' }));
+
+    root.appendChild(el('h3', { text: 'Fitted' }));
+    const list = el('div', {});
+    if (!design.sensors.length) {
+        list.appendChild(el('div', { class: 'callout warn', html:
+            'No sensors. Your firmware would be driving blind — it would still get the fixed IMU and ' +
+            '<code>wheel_vel</code> channels, but nothing else.' }));
+    }
+    design.sensors.forEach(function (s, i) {
+        const row = el('div', { class: 'part-row' + (i === selectedSensor ? ' sel' : '') }, [
+            el('span', { class: 'dot', style: 'background:' + U.sensorColor(s.kind) }),
+            el('span', { class: 'grow', text: s.name }),
+            el('span', { class: 'tiny muted', text: S.SensorTypeNames[s.kind] || '?' }),
+            mkIconBtn('✎', function () { selectedSensor = (selectedSensor === i ? -1 : i); refresh(); }),
+            mkIconBtn('⧉', function () {
+                const c = S.clone(s);
+                c.name = uniqueSensorName(s.name);
+                c.localPos.x = -c.localPos.x;
+                c.aimEuler.y = -c.aimEuler.y;
+                design.sensors.push(c);
+                refresh();
+            }, 'Mirror to the other side'),
+            mkIconBtn('✕', function () {
+                design.sensors.splice(i, 1);
+                if (selectedSensor >= design.sensors.length) selectedSensor = -1;
+                refresh();
+            })
+        ]);
+        list.appendChild(row);
+    });
+    root.appendChild(list);
+
+    if (selectedSensor >= 0 && design.sensors[selectedSensor]) {
+        root.appendChild(sensorInspector(design.sensors[selectedSensor]));
+    }
+
+    root.appendChild(el('h3', { text: 'Add a part' }));
+    const presets = el('div', {});
+    SENSOR_PRESETS.forEach(function (p) {
+        const card = el('div', { class: 'preset-card' }, [
+            el('b', { text: p.label }),
+            el('div', { text: p.blurb }),
+            p.note ? el('div', { class: 'tiny', text: p.note }) : null
+        ]);
+        card.addEventListener('click', function () {
+            const s = S.newSensor();
+            p.apply(s);
+            s.name = uniqueSensorName(defaultSensorName(s.kind));
+            if (s.kind === S.SensorType.Encoder || s.kind === S.SensorType.Suspension) {
+                s.wheelIndex = Math.min(design.wheels.length - 1, Math.max(0, nextFreeWheelIndex(s.kind)));
+            }
+            design.sensors.push(s);
+            selectedSensor = design.sensors.length - 1;
+            refresh();
+        });
+        presets.appendChild(card);
+    });
+    root.appendChild(presets);
+
+    const encMissing = design.wheels.length - design.sensors.filter(function (s) {
+        return s.kind === S.SensorType.Encoder;
+    }).length;
+    if (encMissing > 0) {
+        const b = el('button', { text: 'Add an encoder to every wheel (' + encMissing + ' missing)' });
+        b.addEventListener('click', function () {
+            const tags = ['fl', 'fr', 'rl', 'rr'];
+            design.wheels.forEach(function (w, i) {
+                const has = design.sensors.some(function (s) {
+                    return s.kind === S.SensorType.Encoder && s.wheelIndex === i;
+                });
+                if (has) return;
+                const s = S.newSensor();
+                s.kind = S.SensorType.Encoder;
+                s.wheelIndex = i;
+                s.cprTicks = 4096;
+                s.name = uniqueSensorName('enc_' + (tags[i] || i));
+                design.sensors.push(s);
+            });
+            refresh();
+        });
+        root.appendChild(el('div', { class: 'btn-row' }, [b]));
+    }
+}
+
+function defaultSensorName(kind) {
+    switch (kind) {
+        case 1: return 'tof';
+        case 2: return 'enc';
+        case 5: return 'cam';
+        case 6: return 'susp';
+        case 7: return 'batt';
+        default: return 'sensor';
+    }
+}
+function uniqueSensorName(base) {
+    const taken = {};
+    design.sensors.forEach(function (s) { taken[s.name] = true; });
+    if (!taken[base]) return base;
+    for (let i = 2; i < 99; i++) if (!taken[base + '_' + i]) return base + '_' + i;
+    return base + '_x';
+}
+function nextFreeWheelIndex(kind) {
+    for (let i = 0; i < design.wheels.length; i++) {
+        const used = design.sensors.some(function (s) { return s.kind === kind && s.wheelIndex === i; });
+        if (!used) return i;
+    }
+    return 0;
+}
+function mkIconBtn(glyph, onClick, title) {
+    const b = el('button', { class: 'small ghost', text: glyph, title: title || '' });
+    b.addEventListener('click', onClick);
+    return b;
+}
+
+function sensorInspector(s) {
+    const box = el('div', { class: 'panel sub' });
+    box.appendChild(el('h4', { text: 'Editing “' + s.name + '”' }));
+
+    box.appendChild(U.textField({
+        label: 'Name (how firmware finds it)', get: function () { return s.name; },
+        set: function (v) { s.name = v; }, onChange: touch
+    }));
+
+    box.appendChild(el('div', { class: 'grid3' }, [
+        U.slider({ label: 'Across', unit: 'm', min: -0.18, max: 0.18, step: 0.005, dp: 3,
+            get: function () { return s.localPos.x; }, set: function (v) { s.localPos.x = v; }, onChange: touch }),
+        U.slider({ label: 'Height', unit: 'm', min: -0.05, max: 0.25, step: 0.005, dp: 3,
+            get: function () { return s.localPos.y; }, set: function (v) { s.localPos.y = v; }, onChange: touch }),
+        U.slider({ label: 'Along', unit: 'm', min: -0.30, max: 0.30, step: 0.005, dp: 3,
+            get: function () { return s.localPos.z; }, set: function (v) { s.localPos.z = v; }, onChange: touch })
+    ]));
+
+    if (s.kind === S.SensorType.Tof || s.kind === S.SensorType.Camera) {
+        box.appendChild(el('div', { class: 'grid2' }, [
+            U.slider({ label: 'Aim yaw', unit: '°', min: -180, max: 180, step: 1, dp: 0,
+                get: function () { return s.aimEuler.y; }, set: function (v) { s.aimEuler.y = v; }, onChange: touch,
+                hint: '0 looks straight ahead; positive turns right.' }),
+            U.slider({ label: 'Aim pitch', unit: '°', min: -90, max: 90, step: 1, dp: 0,
+                get: function () { return s.aimEuler.x; }, set: function (v) { s.aimEuler.x = v; }, onChange: touch,
+                hint: 'Positive points down.' })
+        ]));
+    }
+
+    if (s.kind === S.SensorType.Tof) {
+        box.appendChild(el('div', { class: 'grid2' }, [
+            U.slider({ label: 'Maximum range', unit: 'm', min: 0.2, max: 8, step: 0.1, dp: 1,
+                get: function () { return s.range; }, set: function (v) { s.range = v; }, onChange: touch,
+                hint: 'Reported when nothing is in view — so your code must treat "max range" as "nothing there".' }),
+            U.slider({ label: 'Rays in the cone', unit: '', min: 1, max: 7, step: 1, dp: 0,
+                get: function () { return s.coneRays; }, set: function (v) { s.coneRays = v; }, onChange: touch,
+                hint: 'A real ToF has a field of view, not a laser line. More rays cost nothing and behave more like the part.' }),
+            U.slider({ label: 'Cone angle', unit: '°', min: 0, max: 30, step: 1, dp: 0,
+                get: function () { return s.coneAngle; }, set: function (v) { s.coneAngle = v; }, onChange: touch })
+        ]));
+    }
+
+    if (s.kind === S.SensorType.Encoder || s.kind === S.SensorType.Suspension) {
+        box.appendChild(U.selectField({
+            label: 'Which wheel', numeric: true,
+            options: design.wheels.map(function (w, i) { return { value: i, label: i + ' · ' + w.name }; }),
+            get: function () { return s.wheelIndex; }, set: function (v) { s.wheelIndex = v; }, onChange: touch
+        }));
+    }
+    if (s.kind === S.SensorType.Encoder) {
+        box.appendChild(el('div', { class: 'grid2' }, [
+            U.slider({ label: 'Counts per revolution', unit: '', min: 16, max: 2048, step: 4, dp: 0,
+                get: function () { return Math.min(2048, s.cprTicks); }, set: function (v) { s.cprTicks = v; }, onChange: touch,
+                hint: 'Quadrature decoding gives 4× the line count. Set the decoded number.' }),
+            U.slider({ label: 'Encoder gearing', unit: ':1', min: 1, max: 50, step: 0.5, dp: 1,
+                get: function () { return s.encoderGearRatio; }, set: function (v) { s.encoderGearRatio = v; }, onChange: touch,
+                hint: '1 if it reads the wheel shaft. Use the gear ratio if it sits on the motor.' })
+        ]));
+        const res = 2 * Math.PI * (design.wheels[s.wheelIndex] ? design.wheels[s.wheelIndex].radius : 0.033) /
+            Math.max(1, s.cprTicks * s.encoderGearRatio);
+        box.appendChild(el('div', { class: 'callout small', html:
+            'One count is <b>' + (res * 1000).toFixed(3) + ' mm</b> of ground travel. ' +
+            'Quantisation is almost never your odometry error — wheel slip is.' }));
+    }
+    if (s.kind === S.SensorType.Camera) {
+        box.appendChild(el('div', { class: 'grid2' }, [
+            U.slider({ label: 'Frame width', unit: 'px', min: 16, max: 128, step: 8, dp: 0,
+                get: function () { return s.camWidth; }, set: function (v) { s.camWidth = v; }, onChange: touch }),
+            U.slider({ label: 'Frame height', unit: 'px', min: 16, max: 96, step: 8, dp: 0,
+                get: function () { return s.camHeight; }, set: function (v) { s.camHeight = v; }, onChange: touch }),
+            U.slider({ label: 'Field of view', unit: '°', min: 20, max: 110, step: 1, dp: 0,
+                get: function () { return s.camFov; }, set: function (v) { s.camFov = v; }, onChange: touch }),
+            U.slider({ label: 'Frame rate', unit: 'Hz', min: 1, max: 30, step: 1, dp: 0,
+                get: function () { return s.camRateHz; }, set: function (v) { s.camRateHz = v; }, onChange: touch })
+        ]));
+    }
+
+    box.appendChild(el('h4', { text: 'Signal realism' }));
+    box.appendChild(el('p', { class: 'small muted', html:
+        'Leave these at 0 for a perfect sensor. Turn them up to match your real part and you find ' +
+        'out early whether your filter can cope.' }));
+    box.appendChild(el('div', { class: 'grid2' }, [
+        U.slider({ label: 'Noise σ', unit: 'sensor units', min: 0, max: 0.5, step: 0.001, dp: 3,
+            get: function () { return s.noiseStd; }, set: function (v) { s.noiseStd = v; }, onChange: touch }),
+        U.slider({ label: 'Quantisation step', unit: '', min: 0, max: 0.1, step: 0.001, dp: 3,
+            get: function () { return s.noiseQuant; }, set: function (v) { s.noiseQuant = v; }, onChange: touch }),
+        U.slider({ label: 'Bias drift', unit: 'per √s', min: 0, max: 0.05, step: 0.001, dp: 3,
+            get: function () { return s.driftRate; }, set: function (v) { s.driftRate = v; }, onChange: touch,
+            hint: 'A slow random walk in the zero point — what makes dead reckoning wander.' }),
+        U.slider({ label: 'Update rate', unit: 'Hz', min: 0, max: 100, step: 1, dp: 0,
+            get: function () { return s.updateRateHz; }, set: function (v) { s.updateRateHz = v; }, onChange: touch,
+            hint: '0 = a fresh reading every control tick.' }),
+        U.slider({ label: 'Latency', unit: 'ms', min: 0, max: 100, step: 1, dp: 0,
+            get: function () { return s.latencyMs; }, set: function (v) { s.latencyMs = v; }, onChange: touch,
+            hint: 'Age of the value when your code reads it. At 4.5 m/s, 20 ms is 90 mm of stale position.' })
+    ]));
+    return box;
+}
+
+// --------------------------------------------------------------- step 7 ----
+
+function stepExtras(root) {
+    root.appendChild(el('h2', { text: '7 · Aero & firmware' }));
+
+    root.appendChild(el('h3', { text: 'Aerodynamic parts' }));
+    root.appendChild(el('p', { class: 'small muted', html:
+        'Optional. At 1/10 scale these are small — a 15° wing makes under a newton at 10 m/s — but ' +
+        'they act <b>where you mount them</b>, so a rear wing plants the rear axle specifically.' }));
+    const aeroList = el('div', {});
+    design.aero.forEach(function (a, i) {
+        aeroList.appendChild(el('div', { class: 'part-row' }, [
+            el('span', { class: 'dot', style: 'background:#c58af0' }),
+            el('span', { class: 'grow', text: a.name + ' · ' + S.AeroKindNames[a.kind] +
+                ' · ' + a.angleDeg.toFixed(0) + '° · z ' + a.localPos.z.toFixed(2) }),
+            mkIconBtn('✕', function () { design.aero.splice(i, 1); refresh(); })
+        ]));
+    });
+    root.appendChild(aeroList);
+    const aeroBtns = el('div', { class: 'btn-row' });
+    S.AeroKindNames.forEach(function (n, kind) {
+        const b = el('button', { class: 'small', text: '+ ' + n });
+        b.addEventListener('click', function () {
+            const a = S.newAero({ kind: kind, name: n.toLowerCase() });
+            if (kind === S.AeroKind.Splitter || kind === S.AeroKind.Canard) a.localPos = S.v3(0, 0.03, 0.20);
+            design.aero.push(a);
+            refresh();
+        });
+        aeroBtns.appendChild(b);
+    });
+    root.appendChild(aeroBtns);
+
+    if (design.aero.length) {
+        const a = design.aero[design.aero.length - 1];
+        root.appendChild(el('div', { class: 'panel sub' }, [
+            el('h4', { text: 'Last added: ' + a.name }),
+            el('div', { class: 'grid2' }, [
+                U.slider({ label: 'Attack angle', unit: '°', min: 0, max: 20, step: 1, dp: 0,
+                    get: function () { return a.angleDeg; }, set: function (v) { a.angleDeg = v; }, onChange: touch,
+                    hint: 'Downforce climbs with angle up to about 15°, then the flow separates and you ' +
+                          'keep the drag without the grip.' }),
+                U.slider({ label: 'Size', unit: '×', min: 0.6, max: 1.6, step: 0.05, dp: 2,
+                    get: function () { return a.sizeScale; }, set: function (v) { a.sizeScale = v; }, onChange: touch,
+                    hint: 'Forces scale with the square of this.' }),
+                U.slider({ label: 'Position along', unit: 'm', min: -0.30, max: 0.30, step: 0.01, dp: 2,
+                    get: function () { return a.localPos.z; }, set: function (v) { a.localPos.z = v; }, onChange: touch }),
+                U.slider({ label: 'Height', unit: 'm', min: -0.05, max: 0.25, step: 0.01, dp: 2,
+                    get: function () { return a.localPos.y; }, set: function (v) { a.localPos.y = v; }, onChange: touch })
+            ])
+        ]));
+    }
+
+    root.appendChild(el('h3', { text: 'Firmware' }));
+    root.appendChild(U.textField({
+        label: 'Controller DLL', get: function () { return design.controllerDll; },
+        set: function (v) { design.controllerDll = v; }, onChange: touch,
+        hint: 'The file name inside <code>Assets/Plugins/x86_64</code> that autonomous mode loads. ' +
+              'Leave empty for the shared default. No slashes — a path is rejected and falls back. ' +
+              'The Control Lab generates a controller and tells you what to put here.'
+    }));
+
+    root.appendChild(el('h3', { text: 'Sensor realism (vehicle-wide)' }));
+    root.appendChild(el('p', { class: 'small muted', html:
+        'These corrupt the fixed ABI channels — the ones every controller gets whether or not you ' +
+        'fitted a part for them.' }));
+    root.appendChild(el('div', { class: 'grid2' }, [
+        U.slider({ label: 'IMU vibration', unit: '', min: 0, max: 0.5, step: 0.01, dp: 2,
+            get: function () { return design.imuVibration; }, set: function (v) { design.imuVibration = v; }, onChange: touch,
+            hint: 'Motor shake bleeding into the accelerometer, scaling with motor speed — exactly the ' +
+                  'nuisance that forces a low-pass filter on real hardware.' }),
+        U.slider({ label: 'wheel_vel noise σ', unit: 'rad/s', min: 0, max: 2, step: 0.01, dp: 2,
+            get: function () { return design.wheelVelNoiseStd; }, set: function (v) { design.wheelVelNoiseStd = v; }, onChange: touch }),
+        U.slider({ label: 'wheel_vel quantisation', unit: 'counts/rev', min: 0, max: 2048, step: 8, dp: 0,
+            get: function () { return design.wheelVelQuantCpr; }, set: function (v) { design.wheelVelQuantCpr = v; }, onChange: touch,
+            hint: 'Set it to your encoder\'s real resolution. 0 leaves the channel perfectly clean, ' +
+                  'which no hardware ever is.' })
+    ]));
+
+    root.appendChild(el('h3', { text: 'Antennas' }));
+    root.appendChild(el('p', { class: 'small muted', text:
+        'Purely cosmetic — no sensor, no physics beyond their small mass.' }));
+    const antBtns = el('div', { class: 'btn-row' }, [
+        (function () {
+            const b = el('button', { class: 'small', text: '+ Antenna' });
+            b.addEventListener('click', function () {
+                design.antennas.push(S.newAntenna({ name: 'ant_' + (design.antennas.length + 1) }));
+                refresh();
+            });
+            return b;
+        })(),
+        (function () {
+            const b = el('button', { class: 'small ghost', text: 'Remove all' });
+            b.addEventListener('click', function () { design.antennas = []; refresh(); });
+            return b;
+        })()
+    ]);
+    root.appendChild(antBtns);
+}
+
+// --------------------------------------------------------------- step 8 ----
+
+function stepReview(root) {
+    root.appendChild(el('h2', { text: '8 · Review & export' }));
+
+    const issues = S.validate(design);
+    U.renderIssues(root.appendChild(el('div', {})), issues);
+    const blocking = issues.filter(function (i) { return i.level === 'error'; }).length;
+
+    root.appendChild(el('h3', { text: 'Save it' }));
+    const fileName = S.fileNameFor(design);
+    root.appendChild(el('p', { class: 'small', html:
+        'This will be saved as <code>' + fileName + '</code>. ' + X.pathHelp('vehicles') }));
+
+    const status = el('div', { class: 'status', style: 'margin:8px 0' });
+    const btnRow = el('div', { class: 'btn-row' });
+
+    if (X.supported) {
+        const pick = el('button', { class: 'primary', text: 'Save to my Vehicles folder…' });
+        pick.addEventListener('click', function () {
+            saveViaPicker(status);
+        });
+        btnRow.appendChild(pick);
+    }
+    const dl = el('button', { class: X.supported ? '' : 'primary', text: 'Download the JSON' });
+    dl.addEventListener('click', function () {
+        X.download(fileName, S.toJson(design), 'application/json');
+        status.innerHTML = '<span class="ok">Downloaded ' + fileName + '.</span> Move it into your Vehicles folder.';
+    });
+    btnRow.appendChild(dl);
+
+    const toLab = el('button', { text: 'Open in the Control Lab →' });
+    toLab.addEventListener('click', function () {
+        X.stashDesign(design);
+        location.href = 'control-lab.html';
+    });
+    btnRow.appendChild(toLab);
+
+    root.appendChild(btnRow);
+    root.appendChild(status);
+    if (blocking) {
+        root.appendChild(el('div', { class: 'callout warn', html:
+            'You can still save with errors outstanding — the file will be written exactly as shown — ' +
+            'but the car will not behave the way you intend until they are fixed.' }));
+    }
+
+    root.appendChild(el('h3', { text: 'Then, in the game' }));
+    root.appendChild(el('ol', { class: 'small' }, [
+        el('li', { html: 'Open the <b>Garage</b> and load “' + design.name + '” — it appears in the list once the file is in the folder.' }),
+        el('li', { html: 'Check it looks right, then hit <b>Drive</b>.' }),
+        el('li', { html: 'To run your own firmware on it, build a controller DLL and set the ' +
+            '<b>Controller DLL</b> field in step 7 to its file name.' })
+    ]));
+
+    root.appendChild(el('h3', { text: 'The file' }));
+    const pre = el('pre', {}, [el('code', { text: S.toJson(design) })]);
+    pre.style.maxHeight = '380px';
+    root.appendChild(pre);
+}
+
+function saveViaPicker(status) {
+    const fileName = S.fileNameFor(design);
+    const text = S.toJson(design);
+    status.textContent = 'Waiting for you to choose a folder…';
+    X.savedDirectory('vehicles').then(function (found) {
+        if (found && found.needsPermission) {
+            return X.requestPermission(found.handle).then(function (granted) {
+                return granted ? found.handle : X.pickDirectory('vehicles');
+            });
+        }
+        return found || X.pickDirectory('vehicles');
+    }).then(function (dir) {
+        return X.writeFile(dir, fileName, text).then(function () { return dir; });
+    }).then(function (dir) {
+        status.innerHTML = '<span class="ok">Saved ' + fileName + ' into ' + (dir.name || 'the chosen folder') +
+            '.</span> It will show up in the garage next time you open it.';
+    }).catch(function (e) {
+        status.innerHTML = '<span class="err">' + (e && e.name === 'AbortError' ? 'Cancelled.' : (e.message || String(e))) + '</span>';
+    });
+}
+
+// ---------------------------------------------------------------- stats ----
+
+function renderStats() {
+    const t = U.clear($('#statsTable'));
+    const st = S.stats(design);
+    function row(label, value, hint) {
+        t.appendChild(el('tr', {}, [
+            el('td', { html: label }),
+            el('td', { class: 'num', text: value }),
+        ]));
+        if (hint) t.appendChild(el('tr', {}, [el('td', { colspan: 2, class: 'tiny muted', text: hint })]));
+    }
+    row('Total mass', st.totalMass.toFixed(3) + ' kg');
+    row('Top speed', st.powered ? st.estTopSpeedMs.toFixed(2) + ' m/s' : '—');
+    row('Wheel torque at stall', st.totalStallTorqueNm.toFixed(3) + ' N·m');
+    if (st.launchAccelMs2) row('Launch acceleration', st.launchAccelMs2.toFixed(1) + ' m/s²');
+    row('Driven / steered', st.powered + ' / ' + st.steered + ' of ' + st.wheels);
+    if (st.composite) {
+        row('Front axle load', st.frontWeightPct.toFixed(0) + ' %',
+            st.frontWeightPct > 60 ? 'Nose heavy — expect it to push wide on entry.'
+            : st.frontWeightPct < 40 ? 'Tail heavy — expect the back to step out.' : '');
+        row('Yaw inertia', st.yawInertia.toFixed(4) + ' kg·m²');
+    }
+    if (st.rideFreqHz) {
+        row('Ride frequency', st.rideFreqHz.toFixed(2) + ' Hz');
+        row('Static sag', st.sagPct.toFixed(0) + ' %',
+            st.sagPct > 80 ? 'Sitting on the bump stops — stiffen the springs or add travel.' : '');
+    }
+    if (st.dragAtTopN) row('Drag at top speed', st.dragAtTopN.toFixed(2) + ' N');
+    if (st.downforceAtTopN) row('Downforce at top speed', st.downforceAtTopN.toFixed(2) + ' N');
+}
+
+// ---- helpers ----
+
+function mkSlider(label, unit, path, min, max, stepv, dp) {
+    const parts = path.split('.');
+    return U.slider({
+        label: label, unit: unit, min: min, max: max, step: stepv, dp: dp,
+        get: function () { return parts.reduce(function (o, k) { return o[k]; }, design); },
+        set: function (v) {
+            let o = design;
+            for (let i = 0; i < parts.length - 1; i++) o = o[parts[i]];
+            o[parts[parts.length - 1]] = v;
+        },
+        onChange: touch
+    });
+}
+
+// ----------------------------------------------------------------- boot ----
+
+$('#btnPrev').addEventListener('click', function () { if (step > 0) { step--; refresh(); } });
+$('#btnNext').addEventListener('click', function () { if (step < STEPS.length - 1) { step++; refresh(); } });
+$('#btnReset').addEventListener('click', function () {
+    if (!confirm('Discard this design and start from the stock car?')) return;
+    design = S.stockDesign();
+    selectedSensor = -1;
+    step = 0;
+    refresh();
+});
+$('#btnLoad').addEventListener('click', function () {
+    const input = document.createElement('input');
+    input.type = 'file';
+    input.accept = '.json,application/json';
+    input.addEventListener('change', function () {
+        if (!input.files || !input.files.length) return;
+        X.readTextFile(input.files[0]).then(function (text) {
+            try {
+                design = S.normalize(JSON.parse(text));
+                selectedSensor = -1;
+                step = 0;
+                refresh();
+            } catch (e) {
+                alert('That file did not parse as a vehicle: ' + e.message);
+            }
+        });
+    });
+    input.click();
+});
+
+window.addEventListener('resize', function () { U.drawSchematic('schematic', design); });
+refresh();
+
+})();
+</script>
+</body>
+</html>

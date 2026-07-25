@@ -1,0 +1,768 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Tiny Torque · Calibration Companion</title>
+<link rel="stylesheet" href="shared/tt-style.css">
+<style>
+    .cal-grid { display: grid; grid-template-columns: 210px minmax(340px, 1fr); gap: 16px; align-items: start; }
+    @media (max-width: 1000px) { .cal-grid { grid-template-columns: 1fr; } }
+    .sticky { position: sticky; top: 12px; }
+    textarea.data { min-height: 130px; font-size: 12.5px; }
+    .plotwrap { margin: 12px 0 4px; }
+    .metrics { display: flex; gap: 18px; flex-wrap: wrap; font-family: var(--mono); font-size: 12.5px; margin-top: 6px; }
+    .metrics b { color: var(--fg-bright); }
+    .metrics span { color: var(--fg-dim); }
+</style>
+</head>
+<body>
+
+<header class="tt-header">
+    <h1><span class="tt-mark">Tiny&nbsp;Torque</span> · Calibration Companion</h1>
+    <span class="tt-tagline">Measure the car. Do not guess at it.</span>
+    <nav>
+        <a href="index.html">Hub</a>
+        <a href="car-setup.html">Car Setup</a>
+        <a href="control-lab.html">Control Lab</a>
+        <a href="calibration.html" class="active">Calibration</a>
+        <a href="telemetry.html">Telemetry</a>
+        <a href="motor-converter.html">Motor</a>
+    </nav>
+</header>
+
+<main class="tt-main wide">
+<div class="cal-grid">
+
+    <div class="panel sticky" style="padding:10px 0">
+        <ul class="steps" id="stageNav"></ul>
+        <div style="padding:10px 12px 2px">
+            <button class="small primary" id="btnResults" style="width:100%">See the results ↓</button>
+        </div>
+    </div>
+
+    <div id="stageBody"></div>
+
+</div>
+</main>
+
+<script src="shared/tt-schema.js"></script>
+<script src="shared/tt-motor.js"></script>
+<script src="shared/tt-sim.js"></script>
+<script src="shared/tt-plot.js"></script>
+<script src="shared/tt-ui.js"></script>
+<script src="shared/tt-export.js"></script>
+<script src="shared/tt-jgraph.js"></script>
+<script>
+(function () {
+'use strict';
+const S = TT.Schema, M = TT.Motor, Sim = TT.Sim, U = TT.UI, X = TT.Export, JG = TT.JGraph;
+const el = U.el, $ = U.$;
+
+// ---------------------------------------------------------------- state ----
+
+let cal = X.loadLocal('calibration', null) || {
+    massEff: 2.708, wheelRadius: 0.033,
+    // A: encoder scale
+    scaleRows: '',
+    // B: coast-down drag
+    coastRows: '',
+    coastMode: 'vt',           // 'vt' = speed vs time, 'vd' = decel vs speed
+    // C: traction efficiency
+    tractionRows: '',
+    // D: brake slip
+    brakeRows: '',
+    results: {}
+};
+function save() { X.saveLocal('calibration', cal); }
+
+let stage = 0;
+
+const STAGES = [
+    { key: 'about', label: 'What and why', render: stageAbout },
+    { key: 'setup', label: 'The car', render: stageSetup },
+    { key: 'scale', label: 'A · Encoder scale', render: stageScale },
+    { key: 'drag', label: 'B · Coast-down drag', render: stageDrag },
+    { key: 'traction', label: 'C · Traction efficiency', render: stageTraction },
+    { key: 'brake', label: 'D · Brake slip', render: stageBrake },
+    { key: 'results', label: 'Results', render: stageResults }
+];
+
+function render() {
+    const nav = U.clear($('#stageNav'));
+    STAGES.forEach(function (s, i) {
+        const li = el('li', { class: i === stage ? 'active' : '' }, [
+            el('span', { class: 'num', text: i === 0 ? '·' : (i === STAGES.length - 1 ? '✓' : String(i)) }),
+            el('span', { text: s.label })
+        ]);
+        li.addEventListener('click', function () { stage = i; render(); });
+        nav.appendChild(li);
+    });
+    const body = U.clear($('#stageBody'));
+    STAGES[stage].render(body);
+}
+
+// ---- parsing pasted data ---------------------------------------------------
+
+/* Accept whatever the user pastes: comma, tab, or space separated, with or
+   without a header row, blank lines and # comments ignored. Getting data out
+   of a log and into a page should not be a formatting exercise. */
+function parseRows(text, columns) {
+    const rows = [];
+    String(text || '').split(/\r?\n/).forEach(function (line) {
+        const t = line.trim();
+        if (!t || t[0] === '#') return;
+        const parts = t.split(/[,\t;]+|\s{1,}/).filter(function (p) { return p !== ''; });
+        const nums = parts.map(Number);
+        if (nums.length < columns || nums.some(function (n) { return !isFinite(n); })) return;  // header or junk
+        rows.push(nums.slice(0, columns));
+    });
+    return rows;
+}
+
+function dataField(label, key, columns, placeholder, hint) {
+    const ta = el('textarea', { class: 'data', placeholder: placeholder });
+    ta.value = cal[key] || '';
+    const status = el('div', { class: 'hint' });
+    function update() {
+        cal[key] = ta.value;
+        save();
+        const rows = parseRows(ta.value, columns);
+        status.innerHTML = rows.length
+            ? '<span class="ok">' + rows.length + ' rows read.</span> ' + (hint || '')
+            : (ta.value.trim() ? '<span class="warn">No usable rows yet — each line needs ' + columns +
+                ' numbers.</span> ' : (hint || ''));
+        render();
+    }
+    ta.addEventListener('change', update);
+    const wrap = el('div', { class: 'field' }, [el('label', { text: label }), ta, status]);
+    // Populate the status without triggering a re-render on first draw.
+    const rows = parseRows(ta.value, columns);
+    status.innerHTML = rows.length ? '<span class="ok">' + rows.length + ' rows read.</span> ' + (hint || '') : (hint || '');
+    return wrap;
+}
+
+// ---- stage: about ----------------------------------------------------------
+
+function stageAbout(root) {
+    const p = el('div', { class: 'panel' });
+    p.appendChild(el('h2', { text: 'Why a model needs measuring' }));
+    p.appendChild(el('p', { class: 'small', html:
+        'The Control Lab builds a controller out of numbers from a datasheet. Those numbers are right ' +
+        'about the parts and wrong about the car, because a real vehicle carries losses nobody prints: ' +
+        'a free-rolling wheel drags slightly and under-reads distance, bearings and gears eat torque ' +
+        'that never reaches the road, and the tyre gives up a percent or two of whatever force you ' +
+        'command as slip.' }));
+    p.appendChild(el('p', { class: 'small', html:
+        'None of that can be derived. It has to be measured, and the measurement is four short runs. ' +
+        'What you get out is a handful of constants that make the feed-forward honest — after which ' +
+        'the PID is genuinely trimming rather than quietly covering for a wrong model.' }));
+
+    p.appendChild(el('h3', { text: 'The four measurements' }));
+    const t = el('table', { class: 'compact' });
+    [
+        ['A · Encoder scale', 'Drive a measured distance at a steady speed', 'CAL_SCALE',
+            'How much your odometry under-reads. Usually the single largest error in dead reckoning.'],
+        ['B · Coast-down drag', 'Get to speed, cut power, log the slowdown', 'VE_DRAG_C0/C1/C2',
+            'The force opposing you at any speed. Feed-forward cannot hold a speed without it.'],
+        ['C · Traction efficiency', 'Hold a steady speed and note the current', 'CAL_TRACTION_EFF',
+            'What fraction of commanded force actually reaches the road.'],
+        ['D · Brake slip', 'Brake over a measured distance', 'CAL_BRAKE',
+            'Extra odometry error while the brake is on. Small, and it matters when stopping on a mark.']
+    ].forEach(function (r) {
+        t.appendChild(el('tr', {}, [
+            el('td', { html: '<b>' + r[0] + '</b>' }),
+            el('td', { class: 'small', text: r[1] }),
+            el('td', { html: '<code>' + r[2] + '</code>' })
+        ]));
+        t.appendChild(el('tr', {}, [el('td', { colspan: 3, class: 'tiny muted', text: r[3] })]));
+    });
+    p.appendChild(t);
+
+    p.appendChild(el('div', { class: 'callout', html:
+        '<b>This works for the sim car and the real one, and that is the point.</b> In the simulator, ' +
+        '"ground truth" is the <code>veh/pos_x</code> and <code>veh/pos_z</code> channels in your ' +
+        'telemetry CSV. On the workshop floor it is a tape measure. The procedure does not change, ' +
+        'which is what makes a controller tuned in one place work in the other.' }));
+
+    p.appendChild(el('div', { class: 'callout warn', html:
+        '<b>One lesson worth having in advance.</b> A drag polynomial identified while the motor is ' +
+        'pushing is not the same as coast-down drag. Slip loss scales with the <i>force</i> you apply, ' +
+        'not with speed, so folding it into the drag curve gives you a model that fits one operating ' +
+        'point and is wrong everywhere else. Measure drag with the power off (B) and traction ' +
+        'efficiency separately (C) — that is why they are two stages and not one.' }));
+    root.appendChild(p);
+}
+
+// ---- stage: the car --------------------------------------------------------
+
+function stageSetup(root) {
+    const p = el('div', { class: 'panel' });
+    p.appendChild(el('h2', { text: 'The car being measured' }));
+    p.appendChild(el('p', { class: 'small muted', html:
+        'Two numbers are needed before any fit makes sense. Load a vehicle and they are filled in ' +
+        'for you.' }));
+
+    const btns = el('div', { class: 'btn-row' });
+    const load = el('button', { class: 'small', text: 'Load a vehicle JSON…' });
+    load.addEventListener('click', function () {
+        const input = document.createElement('input');
+        input.type = 'file'; input.accept = '.json';
+        input.addEventListener('change', function () {
+            if (!input.files.length) return;
+            X.readTextFile(input.files[0]).then(function (text) {
+                try { applyVehicle(S.normalize(JSON.parse(text))); }
+                catch (e) { alert('Could not read that vehicle: ' + e.message); }
+            });
+        });
+        input.click();
+    });
+    btns.appendChild(load);
+    const stash = X.takeDesign();
+    if (stash) {
+        const b = el('button', { class: 'small ghost', text: 'Use "' + (stash.name || 'the stashed car') + '"' });
+        b.addEventListener('click', function () { applyVehicle(S.normalize(stash)); });
+        btns.appendChild(b);
+    }
+    const stock = el('button', { class: 'small ghost', text: 'Use the stock RC car' });
+    stock.addEventListener('click', function () { applyVehicle(S.stockDesign()); });
+    btns.appendChild(stock);
+    p.appendChild(btns);
+
+    p.appendChild(el('div', { class: 'grid2' }, [
+        U.slider({
+            label: 'Effective mass', unit: 'kg', min: 0.2, max: 10, step: 0.001, dp: 3,
+            get: function () { return cal.massEff; }, set: function (v) { cal.massEff = v; },
+            onChange: function () { save(); },
+            hint: 'Vehicle mass <b>plus reflected rotor inertia</b> — not the number on the scales. ' +
+                  'Loading a vehicle computes it. Every force in these fits is mass × acceleration, so ' +
+                  'getting this wrong scales all of them.'
+        }),
+        U.slider({
+            label: 'Wheel radius', unit: 'm', min: 0.01, max: 0.15, step: 0.0005, dp: 4,
+            get: function () { return cal.wheelRadius; }, set: function (v) { cal.wheelRadius = v; },
+            onChange: function () { save(); }
+        })
+    ]));
+
+    if (cal.vehicleName) {
+        p.appendChild(el('div', { class: 'callout good small', html:
+            'Using <b>' + cal.vehicleName + '</b>: ' + cal.massEff.toFixed(3) + ' kg effective ' +
+            '(' + cal.massPlain.toFixed(3) + ' kg of car plus ' +
+            (cal.massEff - cal.massPlain).toFixed(3) + ' kg of reflected rotor inertia), ' +
+            cal.wheelRadius.toFixed(4) + ' m wheels.' }));
+    }
+    root.appendChild(p);
+
+    function applyVehicle(d) {
+        const ex = TT.CGen ? null : null;
+        const stats = S.stats(d);
+        const powered = d.wheels.filter(function (w) { return w.powered; });
+        const motor = powered.length ? powered[0].motor : S.newMotor();
+        const radius = powered.length ? powered[0].radius : 0.033;
+        const pl = M.plant({
+            kt: motor.kt, gearRatio: motor.gearRatio, wheelRadius: radius,
+            resistance: motor.resistance, efficiency: motor.efficiency,
+            motorCount: Math.max(1, powered.length), rotorInertia: motor.rotorInertia,
+            mass: stats.totalMass, maxVoltage: motor.maxVoltage, maxCurrent: motor.maxCurrent
+        });
+        cal.massEff = pl.massEff;
+        cal.massPlain = stats.totalMass;
+        cal.wheelRadius = radius;
+        cal.vehicleName = d.name;
+        cal.forcePerAmpAll = pl.forcePerAmpAll;
+        cal.bemfVPerMs = pl.bemfVPerMs;
+        save();
+        render();
+    }
+}
+
+// ---- stage A: encoder scale -------------------------------------------------
+
+function stageScale(root) {
+    const p = el('div', { class: 'panel' });
+    p.appendChild(el('h2', { text: 'A · How much does your odometry under-read?' }));
+    p.appendChild(el('p', { class: 'small', html:
+        'A wheel that is not being driven still has to overcome its own bearing and seal drag, and it ' +
+        'gets that torque by slipping very slightly against the ground. The result is an encoder that ' +
+        'consistently reports a little less distance than the car actually covered — a few percent, ' +
+        'every time, in the same direction.' }));
+    p.appendChild(el('div', { class: 'eq', html:
+        's<sub>true</sub> = s<sub>encoder</sub> · (1 + CAL_SCALE)' }));
+    p.appendChild(el('p', { class: 'small', html:
+        'It is a <b>ratio</b>, not an offset — the error grows with distance travelled, which is exactly ' +
+        'why dead reckoning drifts rather than simply being wrong by a fixed amount.' }));
+
+    p.appendChild(el('h3', { text: 'The run' }));
+    p.appendChild(el('ol', { class: 'small' }, [
+        el('li', { html: 'Set <code>CAL_SCALE</code> to 0 and drive a straight line at a <b>steady</b> speed. ' +
+            'Acceleration and braking both add slip of their own and would contaminate the measurement.' }),
+        el('li', { html: 'Record the distance the odometer reported and the distance the car actually ' +
+            'covered. In the sim, take ground truth from <code>veh/pos_x</code> and <code>veh/pos_z</code> ' +
+            'over the same window; on hardware, use a tape measure.' }),
+        el('li', { html: 'Do it several times, ideally over different distances — a real scale error ' +
+            'shows up as a consistent slope, whereas a one-off measurement cannot tell you the ' +
+            'difference between a scale error and a mistake.' })
+    ]));
+
+    p.appendChild(dataField('Runs — one per line: odometer distance, true distance (both in metres)',
+        'scaleRows', 2,
+        '# odometer_m, true_m\n14.32, 14.50\n7.41, 7.50\n21.55, 21.80',
+        'Both in metres.'));
+
+    const rows = parseRows(cal.scaleRows, 2);
+    if (rows.length >= 1) {
+        const enc = rows.map(function (r) { return r[0]; });
+        const truth = rows.map(function (r) { return r[1]; });
+        // Force the fit through the origin: zero distance must mean zero error.
+        let num = 0, den = 0;
+        for (let i = 0; i < rows.length; i++) { num += enc[i] * truth[i]; den += enc[i] * enc[i]; }
+        const slope = den > 1e-12 ? num / den : 1;
+        const scale = slope - 1;
+
+        // Residuals tell you whether it is really a scale error.
+        let worst = 0;
+        rows.forEach(function (r) {
+            const pred = r[0] * slope;
+            worst = Math.max(worst, Math.abs(pred - r[1]));
+        });
+
+        cal.results.calScale = scale;
+        save();
+
+        const canvas = el('canvas', { class: 'tt-plot' });
+        p.appendChild(el('div', { class: 'plotwrap' }, [canvas]));
+        const legend = el('div', {});
+        p.appendChild(legend);
+        const maxEnc = Math.max.apply(null, enc) * 1.1;
+        const plot = new TT.Plot(canvas, { height: 240, xLabel: 'odometer distance (m)', yLabel: 'true distance (m)' });
+        plot.setSeries([
+            { name: 'measured', x: enc, y: truth, style: 'dots' },
+            { name: 'fit', x: [0, maxEnc], y: [0, maxEnc * slope], color: '#5aa9f0', style: 'dashed' },
+            { name: 'perfect odometry', x: [0, maxEnc], y: [0, maxEnc], color: '#565d6a' }
+        ]).draw();
+        plot.renderLegend(legend);
+
+        p.appendChild(el('div', { class: 'metrics', html:
+            '<span>CAL_SCALE <b>' + scale.toFixed(5) + '</b></span>' +
+            '<span>odometry reads <b>' + (Math.abs(scale) * 100).toFixed(2) + ' % ' +
+            (scale > 0 ? 'short' : 'long') + '</b></span>' +
+            '<span>worst residual <b>' + (worst * 1000).toFixed(0) + ' mm</b></span>' }));
+
+        p.appendChild(el('div', {
+            class: 'callout ' + (Math.abs(scale) > 0.06 ? 'warn' : Math.abs(scale) < 0.0005 ? '' : 'good') + ' small',
+            html: Math.abs(scale) > 0.06
+                ? 'Over 6 % is a lot for tyre slip alone. Check the wheel radius and the counts per ' +
+                  'revolution first — a wrong constant looks exactly like a scale error, and is far ' +
+                  'more common than 6 % of genuine slip.'
+                : Math.abs(scale) < 0.0005
+                    ? 'Essentially zero. That is normal in the simulator, which does not model bearing ' +
+                      'drag or carcass deformation on free-rolling wheels. On real hardware expect 1–4 %.'
+                    : 'That is the right order of magnitude for real rubber — 1–4 % is typical.'
+        }));
+        if (rows.length === 1) {
+            p.appendChild(el('div', { class: 'callout warn small', html:
+                'One run cannot distinguish a scale error from a measurement mistake. Add a couple more ' +
+                'at different distances and check the residuals stay small.' }));
+        }
+    }
+    root.appendChild(p);
+}
+
+// ---- stage B: coast-down drag ----------------------------------------------
+
+function stageDrag(root) {
+    const p = el('div', { class: 'panel' });
+    p.appendChild(el('h2', { text: 'B · What is slowing you down?' }));
+    p.appendChild(el('p', { class: 'small', html:
+        'Get up to speed, cut the power completely, and let the car roll to a stop while logging speed. ' +
+        'Everything that decelerates it is drag, and its shape tells you what kind:' }));
+    p.appendChild(el('div', { class: 'eq', html:
+        'F<sub>drag</sub>(v) = c₀ + c₁·v + c₂·v²' +
+        '<div class="note">c₀ is constant: bearings, seals, gear mesh — present even at walking pace. ' +
+        'c₂ is aerodynamic and only matters at the top end. c₁ absorbs everything in between.</div>' }));
+    p.appendChild(el('div', { class: 'callout warn small', html:
+        '<b>The power must be genuinely off.</b> If the ESC has a drag brake enabled, or the controller ' +
+        'is still commanding a trickle of voltage, you are measuring that instead — and the fit will ' +
+        'look perfectly reasonable while being wrong.' }));
+
+    p.appendChild(U.chipRow({
+        label: 'What did you record?',
+        options: [
+            { value: 'vt', label: 'Speed against time' },
+            { value: 'vd', label: 'Deceleration against speed' }
+        ],
+        get: function () { return cal.coastMode; },
+        set: function (v) { cal.coastMode = v; save(); },
+        onChange: function () { render(); },
+        hint: 'Speed against time is the usual log. The other form is for when you have already differentiated.'
+    }));
+
+    if (cal.coastMode === 'vt') {
+        p.appendChild(dataField('Coast-down log — one per line: time (s), speed (m/s)',
+            'coastRows', 2,
+            '# t_s, v_mps\n0.00, 6.00\n0.10, 5.83\n0.20, 5.67\n0.30, 5.52',
+            'Differentiated for you. A steady sample rate helps but is not required.'));
+    } else {
+        p.appendChild(dataField('One per line: speed (m/s), deceleration (m/s², positive)',
+            'coastRows', 2, '# v_mps, decel_mps2\n6.0, 1.31\n5.0, 1.16\n4.0, 1.02', ''));
+    }
+
+    const rows = parseRows(cal.coastRows, 2);
+    let speeds = [], decels = [];
+    if (cal.coastMode === 'vt' && rows.length >= 4) {
+        // Central differences, which are far less noisy than forward ones.
+        for (let i = 1; i < rows.length - 1; i++) {
+            const dt = rows[i + 1][0] - rows[i - 1][0];
+            if (dt <= 0) continue;
+            const dv = rows[i + 1][1] - rows[i - 1][1];
+            const a = -dv / dt;
+            if (a > 0 && rows[i][1] > 0.1) { speeds.push(rows[i][1]); decels.push(a); }
+        }
+    } else if (cal.coastMode === 'vd') {
+        rows.forEach(function (r) { if (r[0] > 0.1 && r[1] > 0) { speeds.push(r[0]); decels.push(r[1]); } });
+    }
+
+    if (speeds.length >= 3) {
+        const fit = Sim.fitDragPolynomial(speeds, decels, cal.massEff);
+        if (fit) {
+            cal.results.dragC0 = fit.c0;
+            cal.results.dragC1 = fit.c1;
+            cal.results.dragC2 = fit.c2;
+            save();
+
+            const canvas = el('canvas', { class: 'tt-plot' });
+            p.appendChild(el('div', { class: 'plotwrap' }, [canvas]));
+            const legend = el('div', {});
+            p.appendChild(legend);
+
+            const vMax = Math.max.apply(null, speeds) * 1.05;
+            const fx = [], fy = [];
+            for (let v = 0; v <= vMax; v += vMax / 60) {
+                fx.push(v); fy.push(fit.c0 + fit.c1 * v + fit.c2 * v * v);
+            }
+            const plot = new TT.Plot(canvas, { height: 250, xLabel: 'speed (m/s)', yLabel: 'drag force (N)' });
+            plot.setSeries([
+                { name: 'measured', x: speeds, y: decels.map(function (a) { return a * cal.massEff; }), style: 'dots' },
+                { name: 'fit', x: fx, y: fy, color: '#5aa9f0' },
+                { name: 'constant part c₀', x: [0, vMax], y: [fit.c0, fit.c0], color: '#565d6a', style: 'dashed' }
+            ]).draw();
+            plot.renderLegend(legend);
+
+            const at = Math.max.apply(null, speeds);
+            const dragAt = fit.c0 + fit.c1 * at + fit.c2 * at * at;
+            p.appendChild(el('div', { class: 'metrics', html:
+                '<span>c₀ <b>' + fit.c0.toFixed(4) + ' N</b></span>' +
+                '<span>c₁ <b>' + fit.c1.toFixed(4) + '</b></span>' +
+                '<span>c₂ <b>' + fit.c2.toFixed(5) + '</b></span>' +
+                '<span>fit quality r² <b>' + fit.r2.toFixed(4) + '</b></span>' +
+                '<span>drag at ' + at.toFixed(1) + ' m/s <b>' + dragAt.toFixed(2) + ' N</b></span>' }));
+
+            const notes = [];
+            if (fit.r2 < 0.9) notes.push(['warn',
+                'The fit only explains ' + (fit.r2 * 100).toFixed(0) + ' % of the variation. Either the ' +
+                'log is noisy — try a smoother speed signal or more samples — or something other than ' +
+                'drag was acting, such as a slope or a drag brake.']);
+            if (fit.c2 < 0) notes.push(['warn',
+                'A negative aerodynamic term is not physical. It usually means the speed range was too ' +
+                'narrow for the fit to separate c₁ from c₂; coast from a higher speed and re-fit.']);
+            if (fit.c0 > cal.massEff * 3) notes.push(['warn',
+                'c₀ of ' + fit.c0.toFixed(2) + ' N is very high for a car this size — that is ' +
+                (fit.c0 / (cal.massEff * 9.81) * 100).toFixed(0) + ' % of its weight in constant drag. ' +
+                'Check for a rubbing brake, a tight gear mesh, or an ESC drag brake left on.']);
+            if (!notes.length) notes.push(['good',
+                'A well-conditioned fit. Paste these three into your config header and the feed-forward ' +
+                'finally knows what it is pushing against.']);
+            notes.forEach(function (n) { p.appendChild(el('div', { class: 'callout ' + n[0] + ' small', html: n[1] })); });
+
+            const jg = el('div', { class: 'btn-row' });
+            jg.appendChild(JG.button('coast_drag', function () {
+                return JG.figure('coast_drag', 'Coast-down drag fit', speeds, [
+                    { name: 'measured_N', data: decels.map(function (a) { return a * cal.massEff; }) },
+                    { name: 'fitted_N', data: speeds.map(function (v) { return fit.c0 + fit.c1 * v + fit.c2 * v * v; }) }
+                ], { xLabel: 'speed (m/s)', yLabel: 'drag (N)' });
+            }));
+            p.appendChild(jg);
+        }
+    } else if (rows.length) {
+        p.appendChild(el('div', { class: 'callout warn small', text:
+            'Need at least three usable points after differentiating. Add more of the coast-down log.' }));
+    }
+    root.appendChild(p);
+}
+
+// ---- stage C: traction efficiency -------------------------------------------
+
+function stageTraction(root) {
+    const p = el('div', { class: 'panel' });
+    p.appendChild(el('h2', { text: 'C · How much of your push reaches the road?' }));
+    p.appendChild(el('p', { class: 'small', html:
+        'Hold a steady speed and nothing is accelerating, so the thrust the motors make must exactly ' +
+        'equal the drag you measured in B. Compare what the electrical side says it is producing with ' +
+        'what the drag curve says is needed, and the ratio is everything lost between the two — tyre ' +
+        'slip, and whatever the efficiency figure on the gearbox was optimistic about.' }));
+    p.appendChild(el('div', { class: 'eq', html:
+        'CAL_TRACTION_EFF = drag(v) / (I · force-per-amp)' }));
+
+    if (!cal.forcePerAmpAll) {
+        p.appendChild(el('div', { class: 'callout warn', html:
+            'Load a vehicle on <b>The car</b> first — this stage needs its force-per-amp figure.' }));
+        root.appendChild(p);
+        return;
+    }
+    p.appendChild(el('div', { class: 'callout small', html:
+        'Using <b>' + cal.forcePerAmpAll.toFixed(4) + ' N per amp</b> total from ' +
+        (cal.vehicleName || 'the loaded vehicle') + '.' }));
+
+    if (cal.results.dragC0 === undefined) {
+        p.appendChild(el('div', { class: 'callout warn', html:
+            'Do stage <b>B</b> first — without the drag curve there is nothing to compare against.' }));
+        root.appendChild(p);
+        return;
+    }
+
+    p.appendChild(dataField('Steady-speed runs — one per line: speed (m/s), current per motor (A)',
+        'tractionRows', 2,
+        '# v_mps, amps_per_motor\n4.50, 2.00\n3.00, 1.55\n6.00, 2.72',
+        'Read the current off the motor feedback channel while the speed is flat.'));
+
+    const rows = parseRows(cal.tractionRows, 2);
+    if (rows.length >= 1) {
+        const effs = [], speeds = [], dragN = [], thrustN = [];
+        rows.forEach(function (r) {
+            const v = r[0], amps = r[1];
+            const drag = cal.results.dragC0 + cal.results.dragC1 * v + cal.results.dragC2 * v * v;
+            const thrust = amps * cal.forcePerAmpAll;
+            if (thrust > 1e-6) {
+                speeds.push(v); dragN.push(drag); thrustN.push(thrust); effs.push(drag / thrust);
+            }
+        });
+        if (effs.length) {
+            const mean = effs.reduce(function (a, b) { return a + b; }, 0) / effs.length;
+            cal.results.tractionEff = Math.min(1, mean);
+            save();
+
+            const t = el('table', { class: 'compact' });
+            t.appendChild(el('tr', {}, ['Speed', 'Drag needed', 'Thrust made', 'Efficiency'].map(function (h) {
+                return el('th', { class: h === 'Speed' ? '' : 'num', text: h });
+            })));
+            speeds.forEach(function (v, i) {
+                t.appendChild(el('tr', {}, [
+                    el('td', { text: v.toFixed(2) + ' m/s' }),
+                    el('td', { class: 'num', text: dragN[i].toFixed(3) + ' N' }),
+                    el('td', { class: 'num', text: thrustN[i].toFixed(3) + ' N' }),
+                    el('td', { class: 'num', text: (effs[i] * 100).toFixed(1) + ' %' })
+                ]));
+            });
+            p.appendChild(t);
+
+            const spread = Math.max.apply(null, effs) - Math.min.apply(null, effs);
+            p.appendChild(el('div', { class: 'metrics', html:
+                '<span>CAL_TRACTION_EFF <b>' + Math.min(1, mean).toFixed(3) + '</b></span>' +
+                '<span>spread across runs <b>' + (spread * 100).toFixed(1) + ' pp</b></span>' }));
+
+            if (mean > 1.02) {
+                p.appendChild(el('div', { class: 'callout bad small', html:
+                    'Over 100 % efficiency is impossible, so one of the inputs is wrong. The usual ' +
+                    'culprits: the drag curve was measured with something still driving, or the current ' +
+                    'figure is the pack total rather than per motor.' }));
+            } else if (mean < 0.7) {
+                p.appendChild(el('div', { class: 'callout warn small', html:
+                    'Losing ' + ((1 - mean) * 100).toFixed(0) + ' % between the motor and the road is a ' +
+                    'lot. Genuine tyre slip is a few percent; this much usually means the drivetrain ' +
+                    'efficiency in the vehicle file is already counting some of the same loss.' }));
+            } else {
+                p.appendChild(el('div', { class: 'callout good small', html:
+                    'Plausible. Anything above about 0.95 means the tyres are doing their job.' }));
+            }
+            if (spread > 0.15) {
+                p.appendChild(el('div', { class: 'callout warn small', html:
+                    'The efficiency varies a lot between runs, which suggests the speeds were not really ' +
+                    'steady — or that the drag curve does not fit as well as its r² suggested.' }));
+            }
+        }
+    }
+    root.appendChild(p);
+}
+
+// ---- stage D: brake slip ----------------------------------------------------
+
+function stageBrake(root) {
+    const p = el('div', { class: 'panel' });
+    p.appendChild(el('h2', { text: 'D · Extra slip while braking' }));
+    p.appendChild(el('p', { class: 'small', html:
+        'Braking makes every wheel slip a little more than it does while coasting, including the ones ' +
+        'you take odometry from. Over a short stop it is a few tens of millimetres — irrelevant for ' +
+        'holding a speed, and decisive if you are trying to stop on a mark.' }));
+    p.appendChild(el('div', { class: 'eq', html:
+        's<sub>true</sub> = s<sub>encoder</sub> · (1 + CAL_SCALE + CAL_BRAKE · brake)' +
+        '<div class="note">Multiplicative with distance rolled, because slip is proportional to road ' +
+        'speed. An additive form would manufacture phantom distance while parked with the brake held.</div>' }));
+
+    p.appendChild(dataField('Braking runs — one per line: odometer distance (m), true distance (m), average brake command (0–1)',
+        'brakeRows', 3,
+        '# odometer_m, true_m, avg_brake\n1.150, 1.265, 0.10\n0.800, 0.860, 0.08',
+        'Take the window where the brake is actually applied, not the whole stop.'));
+
+    const rows = parseRows(cal.brakeRows, 3);
+    const scale = cal.results.calScale || 0;
+    if (rows.length >= 1) {
+        const xs = [], ys = [];
+        rows.forEach(function (r) {
+            const enc = r[0], truth = r[1], brake = r[2];
+            if (enc <= 0 || brake <= 0) return;
+            // Whatever is left after the plain scale error is attributed to the brake.
+            const residual = truth / enc - 1 - scale;
+            xs.push(brake); ys.push(residual);
+        });
+        if (xs.length) {
+            // Through the origin: no brake means no extra slip.
+            let num = 0, den = 0;
+            for (let i = 0; i < xs.length; i++) { num += xs[i] * ys[i]; den += xs[i] * xs[i]; }
+            const calBrake = den > 1e-12 ? num / den : 0;
+            cal.results.calBrake = calBrake;
+            save();
+
+            const t = el('table', { class: 'compact' });
+            t.appendChild(el('tr', {}, ['Brake', 'Odometer', 'True', 'Residual slip'].map(function (h) {
+                return el('th', { class: h === 'Brake' ? '' : 'num', text: h });
+            })));
+            rows.forEach(function (r, i) {
+                t.appendChild(el('tr', {}, [
+                    el('td', { text: r[2].toFixed(2) }),
+                    el('td', { class: 'num', text: r[0].toFixed(3) + ' m' }),
+                    el('td', { class: 'num', text: r[1].toFixed(3) + ' m' }),
+                    el('td', { class: 'num', text: ((r[1] / r[0] - 1 - scale) * 100).toFixed(2) + ' %' })
+                ]));
+            });
+            p.appendChild(t);
+
+            p.appendChild(el('div', { class: 'metrics', html:
+                '<span>CAL_BRAKE <b>' + calBrake.toFixed(4) + '</b></span>' +
+                '<span>at brake 0.10 that is <b>' + (calBrake * 0.10 * 100).toFixed(2) + ' %</b> extra slip</span>' }));
+
+            if (Math.abs(calBrake) < 1e-4) {
+                p.appendChild(el('div', { class: 'callout small', html:
+                    'Effectively zero, which is what you see when the motor brake is doing all the work ' +
+                    'and the friction brake never really engages the odometry wheels. Leave it at 0.' }));
+            } else {
+                p.appendChild(el('div', { class: 'callout good small', html:
+                    'Measurable. Feed it into the odometry correction and your stopping accuracy improves ' +
+                    'by roughly the residual column above.' }));
+            }
+        }
+    }
+
+    p.appendChild(el('div', { class: 'callout small', html:
+        '<b>A cheaper alternative, if you can arrange it:</b> release the brake for the last few ' +
+        'centimetres and close on position instead of speed. Then this constant stops mattering at all ' +
+        'over the part of the stop where accuracy counts.' }));
+    root.appendChild(p);
+}
+
+// ---- stage: results ---------------------------------------------------------
+
+function stageResults(root) {
+    const p = el('div', { class: 'panel' });
+    p.appendChild(el('h2', { text: 'What you measured' }));
+
+    const r = cal.results;
+    const have = function (k) { return r[k] !== undefined && isFinite(r[k]); };
+    const t = el('table', { class: 'compact' });
+    t.appendChild(el('tr', {}, [el('th', { text: 'Constant' }), el('th', { class: 'num', text: 'Value' }), el('th', { text: 'From' })]));
+    [
+        ['CAL_SCALE', 'calScale', 'A · encoder scale'],
+        ['VE_DRAG_C0', 'dragC0', 'B · coast-down'],
+        ['VE_DRAG_C1', 'dragC1', 'B · coast-down'],
+        ['VE_DRAG_C2', 'dragC2', 'B · coast-down'],
+        ['CAL_TRACTION_EFF', 'tractionEff', 'C · steady speed'],
+        ['CAL_BRAKE', 'calBrake', 'D · braking runs']
+    ].forEach(function (row) {
+        t.appendChild(el('tr', {}, [
+            el('td', { html: '<code>' + row[0] + '</code>' }),
+            el('td', { class: 'num', text: have(row[1]) ? r[row[1]].toPrecision(5) : 'not measured' }),
+            el('td', { class: 'tiny muted', text: row[2] })
+        ]));
+    });
+    p.appendChild(t);
+
+    const missing = ['calScale', 'dragC0', 'tractionEff'].filter(function (k) { return !have(k); });
+    if (missing.length) {
+        p.appendChild(el('div', { class: 'callout warn small', html:
+            'Stages still outstanding. The block below uses safe placeholders for those, which will get ' +
+            'the car moving but not moving accurately.' }));
+    }
+
+    p.appendChild(el('h3', { text: 'Paste this into your config header' }));
+    const block =
+        '/* ---- measured ' + new Date().toISOString().slice(0, 10) + ' on ' +
+            (cal.vehicleName || 'this vehicle') + ' ---- */\n' +
+        '#define CAL_SCALE          ' + fnum(have('calScale') ? r.calScale : 0, 5) +
+            '    /* v_ground = v_enc * (1 + CAL_SCALE) */\n' +
+        '#define CAL_TRACTION_EFF   ' + fnum(have('tractionEff') ? r.tractionEff : 0.99, 3) +
+            '    /* fraction of commanded force reaching the road */\n' +
+        '#define CAL_BRAKE          ' + fnum(have('calBrake') ? r.calBrake : 0, 4) +
+            '    /* extra fractional slip per unit brake command */\n' +
+        '\n' +
+        '#define VE_DRAG_C0         ' + fnum(have('dragC0') ? r.dragC0 : 0.9, 4) + '\n' +
+        '#define VE_DRAG_C1         ' + fnum(have('dragC1') ? r.dragC1 : 0.38, 4) + '\n' +
+        '#define VE_DRAG_C2         ' + fnum(have('dragC2') ? r.dragC2 : 0.015, 4) + '\n' +
+        '\n' +
+        '#define VE_MASS_EFF        ' + fnum(cal.massEff, 4) + '    /* kg, incl. reflected rotor inertia */\n';
+    p.appendChild(el('pre', {}, [el('code', { text: block })]));
+
+    const btns = el('div', { class: 'btn-row' });
+    const copy = el('button', { class: 'primary', text: 'Copy' });
+    const status = el('span', { class: 'status' });
+    copy.addEventListener('click', function () {
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+            navigator.clipboard.writeText(block).then(
+                function () { status.innerHTML = '<span class="ok">Copied.</span>'; },
+                function () { status.innerHTML = '<span class="warn">Clipboard refused — select the text instead.</span>'; });
+        } else status.innerHTML = '<span class="warn">Select the text above instead.</span>';
+    });
+    btns.appendChild(copy);
+    const toLab = el('button', { text: 'Send to the Control Lab →' });
+    toLab.addEventListener('click', function () {
+        const g = X.loadLocal('labGains', {}) || {};
+        if (have('calScale')) g.calScale = r.calScale;
+        if (have('tractionEff')) g.tractionEff = r.tractionEff;
+        if (have('dragC0')) { g.dragC0 = r.dragC0; g.dragC1 = r.dragC1; g.dragC2 = r.dragC2; }
+        X.saveLocal('labGains', g);
+        location.href = 'control-lab.html';
+    });
+    btns.appendChild(toLab);
+    const reset = el('button', { class: 'ghost', text: 'Clear all measurements' });
+    reset.addEventListener('click', function () {
+        if (!confirm('Discard every measurement on this page?')) return;
+        cal.scaleRows = cal.coastRows = cal.tractionRows = cal.brakeRows = '';
+        cal.results = {};
+        save(); stage = 0; render();
+    });
+    btns.appendChild(reset);
+    p.appendChild(btns);
+    p.appendChild(status);
+
+    p.appendChild(el('h3', { text: 'Then verify' }));
+    p.appendChild(el('p', { class: 'small', html:
+        'Rebuild, run the same manoeuvre, and compare against <b>ground truth</b> — not against the ' +
+        'controller\'s own odometer. Report both: agreement between them proves the loop closed, and ' +
+        'agreement with ground truth proves the calibration is right. Those are different claims, and ' +
+        'conflating them is how a confidently wrong controller gets shipped.' }));
+    root.appendChild(p);
+}
+
+function fnum(v, dp) {
+    if (!isFinite(v)) v = 0;
+    return v.toFixed(dp).replace(/(\.\d*?)0+$/, '$1').replace(/\.$/, '.0') + 'f';
+}
+
+// ----------------------------------------------------------------- boot ----
+
+$('#btnResults').addEventListener('click', function () { stage = STAGES.length - 1; render(); });
+render();
+
+})();
+</script>
+</body>
+</html>
