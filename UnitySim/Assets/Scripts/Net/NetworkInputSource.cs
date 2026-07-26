@@ -17,12 +17,14 @@ namespace AIHWSim.Net
         private InputState _last;
         private float _receivedAt = -999f;
         private bool _respawnLatch;
+        private bool _useItemLatch;
 
         public void Receive(in InputState s)
         {
             _last = s;
             _receivedAt = Time.unscaledTime;
             if (s.respawnEdge) _respawnLatch = true;
+            if (s.useItemEdge) _useItemLatch = true;
         }
 
         private bool Live =>
@@ -40,6 +42,14 @@ namespace AIHWSim.Net
             if (!_respawnLatch || (NetSession.Instance != null && NetSession.Instance.InputsFrozen))
                 return false;
             _respawnLatch = false;
+            return true;
+        }
+
+        public bool UseItemPressed()
+        {
+            if (!_useItemLatch || (NetSession.Instance != null && NetSession.Instance.InputsFrozen))
+                return false;
+            _useItemLatch = false;
             return true;
         }
     }
@@ -62,6 +72,7 @@ namespace AIHWSim.Net
         public float Brake() => Frozen ? 1f : _inner.Brake();
         public bool Handbrake() => !Frozen && _inner.Handbrake();
         public bool RespawnPressed() => !Frozen && _inner.RespawnPressed();
+        public bool UseItemPressed() => !Frozen && _inner.UseItemPressed();
         public float MouseSteerDelta() => Frozen ? 0f : _inner.MouseSteerDelta();
     }
 }

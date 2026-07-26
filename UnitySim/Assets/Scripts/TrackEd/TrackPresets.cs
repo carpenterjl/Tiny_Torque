@@ -18,6 +18,11 @@ namespace AIHWSim.TrackEd
 
         // Floor-type ids = index into TrackCatalog.Floors (append-only order).
         private const int Dirt = 0, Asphalt = 1, Grass = 2, Sand = 3, Ice = 4, Mud = 5, Rumble = 6, Boost = 7, Checker = 8;
+        // Themed surfaces (iteration 24). Carpet, wet sand and lava rock sit below
+        // the 0.90 arcade track-limit threshold, so painting them as run-off makes
+        // them count as off-track with no extra authoring.
+        private const int Wood = 9, Carpet = 10, Neon = 11, Plank = 12,
+                          WetSand = 13, LavaRock = 14, Obsidian = 15, Grate = 16;
 
         public static readonly (string name, Func<TrackDesign> build)[] All =
         {
@@ -29,6 +34,13 @@ namespace AIHWSim.TrackEd
             ("Boost Speedway",   BoostSpeedway),
             ("Dust Devil Rally", DustDevilRally),
             ("Neon Vortex",      NeonVortex),
+            // Themed arcade circuits (iteration 24): built from the Blender prop
+            // families, each with authored item boxes so ArcadeDirector's
+            // automatic placement stays out of the way.
+            ("Workshop Grand Prix", WorkshopGrandPrix),
+            ("Neon Vortex II",      NeonVortexII),
+            ("Boardwalk Cove",      BoardwalkCove),
+            ("Foundry Descent",     FoundryDescent),
             // Not a circuit: a straight-line measurement range for the Opus Vector
             // mission firmware.
             ("Opus Proving Ground", OpusProvingGround),
@@ -71,19 +83,42 @@ namespace AIHWSim.TrackEd
         private static PlacedItem It(string id, float x, float z, float yaw = 0f, float y = 0f, int order = -1) =>
             new PlacedItem { itemId = id, x = x, z = z, yawDeg = yaw, y = y, order = order };
 
-        /// <summary>Build a closed/open spline from world points (y = height).</summary>
+        /// <summary>
+        /// Build a closed/open spline from world points (y = height). `width`,
+        /// `surface` and a flat 0° bank are the defaults; the three optional
+        /// parallel arrays override them per control point, which is what turns a
+        /// flat constant-width oval into a real circuit — elevation lives in the
+        /// points' y, banking in `roll`, pinch points and sweepers in `widths`,
+        /// and boost pads / kerbs / low-grip patches in `surfaces` (segment i→i+1
+        /// takes point i's surface).
+        /// </summary>
         private static SplineSpec Spline(Vector3[] pts, float width, int surface, bool closed,
-            bool walls, bool stripes, float[] roll = null)
+            bool walls, bool stripes, float[] roll = null, float[] widths = null, int[] surfaces = null)
         {
             var s = new SplineSpec { closed = closed, edgeWalls = walls, edgeStripes = stripes };
             for (int i = 0; i < pts.Length; i++)
             {
                 s.points.Add(pts[i]);
-                s.widths.Add(width);
-                s.surface.Add(surface);
+                s.widths.Add(widths != null && i < widths.Length ? widths[i] : width);
+                s.surface.Add(surfaces != null && i < surfaces.Length ? surfaces[i] : surface);
                 s.rollDeg.Add(roll != null && i < roll.Length ? roll[i] : 0f);
             }
             return s;
+        }
+
+        /// <summary>
+        /// A row of three item boxes across the racing line. `alongX` says which
+        /// way the cars are travelling there, so the row always spans the track
+        /// rather than lying down it; `y` is the deck height, which matters once
+        /// the ribbon climbs (TrackFactory drops each item from y+3, so a box on
+        /// an elevated section still lands on the deck rather than the floor).
+        /// Narrow the `spread` on a pinched section or the outer boxes hang off.
+        /// </summary>
+        private static void BoxRow(TrackDesign d, float x, float z, bool alongX, float y = 0f, float spread = 0.9f)
+        {
+            for (int k = -1; k <= 1; k++)
+                d.items.Add(alongX ? It("item_box", x, z + k * spread, 0f, y)
+                                   : It("item_box", x + k * spread, z, 0f, y));
         }
 
         /// <summary>An oval ring of control points on the XZ plane (CCW from +X).</summary>
@@ -314,6 +349,367 @@ namespace AIHWSim.TrackEd
             d.items.Add(It("checkpoint", 0f, 14f, 0f, 0f, 1));
             d.items.Add(It("checkpoint", -14f, 0f, 90f, 0f, 2));
             d.items.Add(It("spawn", -4f, -14f, 90f));
+            return d;
+        }
+
+        // ---- themed arcade circuits (iteration 24) ---------------------------
+        //
+        // Each of these four is a DIFFERENT shape, not one oval in four colours.
+        // The spline carries elevation in its points' y, banking in rollDeg, and
+        // width per control point, so the circuit itself is the content and the
+        // props only dress it:
+        //
+        //   Workshop Grand Prix — climbs 1.3 m off the bench onto a narrow plank
+        //                         run along the top, then drops back down.
+        //   Neon Vortex II      — a true figure-8: the lap crosses over itself at
+        //                         the map centre, low branch under, high branch
+        //                         1.2 m over, and the banking inverts through it.
+        //   Boardwalk Cove      — a whoops rhythm section into a 22°-banked bowl,
+        //                         out onto a 2 m pier, back down to the beach.
+        //   Foundry Descent     — a steady climb to a 1.9 m gantry, a narrow grate
+        //                         bridge, then a plunge with a crest at the top.
+        //
+        // Gradients stay under ~11%: at RC scale that is dramatic to look at (the
+        // car is 0.10 m tall) while costing almost nothing in speed — the rear
+        // pair make ~50 N of thrust against ~3 N of grade resistance.
+        //
+        // `yawDeg` on every gate is the HEADING OF TRAVEL through it (+X = 90,
+        // +Z = 0, −X = 270, −Z = 180), so the bar lies across the road; on a
+        // curved section it is the Catmull-Rom tangent, P(i+1) − P(i−1).
+        //
+        // Two placement rules that are invisible until they bite:
+        //   * TrackFactory drops each item from y+3 and takes the HIGHEST hit, so
+        //     an item under an overpass snaps onto the overpass. Nothing is placed
+        //     beneath the Vortex crossover.
+        //   * The narrow-bore props — tape arch, light hoop, rock arch — stay off
+        //     the racing line. Their openings are 0.34–0.46 m against a 0.20 m
+        //     car, which is a coin flip at speed. Hazards that ARE on the line
+        //     (pencils, barrels, beach balls, blocks) are things you can hit and
+        //     survive.
+
+        /// <summary>
+        /// ★ Workshop Grand Prix — the RC car's own scale, played straight. The
+        /// lap starts on the varnished bench, climbs 1.3 m up the right-hand side
+        /// onto a stack of books, runs the top as a 2.2 m plank with pencils
+        /// rolling loose across it, then drops back to the bench down the left.
+        /// Carpet everywhere off the ribbon: 0.80 friction, so it is both slow and
+        /// off-track for the arcade limits rule.
+        /// </summary>
+        private static TrackDesign WorkshopGrandPrix()
+        {
+            var d = New("Workshop Grand Prix", 40, 36, Wood);
+            PaintRect(d, 0, 0, 39, 2, Carpet);
+            PaintRect(d, 0, 33, 39, 35, Carpet);
+            PaintRect(d, 0, 0, 2, 35, Carpet);
+            PaintRect(d, 37, 0, 39, 35, Carpet);
+            PaintRect(d, 12, 12, 27, 23, Carpet);   // infield
+
+            // Bench level round the bottom, up the right, along the top at 1.30 m,
+            // down the left. The plank (P5→P6) is the narrow bit that hurts.
+            var pts = new[]
+            {
+                new Vector3(-6f, 0.00f, -13f),  // 0  start straight, +X
+                new Vector3(5f, 0.00f, -13f),   // 1  ruler ramp sits here
+                new Vector3(13f, 0.20f, -9f),   // 2  turn-in, climb begins
+                new Vector3(16f, 0.75f, -1f),   // 3  climbing, banked
+                new Vector3(14f, 1.15f, 7f),    // 4
+                new Vector3(6f, 1.30f, 12f),    // 5  top of the book stack
+                new Vector3(-5f, 1.30f, 13f),   // 6  the plank, travelling −X
+                new Vector3(-13f, 1.05f, 9f),   // 7  the drop starts
+                new Vector3(-16f, 0.30f, 1f),   // 8  descent
+                new Vector3(-13f, 0.00f, -8f),  // 9  back on the bench
+            };
+            var widths  = new[] { 3.6f, 3.6f, 3.2f, 3.0f, 2.6f, 2.4f, 2.2f, 2.8f, 3.2f, 3.4f };
+            var roll    = new[] { 0f, 0f, -6f, -10f, -8f, 0f, 0f, -5f, -8f, -4f };
+            var surfs   = new[] { Wood, Wood, Rumble, Wood, Wood, Wood, Wood, Wood, Wood, Boost };
+            // Walls matter here: the plank is 2.2 m at 1.3 m up.
+            d.splines.Add(Spline(pts, 3.0f, Wood, closed: true, walls: true, stripes: true,
+                                 roll: roll, widths: widths, surfaces: surfs));
+
+            // On the line. The ruler is the launch into the climb; the pencils are
+            // loose on the plank, where there is nowhere to go.
+            d.items.Add(It("tw_ruler_ramp", 2f, -13f, 90f));
+            d.items.Add(It("tw_pencil", 2f, 12.4f, 90f, 1.30f));
+            d.items.Add(It("tw_pencil", -2f, 12.8f, 90f, 1.30f));
+            // Bricks stagger the start straight into a weave.
+            d.items.Add(It("tw_brick_wall", -3f, -11.9f));
+            d.items.Add(It("tw_brick_wall", 1f, -14.1f));
+
+            // Books stacked under and around the high section — they are what the
+            // track is standing on, so they go where the ribbon is in the air.
+            d.items.Add(It("tw_book_stack", 18.6f, 4f));
+            d.items.Add(It("tw_book_stack", 18.6f, 8f));
+            d.items.Add(It("tw_book_stack", 10f, 15.6f));
+            d.items.Add(It("tw_book_stack", -14f, 14f));
+            d.items.Add(It("tw_brick_wall", -18.6f, -2f));
+            d.items.Add(It("tw_brick_wall", -18.6f, 3f));
+
+            // Landmarks at bench level, where they read against the raised loop.
+            d.items.Add(It("tw_tape_arch", 9f, -16.2f, 90f));
+            d.items.Add(It("tw_tape_arch", -9f, -16.4f, 90f));
+            d.items.Add(It("tw_mug", 18.5f, -6f));
+            d.items.Add(It("tw_mug", -19f, -5f));
+            d.items.Add(It("tw_mug", 4f, 16.4f));
+
+            BoxRow(d, 0f, -13f, alongX: true);
+            BoxRow(d, 16f, -1f, alongX: false, y: 0.75f);
+            BoxRow(d, 0f, 12.7f, alongX: true, y: 1.30f, spread: 0.6f);   // on the plank
+            BoxRow(d, -16f, 1f, alongX: false, y: 0.30f);
+
+            d.items.Add(It("finish", -1f, -13f, 90f));
+            d.items.Add(It("checkpoint", 16f, -1f, 0f, 0.75f, 0));
+            d.items.Add(It("checkpoint", -5f, 13f, 261f, 1.30f, 1));
+            d.items.Add(It("checkpoint", -16f, 1f, 180f, 0.30f, 2));
+            d.items.Add(It("spawn", -5f, -13f, 90f));
+            return d;
+        }
+
+        /// <summary>
+        /// ★ Neon Vortex II — a true figure-8. One lap crosses over itself at the
+        /// map centre: the north lobe is entered low heading north-east, and the
+        /// track returns to the same spot 1.2 m higher heading south-east, so the
+        /// bridge passes over its own road. Because the two lobes are traversed in
+        /// opposite senses the banking inverts through the crossover — 18° one way
+        /// round, 18° the other — which is where the name comes from.
+        ///
+        /// The two centre control points are deliberately offset 1.7 m diagonally
+        /// rather than sharing an exact XZ position: coincident points would give
+        /// SplineMath a degenerate tangent, and the offset still leaves the 2.4 m
+        /// decks overlapping. Clearance under the bridge is ~1.15 m against a
+        /// 0.10 m car.
+        /// </summary>
+        private static TrackDesign NeonVortexII()
+        {
+            var d = New("Neon Vortex II", 44, 44, Neon);
+            PaintRect(d, 0, 0, 43, 2, Asphalt);
+            PaintRect(d, 0, 41, 43, 43, Asphalt);
+            PaintRect(d, 15, 27, 28, 38, Asphalt);   // north lobe infield
+            PaintRect(d, 15, 5, 28, 16, Asphalt);    // south lobe infield
+
+            var pts = new[]
+            {
+                new Vector3(0.6f, 0.00f, -0.6f),  // 0  centre, LOW, heading NE
+                new Vector3(9f, 0.10f, 6f),       // 1
+                new Vector3(14f, 0.35f, 13f),     // 2  north lobe, east side
+                new Vector3(0f, 0.55f, 18f),      // 3  north apex
+                new Vector3(-14f, 0.40f, 13f),    // 4  north lobe, west side
+                new Vector3(-9f, 0.85f, 6f),      // 5  climbing to the bridge
+                new Vector3(-0.6f, 1.20f, 0.6f),  // 6  centre, HIGH, heading SE
+                new Vector3(9f, 0.85f, -6f),      // 7
+                new Vector3(14f, 0.45f, -13f),    // 8  south lobe, east side
+                new Vector3(5f, 0.25f, -18f),     // 9  start/finish straight, −X
+                new Vector3(-5f, 0.25f, -18f),    // 10
+                new Vector3(-14f, 0.40f, -13f),   // 11 south lobe, west side
+                new Vector3(-9f, 0.15f, -6f),     // 12 diving back under the bridge
+            };
+            // North lobe is taken anticlockwise (left-hand), south lobe clockwise
+            // (right-hand); rollDeg is +ve for right-edge-down, so the sign flips
+            // with the direction of turn.
+            // The start/finish straight (9→10) is deliberately flat: a banked grid
+            // would have the field sliding before the lights go out.
+            var roll = new[] { 0f, -8f, -16f, -18f, -16f, -8f,
+                               0f, 8f, 16f, 0f, 0f, 16f, 8f };
+            var widths = new[] { 2.6f, 3.0f, 3.4f, 3.6f, 3.4f, 3.0f,
+                                 2.4f, 3.0f, 3.4f, 3.6f, 3.6f, 3.4f, 3.0f };
+            var surfs = new[] { Neon, Neon, Neon, Rumble, Neon, Boost,
+                                Neon, Neon, Neon, Neon, Rumble, Neon, Boost };
+            d.splines.Add(Spline(pts, 3.0f, Neon, closed: true, walls: true, stripes: true,
+                                 roll: roll, widths: widths, surfaces: surfs));
+
+            // Barriers stagger the bridge approach, where the road is narrowest.
+            d.items.Add(It("ng_barrier_glow", -7.5f, 5.0f, 40f, 0.90f));
+            d.items.Add(It("ng_barrier_glow", -4.0f, 2.6f, 40f, 1.05f));
+
+            // Start gate on the bottom straight, where the field is lined up.
+            d.items.Add(It("ng_arch_gate", 2f, -18f, 270f, 0.25f));
+
+            // Pylons trace the outside of both lobes rather than sitting in rows.
+            foreach (float z in new[] { 9f, 15f, 19f })
+            {
+                d.items.Add(It("ng_pylon", 17f, z - 4f));
+                d.items.Add(It("ng_pylon", -17f, z - 4f));
+            }
+            foreach (float z in new[] { -9f, -15f, -19f })
+            {
+                d.items.Add(It("ng_pylon", 17f, z + 4f));
+                d.items.Add(It("ng_pylon", -17f, z + 4f));
+            }
+
+            // Hoops frame the bridge from the side; stacks and spires build the
+            // skyline. Nothing goes under the crossover — it would snap onto it.
+            d.items.Add(It("ng_ring_float", 19f, 0f, 90f));
+            d.items.Add(It("ng_ring_float", -19f, 0f, 270f));
+            d.items.Add(It("ng_data_cube", 17.5f, -4f));
+            d.items.Add(It("ng_data_cube", -17.5f, 4f));
+            d.items.Add(It("ng_spire", 20.5f, -17f));
+            d.items.Add(It("ng_spire", -20.5f, 17f));
+            d.items.Add(It("ng_spire", 20f, 18f));
+            d.items.Add(It("ng_spire", -20f, -18f));
+
+            BoxRow(d, 0f, -18f, alongX: true, y: 0.25f);
+            BoxRow(d, 14f, 12.5f, alongX: false, y: 0.35f);
+            BoxRow(d, -0.6f, 0.6f, alongX: true, y: 1.20f, spread: 0.55f);  // on the bridge
+            BoxRow(d, -14f, -12.5f, alongX: false, y: 0.40f);
+
+            d.items.Add(It("finish", 0f, -18f, 270f, 0.25f));
+            d.items.Add(It("checkpoint", 14f, 13f, 323f, 0.35f, 0));
+            d.items.Add(It("checkpoint", -0.6f, 0.6f, 124f, 1.20f, 1));   // on the bridge
+            d.items.Add(It("checkpoint", -14f, -13f, 342f, 0.40f, 2));
+            d.items.Add(It("spawn", 4f, -18f, 270f, 0.25f));
+            return d;
+        }
+
+        /// <summary>
+        /// ★ Boardwalk Cove — the rhythm map. The start straight is four whoops on
+        /// a 6 m wavelength, which at ~10 m/s is a ~1.7 Hz pumping section that
+        /// gets the car light over every crest; it fires you into a 4.4 m-wide bowl
+        /// banked at 22°, out onto a 2.0 m pier raised over the tide, then down a
+        /// ramp to a flat beach left-hander. Wet sand (0.45) is the infield cut:
+        /// shorter, and off-track the whole way across.
+        /// </summary>
+        private static TrackDesign BoardwalkCove()
+        {
+            var d = New("Boardwalk Cove", 46, 40, Sand);
+            PaintRect(d, 0, 0, 45, 3, WetSand);      // tide line
+            PaintRect(d, 0, 36, 45, 39, WetSand);
+            PaintRect(d, 14, 13, 31, 26, WetSand);   // the infield cut
+
+            var pts = new[]
+            {
+                new Vector3(-9f, 0.00f, -14f),  // 0  finish, +X
+                new Vector3(-3f, 0.40f, -14f),  // 1  whoop
+                new Vector3(3f, 0.00f, -14f),   // 2  trough
+                new Vector3(9f, 0.40f, -14f),   // 3  whoop — launch into the bowl
+                new Vector3(15f, 0.10f, -10f),  // 4  turn-in
+                new Vector3(19f, 0.60f, -3f),   // 5  THE BOWL, 22°
+                new Vector3(19f, 0.60f, 4f),    // 6
+                new Vector3(13f, 0.10f, 11f),   // 7  drop out of the bowl
+                new Vector3(3f, 0.65f, 15f),    // 8  climb onto the pier
+                new Vector3(-7f, 0.65f, 15f),   // 9  the pier, 2.0 m wide
+                new Vector3(-15f, 0.25f, 9f),   // 10 ramp down
+                new Vector3(-19f, 0.00f, 0f),   // 11 beach left-hander
+                new Vector3(-17f, 0.00f, -9f),  // 12
+                new Vector3(-13f, 0.25f, -14f), // 13 back onto the whoops
+            };
+            var widths = new[] { 3.2f, 3.2f, 3.2f, 3.2f, 3.6f, 4.4f, 4.4f,
+                                 3.4f, 2.4f, 2.0f, 2.6f, 3.4f, 3.4f, 3.2f };
+            var roll = new[] { 0f, 0f, 0f, 0f, -8f, -22f, -22f,
+                               -10f, 0f, 0f, -6f, -14f, -10f, -4f };
+            var surfs = new[] { Plank, Plank, Plank, Boost, Plank, Rumble, Plank,
+                                Plank, Plank, Plank, Boost, Plank, Plank, Plank };
+            d.splines.Add(Spline(pts, 3.2f, Plank, closed: true, walls: true, stripes: true,
+                                 roll: roll, widths: widths, surfaces: surfs));
+
+            // On the line: a kicker on the pier, balls loose in the bowl where the
+            // banking keeps feeding them back across the racing line, and a
+            // sandcastle on the apex of the beach corner — clip it and it stops you.
+            d.items.Add(It("bb_surfboard_ramp", -2f, 15f, 270f, 0.65f));
+            d.items.Add(It("bb_beach_ball", 18.5f, -1f, 0f, 0.60f));
+            d.items.Add(It("bb_beach_ball", 19.6f, 1f, 0f, 0.60f));
+            d.items.Add(It("bb_beach_ball", 17.9f, 2.2f, 0f, 0.60f));
+            d.items.Add(It("bb_sandcastle", -16.4f, 0f));
+
+            // Railings on the outside of the whoops; palms and torches read the
+            // height of the pier from the beach.
+            foreach (float x in new[] { -6f, 0f, 6f })
+                d.items.Add(It("bb_plank_wall", x, -16.2f));
+            d.items.Add(It("bb_palm", 22f, -8f));
+            d.items.Add(It("bb_palm", 21.5f, 7f));
+            d.items.Add(It("bb_palm", -22f, -6f));
+            d.items.Add(It("bb_palm", -21f, 6.5f));
+            d.items.Add(It("bb_palm", 14f, 18f));
+            d.items.Add(It("bb_palm", -14f, 18.2f));
+            d.items.Add(It("bb_tiki_torch", 12f, -17.5f));
+            d.items.Add(It("bb_tiki_torch", -12f, -17.5f));
+            d.items.Add(It("bb_tiki_torch", 20f, 11f));
+            d.items.Add(It("bb_tiki_torch", -20f, -12f));
+            d.items.Add(It("bb_sandcastle", 21f, -14f));
+
+            BoxRow(d, 0f, -14f, alongX: true, y: 0.20f);
+            BoxRow(d, 19f, 0.5f, alongX: false, y: 0.60f, spread: 1.1f);   // the bowl
+            BoxRow(d, -2f, 15f, alongX: true, y: 0.65f, spread: 0.5f);     // the pier
+            BoxRow(d, -19f, -4f, alongX: false);
+
+            d.items.Add(It("finish", -9f, -14f, 90f));
+            d.items.Add(It("checkpoint", 19f, -3f, 16f, 0.60f, 0));
+            d.items.Add(It("checkpoint", -7f, 15f, 252f, 0.65f, 1));
+            d.items.Add(It("checkpoint", -19f, 0f, 186f, 0f, 2));
+            d.items.Add(It("spawn", -12f, -14.2f, 90f));
+            return d;
+        }
+
+        /// <summary>
+        /// ★ Foundry Descent — an obsidian ribbon threaded over lava scree, with
+        /// grate jumps, steam vents and a basalt arch on the hero corner. Obsidian
+        /// is the grippiest surface in the catalog (1.20) and the scree either side
+        /// is the loosest that still counts as ground, so the track punishes a
+        /// wide line harder than any other map here.
+        /// </summary>
+        private static TrackDesign FoundryDescent()
+        {
+            var d = New("Foundry Descent", 42, 42, LavaRock);
+            PaintRect(d, 14, 15, 27, 26, Obsidian);   // infield plate
+            PaintRect(d, 0, 18, 3, 23, Grate);
+            PaintRect(d, 38, 18, 41, 23, Grate);
+
+            // The name is the layout: a steady boosted climb up the right to a
+            // 1.90 m gantry, a narrow grate bridge across the top, then a 10.7%
+            // plunge down the left. The crest at point 5→6 is convex, so the car
+            // goes light exactly where the descent begins.
+            var pts = new[]
+            {
+                new Vector3(-6f, 0.00f, -15f),  // 0  start straight, +X
+                new Vector3(6f, 0.00f, -15f),   // 1
+                new Vector3(14f, 0.35f, -10f),  // 2  grate ramp, climb begins
+                new Vector3(17f, 1.10f, -2f),   // 3  climbing, banked 14°
+                new Vector3(15f, 1.85f, 6f),    // 4  the gantry
+                new Vector3(7f, 1.90f, 12f),    // 5  grate bridge, 2.2 m
+                new Vector3(-4f, 1.75f, 14f),   // 6  crest — then it drops
+                new Vector3(-13f, 0.70f, 10f),  // 7  the plunge
+                new Vector3(-17f, 0.15f, 1f),   // 8  runout, banked 16°
+                new Vector3(-15f, 0.00f, -8f),  // 9
+                new Vector3(-11f, 0.00f, -14f), // 10
+            };
+            var widths = new[] { 3.4f, 3.4f, 3.0f, 2.8f, 2.6f, 2.2f,
+                                 2.4f, 3.6f, 3.6f, 3.4f, 3.4f };
+            var roll = new[] { 0f, 0f, -6f, -14f, -12f, 0f, 0f, -6f, -16f, -10f, -4f };
+            var surfs = new[] { Obsidian, Obsidian, Boost, Obsidian, Grate, Grate,
+                                Obsidian, Obsidian, Obsidian, Obsidian, Obsidian };
+            d.splines.Add(Spline(pts, 3.0f, Obsidian, closed: true, walls: true, stripes: true,
+                                 roll: roll, widths: widths, surfaces: surfs));
+
+            // On the line. The barrels sit on the descent, so a hit sends them
+            // downhill into whoever is behind — the best hazard on any of these maps.
+            d.items.Add(It("vf_grate_ramp", 11f, -12.5f, 58f, 0.20f));
+            d.items.Add(It("vf_barrel", -9f, 11.5f, 0f, 0.95f));
+            d.items.Add(It("vf_barrel", -10.4f, 10.2f, 0f, 0.85f));
+            d.items.Add(It("vf_barrel", -15f, 4f, 0f, 0.35f));
+            d.items.Add(It("vf_steam_vent", 4f, 13.2f, 0f, 1.85f));
+            d.items.Add(It("vf_steam_vent", 0f, 14.2f, 0f, 1.78f));
+            d.items.Add(It("vf_obsidian_block", 2f, -13.4f));
+            d.items.Add(It("vf_obsidian_block", -2f, -16.6f));
+
+            // Landmarks: the arches frame the climb and the runout, the crags
+            // build the skyline behind the gantry.
+            d.items.Add(It("vf_rock_arch", 19.6f, -8f, 0f));
+            d.items.Add(It("vf_rock_arch", -19.6f, 7f, 0f));
+            d.items.Add(It("vf_crag_spire", 20f, 4f));
+            d.items.Add(It("vf_crag_spire", -20f, -5f));
+            d.items.Add(It("vf_crag_spire", 10f, 18.5f));
+            d.items.Add(It("vf_crag_spire", -10f, -18.5f));
+            d.items.Add(It("vf_obsidian_block", 18.5f, 12f));
+            d.items.Add(It("vf_obsidian_block", -18.5f, -12f));
+
+            BoxRow(d, 0f, -15f, alongX: true);
+            BoxRow(d, 17f, -2f, alongX: false, y: 1.10f);
+            BoxRow(d, 2f, 13.4f, alongX: true, y: 1.85f, spread: 0.55f);   // the bridge
+            BoxRow(d, -16f, -3f, alongX: false, y: 0.05f);
+
+            d.items.Add(It("finish", 0f, -15f, 90f));
+            d.items.Add(It("checkpoint", 17f, -2f, 4f, 1.10f, 0));
+            d.items.Add(It("checkpoint", 7f, 12f, 293f, 1.90f, 1));
+            d.items.Add(It("checkpoint", -17f, 1f, 186f, 0.15f, 2));
+            d.items.Add(It("spawn", -4f, -15f, 90f));
             return d;
         }
 

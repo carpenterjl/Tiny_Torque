@@ -40,6 +40,8 @@ namespace AIHWSim.Menu
         private int _spControl;     // 0 Manual / 1 Autonomous (C firmware) / 2 Autonomous (bot AI)
         private bool _spRubber;
         private int _spCountdown = 3; // race-start countdown seconds (0..60)
+        private bool _spArcade;       // power-ups, weapons, arcade board
+        private bool _spTrackLimits = true;
         private static readonly List<string> DiffNames = new List<string> { "Easy", "Medium", "Hard" };
         private static readonly List<string> ControlNames =
             new List<string> { "Manual", "Autonomous (firmware)", "Autonomous (bot AI)" };
@@ -72,6 +74,8 @@ namespace AIHWSim.Menu
             _spControl = Mathf.Clamp(s.spControl, 0, 2);
             _spRubber = s.spRubberBand;
             _spCountdown = Mathf.Clamp(s.spCountdown, 0, 60);
+            _spArcade = s.spArcade;
+            _spTrackLimits = s.spTrackLimits;
         }
 
         private void RefreshLists()
@@ -189,6 +193,27 @@ namespace AIHWSim.Menu
                 if (GUILayout.Button("+", GUILayout.Width(30))) _spCountdown = Mathf.Min(60, _spCountdown + 1);
                 GUILayout.EndHorizontal();
             }
+
+            // Arcade is always offered — hiding it behind "set some laps first"
+            // made the whole mode undiscoverable. It still REQUIRES a lap count
+            // (item boxes and race positions both need a finish line), so ticking
+            // it with a free-drive selected sets a race up rather than silently
+            // doing nothing. It must never run on a firmware session: a boost or
+            // a spin-out would corrupt the controller-validation run.
+            bool firmware = _spControl == 1;
+            GUI.enabled = !firmware;
+            bool wantArcade = GUILayout.Toggle(_spArcade && !firmware, " Arcade mode (power-ups & weapons)");
+            if (wantArcade && !_spArcade && _spLaps == 0) _spLaps = 3;   // arcade needs a race
+            _spArcade = wantArcade && !firmware;
+            if (_spArcade)
+            {
+                _spTrackLimits = GUILayout.Toggle(_spTrackLimits, "    Track limits (off-track penalty)");
+                GUILayout.Label("    Item boxes on track · use with Left Shift / gamepad X.\n" +
+                                "    Built for the ★ themed circuits; works on any map with a finish line.",
+                                GarageSkin.StatLabel);
+            }
+            GUI.enabled = true;
+            if (firmware) GUILayout.Label("Arcade is off in firmware sessions.", GarageSkin.StatLabel);
             GUILayout.Space(10);
 
             string go = (_spBots > 0 || _spLaps > 0) ? "Race ▶" : "Drive ▶";
@@ -209,6 +234,9 @@ namespace AIHWSim.Menu
             SessionConfig.TargetLaps = _spLaps;
             SessionConfig.RubberBand = _spBots > 0 && _spRubber;
             SessionConfig.CountdownSeconds = (_spBots > 0 || _spLaps > 0) ? _spCountdown : 0;
+            // Assigned AFTER SetSinglePlayer, which clears them.
+            SessionConfig.Arcade = _spArcade && _spLaps > 0 && _spControl != 1;
+            SessionConfig.TrackLimits = SessionConfig.Arcade && _spTrackLimits;
             GameFlow.ActiveDesign = ResolveVehicle(vehicle);
             GameFlow.ActiveTrack = ResolveTrack(track);
 
@@ -235,6 +263,8 @@ namespace AIHWSim.Menu
             s.spControl = _spControl;
             s.spRubberBand = _spRubber;
             s.spCountdown = _spCountdown;
+            s.spArcade = _spArcade;
+            s.spTrackLimits = _spTrackLimits;
             SettingsStore.Save();
 
             LoadIfBuilt(GameFlow.TrackSceneName, GameFlow.LoadTrack);
@@ -277,6 +307,18 @@ namespace AIHWSim.Menu
             GUILayout.Label(_mpLaps == 0 ? "Sandbox (no race)" : _mpLaps.ToString(), GarageSkin.Header);
             if (GUILayout.Button("+", GUILayout.Width(30))) _mpLaps = Mathf.Min(50, _mpLaps + 1);
             GUILayout.EndHorizontal();
+
+            // Same rule as the single-player page: always offered, and ticking it
+            // with a sandbox selected sets a race up instead of doing nothing.
+            bool wantMpArcade = GUILayout.Toggle(_spArcade, " Arcade mode (power-ups & weapons)");
+            if (wantMpArcade && !_spArcade && _mpLaps == 0) _mpLaps = 3;
+            _spArcade = wantMpArcade;
+            if (_spArcade)
+            {
+                _spTrackLimits = GUILayout.Toggle(_spTrackLimits, "    Track limits (off-track penalty)");
+                GUILayout.Label("    Both players pick up independently; one shared board.",
+                                GarageSkin.StatLabel);
+            }
             GUILayout.Space(6);
 
             string problem = ValidateDevices();
@@ -347,6 +389,8 @@ namespace AIHWSim.Menu
             SessionConfig.Mode = SessionMode.SplitScreen;
             SessionConfig.TargetLaps = _mpLaps;
             SessionConfig.CountdownSeconds = 0; // split-screen has no countdown control (yet)
+            SessionConfig.Arcade = _spArcade && _mpLaps > 0;
+            SessionConfig.TrackLimits = SessionConfig.Arcade && _spTrackLimits;
             SessionConfig.Players.Clear();
             SessionConfig.Players.Add(MakeSlot(s.player1Name, _mpVeh1, _mpDev1, SessionConfig.P1Assists(s)));
             SessionConfig.Players.Add(MakeSlot(s.player2Name, _mpVeh2, _mpDev2, SessionConfig.P2Assists(s)));
@@ -429,6 +473,12 @@ namespace AIHWSim.Menu
         {
             SessionConfig.Mode = (SessionMode)s.mode;
             SessionConfig.TargetLaps = s.targetLaps;
+            // Snapshots don't capture inventories or effect timers, so resuming
+            // into arcade would restore a race with everyone empty-handed and the
+            // boxes reset. This path doesn't go through SetSinglePlayer, so clear
+            // the flags explicitly rather than inheriting the last session's.
+            SessionConfig.Arcade = false;
+            SessionConfig.TrackLimits = false;
             SessionConfig.Players.Clear();
             foreach (var ps in s.players)
             {

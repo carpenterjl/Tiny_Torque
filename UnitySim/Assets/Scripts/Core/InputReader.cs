@@ -125,6 +125,23 @@ namespace AIHWSim.Core
             return false;
         }
 
+        // Arcade: fire the held power-up. LeftShift and the west face button are
+        // the only bindings still free (LeftCtrl brake, Space handbrake, R/north
+        // respawn, south handbrake, east brake, M/select mode toggle).
+        public static bool UseItemPressed()
+        {
+#if ENABLE_INPUT_SYSTEM
+            var gp = Gamepad.current;
+            if (gp != null && gp.buttonWest.wasPressedThisFrame) return true;
+            var kb = Keyboard.current;
+            if (kb != null && kb.leftShiftKey.wasPressedThisFrame) return true;
+#endif
+#if ENABLE_LEGACY_INPUT_MANAGER
+            if (SafeKeyDown(KeyCode.LeftShift)) return true;
+#endif
+            return false;
+        }
+
         public static bool ModeTogglePressed()
         {
 #if ENABLE_INPUT_SYSTEM

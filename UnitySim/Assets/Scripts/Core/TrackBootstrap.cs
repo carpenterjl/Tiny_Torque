@@ -41,6 +41,8 @@ namespace AIHWSim.Core
         private Vector3 _spawnPos;
         private Quaternion _spawnRot;
         private LapTimer _lapTimer;
+        private TrackEd.BuiltTrack _built;   // custom maps only; null on the classic oval
+        private Arcade.ArcadeDirector _arcade;
 
         // Bot-race composition.
         private Vector3[] _ovalPath;                 // classic-oval centerline for bots
@@ -101,9 +103,10 @@ namespace AIHWSim.Core
             ConsumePendingSnapshot();
 
             // Race mode (first to N laps) when configured and the map can time laps.
+            RaceDirector race = null;
             if (SessionConfig.TargetLaps > 0 && _lapTimer != null)
             {
-                var race = new GameObject("RaceDirector").AddComponent<RaceDirector>();
+                race = new GameObject("RaceDirector").AddComponent<RaceDirector>();
                 race.targetLaps = SessionConfig.TargetLaps;
                 race.timer = _lapTimer;
                 race.players = _rigs;
@@ -114,6 +117,39 @@ namespace AIHWSim.Core
                 if (SessionConfig.CountdownSeconds > 0)
                     foreach (var rig in _rigs) rig.car.Frozen = true;
             }
+
+            // Arcade layer, gated exactly like the race above: item boxes and
+            // positions both need a finish line, and power-ups in a free-drive
+            // would be meaningless.
+            if (SessionConfig.Arcade && SessionConfig.TargetLaps > 0 && _lapTimer != null)
+            {
+                BuildArcade(authority: true);
+                if (race != null)
+                {
+                    race.arcade = true;
+                    // A repeatedly spun-out bot must not hold the results screen
+                    // hostage forever.
+                    race.resultsGraceSeconds = 30f;
+                    race.PlayerFinished += _arcade.AwardFinish;
+                }
+                if (_lapTimer != null) _lapTimer.showDefaultHud = false;
+                var ahud = new GameObject("ArcadeHud").AddComponent<Arcade.ArcadeHud>();
+                ahud.director = _arcade;
+                ahud.splitScreen = _splitScreen;
+                ahud.localRig = _humanRig;
+            }
+        }
+
+        /// <summary>Create the arcade director and give every rig arcade state.
+        /// Firmware rigs are refused inside Register.</summary>
+        private void BuildArcade(bool authority)
+        {
+            _arcade = new GameObject("ArcadeDirector").AddComponent<Arcade.ArcadeDirector>();
+            _arcade.IsAuthority = authority;
+            _arcade.trackLimits = SessionConfig.TrackLimits;
+            _arcade.lapTimer = _lapTimer;
+            _arcade.SetTrack(_built, _botPath, _botPathClosed);
+            foreach (var rig in _rigs) _arcade.Register(rig);
         }
 
         // ================= LAN (host simulates everyone; clients render ghosts) ===
@@ -613,6 +649,7 @@ namespace AIHWSim.Core
         {
             BuildLighting();
             var built = TrackFactory.Build(GameFlow.ActiveTrack, interactive: true);
+            _built = built;             // arcade drops item boxes onto its surfaces
             _spawnPos = built.spawnPos;
             _spawnRot = built.spawnRot;
             _lapTimer = built.lapTimer; // null when the map has no finish line

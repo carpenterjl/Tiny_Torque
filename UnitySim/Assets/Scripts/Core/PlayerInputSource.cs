@@ -24,6 +24,10 @@ namespace AIHWSim.Core
         float Brake();
         bool Handbrake();
         bool RespawnPressed();
+        /// <summary>Edge: fire the held arcade power-up. Consumed by the caller,
+        /// so each press reaches exactly one item use. Always false outside
+        /// arcade sessions — nothing listens.</summary>
+        bool UseItemPressed();
         float MouseSteerDelta();
     }
 
@@ -165,6 +169,27 @@ namespace AIHWSim.Core
 #endif
                 default:
                     return InputReader.RespawnPressed();
+            }
+        }
+
+        public bool UseItemPressed()
+        {
+            switch (_kind)
+            {
+#if ENABLE_INPUT_SYSTEM
+                case InputDeviceKind.Keyboard:
+                {
+                    var kb = Keyboard.current;
+                    return kb != null && kb.leftShiftKey.wasPressedThisFrame;
+                }
+                case InputDeviceKind.Gamepad:
+                {
+                    var gp = Pad;
+                    return gp != null && gp.buttonWest.wasPressedThisFrame;
+                }
+#endif
+                default:
+                    return InputReader.UseItemPressed();
             }
         }
 

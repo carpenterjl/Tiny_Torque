@@ -46,6 +46,10 @@ namespace AIHWSim.Core
                     car.ResetVehicle();            // back to the starting location
                     if (lapTimer != null) lapTimer.ResetTimer(car); // only this car's laps
                 }
+                // Arcade: fire the held power-up. Null outside arcade sessions, so
+                // this costs one null check in a normal race.
+                if (source.UseItemPressed())
+                    Arcade.ArcadeDirector.Instance?.RequestUse(car);
             }
 
             if (enableMouseSteer)

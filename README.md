@@ -130,6 +130,9 @@ standings and shared results (host can rematch). The host simulates all
 physics; clients stream inputs and render smooth interpolated cars. Windows
 Firewall will ask to allow the game on private networks the first time you host
 (the game uses **UDP 7777** for transport and **UDP 47777** for LAN discovery).
+Wi-Fi is fine — the streams are a few KB/s and clients render 120 ms behind the
+host to absorb jitter; what matters is that everyone is on the same network and
+*not* a guest network, which usually blocks PCs from seeing each other.
 Telemetry/graphs/autonomous controllers remain single-player features.
 
 **Sharing & installers.** **Tools ▸ AIHWSim ▸ Build Standalone (Dev)** makes a
@@ -395,6 +398,127 @@ size or overruns its triangle budget:
 
 ```bash
 "E:\Unity Hub\Editor\6000.1.15f1\Editor\Unity.exe" -batchmode -quit -nographics -projectPath "UnitySim" -executeMethod AIHWSim.EditorTools.PartModelValidator.Report -logFile pmv.log
+```
+
+## Arcade mode
+
+A deliberately unserious second mode alongside the physics-honest one: item boxes,
+power-ups, weapons, track limits and a live scoreboard. **Main Menu ▸ Single
+Player ▸ Arcade mode**, or the same toggle on the split-screen page.
+
+Arcade needs a race to mean anything — item boxes and race positions both want a
+finish line — so ticking the box with a free-drive selected sets the lap count to
+3 rather than doing nothing. It is refused outright on **Autonomous (C firmware)**
+sessions: a boost or a spin-out would corrupt the controller-validation run the
+mode exists to produce. `SessionConfig.SetSinglePlayer()` clears both flags, which
+is the complete leak guard — garage Drive, builder Drive and the stale-LAN guard
+all funnel through it, so no free-drive can inherit a stale arcade session.
+
+| | |
+|---|---|
+| Use item | **Left Shift** (keyboard) · **X / square** (gamepad) |
+| Items | boost, triple-boost, homing missile, dropped banana, shield |
+| Roulette | weighted by live position — leaders draw boost/banana/shield, back-markers draw missile/triple-boost |
+| Track limits | all four wheels off a surface below 0.90 friction for 2.5 s → a 2 s speed cap; two wheels off at an apex is racing, and jumps are exempt |
+| Points | 15/12/10/8/6/4/2/1 on finish |
+
+Bots use items too, on a 2 Hz policy with a randomised reaction delay — boost only
+when pointed straight, missile only with a target in range, banana only with
+someone close behind, and never within 1.5 s of GO.
+
+## Track props (arcade mode)
+
+The same pipeline builds the **track** props, in `Blender/props.blend` +
+`build_props.py`, exported to `Assets/Resources/TrackProps/`. Twenty-eight
+assets: four shared arcade objects (item box, missile, banana peel, shield orb)
+and six props for each of four themes.
+
+| Theme | Props |
+|---|---|
+| **Toy Workshop** | book stack, ruler ramp, toy brick, pencil, mug, tape arch |
+| **Neon Grid** | pylon, light gate, light hoop, glow barrier, data stack, spire |
+| **Beach Boardwalk** | palm, surfboard ramp, boardwalk rail, tiki torch, beach ball, sandcastle |
+| **Volcano Foundry** | rock arch, obsidian block, steam vent, barrel, grate ramp, crag spire |
+
+Everything is authored at true metric size — a mug really is 100 mm tall — which
+is what makes the Toy Workshop theme work: the car is a 420 mm RC car in a human
+world, so the scale is the joke rather than a problem to hide.
+
+Two rules separate a track prop from a vehicle part. First, `PartMeshLibrary`
+strips every collider on import, which is right for cosmetic vehicle geometry but
+leaves a wall you can drive through — so a mesh prop is always a pair, the
+imported shell plus an **invisible primitive hull authored in `TrackCatalog`**.
+The hull is deliberately coarse: it is what the car, the ToF sensors and the
+builder's selection ray all hit, and a box beats a 2k-tri mesh collider for every
+one of them. Gates (tape arch, rock arch, light gate) get three hulls, not one,
+so the opening stays open. Second, props stay on the default layer rather than
+the viz layer, so the on-car camera sensor can actually see the scenery.
+
+Props sit on the ground plane with their **origin at the base contact point**,
+because `TrackFactory` drops each item onto the surface it was placed on. The two
+exceptions are documented in the build script: the tape arch and the light hoop
+are deliberately part-buried, because a ring standing on its rim holds its bore
+70–110 mm off the deck and a 100 mm car noses straight into it.
+
+Four themed circuits ship built from these families, each a different *shape*
+rather than one oval in four colours — the spline carries elevation in its points'
+y, banking in `rollDeg` and width per control point, so the circuit itself is the
+content and the props only dress it:
+
+| Circuit | Length | Rise | Max grade | Narrowest | Max bank | Signature |
+|---|---|---|---|---|---|---|
+| ★ Workshop Grand Prix | 94 m | 1.35 m | 9.7 % | 2.2 m | 10° | climbs off the bench onto a plank run with pencils rolling loose across it |
+| ★ Neon Vortex II | 141 m | 1.20 m | 5.5 % | 2.4 m | 18° | a true figure-8 — the lap crosses over itself, 1.16 m of clearance, banking inverting through the bridge |
+| ★ Boardwalk Cove | 111 m | 0.74 m | 10.4 % | 2.0 m | 22° | four whoops on a 6 m wavelength into a 22° bowl, out onto a pier |
+| ★ Foundry Descent | 102 m | 1.96 m | 12.0 % | 2.2 m | 16° | a boosted climb to a 1.9 m gantry, a grate bridge, then the plunge |
+
+Gradients stay under ~12 %: at RC scale that is dramatic to look at (the car is
+0.10 m tall) while costing almost nothing in speed, since the rear pair make
+~50 N of thrust against ~3 N of grade resistance.
+
+Each has three checkpoints and twelve authored item boxes — some of them on the
+elevated sections, which is why `BoxRow` takes a deck height. Authoring boxes on
+a map suppresses `ArcadeDirector`'s automatic placement entirely, so a hand-placed
+set is authoritative. Eight themed floor surfaces come with them (workbench,
+carpet, neon grid, boardwalk, wet sand, lava rock, obsidian, grate); their
+friction values double as the arcade track-limit classification, so carpet, wet
+sand and lava scree read as off-track without any extra authoring.
+
+Two placement rules are invisible until they bite. `TrackFactory` drops each item
+from `y + 3` and takes the *highest* hit, so an item under an overpass snaps onto
+the overpass — nothing is placed beneath the Vortex crossover. And the
+narrow-bore props (tape arch 0.34 m, light hoop 0.40 m, rock arch 0.46 m) stay
+*off* the racing line against a 0.20 m car; the hazards that are on the line —
+pencils, barrels, beach balls, blocks — are things you can hit and survive.
+
+In the Track Builder the props live under two new palette tabs — **ARCADE** (the
+item box) and **SCENERY** (all 24, grouped under a header per theme).
+
+Validate the props and the maps with:
+
+```bash
+"E:\Unity Hub\Editor\6000.1.15f1\Editor\Unity.exe" -batchmode -quit -projectPath "UnitySim" -executeMethod AIHWSim.EditorTools.TrackPresetValidator.Report -logFile tpv.log
+```
+
+`TrackPresetValidator` checks the things that otherwise fail *silently*: an item
+id that no longer resolves is skipped without a word by design (that is what lets
+old saves load in new builds), a floor index past the end of the catalog throws
+deep inside the mesh build, and a checkpoint sequence with a gap in it simply
+never completes a lap.
+
+It also reports the geometry of every ribbon (`[TPV] GEOM`) and builds each map
+for real (`[TPV] BUILD`), which covers the two ways a 3D circuit goes wrong. A
+gradient the car cannot climb just looks like a car that stops, so anything over
+40 % fails and over 25 % warns. And a track that crosses itself is only a bridge
+if the decks clear each other: the check compares every pair of points that are
+far apart *along* the curve but within 1.5 m in plan view, and fails if the gap
+is under 0.35 m — enough for the 0.10 m car plus the ribbon's 0.04 m skirt. A
+0.2 m step would be an invisible wall at speed. Neon Vortex II is the only
+preset that trips the overpass detector, which is how you know the figure-8 is
+really crossing over itself:
+
+```
+[TPV] GEOM Neon Vortex II[0]: len=140.8m rise=1.20m grade=5.5% width=2.4m bank=18deg overpass(clear=1.16m)
 ```
 
 ## Layout

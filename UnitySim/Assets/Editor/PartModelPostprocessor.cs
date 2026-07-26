@@ -12,12 +12,16 @@ namespace AIHWSim.EditorTools
     ///     only; PartVisualFactory assigns the shared runtime materials by name.
     ///   • no auto colliders → PartMeshLibrary strips colliders anyway, but this
     ///     keeps the imported prefab clean.
-    /// Scoped strictly to that folder so nothing else in the project is affected.
+    /// Scoped strictly to those folders so nothing else in the project is affected.
     /// </summary>
     public sealed class PartModelPostprocessor : AssetPostprocessor
     {
-        private static bool IsPartModel(string path) =>
-            path.Replace('\\', '/').Contains("Resources/PartModels/");
+        private static bool IsPartModel(string path)
+        {
+            string p = path.Replace('\\', '/');
+            return p.Contains("Resources/PartModels/")   // vehicle parts
+                || p.Contains("Resources/TrackProps/");  // track scenery + arcade props
+        }
 
         private void OnPreprocessModel()
         {

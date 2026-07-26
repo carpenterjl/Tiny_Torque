@@ -53,6 +53,8 @@ namespace AIHWSim.Persistence
         public int spControl = 0;       // 0 Manual / 1 Autonomous (C firmware) / 2 Autonomous (bot AI)
         public bool spRubberBand = false;
         public int spCountdown = 3;     // race-start countdown seconds (0..60)
+        public bool spArcade = false;      // power-ups, weapons, arcade scoreboard
+        public bool spTrackLimits = true;  // off-track penalty (only used in arcade)
     }
 
     /// <summary>

@@ -4,9 +4,10 @@ using UnityEngine;
 namespace AIHWSim.Vehicles
 {
     /// <summary>
-    /// Loads authored Blender part meshes (exported as FBX under
-    /// <c>Assets/Resources/PartModels/</c>) and instantiates them as cosmetic-only
-    /// hierarchies for the vehicle. This is the project's single asset-backed
+    /// Loads authored Blender meshes (exported as FBX under
+    /// <c>Assets/Resources/PartModels/</c> for vehicle parts and
+    /// <c>Assets/Resources/TrackProps/</c> for track scenery) and instantiates them
+    /// as cosmetic-only hierarchies. This is the project's single asset-backed
     /// visual path; everything else is still runtime-procedural. Callers try a
     /// mesh here first and fall back to <see cref="PartVisualFactory"/> primitives
     /// when the asset is absent, so the game runs unchanged before any FBX is
@@ -25,21 +26,27 @@ namespace AIHWSim.Vehicles
         /// (A/B testing, or reverting to the pre-asset look without deleting files).</summary>
         public static bool Enabled = true;
 
-        private const string ResourceRoot = "PartModels/";
+        /// <summary>Vehicle part meshes (wheels, bodies, battery, antenna).</summary>
+        public const string PartRoot = "PartModels/";
 
-        // Cache the loaded source prefabs. Misses are cached as null so a missing
-        // asset is only probed once per session.
+        /// <summary>Track scenery/arcade prop meshes. Separate folder because props
+        /// have no runtime scale contract and are validated on extent + tri budget.</summary>
+        public const string PropRoot = "TrackProps/";
+
+        // Cache the loaded source prefabs, keyed root+key. Misses are cached as
+        // null so a missing asset is only probed once per session.
         private static readonly Dictionary<string, GameObject> _cache = new Dictionary<string, GameObject>();
 
         /// <summary>True when an asset for <paramref name="key"/> is present.</summary>
-        public static bool Has(string key) => Enabled && Load(key) != null;
+        public static bool Has(string key, string root = PartRoot) => Enabled && Load(key, root) != null;
 
-        private static GameObject Load(string key)
+        private static GameObject Load(string key, string root)
         {
-            if (!_cache.TryGetValue(key, out var src))
+            string path = root + key;
+            if (!_cache.TryGetValue(path, out var src))
             {
-                src = Resources.Load<GameObject>(ResourceRoot + key);
-                _cache[key] = src;
+                src = Resources.Load<GameObject>(path);
+                _cache[path] = src;
             }
             return src;
         }
@@ -49,13 +56,16 @@ namespace AIHWSim.Vehicles
         /// (identity local pose), stripped of colliders/rigidbodies. Every child is put
         /// on <paramref name="layer"/> (default the Ignore-Raycast viz layer, matching
         /// the primitive part builders; pass the car's own layer for the body so its
-        /// camera-culling behaviour is unchanged). Returns the instance root, or null
-        /// when disabled or the asset is missing (caller should then build primitives).
+        /// camera-culling behaviour is unchanged, and the parent's layer for track
+        /// props so the on-car camera sensor can actually see the scenery). Returns
+        /// the instance root, or null when disabled or the asset is missing (caller
+        /// should then build primitives).
         /// </summary>
-        public static GameObject TryInstantiate(string key, Transform parent, int layer = PartVisualFactory.VizLayer)
+        public static GameObject TryInstantiate(string key, Transform parent,
+            int layer = PartVisualFactory.VizLayer, string root = PartRoot)
         {
             if (!Enabled) return null;
-            var src = Load(key);
+            var src = Load(key, root);
             if (src == null) return null;
 
             var go = Object.Instantiate(src, parent, false);

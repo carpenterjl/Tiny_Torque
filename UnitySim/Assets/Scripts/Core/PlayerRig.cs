@@ -20,5 +20,8 @@ namespace AIHWSim.Core
         public Camera camera;
         public LapTimer lapTimer;   // shared scene timer; null on finish-less maps
         public int netSlot = -1;    // LAN roster slot; -1 in local sessions
+        /// <summary>Arcade state, or null outside arcade sessions. The component
+        /// itself lives on the car so a trigger can find it from a collider.</summary>
+        public Arcade.ArcadeRacer arcade;
     }
 }

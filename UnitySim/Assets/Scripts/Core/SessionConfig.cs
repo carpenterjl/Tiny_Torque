@@ -60,6 +60,12 @@ namespace AIHWSim.Core
         /// <summary>Race-start countdown in seconds (0 = go immediately).</summary>
         public static int CountdownSeconds;
 
+        /// <summary>Arcade mode: item boxes, power-ups, weapons, arcade scoreboard.</summary>
+        public static bool Arcade;
+
+        /// <summary>Off-track detection + penalty (sub-toggle of arcade).</summary>
+        public static bool TrackLimits;
+
         /// <summary>Reset to a plain single-player session (legacy entry paths).</summary>
         public static void SetSinglePlayer()
         {
@@ -68,6 +74,11 @@ namespace AIHWSim.Core
             TargetLaps = 0; // legacy entry paths are free-drive; the menu sets laps after
             RubberBand = false;
             CountdownSeconds = 0;
+            // Every legacy entry path (garage Drive, builder Drive, the stale-LAN
+            // guard) funnels through here, which makes this the one place that has
+            // to clear arcade — otherwise a race's flags leak into a free-drive.
+            Arcade = false;
+            TrackLimits = false;
         }
 
         /// <summary>The roster TrackBootstrap builds from — always at least one slot.</summary>

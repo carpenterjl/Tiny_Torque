@@ -94,6 +94,23 @@ namespace AIHWSim.Vehicles
         public AssistSettings assists;         // per-player prefs (rig build)
         public bool assistsActive = true;      // false in Autonomous mode
 
+        // ---- Arcade layer (AIHWSim.Arcade owns these; neutral = no effect) ----
+        // Written only by ArcadeDirector, which is constructed only in arcade
+        // sessions. At the values below every expression that reads them reduces
+        // to its pre-arcade form, so a normal race, a firmware run and the Opus
+        // mission are bit-for-bit unaffected.
+
+        /// <summary>Extra forward acceleration (m/s²) from a boost item. Maxed
+        /// against the boost-pad surface value, so items and pads don't stack.</summary>
+        public float arcadeBoostAccel;
+
+        /// <summary>Tyre grip scale from an arcade effect (spin-out, oil). MUST
+        /// default to 1 — a car built outside arcade would otherwise have no grip.</summary>
+        public float arcadeGripMult = 1f;
+
+        /// <summary>Yaw torque (N·m) applied while spun out by a hit.</summary>
+        public float arcadeYawTorque;
+
         [Header("Composite mass (factory-set)")]
         public bool useCompositeMass = false;
         public float compositeMass = 1.6f;
@@ -286,6 +303,16 @@ namespace AIHWSim.Vehicles
         {
             _motors.Clear();
             if (motors != null) _motors.AddRange(motors);
+        }
+
+        /// <summary>
+        /// Apply an external impulse (missile punt, off-track drag). Exists only
+        /// because the Rigidbody is private; nothing else about the body is
+        /// exposed. Arcade-owned — no effect unless something calls it.
+        /// </summary>
+        public void ArcadeImpulse(Vector3 impulse, Vector3 worldPoint)
+        {
+            if (_body != null) _body.AddForceAtPosition(impulse, worldPoint, ForceMode.Impulse);
         }
 
         private void Awake()
@@ -925,7 +952,7 @@ namespace AIHWSim.Vehicles
 
             float steerCmd = Mathf.Clamp(_cmd[SteerActuator], -1f, 1f);
             float brake = Mathf.Clamp01(_cmd[BrakeActuator]) * maxBrakeTorque;
-            float boost = 0f;
+            float boost = arcadeBoostAccel;   // 0 outside arcade; pads max against it
 
             // Race countdown hold: full brakes, no drive/steer until GO.
             if (Frozen) { brake = maxBrakeTorque; steerCmd = 0f; }
@@ -1137,7 +1164,7 @@ namespace AIHWSim.Vehicles
                     float fx = 0f, fy = 0f;
                     if (grounded && fz > 0f)
                     {
-                        float mu = surf.frictionMult * GripMult(w.cfg) * loadFactor;
+                        float mu = surf.frictionMult * GripMult(w.cfg) * loadFactor * arcadeGripMult;
                         // _gripStiffness is the Tune "Grip (side)" knob; its legacy
                         // neutral value 2.0 maps to a lateral µ scale of 1.
                         TyreModel.Forces(vx, vy, w.omega, r, fz, mu,
@@ -1171,7 +1198,9 @@ namespace AIHWSim.Vehicles
                 else
                 {
                     // ---- Legacy PhysX-friction path (TyreModel.Enabled = false) ----
-                    float combined = surf.frictionMult * loadFactor;
+                    // arcadeGripMult rides the change-gated product, so a constant
+                    // 1 writes no friction curve and an arcade hit writes exactly once.
+                    float combined = surf.frictionMult * loadFactor * arcadeGripMult;
                     if (Mathf.Abs(combined - w.lastMult) > 1e-4f)
                     {
                         float grip = GripMult(w.cfg);
@@ -1214,6 +1243,12 @@ namespace AIHWSim.Vehicles
                 float tq = Mathf.Clamp(-yawErr * 0.08f * a.stability, -0.3f, 0.3f);
                 _body.AddTorque(0f, tq, 0f, ForceMode.Force);
             }
+
+            // Arcade spin-out. Deliberately not routed through Frozen, which
+            // forces full brakes and is owned by the race countdown — a torque
+            // plus a reduced arcadeGripMult reads as a slide, not a freeze.
+            if (arcadeYawTorque != 0f)
+                _body.AddTorque(0f, arcadeYawTorque, 0f, ForceMode.Force);
 
             foreach (var pair in _antiRollPairs) ApplyAntiRoll(pair.a.col, pair.b.col);
 

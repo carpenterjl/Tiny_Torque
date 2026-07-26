@@ -19,16 +19,32 @@ namespace AIHWSim.EditorTools
     {
         private const float TolMetres = 0.002f;   // +-2 mm
 
+        private const float MinExtentMetres = 0.02f;   // below this, something is scaled wrong
+
         /// <summary>Expected renderer-bounds size in metres plus a triangle budget.
         /// A null axis is deliberately unconstrained: body height is free, wheel
-        /// width varies with tread, and the buggy's flares exceed the core width.</summary>
+        /// width varies with tread, and the buggy's flares exceed the core width.
+        /// Track props are checked differently — they carry no runtime scale
+        /// contract, so they are bounded by max extent and budget instead.</summary>
         private readonly struct Spec
         {
-            public readonly string Key;
-            public readonly float? X, Y, Z;
+            public readonly string Key, Root;
+            public readonly float? X, Y, Z, MaxExtent;
             public readonly int MaxTris;
+
+            /// <summary>Vehicle part: exact authored axes (null = free).</summary>
             public Spec(string key, float? x, float? y, float? z, int maxTris)
-            { Key = key; X = x; Y = y; Z = z; MaxTris = maxTris; }
+            {
+                Key = key; Root = "PartModels/";
+                X = x; Y = y; Z = z; MaxExtent = null; MaxTris = maxTris;
+            }
+
+            /// <summary>Track prop: bound the extent and the triangle budget.</summary>
+            public Spec(string key, float maxExtent, int maxTris)
+            {
+                Key = key; Root = "TrackProps/";
+                X = null; Y = null; Z = null; MaxExtent = maxExtent; MaxTris = maxTris;
+            }
         }
 
         private static readonly Spec[] Specs =
@@ -45,6 +61,43 @@ namespace AIHWSim.EditorTools
             // Battery renders at authored size - no runtime scale at all.
             new Spec("battery_stick", 0.047f, 0.025f, 0.138f, 800),
             new Spec("antenna_stub",  null,   null,   null,   600),
+            // Track props (Resources/TrackProps) are appended here as each family
+            // is authored — a listed asset that is missing is a hard FAIL, so a
+            // key only goes in once its FBX ships. Budgets: small prop 1500,
+            // medium 3000, hero landmark 6000.
+            new Spec("arc_item_box",   0.30f, 2000),
+            new Spec("arc_missile",    0.22f, 1200),
+            new Spec("arc_banana",     0.18f, 1200),
+            new Spec("arc_shield_orb", 0.10f,  600),
+            // Toy Workshop — real desk objects at real size, which is exactly
+            // why they read as enormous beside a 0.42 m car.
+            new Spec("tw_book_stack",  0.35f, 1500),
+            new Spec("tw_ruler_ramp",  0.40f, 1500),
+            new Spec("tw_brick_wall",  0.42f, 3000),
+            new Spec("tw_pencil",      0.28f, 1000),
+            new Spec("tw_mug",         0.18f, 1500),
+            new Spec("tw_tape_arch",   0.75f, 1500),
+            // Neon Grid
+            new Spec("ng_pylon",       0.40f, 1000),
+            new Spec("ng_arch_gate",   1.05f, 1500),
+            new Spec("ng_ring_float",  0.60f, 2000),
+            new Spec("ng_barrier_glow",0.62f, 1000),
+            new Spec("ng_data_cube",   0.28f, 1500),
+            new Spec("ng_spire",       0.90f, 1000),
+            // Beach Boardwalk
+            new Spec("bb_palm",            0.80f, 1500),
+            new Spec("bb_surfboard_ramp",  0.62f, 1500),
+            new Spec("bb_plank_wall",      0.72f, 1500),
+            new Spec("bb_tiki_torch",      0.62f, 1500),
+            new Spec("bb_beach_ball",      0.22f, 2000),
+            new Spec("bb_sandcastle",      0.45f, 2500),
+            // Volcano Foundry
+            new Spec("vf_rock_arch",     0.98f, 1500),
+            new Spec("vf_obsidian_block",0.48f,  600),
+            new Spec("vf_steam_vent",    0.40f, 1000),
+            new Spec("vf_barrel",        0.28f, 2000),
+            new Spec("vf_grate_ramp",    0.55f, 1000),
+            new Spec("vf_crag_spire",    0.85f,  600),
         };
 
         public static void Report()
@@ -52,7 +105,7 @@ namespace AIHWSim.EditorTools
             int fail = 0;
             foreach (var s in Specs)
             {
-                var src = Resources.Load<GameObject>("PartModels/" + s.Key);
+                var src = Resources.Load<GameObject>(s.Root + s.Key);
                 if (src == null)
                 {
                     Debug.LogError($"[PMV] FAIL {s.Key}: missing asset");
@@ -78,6 +131,14 @@ namespace AIHWSim.EditorTools
                 if (Off(b.size.x, s.X)) why += $" X={b.size.x:0.000}!={s.X:0.000}";
                 if (Off(b.size.y, s.Y)) why += $" Y={b.size.y:0.000}!={s.Y:0.000}";
                 if (Off(b.size.z, s.Z)) why += $" Z={b.size.z:0.000}!={s.Z:0.000}";
+                if (s.MaxExtent.HasValue)
+                {
+                    // Props have no axis contract; bound them at both ends so the
+                    // x100 metre->centimetre bake and its inverse both get caught.
+                    float ext = Mathf.Max(b.size.x, Mathf.Max(b.size.y, b.size.z));
+                    if (ext > s.MaxExtent.Value) why += $" extent={ext:0.000}>{s.MaxExtent.Value:0.000}";
+                    if (ext < MinExtentMetres) why += $" extent={ext:0.000}<{MinExtentMetres:0.000}";
+                }
                 if (tris > s.MaxTris) why += $" tris={tris}>{s.MaxTris}";
 
                 string line = $"{s.Key}: parts={rs.Length} tris={tris} " +

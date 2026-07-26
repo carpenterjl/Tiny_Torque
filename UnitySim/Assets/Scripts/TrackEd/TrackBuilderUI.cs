@@ -23,10 +23,41 @@ namespace AIHWSim.TrackEd
 
         private TrackDesign D => bootstrap.Design;
 
-        private static readonly string[] TabNames = { "FLOOR", "WALLS", "OBSTACLES", "MISC", "SPLINE" };
+        private enum TabKind { Floor, Items, Spline }
+
+        /// <summary>
+        /// One row per tab. This used to be a name array plus `(ItemCategory)(_tab - 1)`
+        /// arithmetic scattered across a dozen comparisons, which meant every new
+        /// category silently renumbered the ones after it. The table is the single
+        /// place a tab is defined; nothing else knows an index.
+        /// </summary>
+        private readonly struct TabDef
+        {
+            public readonly string Name;
+            public readonly TabKind Kind;
+            public readonly ItemCategory Cat;
+            public TabDef(string name, TabKind kind, ItemCategory cat = ItemCategory.Wall)
+            { Name = name; Kind = kind; Cat = cat; }
+        }
+
+        private static readonly TabDef[] Tabs =
+        {
+            new TabDef("FLOOR",   TabKind.Floor),
+            new TabDef("WALLS",   TabKind.Items, ItemCategory.Wall),
+            new TabDef("OBST",    TabKind.Items, ItemCategory.Obstacle),
+            new TabDef("MISC",    TabKind.Items, ItemCategory.Misc),
+            new TabDef("ARCADE",  TabKind.Items, ItemCategory.Arcade),
+            new TabDef("SCENERY", TabKind.Items, ItemCategory.Scenery),
+            new TabDef("SPLINE",  TabKind.Spline),
+        };
+
+        private const int FloorTabIndex = 0;
 
         private EditState _state = EditState.Idle;
         private int _tab;
+
+        private bool OnFloorTab => Tabs[_tab].Kind == TabKind.Floor;
+        private bool OnSplineTab => Tabs[_tab].Kind == TabKind.Spline;
         private int _selFloor;          // selected floor type (paint brush)
         private Vector2Int _lastPaintTile = new Vector2Int(-1, -1);
 
@@ -97,14 +128,14 @@ namespace AIHWSim.TrackEd
             if (InputReader.RedoPressed()) { bootstrap.TryRedo(); _selItem = -1; return; }
             if (InputReader.FocusPressed())
             {
-                if (_tab == 4 && ValidSpline(_selSpline))
+                if (OnSplineTab && ValidSpline(_selSpline))
                     FocusSpline(_selSpline);
                 else if (_selItem >= 0 && _selItem < D.items.Count)
                     bootstrap.Orbit.FocusOn(new Vector3(D.items[_selItem].x, 0f, D.items[_selItem].z), 3.5f);
                 else bootstrap.FrameMap();
             }
 
-            if (_tab == 4)
+            if (OnSplineTab)
             {
                 UpdateSplineIdle(overUI);
                 return;
@@ -128,7 +159,7 @@ namespace AIHWSim.TrackEd
 
             // ...otherwise the FLOOR tab paints (ribbon runs take precedence over
             // the slab tiles underneath them).
-            if (_tab == 0)
+            if (OnFloorTab)
             {
                 if (TryPaintRibbon(startStroke: true)) return;
                 if (RayToTile(out var tile))
@@ -411,7 +442,7 @@ namespace AIHWSim.TrackEd
         /// <summary>Sphere handles for the selected spline's control points.</summary>
         private void EnsureSplineHandles()
         {
-            bool want = _tab == 4 && ValidSpline(_selSpline) && _state != EditState.DraggingPoint;
+            bool want = OnSplineTab && ValidSpline(_selSpline) && _state != EditState.DraggingPoint;
             int points = want ? D.splines[_selSpline].Count : 0;
             if (_handleVersion == bootstrap.RebuildVersion && _handleSpline == _selSpline &&
                 _handlePoints == points && _handleSelPoint == _selPoint && (want || _handles.Count == 0))
@@ -830,23 +861,23 @@ namespace AIHWSim.TrackEd
             // Two-row tabs read better in 190 px.
             GUILayout.BeginArea(_leftRect, GUI.skin.box);
             GUILayout.BeginHorizontal();
-            for (int i = 0; i < 3; i++) DrawTabButton(i);
+            for (int i = 0; i < 4; i++) DrawTabButton(i);
             GUILayout.EndHorizontal();
             GUILayout.BeginHorizontal();
-            for (int i = 3; i < 5; i++) DrawTabButton(i);
+            for (int i = 4; i < Tabs.Length; i++) DrawTabButton(i);
             GUILayout.EndHorizontal();
             GUILayout.Space(6);
 
             _paletteScroll = GUILayout.BeginScrollView(_paletteScroll);
-            if (_tab == 0) DrawFloorPalette();
-            else if (_tab == 4) DrawSplineTab();
-            else DrawItemPalette((ItemCategory)(_tab - 1));
+            if (OnFloorTab) DrawFloorPalette();
+            else if (OnSplineTab) DrawSplineTab();
+            else DrawItemPalette(Tabs[_tab].Cat);
             GUILayout.EndScrollView();
 
             GUILayout.FlexibleSpace();
             GUILayout.Label(
-                _tab == 0 ? "Click/drag paints tiles"
-                : _tab == 4 ? (_state == EditState.DrawingSpline
+                OnFloorTab ? "Click/drag paints tiles"
+                : OnSplineTab ? (_state == EditState.DrawingSpline
                     ? "Click map to add points\nEsc/Done finishes"
                     : "Drag spheres to reshape\nClick ribbon to insert point")
                 : "Click icon, then click map\nScroll rotates · Esc cancels", GarageSkin.StatLabel);
@@ -856,7 +887,7 @@ namespace AIHWSim.TrackEd
         private void DrawTabButton(int i)
         {
             bool active = _tab == i;
-            if (GUILayout.Toggle(active, TabNames[i], active ? GarageSkin.TabActive : GUI.skin.button,
+            if (GUILayout.Toggle(active, Tabs[i].Name, active ? GarageSkin.TabActive : GUI.skin.button,
                 GUILayout.Height(24)) && !active)
             {
                 _tab = i;
@@ -931,7 +962,7 @@ namespace AIHWSim.TrackEd
                 GUILayout.Width(76), GUILayout.Height(56)))
             {
                 _selFloor = type;
-                _tab = 0;
+                _tab = FloorTabIndex;
             }
             GUILayout.Label(f.label, GarageSkin.StatLabel);
             GUILayout.EndVertical();
@@ -941,8 +972,27 @@ namespace AIHWSim.TrackEd
         {
             var defs = new System.Collections.Generic.List<ItemDef>();
             foreach (var it in TrackCatalog.Items)
-                if (it.category == cat) defs.Add(it);
+                if (it.category == cat && it.theme.Length == 0) defs.Add(it);
 
+            DrawIconGrid(defs);
+
+            // Themed props get a header per family rather than a tab each — four
+            // near-empty tabs would be worse than one scrolling list.
+            foreach (var theme in TrackCatalog.Themes)
+            {
+                defs.Clear();
+                foreach (var it in TrackCatalog.Items)
+                    if (it.category == cat && it.theme == theme) defs.Add(it);
+                if (defs.Count == 0) continue;
+
+                GUILayout.Space(4);
+                GUILayout.Label(theme, GarageSkin.Header);
+                DrawIconGrid(defs);
+            }
+        }
+
+        private void DrawIconGrid(System.Collections.Generic.List<ItemDef> defs)
+        {
             for (int i = 0; i < defs.Count; i += 2)
             {
                 GUILayout.BeginHorizontal();
@@ -980,7 +1030,7 @@ namespace AIHWSim.TrackEd
 
             DrawCheckpointPanel();
             GUILayout.Space(8);
-            if (_tab == 4) DrawSplinePanel();
+            if (OnSplineTab) DrawSplinePanel();
             else DrawSelectionPanel();
             GUILayout.EndScrollView();
 

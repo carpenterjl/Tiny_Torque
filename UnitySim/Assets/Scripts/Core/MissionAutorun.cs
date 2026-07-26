@@ -66,7 +66,21 @@ namespace AIHWSim.Core
         {
             _req = null;
             if (!File.Exists(RequestPath)) return;
-            try { _req = JsonUtility.FromJson<Request>(File.ReadAllText(RequestPath)); }
+
+            // Consume the request before acting on it. The editor-side runner also
+            // deletes it, but only when play mode exits cleanly — an aborted or
+            // killed run leaves it behind, and then the next launch of anything
+            // (including a normal game session sitting in the menu) arms itself and
+            // quits on the timeout. One reader, one run.
+            string json;
+            try
+            {
+                json = File.ReadAllText(RequestPath);
+                File.Delete(RequestPath);
+            }
+            catch (Exception e) { Debug.LogError($"[MissionAutorun] unreadable request: {e.Message}"); return; }
+
+            try { _req = JsonUtility.FromJson<Request>(json); }
             catch (Exception e) { Debug.LogError($"[MissionAutorun] bad request: {e.Message}"); return; }
             if (_req == null) return;
 

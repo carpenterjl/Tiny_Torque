@@ -89,7 +89,7 @@ namespace AIHWSim.EditorTools
         private static void Cleanup()
         {
             try { if (File.Exists(MissionAutorun.RequestPath)) File.Delete(MissionAutorun.RequestPath); }
-            catch { /* a stale request only affects the next run, which rewrites it */ }
+            catch { /* MissionAutorun consumes it at boot; this only covers runs that never got that far */ }
         }
     }
 }

@@ -137,6 +137,7 @@ namespace AIHWSim.Net
         public float throttle, steer, brake;
         public bool handbrake;
         public bool respawnEdge;
+        public bool useItemEdge;   // arcade: fire the held power-up
     }
 
     public static class NetPack

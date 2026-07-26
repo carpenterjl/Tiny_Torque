@@ -181,6 +181,11 @@ namespace AIHWSim.TrackEd
             }
 
             var checkpoints = interactive ? d.OrderedCheckpoints() : null;
+            // Scenery that provably never moves gets static-batched at the end.
+            // A themed map runs 40-60 mesh props; left unbatched that is a few
+            // hundred draw calls on its own, more than the whole rest of the scene.
+            var batchable = interactive
+                ? new System.Collections.Generic.List<GameObject>() : null;
 
             for (int i = 0; i < d.items.Count; i++)
             {
@@ -196,6 +201,11 @@ namespace AIHWSim.TrackEd
                 go.AddComponent<PlacedItemMarker>().index = i;
 
                 if (!interactive) continue;
+
+                // Anything with a Rigidbody or a behaviour component can move or
+                // be toggled, so only inert scenery is eligible for batching.
+                if (!def.dynamic && def.behavior == ItemBehavior.None)
+                    batchable.Add(go);
 
                 if (def.dynamic)
                 {
@@ -234,6 +244,26 @@ namespace AIHWSim.TrackEd
                         cp.timer = built.lapTimer;
                         break;
                     }
+                    case ItemBehavior.ItemBox:
+                    {
+                        // Only wire it up in an arcade session; outside one an
+                        // authored box stays as scenery rather than a pickup the
+                        // player can drive through and get nothing from.
+                        // The trigger collider is authored by the catalog (so the
+                        // builder can select the box); this only brings it to life.
+                        var box = go.transform.Find("Box");
+                        if (box == null) break;
+                        if (Core.SessionConfig.Arcade)
+                        {
+                            var ib = box.gameObject.AddComponent<Arcade.ArcadeItemBox>();
+                            ib.viz = box.Find("Viz");
+                        }
+                        else
+                        {
+                            box.gameObject.SetActive(false);
+                        }
+                        break;
+                    }
                     case ItemBehavior.Light:
                     {
                         var lightGo = new GameObject("Lamp");
@@ -251,6 +281,9 @@ namespace AIHWSim.TrackEd
 
             if (interactive && built.lapTimer != null)
                 built.lapTimer.CheckpointCount = checkpoints.Count;
+
+            if (batchable != null && batchable.Count > 0)
+                StaticBatchingUtility.Combine(batchable.ToArray(), itemsRoot);
         }
 
         /// <summary>The surface-dropped pose for a placed item (position + yaw

@@ -65,6 +65,7 @@ namespace AIHWSim.Core
         private float _reverseTimer;
         private int _reverseCount;
         private bool _respawnLatch;
+        private bool _useItemLatch;
 
         /// <summary>Rubber-band multiplier on target speed (1 = none). Set by the RaceDirector.</summary>
         public float SpeedScale = 1f;
@@ -95,6 +96,21 @@ namespace AIHWSim.Core
         public float Brake() { EnsureFresh(); return _brake; }
         public bool Handbrake() => false;
         public float MouseSteerDelta() => 0f;
+
+        /// <summary>
+        /// Arcade: fire the held item on the next poll. The DECISION is not made
+        /// here — a bot knows nothing about items or the rest of the field, so
+        /// ArcadeDirector (which sees both) sets this latch and the driver simply
+        /// reports it, the same shape as the stuck-recovery respawn latch.
+        /// </summary>
+        public void RequestUseItem() => _useItemLatch = true;
+
+        public bool UseItemPressed()
+        {
+            if (!_useItemLatch) return false;
+            _useItemLatch = false;
+            return true;
+        }
 
         public bool RespawnPressed()
         {

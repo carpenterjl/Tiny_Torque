@@ -1,36 +1,73 @@
-"""Reusable Blender helpers for the AI Hardware Control Sim part-mesh pipeline.
+"""Reusable Blender helpers for the Tiny Torque mesh pipeline.
 
 Blender MCP session state resets between calls, so this module is re-loaded at the
 top of every call with:
 
-    exec(open(r"E:\\EE Projects\\AI Hardware Control Sim (Unity)\\Blender\\mcp_helpers.py").read(), globals())
+    exec(open(r"E:\\EE Projects\\Tiny_Torque\\Blender\\mcp_helpers.py").read(), globals())
 
 Authoring frame (Blender):  X = width, Y = length (nose at -Y), Z = up.
 Export maps it to Unity:    X = width, Y = up,     Z = length (nose at +Z).
+
+Two asset families share this rig, each with its own .blend and Resources folder:
+    vehicle parts  parts.blend -> Assets/Resources/PartModels   (the default)
+    track props    props.blend -> Assets/Resources/TrackProps   (call use_props())
 
 Contract sizes (metres, Unity axes) enforced by `check_contract`:
     body_*         X 0.200, Z 0.420 exactly   (Y/height free)
     wheel_*        outer tyre radius 0.0330    (axle +X)
     battery_stick  0.047 X * 0.025 Y * 0.138 Z (long axis +Z)
     antenna_stub   0.095 - 0.110 tall (+Y)
+Track props have no runtime scale contract; they are checked on max extent and
+triangle budget instead (see PartModelValidator).
 """
 
 import bpy, bmesh, math, os
 from mathutils import Vector
 
-PROJECT = r"E:\EE Projects\AI Hardware Control Sim (Unity)"
-BLEND_PATH = os.path.join(PROJECT, "Blender", "parts.blend")
-FBX_DIR = os.path.join(PROJECT, "UnitySim", "Assets", "Resources", "PartModels")
+PROJECT = r"E:\EE Projects\Tiny_Torque"
+PARTS_BLEND = os.path.join(PROJECT, "Blender", "parts.blend")
+PROPS_BLEND = os.path.join(PROJECT, "Blender", "props.blend")
+PARTS_FBX_DIR = os.path.join(PROJECT, "UnitySim", "Assets", "Resources", "PartModels")
+PROPS_FBX_DIR = os.path.join(PROJECT, "UnitySim", "Assets", "Resources", "TrackProps")
 RENDER_DIR = os.path.join(PROJECT, "Blender", "renders")
+
+# Active target. Every helper reads these globals at call time, so switching
+# families is one call rather than a parameter threaded through the whole rig.
+BLEND_PATH = PARTS_BLEND
+FBX_DIR = PARTS_FBX_DIR
+
+
+def use_props():
+    """Point the rig at props.blend / Resources/TrackProps."""
+    global BLEND_PATH, FBX_DIR
+    BLEND_PATH, FBX_DIR = PROPS_BLEND, PROPS_FBX_DIR
+    return {"blend": BLEND_PATH, "fbx_dir": FBX_DIR}
+
+
+def use_parts():
+    """Point the rig back at parts.blend / Resources/PartModels."""
+    global BLEND_PATH, FBX_DIR
+    BLEND_PATH, FBX_DIR = PARTS_BLEND, PARTS_FBX_DIR
+    return {"blend": BLEND_PATH, "fbx_dir": FBX_DIR}
 
 # ---------------------------------------------------------------------------
 # scene / object utilities
 # ---------------------------------------------------------------------------
 
 def ensure_file():
-    """Open parts.blend if this session isn't already in it."""
-    if os.path.normcase(bpy.data.filepath) != os.path.normcase(BLEND_PATH):
+    """Open the active .blend if this session isn't already in it.
+
+    Creates it from an empty scene when it doesn't exist yet, so a new asset
+    family can be started without hand-making the file.
+    """
+    if os.path.normcase(bpy.data.filepath) == os.path.normcase(BLEND_PATH):
+        return bpy.data.filepath
+    if os.path.exists(BLEND_PATH):
         bpy.ops.wm.open_mainfile(filepath=BLEND_PATH)
+    else:
+        bpy.ops.wm.read_homefile(use_empty=True)
+        os.makedirs(os.path.dirname(BLEND_PATH), exist_ok=True)
+        bpy.ops.wm.save_mainfile(filepath=BLEND_PATH)
     return bpy.data.filepath
 
 

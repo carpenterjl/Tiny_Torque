@@ -30,6 +30,27 @@ namespace AIHWSim.Track
         private bool _counting;
         private float _goTimer;
 
+        /// <summary>Arcade session: the arcade HUD owns the live board, and the
+        /// results table gains a points column.</summary>
+        public bool arcade;
+
+        /// <summary>
+        /// Once the FIRST car finishes, show results after this long whether or not
+        /// the rest have. 0 = classic behaviour (wait for everyone), which is what
+        /// every non-arcade race keeps.
+        ///
+        /// This exists because "everyone must finish" is a real hang in arcade: a
+        /// bot that keeps getting spun out — its own stuck recovery takes ~4 s a go
+        /// — can hold the results screen hostage indefinitely.
+        /// </summary>
+        public float resultsGraceSeconds;
+        private float _graceUntil;
+        private bool _graceRunning;
+
+        /// <summary>Raised when a car crosses the line for the final time, with its
+        /// 1-based place. The arcade layer awards points from it.</summary>
+        public event System.Action<PlayerRig, int> PlayerFinished;
+
         private sealed class Entry
         {
             public PlayerRig rig;
@@ -106,6 +127,14 @@ namespace AIHWSim.Track
             }
             if (_goTimer > 0f) _goTimer -= Time.deltaTime;
 
+            // Leader's grace expired: everyone still out there is a DNF.
+            if (_graceRunning && !_showResults && Time.time >= _graceUntil)
+            {
+                _graceRunning = false;
+                foreach (var e in _entries) if (!e.finished) e.place = 0;
+                _showResults = true;
+            }
+
             if (!rubberBand || bots == null || bots.Count == 0 || timer == null) return;
 
             // Reference progress = the human's (first non-bot entry).
@@ -146,6 +175,8 @@ namespace AIHWSim.Track
             _nextPlace = 1;
             _showResults = false;
             _dismissed = false;
+            _graceRunning = false;
+            AIHWSim.Arcade.ArcadeDirector.Instance?.ResetArcade();
         }
 
         private void OnLap(CarVehicle car, LapTracker t)
@@ -157,7 +188,13 @@ namespace AIHWSim.Track
             {
                 e.finished = true;
                 e.place = _nextPlace++;
+                PlayerFinished?.Invoke(e.rig, e.place);
                 if (AllFinished()) _showResults = true;
+                else if (resultsGraceSeconds > 0f && !_graceRunning)
+                {
+                    _graceRunning = true;
+                    _graceUntil = Time.time + resultsGraceSeconds;
+                }
             }
         }
 
@@ -181,7 +218,9 @@ namespace AIHWSim.Track
             if (_showResults && !_dismissed) { DrawResults(); return; }
             if (_counting) { DrawBig(Mathf.CeilToInt(Mathf.Max(0f, _countdown)).ToString()); return; }
             if (_goTimer > 0f) DrawBig("GO!");
-            DrawBanner();
+            // In arcade the ArcadeHud draws the live board; two banners centred at
+            // the same y would just overlap.
+            if (!arcade) DrawBanner();
         }
 
         private static void DrawBig(string s)
@@ -217,7 +256,9 @@ namespace AIHWSim.Track
             {
                 var lap = timer.GetTracker(e.rig.car);
                 string best = lap.HasBest ? Fmt(lap.BestLap) : "--:--";
-                GUILayout.Label($"P{e.place}  {e.rig.slot.name}   total {Fmt(e.totalTime)}   best {best}");
+                string place = e.place > 0 ? $"P{e.place}" : "DNF";
+                string pts = arcade && e.rig.arcade != null ? $"   {e.rig.arcade.points} pts" : "";
+                GUILayout.Label($"{place}  {e.rig.slot.name}   total {Fmt(e.totalTime)}   best {best}{pts}");
             }
 
             GUILayout.Space(8);

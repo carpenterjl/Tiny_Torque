@@ -28,7 +28,8 @@ namespace AIHWSim.Core
         {
             // Camera pixel rect is bottom-left origin; IMGUI is top-left.
             Rect px = rig.camera.pixelRect;
-            var area = new Rect(px.x + 10f, Screen.height - px.yMax + 10f, 230f, 96f);
+            bool arcade = rig.arcade != null;
+            var area = new Rect(px.x + 10f, Screen.height - px.yMax + 10f, 230f, arcade ? 118f : 96f);
 
             GUILayout.BeginArea(area, GUI.skin.box);
             GUILayout.Label(rig.slot.name, GarageSkin.Header);
@@ -52,6 +53,20 @@ namespace AIHWSim.Core
                     $"Now  {(tracker.Armed ? Fmt(tracker.CurrentLap) : "— cross the line —")}\n" +
                     $"Last {Fmt(tracker.LastLap)}   Best {(tracker.HasBest ? Fmt(tracker.BestLap) : "--:--")}",
                     GarageSkin.StatLabel);
+            }
+
+            // Arcade: the held item goes in the player's own box rather than a
+            // second overlay — the viewport translation is already right here.
+            if (arcade)
+            {
+                var a = rig.arcade;
+                string item = a.rolling
+                    ? Arcade.ArcadeConfig.DisplayName(a.rollFace) + " …"
+                    : (a.HasItem
+                        ? Arcade.ArcadeConfig.DisplayName(a.held) + (a.charges > 1 ? $" x{a.charges}" : "")
+                        : "— no item —");
+                if (a.penalized) item += "   SLOWED";
+                GUILayout.Label($"P{a.livePosition}   {item}", GarageSkin.Header);
             }
             GUILayout.EndArea();
         }

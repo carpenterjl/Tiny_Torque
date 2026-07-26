@@ -7,7 +7,8 @@ namespace AIHWSim.Net
     /// Client-side input pump: samples the local devices (merged keyboard +
     /// gamepad, countdown-gated) at 30 Hz and streams them to the host, where a
     /// <see cref="NetworkInputSource"/> feeds them into this player's simulated
-    /// car. Respawn presses are edge-latched between sends so none are dropped.
+    /// car. Respawn and use-item presses are edge-latched between sends so none
+    /// are dropped in the 33 ms between packets.
     /// </summary>
     public sealed class ClientInputSender : MonoBehaviour
     {
@@ -16,6 +17,7 @@ namespace AIHWSim.Net
         private IDriverInputSource _source;
         private float _accum;
         private bool _respawnLatch;
+        private bool _useItemLatch;
 
         private void Awake()
         {
@@ -28,6 +30,7 @@ namespace AIHWSim.Net
             if (NetSession.Instance == null) return;
 
             if (_source.RespawnPressed()) _respawnLatch = true;
+            if (_source.UseItemPressed()) _useItemLatch = true;
 
             _accum += Time.unscaledDeltaTime;
             if (_accum < Interval) return;
@@ -40,8 +43,10 @@ namespace AIHWSim.Net
                 brake = _source.Brake(),
                 handbrake = _source.Handbrake(),
                 respawnEdge = _respawnLatch,
+                useItemEdge = _useItemLatch,
             });
             _respawnLatch = false;
+            _useItemLatch = false;
         }
     }
 }
