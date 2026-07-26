@@ -37,6 +37,15 @@ namespace AIHWSim.Net
         private bool _hasOffset;
         private float _wheelSpin;     // accumulated wheel roll (rad)
         private float _curSteer, _curWheelSpeed;
+        private Audio.VehicleAudio _audio;
+
+        private void Start()
+        {
+            // Ghosts have no drivetrain to listen to — they are kinematic and
+            // never run StepPhysics — so the audio is driven from the streamed
+            // speed estimate instead. Passing a null car selects that path.
+            _audio = Audio.VehicleAudio.Attach(gameObject, null);
+        }
 
         public void Receive(byte epoch, float hostTime, in CarState s)
         {
@@ -67,6 +76,7 @@ namespace AIHWSim.Net
 
         private void Update()
         {
+            if (_audio != null) _audio.externalSpeed = SpeedEstimate;
             if (_buffer.Count == 0) return;
             float renderTime = Time.unscaledTime + _clockOffset - RenderDelay;
 

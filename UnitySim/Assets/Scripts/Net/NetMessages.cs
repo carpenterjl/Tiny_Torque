@@ -23,6 +23,8 @@ namespace AIHWSim.Net
         public const string SessionState = "aihw.session";   // H→all reliable
         public const string Input = "aihw.input";            // C→H  unreliable-seq 30 Hz
         public const string State = "aihw.state";            // H→all unreliable-seq 30 Hz
+        public const string ArcSync = "aihw.arc_sync";       // H→all unreliable-seq 15 Hz
+        public const string ArcEvt = "aihw.arc_evt";         // H→all reliable
     }
 
     // ---- JSON control payloads ------------------------------------------------
@@ -60,6 +62,12 @@ namespace AIHWSim.Net
         public int state;                 // NetSession.LanState
         public int targetLaps;
         public RosterEntry[] roster = Array.Empty<RosterEntry>();
+        // Arcade rules are the HOST's: a joiner must know them before it builds
+        // the scene, because they decide whether it constructs a mirroring
+        // ArcadeDirector at all.
+        public bool arcade;
+        public bool trackLimits;
+        public bool arcadeHandling = true;
     }
 
     [Serializable]
@@ -117,6 +125,28 @@ namespace AIHWSim.Net
         public int state;              // LanState
         public int targetLaps;
         public float countdownRemaining;
+        public bool arcade;
+        public bool trackLimits;
+        public bool arcadeHandling = true;
+    }
+
+    /// <summary>
+    /// One arcade happening, mirrored to every machine. Carries exactly the
+    /// fields of <see cref="Arcade.ArcadeEvent"/> that survive the wire, so a
+    /// client can re-raise it into its local director and the audio and feedback
+    /// layers work unchanged — they are subscribers, and they cannot tell an
+    /// event the host decided from one this machine decided.
+    /// </summary>
+    [Serializable]
+    public class ArcEvtMsg
+    {
+        public int kind;
+        public int src = -1;
+        public int dst = -1;
+        public int item;
+        public int objId;
+        public Vector3 pos;
+        public Quaternion rot = Quaternion.identity;
     }
 
     // ---- binary 30 Hz streams --------------------------------------------------
@@ -140,14 +170,55 @@ namespace AIHWSim.Net
         public bool useItemEdge;   // arcade: fire the held power-up
     }
 
+    /// <summary>Active arcade effects on one car, as a wire byte.</summary>
+    [Flags]
+    public enum ArcEffect : byte
+    {
+        None = 0,
+        Rolling = 1,
+        Boost = 2,
+        Shield = 4,
+        Spun = 8,
+        Wrecked = 16,
+        Penalized = 32,
+        Warned = 64,
+        Incoming = 128,
+    }
+
+    /// <summary>One car's arcade state (host → clients).</summary>
+    public struct ArcRacerState
+    {
+        public int slot;
+        public int held;         // ItemKind
+        public int charges;
+        public int rollFace;     // ItemKind currently displayed while the roulette spins
+        public ArcEffect effects;
+        public int position;     // 1 = leader
+        public int points;
+    }
+
+    /// <summary>One live projectile's pose (host → clients).</summary>
+    public struct ArcProjState
+    {
+        public int objId;
+        public int kind;         // 1 = missile, 2 = banana
+        public Vector3 pos;
+        public Quaternion rot;
+    }
+
     public static class NetPack
     {
+        public const int ProjMissile = 1;
+        public const int ProjBanana = 2;
+
         public static void WriteInput(FastBufferWriter w, in InputState s)
         {
             w.WriteValueSafe(s.throttle);
             w.WriteValueSafe(s.steer);
             w.WriteValueSafe(s.brake);
-            byte flags = (byte)((s.handbrake ? 1 : 0) | (s.respawnEdge ? 2 : 0));
+            byte flags = (byte)((s.handbrake ? 1 : 0) |
+                                (s.respawnEdge ? 2 : 0) |
+                                (s.useItemEdge ? 4 : 0));
             w.WriteValueSafe(flags);
         }
 
@@ -160,7 +231,62 @@ namespace AIHWSim.Net
             r.ReadValueSafe(out byte flags);
             s.handbrake = (flags & 1) != 0;
             s.respawnEdge = (flags & 2) != 0;
+            s.useItemEdge = (flags & 4) != 0;
             return s;
+        }
+
+        // ---- arcade sync ------------------------------------------------------
+        //
+        // Three blocks, all small: inventories/effects per car, projectile poses,
+        // and a bitmask of which item boxes are currently up.
+        //
+        // Projectiles are STREAMED rather than re-simulated on each client. A
+        // client could integrate the same homing maths, but it would be running
+        // it against interpolated ghost positions that are ~120 ms behind the
+        // host's, so its missile would chase a car that is not where the host
+        // says it is — and the one thing a missile must agree on across machines
+        // is who it hit. At four players this is a dozen objects at 15 Hz.
+
+        public static void WriteArcRacer(FastBufferWriter w, in ArcRacerState s)
+        {
+            w.WriteValueSafe((byte)s.slot);
+            w.WriteValueSafe((byte)s.held);
+            w.WriteValueSafe((byte)Mathf.Clamp(s.charges, 0, 255));
+            w.WriteValueSafe((byte)s.rollFace);
+            w.WriteValueSafe((byte)s.effects);
+            w.WriteValueSafe((byte)Mathf.Clamp(s.position, 0, 255));
+            w.WriteValueSafe((ushort)Mathf.Clamp(s.points, 0, 65535));
+        }
+
+        public static ArcRacerState ReadArcRacer(FastBufferReader r)
+        {
+            var s = new ArcRacerState();
+            r.ReadValueSafe(out byte slot); s.slot = slot;
+            r.ReadValueSafe(out byte held); s.held = held;
+            r.ReadValueSafe(out byte charges); s.charges = charges;
+            r.ReadValueSafe(out byte face); s.rollFace = face;
+            r.ReadValueSafe(out byte fx); s.effects = (ArcEffect)fx;
+            r.ReadValueSafe(out byte pos); s.position = pos;
+            r.ReadValueSafe(out ushort pts); s.points = pts;
+            return s;
+        }
+
+        public static void WriteArcProj(FastBufferWriter w, in ArcProjState p)
+        {
+            w.WriteValueSafe((ushort)p.objId);
+            w.WriteValueSafe((byte)p.kind);
+            w.WriteValueSafe(p.pos);
+            w.WriteValueSafe(p.rot);
+        }
+
+        public static ArcProjState ReadArcProj(FastBufferReader r)
+        {
+            var p = new ArcProjState();
+            r.ReadValueSafe(out ushort id); p.objId = id;
+            r.ReadValueSafe(out byte kind); p.kind = kind;
+            r.ReadValueSafe(out p.pos);
+            r.ReadValueSafe(out p.rot);
+            return p;
         }
 
         public static void WriteStateHeader(FastBufferWriter w, byte epoch, float hostTime, byte carCount)

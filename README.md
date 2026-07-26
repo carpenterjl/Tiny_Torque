@@ -426,6 +426,166 @@ Bots use items too, on a 2 Hz policy with a randomised reaction delay — boost 
 when pointed straight, missile only with a target in range, banana only with
 someone close behind, and never within 1.5 s of GO.
 
+### Getting hit
+
+The two weapons deliberately do different things.
+
+A **banana** spins you out: grip drops to 0.35, drive is cut so you cannot power
+through it, and a yaw torque throws the tail one way or the other at random for
+1.4 s. That torque is 1.2 N·m, which looks large against the car's ~0.03 kg·m²
+of yaw inertia and is not — inertia decides how fast a *free* body would spin,
+but the torque is actually fighting the tyres, and each one is still worth about
+0.5 N·m of resisting moment even at reduced grip. The first build used 0.10 N·m
+and the hit was imperceptible.
+
+A **missile** destroys you: an explosion, an upward impulse and a tumble, 1.5 s
+limp with no drive, and then the car is lifted back onto the racing line facing
+forward, roughly where it was hit, with 1 s of immunity so a second missile
+already in the air cannot re-kill you on arrival. Recovery uses the arc-length
+spine — `Project` to find where you were, `Sample` to get a pose — and then the
+factory's floor/ribbon-only raycast to land on the actual track, which matters on
+Neon Vortex II's bridge and Workshop's plank where the surface below is metres
+down. It is deliberately **not** a respawn to the start line: on a 100–140 m
+circuit that costs most of a lap, and one missile would end a race.
+
+A **shield** shows as a translucent bubble with three orbs circling it, and pops
+with a flash when it eats a hit. It is built on the Ignore Raycast layer, like
+every vehicle part visual, so a shielded car's own camera sensor is not blinded
+by its own effect.
+
+Every hit puts a banner and a brief colour wash on screen — SPUN OUT, WRECKED,
+SHIELD BLOCKED — and a standing **MISSILE INCOMING** warning appears the moment
+something locks onto you. That warning is not decoration: the missile is now
+genuinely dodgeable, and a dodgeable missile you cannot see coming is just an
+unfair one. In split-screen the whole overlay is drawn inside each player's own
+viewport.
+
+The missile homes at 2.2 rad/s — a 5 m turning radius against its 11 m/s — and
+then **commits**: inside 1.5 m its steering collapses, so a late swerve makes it
+miss and fly on. The first build used 3.2 rad/s, which is a 3.4 m radius, about
+as tight as the car itself; it simply followed you in, and calling it dodgeable
+was a claim the geometry did not support.
+
+### Arcade over LAN
+
+Arcade runs in LAN too, host-authoritative like everything else in a LAN session:
+tick **Arcade mode** on the Host LAN page and every joiner gets it. The host's
+rules are the session's — a client is told them in the welcome and never consults
+its own settings, so a lobby is never half arcade. Item boxes are live in free
+roam as well as in races, so there is something to do between them.
+
+The host owns every decision. It runs the whole director, and clients build the
+same director with `IsAuthority` false: they roll no roulette, grant no items,
+recover no wrecks and detonate nothing. What they get is two streams.
+
+**State**, 15 Hz and unreliable: inventories, effects, live positions, points,
+projectile poses, and a bitmask of which item boxes are up. All of it idempotent,
+so a dropped packet costs 66 ms of staleness and nothing else. Boxes are
+identified by nothing but their index, which is why the director sorts them by
+position at load — `FindObjectsByType` guarantees no ordering at all, and without
+the sort two machines could disagree about which box just went down.
+
+**Events**, reliable and exactly once: pickups, launches, hits, explosions. A
+missed bang is missing and a duplicated one is two, so these cannot ride the
+lossy stream. A client re-raises each one into its own director's event stream,
+which means the audio and HUD layers are the same subscribers doing the same
+work on both machines — they cannot tell where the decision was made.
+
+Projectiles are streamed rather than re-simulated. A client could integrate the
+same homing maths, but it would be running it against ghost positions ~120 ms
+behind the host's, so its missile would chase a car that is not where the host
+says it is — and the one thing a missile must agree on across machines is who it
+hit. At four players that is a dozen small objects.
+
+Client ghosts carry `ArcadeRacer` components exactly as host cars do, filled from
+the stream. That is what lets the item panel, the shield bubble, the hit banners
+and the incoming warning be one implementation instead of two. The one thing a
+client genuinely cannot derive is whether a missile is locked onto it — it owns
+no missiles, only their poses — so that arrives as a flag.
+
+This is **protocol v3**: a previously-always-zero input flag bit now means "use
+item", so a v2 client would connect and silently never fire anything. The exact
+version check at connection approval rejects mixed builds instead.
+
+A race also now ends 45 s after the leader crosses, with everyone still out there
+recorded DNF. One player who parks, gets stuck or disconnects badly used to hold
+the whole lobby on the track indefinitely, and arcade makes that likelier rather
+than less — a well-timed missile can cost most of a lap.
+
+### Handling: Arcade or Sim
+
+Arcade mode raises **every** car in the session, bots included, to an assist floor
+(steering, stability, traction control, ABS) and a 25 % tyre-grip baseline. The
+grip rides the existing `arcadeGripMult` channel, already folded into µ on both
+friction paths, so it costs no new physics code.
+
+Untick **Arcade handling** to race the same circuits on the raw brush-tyre model
+instead. That is what the mode shipped as, and it is genuinely hard on a keyboard
+— which is the point of making it a choice rather than a decision. Assists are
+applied as a per-channel maximum, so anything higher you set in Options survives.
+C firmware is never touched either way: `ArcadeDirector.Register` refuses firmware
+rigs outright, so a controller under validation always faces the honest physics.
+
+Arcade handling also drops the drive command to 85 %, which takes the cars from
+about 10 m/s to about 8.5. Top speed here is set purely by motor back-EMF —
+steady state is `V = Kt·ω` — so scaling the command scales top speed almost
+linearly, and it rides `arcadeDriveMult`, the choke point every motor command
+already passes through. Launch torque scales with it too; that is the price of
+costing no new physics code.
+
+Item boost keeps its full 14 m/s² punch but now fades out approaching 11 m/s. It
+is applied as a plain force on the body with no ceiling of its own, so 1.6 s of
+it used to keep accelerating the car well past anything the drivetrain could
+reach — which is what made boosting feel skittish rather than fast. Surface boost
+**pads** are maxed in separately and are deliberately not capped, so a level's
+authored pads behave exactly as they did.
+
+## Sound
+
+The game makes noise now, and — like every mesh, texture and material in the
+project — none of it is an asset. `Audio/ProceduralAudio.cs` synthesizes each
+clip at runtime from oscillators, noise and envelopes, cached on first use. A
+sound is a few numbers in a build script rather than a binary to find, license
+and keep in sync, and the repo stays diffable.
+
+Two rules do all the work for anything that loops: a tonal loop must contain a
+whole number of cycles or the wrap clicks every period, and a noise loop has no
+cycles to align so its head is cross-faded with an overlapping tail instead.
+Noise uses a fixed-seed generator, so a given clip is bit-identical every run.
+
+Every car carries motor whine pitched from its own motor speed, tyre squeal when
+it slides, and an impact thud scaled by how hard it hit. Bots included, so you
+hear the field around you; LAN ghosts too, pitched from the streamed speed
+estimate since they have no drivetrain to read. The arcade layer hangs its own
+sounds off `ArcadeDirector.Event`, which had been raised from fourteen call sites
+since the mode was built and had never had a subscriber.
+
+The tyres are a stick-slip oscillator, not a hiss. Rubber breaking away grabs,
+tears loose and grabs again at an audible rate, so the clip is a vibrato'd squeal
+tone over two sharp resonators and a low rubber growl — filtered white noise
+cannot get there however it is shaped, and the pitch drops as the slide deepens.
+
+They also stay quiet unless the car is genuinely losing grip. `TyreSlip01` is not
+"how much slip is there" — every loaded tyre slips a little, and a readout that
+rises with ordinary cornering squeals through every corner you take cleanly. It
+is the tyre model's **own** combined slip, where 1.0 is exactly the peak of the
+force curve, and it reads zero until you are past it. Wheels that are airborne or
+barely moving are excluded, because neither can scrub.
+
+**Master volume**, **Sound effects** and **Engine + tyres** are separate sliders
+in Options and in the pause menu, where they now take effect immediately.
+
+The garage and the main menu stay silent on purpose. Audio attaches per rig in
+`TrackBootstrap`, not in `VehicleFactory`, so a humming garage and a revving
+menu are a deliberate one-line opt-in rather than an accident. Note also that
+Unity permits exactly one `AudioListener`, and split-screen gives it to P1 — so
+in split-screen you hear the world from player one's ear.
+
+None of this can touch the simulation: the audio components only ever read.
+`CarVehicle.TyreSlip01`, the one property added for tyre noise, is assigned at
+the end of a physics step and never read back by any physics expression. The
+Opus mission's headless result is byte-for-byte identical before and after.
+
 ## Track props (arcade mode)
 
 The same pipeline builds the **track** props, in `Blender/props.blend` +

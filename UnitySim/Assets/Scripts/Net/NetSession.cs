@@ -22,7 +22,11 @@ namespace AIHWSim.Net
     /// </summary>
     public sealed class NetSession : MonoBehaviour
     {
-        public const int ProtocolVersion = 2;   // v2: RC-scale physics + assist prefs
+        // v3: arcade over LAN — a previously-always-zero input flag bit now means
+        // "use item", and three new messages carry the arcade layer. The exact
+        // equality check in approval rejects mixed builds cleanly, which matters
+        // here because a v2 client would silently never fire anything.
+        public const int ProtocolVersion = 3;
         public const int MaxPlayers = 4;
         public const ushort DefaultPort = 7777;
 
@@ -55,6 +59,14 @@ namespace AIHWSim.Net
             public int place;          // 0 = not finished
             public float totalTime;
             public bool finished;
+
+            // Arcade columns. Zero/None in a non-arcade session, so the HUD can
+            // read one model either way rather than branching on the mode.
+            public int points;
+            public int arcPos;         // live arcade position (1 = leader, 0 = unknown)
+            public int held;           // ItemKind
+            public int charges;
+            public ArcEffect effects;
         }
 
         public bool IsHost { get; private set; }
@@ -66,6 +78,19 @@ namespace AIHWSim.Net
 
         public readonly List<NetPlayer> Roster = new List<NetPlayer>();
         public readonly LapStanding[] Standings = NewStandings();
+
+        // ---- arcade rules (the host's; clients receive them) ------------------
+        public bool Arcade { get; private set; }
+        public bool TrackLimits { get; private set; }
+        public bool ArcadeHandling { get; private set; } = true;
+
+        /// <summary>Latest arcade sync from the host (clients only). Reused
+        /// buffers — the consumer reads them inside the event.</summary>
+        public readonly List<ArcRacerState> ArcRacers = new List<ArcRacerState>();
+        public readonly List<ArcProjState> ArcProjectiles = new List<ArcProjState>();
+        public readonly List<byte> ArcBoxMask = new List<byte>();
+        public event Action ArcSyncReceived;
+        public event Action<ArcEvtMsg> ArcEventReceived;
 
         // Scene-layer hooks (TrackBootstrap / views subscribe).
         public event Action<NetPlayer> PlayerJoined;    // host: build a rig
@@ -137,6 +162,12 @@ namespace AIHWSim.Net
             _nm.NetworkConfig.ConnectionData = ApprovalPayload();
             if (!_nm.StartHost()) { Debug.LogError("[NetSession] StartHost failed"); return false; }
             RegisterHandlers();
+
+            // The host's arcade rules become the session's; joiners are told them
+            // in the welcome and never consult their own settings for it.
+            Arcade = SessionConfig.Arcade;
+            TrackLimits = SessionConfig.TrackLimits;
+            ArcadeHandling = SessionConfig.ArcadeHandling;
 
             Roster.Add(new NetPlayer
             {
@@ -294,6 +325,83 @@ namespace AIHWSim.Net
             cm.RegisterNamedMessageHandler(NetMsg.RaceStart, OnRaceStart);
             cm.RegisterNamedMessageHandler(NetMsg.RaceEnd, OnRaceEnd);
             cm.RegisterNamedMessageHandler(NetMsg.SessionState, OnSessionState);
+            cm.RegisterNamedMessageHandler(NetMsg.ArcSync, OnArcSync);
+            cm.RegisterNamedMessageHandler(NetMsg.ArcEvt, OnArcEvt);
+        }
+
+        // ---- arcade sync -------------------------------------------------------
+
+        /// <summary>Host: publish the whole arcade picture. Racer inventories and
+        /// effects go straight into Standings (one model for every HUD on every
+        /// machine); projectiles and item boxes are handed to the caller's
+        /// consumer through <see cref="ArcSyncReceived"/> on the client side.</summary>
+        public void HostBroadcastArcSync(List<ArcRacerState> racers,
+            List<ArcProjState> projectiles, List<byte> boxMask)
+        {
+            if (!IsHost || _nm == null || !_nm.IsListening) return;
+
+            foreach (var r in racers) ApplyArcRacer(r);
+
+            int size = 8 + racers.Count * 12 + projectiles.Count * 36 + boxMask.Count;
+            using var w = new FastBufferWriter(size, Unity.Collections.Allocator.Temp);
+            w.WriteValueSafe((byte)racers.Count);
+            foreach (var r in racers) NetPack.WriteArcRacer(w, r);
+            w.WriteValueSafe((byte)Mathf.Min(255, projectiles.Count));
+            for (int i = 0; i < projectiles.Count && i < 255; i++)
+                NetPack.WriteArcProj(w, projectiles[i]);
+            w.WriteValueSafe((byte)Mathf.Min(255, boxMask.Count));
+            for (int i = 0; i < boxMask.Count && i < 255; i++) w.WriteValueSafe(boxMask[i]);
+
+            _nm.CustomMessagingManager.SendNamedMessageToAll(NetMsg.ArcSync, w,
+                NetworkDelivery.UnreliableSequenced);
+        }
+
+        private void OnArcSync(ulong sender, FastBufferReader r)
+        {
+            if (IsHost) return;
+            ArcRacers.Clear();
+            r.ReadValueSafe(out byte racerCount);
+            for (int i = 0; i < racerCount; i++)
+            {
+                var a = NetPack.ReadArcRacer(r);
+                ArcRacers.Add(a);
+                ApplyArcRacer(a);
+            }
+
+            ArcProjectiles.Clear();
+            r.ReadValueSafe(out byte projCount);
+            for (int i = 0; i < projCount; i++) ArcProjectiles.Add(NetPack.ReadArcProj(r));
+
+            ArcBoxMask.Clear();
+            r.ReadValueSafe(out byte maskLen);
+            for (int i = 0; i < maskLen; i++) { r.ReadValueSafe(out byte b); ArcBoxMask.Add(b); }
+
+            ArcSyncReceived?.Invoke();
+            StandingsChanged?.Invoke();
+        }
+
+        private void ApplyArcRacer(in ArcRacerState a)
+        {
+            if (a.slot < 0 || a.slot >= MaxPlayers) return;
+            var s = Standings[a.slot];
+            s.points = a.points;
+            s.arcPos = a.position;
+            s.held = a.held;
+            s.charges = a.charges;
+            s.effects = a.effects;
+        }
+
+        /// <summary>Host: mirror one arcade event to everyone.</summary>
+        public void HostBroadcastArcEvent(ArcEvtMsg m)
+        {
+            if (!IsHost || _nm == null || !_nm.IsListening) return;
+            BroadcastJson(NetMsg.ArcEvt, m);
+        }
+
+        private void OnArcEvt(ulong sender, FastBufferReader reader)
+        {
+            if (IsHost) return;
+            ArcEventReceived?.Invoke(ReadJson<ArcEvtMsg>(reader));
         }
 
         // JSON send helpers.
@@ -360,6 +468,9 @@ namespace AIHWSim.Net
                 state = (int)State,
                 targetLaps = TargetLaps,
                 roster = BuildRosterEntries(),
+                arcade = Arcade,
+                trackLimits = TrackLimits,
+                arcadeHandling = ArcadeHandling,
             }, NetworkDelivery.ReliableFragmentedSequenced);
             BroadcastRoster();
             Debug.Log($"[NetSession] {p.name} joined (slot {slot})");
@@ -373,6 +484,7 @@ namespace AIHWSim.Net
             State = (LanState)msg.state;
             TargetLaps = msg.targetLaps;
             ApplyRoster(msg.roster);
+            ApplyArcadeRules(msg.arcade, msg.trackLimits, msg.arcadeHandling);
 
             GameFlow.ActiveTrack = string.IsNullOrEmpty(msg.trackJson)
                 ? null : JsonUtility.FromJson<TrackDesign>(msg.trackJson);
@@ -516,6 +628,11 @@ namespace AIHWSim.Net
             if (State == LanState.Countdown && Time.unscaledTime >= CountdownEndTime)
                 SetState(LanState.Racing, broadcast: IsHost);
 
+            // Leader home and the stragglers out of time: call it, they're DNF.
+            if (IsHost && State == LanState.Racing && _firstFinishAt >= 0f &&
+                Time.unscaledTime - _firstFinishAt > DnfGraceSeconds)
+                HostEndRace();
+
             if (!IsHost || _nm == null || !_nm.IsListening || _hostRigs == null) return;
             _stateAccum += Time.unscaledDeltaTime;
             if (_stateAccum < StreamInterval) return;
@@ -610,6 +727,9 @@ namespace AIHWSim.Net
                     state = (int)state,
                     targetLaps = TargetLaps,
                     countdownRemaining = Mathf.Max(0f, CountdownEndTime - Time.unscaledTime),
+                    arcade = Arcade,
+                    trackLimits = TrackLimits,
+                    arcadeHandling = ArcadeHandling,
                 });
         }
 
@@ -619,8 +739,22 @@ namespace AIHWSim.Net
             var m = ReadJson<SessionStateMsg>(reader);
             State = (LanState)m.state;
             TargetLaps = m.targetLaps;
+            ApplyArcadeRules(m.arcade, m.trackLimits, m.arcadeHandling);
             if (State == LanState.Countdown)
                 CountdownEndTime = Time.unscaledTime + m.countdownRemaining;
+        }
+
+        /// <summary>Client: adopt the host's arcade rules. Mirrored into
+        /// SessionConfig as well, because a map change reloads the scene and
+        /// TrackBootstrap composes from there.</summary>
+        private void ApplyArcadeRules(bool arcade, bool limits, bool handling)
+        {
+            Arcade = arcade;
+            TrackLimits = limits;
+            ArcadeHandling = handling;
+            SessionConfig.Arcade = arcade;
+            SessionConfig.TrackLimits = limits;
+            SessionConfig.ArcadeHandling = handling;
         }
 
         // ---- map / race control (full flows wired in the session-control step) ---
@@ -667,6 +801,14 @@ namespace AIHWSim.Net
         private readonly List<int> _raceEntries = new List<int>();
         private int _nextPlace = 1;
 
+        /// <summary>When the leader crossed. Everyone still out there has this long
+        /// to finish before the race is called and they are recorded DNF —
+        /// otherwise one player who parks, disconnects badly or gets stuck holds
+        /// the whole lobby on the track forever. Arcade makes that likelier, not
+        /// less: a well-timed missile can cost most of a lap.</summary>
+        private float _firstFinishAt = -1f;
+        private const float DnfGraceSeconds = 45f;
+
         /// <summary>Host: teleport everyone to the grid and start the countdown.</summary>
         public void HostStartRace(int laps)
         {
@@ -678,6 +820,7 @@ namespace AIHWSim.Net
             _raceEntries.Clear();
             foreach (var p in Roster) _raceEntries.Add(p.slot);
             _nextPlace = 1;
+            _firstFinishAt = -1f;
             for (int i = 0; i < Standings.Length; i++) Standings[i] = new LapStanding();
             StandingsChanged?.Invoke();
 
@@ -703,6 +846,7 @@ namespace AIHWSim.Net
                 {
                     s.finished = true;
                     s.place = _nextPlace++;
+                    if (_firstFinishAt < 0f) _firstFinishAt = Time.unscaledTime;
                     if (AllEntriesFinished()) HostEndRace();
                 }
             }

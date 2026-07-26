@@ -23,6 +23,7 @@ bursty:
 |---|---|---|---|
 | Client → host | throttle/steer/brake + flags (13 bytes) | 30 Hz | ~0.4 KB/s |
 | Host → client | pose/velocity/steer/wheel-speed for every car (~200 bytes at 4 cars) | 30 Hz | ~6 KB/s |
+| Host → client | arcade state: inventories, effects, projectile poses, item boxes | 15 Hz | ~5 KB/s (arcade only) |
 
 That is roughly a thousandth of what streaming video needs, so bandwidth is never the
 constraint. What actually affects feel is **latency and jitter**, and clients already
@@ -111,6 +112,10 @@ Custom cars don't need sharing — a joiner's car design is sent to the host aut
 2. **Host:** Main Menu ▸ Multiplayer ▸ **Host LAN Game** ▸ set your name, pick your car
    and the map ▸ **Start Hosting ▶**. Allow the firewall prompt on **Private networks**.
    You play too — it's a listen server, not a dedicated one.
+   - Tick **Arcade mode** here if you want power-ups and weapons. It is the host's
+     choice for the whole lobby: joiners are told the rules when they connect and
+     never consult their own settings, so nobody can be half in. Item boxes are
+     live in free roam too, not only during races.
 3. **Everyone else:** Main Menu ▸ Multiplayer ▸ **Join LAN Game** ▸ set name and car ▸
    click the host in the **Games on your network** list.
    - Nothing listed? Run `ipconfig` on the host, read its IPv4 address, and type that in

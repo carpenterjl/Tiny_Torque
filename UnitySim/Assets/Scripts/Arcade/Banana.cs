@@ -45,6 +45,8 @@ namespace AIHWSim.Arcade
 
             var car = other.GetComponentInParent<CarVehicle>();
             if (car == null) return;
+            if (ArcadeConfig.LogHits)
+                Debug.Log($"[arcade] banana {objId} touched by {car.name} at t={ArcadeDirector.Clock:0.00}");
             if (car == ownerCar && ArcadeDirector.Clock - droppedAt < ArcadeConfig.BananaOwnerGrace)
                 return;
 

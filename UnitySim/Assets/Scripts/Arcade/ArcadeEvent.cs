@@ -25,6 +25,8 @@ namespace AIHWSim.Arcade
         OffTrackWarning = 10,
         OffTrackPenalty = 11,
         Finished = 12,
+        Wrecked = 13,       // missile hit: destroyed, about to be recovered
+        Recovered = 14,     // lifted back onto the racing line
     }
 
     public struct ArcadeEvent

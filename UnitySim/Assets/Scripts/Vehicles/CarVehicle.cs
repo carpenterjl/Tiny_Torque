@@ -111,6 +111,13 @@ namespace AIHWSim.Vehicles
         /// <summary>Yaw torque (N·m) applied while spun out by a hit.</summary>
         public float arcadeYawTorque;
 
+        /// <summary>Drive-torque scale while an arcade effect suppresses the
+        /// motors (spun out, wrecked). MUST default to 1. Deliberately separate
+        /// from <see cref="Frozen"/>, which also slams the brakes on and is owned
+        /// by the race countdown — a wrecked car should coast and tumble, not
+        /// stop dead.</summary>
+        public float arcadeDriveMult = 1f;
+
         [Header("Composite mass (factory-set)")]
         public bool useCompositeMass = false;
         public float compositeMass = 1.6f;
@@ -185,6 +192,9 @@ namespace AIHWSim.Vehicles
             public float driveTorque;    // this step's motor torque (N·m, set by MotorPart)
             public float spinInertia;    // J: bare wheel + reflected drivetrain (kg·m²)
             public float slipRatio;      // last computed κ (TC/ABS + telemetry)
+            public float slipNorm;       // combined slip / peak slip; >1 = sliding (readout only)
+            public float patchSpeed;     // contact-patch ground speed (m/s, readout only)
+            public bool grounded;        // last step's contact state (readout only)
             public float lastFy;         // last lateral tyre force (N) — servo load
         }
 
@@ -313,6 +323,17 @@ namespace AIHWSim.Vehicles
         public void ArcadeImpulse(Vector3 impulse, Vector3 worldPoint)
         {
             if (_body != null) _body.AddForceAtPosition(impulse, worldPoint, ForceMode.Impulse);
+        }
+
+        /// <summary>
+        /// Apply an angular impulse (the missile-hit tumble). Separate from the
+        /// sustained <see cref="arcadeYawTorque"/>: that one is a torque held for
+        /// the length of a spin-out, this is a single kick that lets the car
+        /// tumble ballistically and land wherever it lands.
+        /// </summary>
+        public void ArcadeTorqueImpulse(Vector3 torqueImpulse)
+        {
+            if (_body != null) _body.AddTorque(torqueImpulse, ForceMode.Impulse);
         }
 
         private void Awake()
@@ -867,7 +888,11 @@ namespace AIHWSim.Vehicles
                 w.spinAngle = 0f;
                 w.driveTorque = 0f;
                 w.slipRatio = 0f;
+                w.slipNorm = 0f;
+                w.patchSpeed = 0f;
+                w.grounded = false;
             }
+            TyreSlip01 = 0f;
             imu.Reset();
             VehicleReset?.Invoke();
         }
@@ -940,6 +965,7 @@ namespace AIHWSim.Vehicles
                 if (m == null) continue;
                 int idx = m.ActuatorIndex;
                 float volts = Frozen ? 0f : ((idx >= 0 && idx < _cmd.Length) ? _cmd[idx] : 0f);
+                volts *= arcadeDriveMult;                      // 1 outside arcade
                 if (batteryNominalV > 0f)
                     volts = Mathf.Clamp(volts, -vTerm, vTerm); // sagging rail caps the command
                 m.SetVoltage(volts);
@@ -1148,6 +1174,21 @@ namespace AIHWSim.Vehicles
                     float vy = Vector3.Dot(vContact, rightW);
 
                     w.slipRatio = TyreModel.SlipRatio(vx, w.omega, r);
+                    // Readouts only — nothing downstream reads these back, they
+                    // exist so TyreSlip01 can be aggregated after the loop.
+                    // slipNorm is the SAME combined slip the tyre model itself
+                    // uses, so 1 is exactly the peak of the force curve: below it
+                    // the tyre is gripping, above it it is sliding. Recomputing a
+                    // separate proxy here would just be a second opinion that
+                    // disagrees with the physics.
+                    {
+                        float den = Mathf.Max(Mathf.Abs(vx), TyreModel.VLow);
+                        float sx = ((w.omega * r - vx) / den) / TyreModel.KappaPeak;
+                        float sy = ((-vy) / den) / TyreModel.AlphaPeak;
+                        w.slipNorm = Mathf.Sqrt(sx * sx + sy * sy);
+                        w.patchSpeed = Mathf.Sqrt(vx * vx + vy * vy);
+                    }
+                    w.grounded = grounded;
 
                     // Traction control cuts drive on wheelspin; ABS releases the
                     // foot brake toward lockup (deliberate handbrake locks exempt).
@@ -1253,6 +1294,49 @@ namespace AIHWSim.Vehicles
             foreach (var pair in _antiRollPairs) ApplyAntiRoll(pair.a.col, pair.b.col);
 
             foreach (var w in _wheels) UpdateVisual(w);
+
+            UpdateSlipReadout();
+        }
+
+        /// <summary>
+        /// How far past the grip limit the tyres are, 0..1, worst wheel wins.
+        ///
+        /// Deliberately NOT "how much slip is there" — every tyre carrying load
+        /// slips a little, and a readout that rises with ordinary cornering makes
+        /// a car that squeals through every corner it takes cleanly. Zero until
+        /// the combined slip passes the peak of the force curve (where the tyre
+        /// genuinely lets go), full in a deep slide.
+        ///
+        /// A pure readout for the audio layer: it is assigned at the end of a
+        /// physics step and never read back by any physics expression, so it
+        /// cannot influence the simulation. Airborne wheels are excluded — a
+        /// free-spinning wheel has enormous slip and would otherwise screech in
+        /// mid-air — and so are wheels that are barely moving, because a stopped
+        /// tyre cannot scrub whatever the ratio says.
+        ///
+        /// Zero on the legacy PhysX-friction path, which computes no slip of its
+        /// own; that path is a dev A/B switch, and losing tyre noise under it is
+        /// the right trade against duplicating the calculation.
+        /// </summary>
+        public float TyreSlip01 { get; private set; }
+
+        /// <summary>Slip past the peak before anything is audible, and the span
+        /// over which it reaches full. 1.0 is the peak itself; a little margin
+        /// keeps a car balanced right on the limit from buzzing.</summary>
+        private const float SlideOnset = 1.15f;
+        private const float SlideSpan = 1.35f;
+        /// <summary>Contact-patch speed below which a wheel is treated as still.</summary>
+        private const float SlideMinPatchSpeed = 0.7f;
+
+        private void UpdateSlipReadout()
+        {
+            float worst = 0f;
+            foreach (var w in _wheels)
+            {
+                if (!w.grounded || w.patchSpeed < SlideMinPatchSpeed) continue;
+                worst = Mathf.Max(worst, (w.slipNorm - SlideOnset) / SlideSpan);
+            }
+            TyreSlip01 = Mathf.Clamp01(worst);
         }
 
         /// <summary>

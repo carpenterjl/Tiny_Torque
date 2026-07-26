@@ -19,16 +19,34 @@ namespace AIHWSim.Arcade
         public PlayerRig localRig;
         public bool splitScreen;
 
+        /// <summary>False in LAN: LanHud draws the shared board from the network
+        /// standings (which include remote players this director only mirrors),
+        /// and two boards on one screen is one too many.</summary>
+        public bool showBoard = true;
+
         private static readonly System.Collections.Generic.List<ArcadeRacer> _order =
             new System.Collections.Generic.List<ArcadeRacer>();
+
+        // Built once rather than per OnGUI — IMGUI style allocation every frame
+        // is pure GC churn.
+        private static GUIStyle _itemStyle;
+        private static GUIStyle _limitStyle;
 
         private void OnGUI()
         {
             if (director == null) return;
             GUI.skin = GarageSkin.Skin;
 
-            DrawBoard();
-            if (!splitScreen) DrawItemPanel();
+            if (showBoard) DrawBoard();
+            if (!splitScreen)
+            {
+                DrawItemPanel();
+                // Solo owns the whole screen. In split-screen the same overlay is
+                // drawn per viewport by SplitScreenHud, which already has the
+                // rects.
+                ArcadeFeedback.Draw(new Rect(0f, 0f, Screen.width, Screen.height),
+                    localRig != null ? localRig.arcade : null, director);
+            }
         }
 
         private void DrawBoard()
@@ -68,8 +86,9 @@ namespace AIHWSim.Arcade
                                          (me.charges > 1 ? $"  ×{me.charges}" : "");
             else label = "— no item —";
 
-            var style = new GUIStyle(GarageSkin.Header) { alignment = TextAnchor.MiddleCenter, fontSize = 18 };
-            GUILayout.Label(label, style);
+            _itemStyle ??= new GUIStyle(GarageSkin.Header)
+                { alignment = TextAnchor.MiddleCenter, fontSize = 18 };
+            GUILayout.Label(label, _itemStyle);
 
             string hint = me.HasItem ? "Shift / X  to use" : "drive through an item box";
             if (ArcadeDirector.Clock < me.shieldUntil) hint = "SHIELD UP · " + hint;
@@ -88,13 +107,14 @@ namespace AIHWSim.Arcade
             else if (me.warned) msg = "RETURN TO TRACK";
             if (msg == null) return;
 
-            var style = new GUIStyle(GarageSkin.Header)
+            _limitStyle ??= new GUIStyle(GarageSkin.Header)
             {
                 alignment = TextAnchor.MiddleCenter,
                 fontSize = 22,
             };
-            style.normal.textColor = me.penalized ? new Color(1f, 0.35f, 0.25f) : GarageSkin.Accent;
-            GUI.Label(new Rect(0f, Screen.height * 0.62f, Screen.width, 40f), msg, style);
+            _limitStyle.normal.textColor =
+                me.penalized ? new Color(1f, 0.35f, 0.25f) : GarageSkin.Accent;
+            GUI.Label(new Rect(0f, Screen.height * 0.62f, Screen.width, 40f), msg, _limitStyle);
         }
     }
 }

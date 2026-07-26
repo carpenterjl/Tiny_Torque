@@ -24,23 +24,97 @@ namespace AIHWSim.Arcade
         public const float BoostAccel = 14f;         // m/s² (a boost pad is 9)
         public const float BoostSeconds = 1.6f;
         public const int TripleBoostCharges = 3;
+        /// <summary>Speed (m/s) the item boost stops pushing towards.
+        ///
+        /// The boost force is a plain <c>AddForce</c> on the body with no speed
+        /// ceiling, no grounded check and no traction limit, so 1.6 s of it kept
+        /// accelerating the car well past the ~10 m/s the drivetrain can reach —
+        /// which is what made boosting read as skittish rather than fast. The
+        /// punch is unchanged; only the runaway is removed.
+        ///
+        /// Applied to <c>arcadeBoostAccel</c> in ArcadeDirector, deliberately not
+        /// in CarVehicle: surface boost PADS are maxed in separately from
+        /// <c>surf.boostAccel</c>, so they keep their authored 9 m/s² untouched.
+        /// </summary>
+        public const float BoostTopSpeed = 11f;
+        /// <summary>Speed band over which the boost fades out below the cap, so
+        /// it tapers instead of switching off.</summary>
+        public const float BoostFadeBand = 1.5f;
 
         // ---- shield ----
         public const float ShieldSeconds = 8f;
 
-        // ---- being hit ----
+        // ---- being hit: a banana spins you, a missile wrecks you ----
         public const float SpinGripMult = 0.35f;
-        public const float SpinSeconds = 1.2f;
-        /// <summary>Yaw torque while spun out (N·m). The car's yaw inertia is only
-        /// ~0.03 kg·m², so this is small on purpose — the grip drop does most of
-        /// the work and the tyres still fight back. Tuned by feel.</summary>
-        public const float SpinTorque = 0.10f;
-        public const float HitImpulseFwd = 0.6f;     // kg·m/s along the missile's heading
+        public const float SpinSeconds = 1.4f;
+        /// <summary>Yaw torque while spun out (N·m).
+        ///
+        /// The first pass used 0.10 here on the reasoning that the car's yaw
+        /// inertia is only ~0.03 kg·m². That was the wrong comparison: inertia
+        /// sets how fast the torque WOULD spin a free body, but the tyres are
+        /// what it actually fights, and each one generates roughly 0.5 N·m of
+        /// resisting moment about the CoM even at SpinGripMult. 0.10 N·m lost to
+        /// them outright and the hit was invisible. This has to beat the tyres,
+        /// not the inertia.</summary>
+        public const float SpinTorque = 1.2f;
+        /// <summary>Drive is cut while spinning, so a hit costs momentum and you
+        /// cannot simply power out of it.</summary>
+        public const float SpinDriveMult = 0f;
+        public const float HitImpulseFwd = 0.6f;     // kg·m/s along the hit's heading
         public const float HitImpulseUp = 0.9f;
+
+        // ---- missile wreck + recovery ----
+        /// <summary>Limp time after a missile hit, before the car is lifted back
+        /// onto the racing line.</summary>
+        public const float WreckSeconds = 1.5f;
+        public const float WreckImpulseUp = 3.2f;    // enough to visibly leave the ground
+        public const float WreckImpulseFwd = 1.4f;
+        public const float WreckTorque = 3.0f;       // tumble, applied as one impulse
+        /// <summary>Metres further along the spine to place the recovered car, so
+        /// it never lands exactly on top of whatever it was hit next to.</summary>
+        public const float WreckRecoverAhead = 1.0f;
+        /// <summary>Immunity after recovering. Without it a second missile already
+        /// in flight re-kills you the instant you reappear.</summary>
+        public const float InvulnSeconds = 1.0f;
+        public const float ExplosionSeconds = 0.8f;
+
+        // ---- on-screen hit feedback ----
+        /// <summary>Banner dwell after a spin-out or a blocked hit. Slightly
+        /// longer than SpinSeconds so the text is still up as control returns and
+        /// the player can connect the two.</summary>
+        public const float HitBannerSeconds = 1.6f;
+        /// <summary>Banner dwell after a wreck — long enough to survive the limp
+        /// AND the recovery teleport, which is the confusing part without it.</summary>
+        public const float WreckBannerSeconds = 2.6f;
+        /// <summary>Colour wash on the moment of impact. Short: it is a punch, not
+        /// a tint, and it must never obscure the corner you are about to take.</summary>
+        public const float HitFlashSeconds = 0.35f;
+        public static readonly Color SpinFeedbackColor = new Color(1f, 0.72f, 0.28f);
+        public static readonly Color WreckFeedbackColor = new Color(1f, 0.34f, 0.22f);
+        public static readonly Color ShieldFeedbackColor = new Color(0.40f, 0.85f, 1f);
+
+        /// <summary>Log every banana/missile contact. A diagnostic, not a feature:
+        /// the first build's banana was reported as doing nothing, and this
+        /// separates "the trigger never fired" from "the effect was too weak to
+        /// feel" without guessing.</summary>
+        public static bool LogHits = false;
 
         // ---- missile ----
         public const float MissileSpeed = 11f;       // ≈1.4× a Hard bot: catches, but dodgeable
-        public const float MissileTurnRate = 3.2f;   // rad/s
+        /// <summary>Homing rate at range (rad/s).
+        ///
+        /// Was 3.2, which at 11 m/s is a 3.4 m turning radius — about as tight as
+        /// the car itself, so the missile simply followed you in and "dodgeable"
+        /// was a claim the geometry did not support. 2.2 rad/s is a 5.0 m radius:
+        /// still corners hard enough to chase down a straight, no longer glued to
+        /// the target's own line.</summary>
+        public const float MissileTurnRate = 2.2f;
+        /// <summary>Inside this range the missile has committed and steers only
+        /// weakly, so a late swerve genuinely makes it miss. Without a commit
+        /// window any turn rate high enough to be threatening is also high enough
+        /// to track a last-moment dodge.</summary>
+        public const float MissileCommitRange = 1.5f;
+        public const float MissileCommitTurnRate = 0.6f;
         public const float MissileLifetime = 6f;
         public const float MissileArmSeconds = 0.15f;
         public const float MissileMuzzleOffset = 0.45f;  // clears the 0.42 m chassis
@@ -50,11 +124,20 @@ namespace AIHWSim.Arcade
         public const float MaxLockDistance = 25f;
 
         // ---- banana ----
-        public const float BananaRadius = 0.07f;
+        /// <summary>Trigger radius. Sized against the car, not the peel: the root
+        /// BoxCollider spans roughly ground+0.03 to ground+0.13, so the old 0.07
+        /// left only ~6 cm of vertical overlap to catch a car crossing it at
+        /// 10 m/s. The visual mesh is unchanged — gameplay volumes are authored
+        /// in code precisely so they don't depend on the art.</summary>
+        public const float BananaRadius = 0.13f;
+        public const float BananaHeight = 0.05f;     // centre above the surface
         public const float BananaLifetime = 25f;
         public const float BananaOwnerGrace = 0.4f;  // then it can hit its owner too
         public const int MaxBananasPerPlayer = 2;
-        public const float BananaDropOffset = 0.30f; // behind the car
+        /// <summary>Drop distance behind the car centre. The chassis half-length
+        /// is 0.21 m, so 0.30 cleared the rear bumper by 2 cm and a peel dropped
+        /// mid-corner could spawn already touching its own dropper.</summary>
+        public const float BananaDropOffset = 0.55f;
 
         // ---- track limits ----
         /// <summary>A surface at or below this friction multiplier is off-track.
@@ -75,6 +158,44 @@ namespace AIHWSim.Arcade
         /// own impulse limits.</summary>
         public const float PenaltyDragGain = 3f;
         public const float PenaltyCooldownSeconds = 3f;
+
+        // ---- arcade handling (SessionConfig.ArcadeHandling) ----
+        /// <summary>
+        /// The assist floor every arcade car is raised to, bots included.
+        ///
+        /// Applied as a per-channel MAX, so a player who set higher values in
+        /// Options keeps them. Bots previously got a zeroed AssistSettings with
+        /// the comment "bots race on raw physics" — correct for a sim race, but
+        /// it is why the AI was visibly spinning off on the banked circuits.
+        /// </summary>
+        public static readonly Vehicles.AssistSettings HandlingAssists =
+            new Vehicles.AssistSettings
+            {
+                steer = 0.80f, stability = 0.70f, traction = 0.90f, abs = 0.90f,
+            };
+
+        /// <summary>Tyre grip baseline in arcade. Rides the existing
+        /// <c>CarVehicle.arcadeGripMult</c> channel, which is already folded into
+        /// µ on both the brush and legacy friction paths — so this costs no new
+        /// physics code and no new friction-write site.</summary>
+        public const float HandlingGripBonus = 1.25f;
+
+        /// <summary>
+        /// Drive-command scale in arcade — the "slow the cars down" knob.
+        ///
+        /// Rides <c>CarVehicle.arcadeDriveMult</c>, the single choke point every
+        /// motor command already passes through (manual, bot, autonomous and LAN
+        /// host alike). Top speed is set purely by motor back-EMF — steady state
+        /// is <c>V = Kt·ω_motor</c> — so scaling the command scales top speed
+        /// essentially linearly: 0.85 turns ~10 m/s into ~8.5 m/s. Launch torque
+        /// scales with it, which is the accepted trade for costing no new
+        /// physics code.
+        ///
+        /// Reaches the car through <see cref="ArcadeRacer.driveBase"/> rather
+        /// than a direct write, because ApplyEffects re-asserts arcadeDriveMult
+        /// every frame and would otherwise stomp it.
+        /// </summary>
+        public const float HandlingDriveScale = 0.85f;
 
         // ---- positions / scoring ----
         public const float PositionUpdateHz = 5f;

@@ -69,6 +69,14 @@ namespace AIHWSim.Core
                 GUILayout.Label($"P{a.livePosition}   {item}", GarageSkin.Header);
             }
             GUILayout.EndArea();
+
+            // Hit banner, impact flash and incoming-missile warning, drawn inside
+            // THIS player's viewport so neither half bleeds onto the other. Same
+            // renderer the solo HUD uses, so the two can never drift apart.
+            if (arcade)
+                Arcade.ArcadeFeedback.Draw(
+                    new Rect(px.x, Screen.height - px.yMax, px.width, px.height),
+                    rig.arcade, Arcade.ArcadeDirector.Instance);
         }
 
         private static string Fmt(float t) =>

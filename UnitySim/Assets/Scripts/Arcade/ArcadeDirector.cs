@@ -54,6 +54,15 @@ namespace AIHWSim.Arcade
         private readonly List<Missile> _missiles = new List<Missile>();
         private readonly List<ArcadeRacer> _sortBuf = new List<ArcadeRacer>();
 
+        /// <summary>Clearance above the surface for a recovered car. The wheels sit
+        /// 0.078 m below the body origin, so anything less drops it into the
+        /// ribbon and lets the depenetration solver fling it.</summary>
+        private const float RecoverRideHeight = 0.10f;
+
+        /// <summary>Shield orb orbit rate. Fast enough to read as active at a
+        /// glance from another car, slow enough not to strobe.</summary>
+        private const float ShieldOrbDegPerSec = 180f;
+
         private BuiltTrack _built;                  // for surface drops (null on the oval)
         private System.Random _rng;
         private float _posAccum, _botAccum, _limitAccum;
@@ -61,6 +70,44 @@ namespace AIHWSim.Arcade
         private bool _boxesBuilt;
 
         public IReadOnlyList<ArcadeRacer> Racers => _racers;
+
+        // ---- LAN mirroring surface -------------------------------------------
+        // The host publisher and the client consumer live in Net/ArcadeNetLink,
+        // which is the only place that knows both namespaces. The director just
+        // exposes what it owns; it has no opinion about the network.
+
+        public IReadOnlyList<Missile> Missiles => _missiles;
+        public IReadOnlyList<Banana> Bananas => _bananas;
+        public int BoxCount => _boxes.Count;
+
+        public bool BoxActive(int i) =>
+            i >= 0 && i < _boxes.Count && _boxes[i] != null && _boxes[i].Active;
+
+        /// <summary>Client mirror of a box's up/down state. Item boxes are built
+        /// from the same track and the same racing line on every machine, so index
+        /// i is the same box everywhere and a bitmask is enough to sync them.</summary>
+        public void SetBoxActive(int i, bool active)
+        {
+            if (IsAuthority || i < 0 || i >= _boxes.Count) return;
+            var box = _boxes[i];
+            if (box == null || box.Active == active) return;
+            if (active) box.Respawn(); else box.Deplete(Clock);
+        }
+
+        public ArcadeRacer RacerForSlot(int slot)
+        {
+            for (int i = 0; i < _racers.Count; i++)
+                if (_racers[i].netSlot == slot) return _racers[i];
+            return null;
+        }
+
+        /// <summary>Client: replay a host event into the local stream, so audio
+        /// and HUD subscribers cannot tell where the decision was made.</summary>
+        public void RaiseRemote(in ArcadeEvent e)
+        {
+            if (IsAuthority) return;
+            Event?.Invoke(e);
+        }
 
         private void Awake()
         {
@@ -140,7 +187,11 @@ namespace AIHWSim.Arcade
             return null;
         }
 
-        private int SlotOf(ArcadeRacer r)
+        /// <summary>The slot an event carries for this racer: the LAN roster slot
+        /// where there is one, otherwise the local roster index. Public because
+        /// the audio layer has to answer "was that event mine?" from an
+        /// <see cref="ArcadeEvent"/>, which carries slots and not references.</summary>
+        public int SlotOf(ArcadeRacer r)
         {
             if (r == null) return -1;
             if (r.netSlot >= 0) return r.netSlot;
@@ -179,7 +230,8 @@ namespace AIHWSim.Arcade
             _boxesBuilt = true;
 
             _boxes.AddRange(FindObjectsByType<ArcadeItemBox>(FindObjectsSortMode.None));
-            if (_boxes.Count > 0 || Spine == null) return;
+            if (_boxes.Count > 0) { SortBoxes(); return; }
+            if (Spine == null) return;
 
             var root = new GameObject("ArcadeItemBoxes").transform;
             int rows = Mathf.Max(1, Mathf.RoundToInt(Spine.TotalLength / ArcadeConfig.AutoBoxSpacingMetres));
@@ -197,6 +249,28 @@ namespace AIHWSim.Arcade
                     SpawnBox(onSurface + Vector3.up * ArcadeConfig.AutoBoxHeight, root);
                 }
             }
+        }
+
+        /// <summary>
+        /// Put the boxes in a position-determined order.
+        ///
+        /// In LAN a box is identified across machines by nothing but its index in
+        /// this list, and FindObjectsByType guarantees no ordering at all — so
+        /// without this, two machines could disagree about which box just went
+        /// down. Auto-placed boxes come out in spine order anyway; this makes
+        /// authored ones safe too, at the cost of one sort at load.
+        /// </summary>
+        private void SortBoxes()
+        {
+            _boxes.Sort((a, b) =>
+            {
+                if (a == null || b == null) return 0;
+                Vector3 pa = a.transform.position, pb = b.transform.position;
+                int c = pa.x.CompareTo(pb.x);
+                if (c != 0) return c;
+                c = pa.z.CompareTo(pb.z);
+                return c != 0 ? c : pa.y.CompareTo(pb.y);
+            });
         }
 
         private void SpawnBox(Vector3 pos, Transform parent)
@@ -240,7 +314,7 @@ namespace AIHWSim.Arcade
         {
             if (!IsAuthority || box == null || !box.Active) return;
             var racer = RacerFor(car);
-            if (racer == null || racer.Busy) return;   // holding one? drive on through
+            if (racer == null || racer.Busy || racer.Wrecked) return;   // holding one? drive on through
 
             box.Deplete(Clock);
             racer.rolling = true;
@@ -254,7 +328,7 @@ namespace AIHWSim.Arcade
         {
             if (!IsAuthority) return;
             var racer = RacerFor(car);
-            if (racer == null || !racer.HasItem) return;
+            if (racer == null || !racer.HasItem || racer.Wrecked) return;
             Use(racer);
         }
 
@@ -275,7 +349,7 @@ namespace AIHWSim.Arcade
 
                 case ItemKind.Shield:
                     racer.shieldUntil = Clock + ArcadeConfig.ShieldSeconds;
-                    break;
+                    break;   // the visual is raised by ApplyEffects, one frame later
 
                 case ItemKind.Banana:
                     DropBanana(racer);
@@ -302,7 +376,8 @@ namespace AIHWSim.Arcade
         {
             var car = racer.car;
             Vector3 pos = car.transform.position - car.transform.forward * ArcadeConfig.BananaDropOffset;
-            if (DropToSurface(pos, out var onSurface)) pos = onSurface + Vector3.up * 0.02f;
+            if (DropToSurface(pos, out var onSurface))
+                pos = onSurface + Vector3.up * ArcadeConfig.BananaHeight;
 
             var go = new GameObject("Banana");
             go.transform.position = pos;
@@ -373,6 +448,7 @@ namespace AIHWSim.Arcade
             foreach (var r in _racers)
             {
                 if (r == src || r.car == null) continue;
+                if (r.Wrecked || Clock < r.invulnUntil) continue;   // don't waste it
                 int h = r.spineHint;
                 float s = Spine.Project(r.car.transform.position, ref h);
                 float gap = Spine.Gap(mine, s);
@@ -391,15 +467,22 @@ namespace AIHWSim.Arcade
             Vector3 dir = m.transform.forward;
             Vector3 at = m.transform.position;
 
+            if (victim != null && Clock < victim.invulnUntil)
+            {
+                // Just recovered — swallow the missile rather than re-killing.
+                RemoveMissile(m);
+                return;
+            }
+
             if (victim != null && victim.shieldUntil > Clock)
             {
-                victim.shieldUntil = 0f;
+                BreakShield(victim);
                 Raise(ArcadeEventKind.ShieldBlocked, null, victim, ItemKind.Missile, m.objId,
                     at, m.transform.rotation);
             }
             else if (victim != null)
             {
-                ApplyHit(victim, dir);
+                ApplyWreck(victim, dir, at);
                 Raise(ArcadeEventKind.MissileHit, null, victim, ItemKind.Missile, m.objId,
                     at, m.transform.rotation);
             }
@@ -420,15 +503,17 @@ namespace AIHWSim.Arcade
             if (!IsAuthority || b == null) return;
             var victim = RacerFor(victimCar);
 
+            if (victim != null && Clock < victim.invulnUntil) return;   // leave it for later
+
             if (victim != null && victim.shieldUntil > Clock)
             {
-                victim.shieldUntil = 0f;
+                BreakShield(victim);
                 Raise(ArcadeEventKind.ShieldBlocked, null, victim, ItemKind.Banana, b.objId,
                     b.transform.position, b.transform.rotation);
             }
             else if (victim != null)
             {
-                ApplyHit(victim, victimCar.transform.forward);
+                ApplySpin(victim, victimCar.transform.forward);
                 Raise(ArcadeEventKind.BananaHit, null, victim, ItemKind.Banana, b.objId,
                     b.transform.position, b.transform.rotation);
             }
@@ -436,9 +521,12 @@ namespace AIHWSim.Arcade
             RemoveBanana(b, false);
         }
 
-        /// <summary>Spin the victim out: grip collapses, a yaw torque throws the
-        /// tail, and one impulse punts them off line.</summary>
-        private void ApplyHit(ArcadeRacer victim, Vector3 dir)
+        /// <summary>
+        /// Banana: spin the victim out. Grip collapses, drive is cut so they
+        /// cannot power through it, a yaw torque throws the tail one way or the
+        /// other at random, and one impulse punts them off line.
+        /// </summary>
+        private void ApplySpin(ArcadeRacer victim, Vector3 dir)
         {
             var car = victim.car;
             if (car == null) return;
@@ -446,11 +534,122 @@ namespace AIHWSim.Arcade
             victim.spinUntil = Clock + ArcadeConfig.SpinSeconds;
             victim.spinTorqueSigned = _rng.NextDouble() < 0.5 ? -ArcadeConfig.SpinTorque
                                                               : ArcadeConfig.SpinTorque;
-            dir.y = 0f;
-            if (dir.sqrMagnitude < 1e-6f) dir = car.transform.forward;
-            dir.Normalize();
+            dir = Flat(dir, car.transform.forward);
             car.ArcadeImpulse(dir * ArcadeConfig.HitImpulseFwd + Vector3.up * ArcadeConfig.HitImpulseUp,
                 car.transform.position);
+
+            victim.ShowHit("SPUN OUT!", ArcadeConfig.SpinFeedbackColor,
+                ArcadeConfig.HitBannerSeconds, ArcadeConfig.HitFlashSeconds);
+        }
+
+        /// <summary>
+        /// Missile: destroy the victim outright. They are thrown into the air and
+        /// tumbled, go limp for <see cref="ArcadeConfig.WreckSeconds"/>, and are
+        /// then lifted back onto the racing line by <see cref="RecoverFromWreck"/>.
+        ///
+        /// Deliberately NOT <c>CarVehicle.ResetVehicle</c>, which returns the car
+        /// to the start line: on a 100–140 m circuit that costs most of a lap, so
+        /// one missile would effectively end a race. Losing a few seconds and some
+        /// places is the punishment; losing the lap is not.
+        /// </summary>
+        private void ApplyWreck(ArcadeRacer victim, Vector3 dir, Vector3 at)
+        {
+            var car = victim.car;
+            if (car == null) return;
+
+            victim.wreckedUntil = Clock + ArcadeConfig.WreckSeconds;
+            victim.awaitingRecover = true;
+            victim.spinUntil = 0f;              // the wreck supersedes any spin
+            victim.boostUntil = 0f;
+
+            dir = Flat(dir, car.transform.forward);
+            car.ArcadeImpulse(dir * ArcadeConfig.WreckImpulseFwd
+                              + Vector3.up * ArcadeConfig.WreckImpulseUp,
+                car.transform.position);
+
+            // One torque impulse rather than a sustained torque: the car should
+            // tumble ballistically and land however it lands, not be driven round
+            // like the banana spin.
+            float sign = _rng.NextDouble() < 0.5 ? -1f : 1f;
+            car.ArcadeTorqueImpulse(new Vector3(
+                (float)(_rng.NextDouble() - 0.5) * ArcadeConfig.WreckTorque,
+                sign * ArcadeConfig.WreckTorque,
+                (float)(_rng.NextDouble() - 0.5) * ArcadeConfig.WreckTorque));
+
+            ArcadeBurst.Spawn(at, 0.9f, ArcadeConfig.SpinFeedbackColor,
+                ArcadeConfig.ExplosionSeconds);
+
+            victim.ShowHit("WRECKED!", ArcadeConfig.WreckFeedbackColor,
+                ArcadeConfig.WreckBannerSeconds, ArcadeConfig.HitFlashSeconds);
+
+            Raise(ArcadeEventKind.Wrecked, null, victim, ItemKind.Missile, 0,
+                at, car.transform.rotation);
+        }
+
+        /// <summary>
+        /// Put a wrecked car back on the racing line, upright and pointing the
+        /// right way, roughly where it was destroyed.
+        ///
+        /// The spine gives both halves of that for free: Project turns the wreck
+        /// position into an arc length, Sample turns arc length back into a pose
+        /// with a forward direction. DropToSurface then lands it on the actual
+        /// ribbon, which matters on the elevated sections — Neon Vortex II's
+        /// bridge and Workshop's plank are metres above the floor beneath them.
+        /// </summary>
+        private void RecoverFromWreck(ArcadeRacer r)
+        {
+            r.awaitingRecover = false;
+            var car = r.car;
+            if (car == null) return;
+
+            Vector3 pos = car.transform.position;
+            Vector3 fwd = Flat(car.transform.forward, Vector3.forward);
+
+            if (Spine != null)
+            {
+                int hint = r.spineHint;
+                float s = Spine.Project(pos, ref hint);
+                r.spineHint = hint;
+                Spine.Sample(s + ArcadeConfig.WreckRecoverAhead, out var onLine, out var lineFwd);
+                pos = onLine;
+                fwd = lineFwd;
+            }
+
+            if (DropToSurface(pos, out var surf)) pos = surf;
+            pos += Vector3.up * RecoverRideHeight;
+
+            car.RestoreState(pos, Quaternion.LookRotation(fwd, Vector3.up),
+                Vector3.zero, Vector3.zero);
+
+            r.spinUntil = 0f;
+            r.wreckedUntil = 0f;
+            r.invulnUntil = Clock + ArcadeConfig.InvulnSeconds;
+            r.RestoreCar();
+
+            Raise(ArcadeEventKind.Recovered, null, r, ItemKind.None, 0,
+                pos, car.transform.rotation);
+        }
+
+        /// <summary>Consume a shield. One place, so the visual teardown and the
+        /// state change can never drift apart across the two hit handlers.</summary>
+        private void BreakShield(ArcadeRacer victim)
+        {
+            victim.shieldUntil = 0f;
+            if (victim.car != null)
+                ArcadeBurst.Spawn(victim.car.transform.position, 0.8f,
+                    ArcadeConfig.ShieldFeedbackColor, 0.35f);
+            victim.HideShield();
+            victim.ShowHit("SHIELD BLOCKED!", ArcadeConfig.ShieldFeedbackColor,
+                ArcadeConfig.HitBannerSeconds, ArcadeConfig.HitFlashSeconds);
+        }
+
+        /// <summary>Flatten to the ground plane, falling back when degenerate.</summary>
+        private static Vector3 Flat(Vector3 v, Vector3 fallback)
+        {
+            v.y = 0f;
+            if (v.sqrMagnitude < 1e-6f) { v = fallback; v.y = 0f; }
+            if (v.sqrMagnitude < 1e-6f) v = Vector3.forward;
+            return v.normalized;
         }
 
         private void RemoveMissile(Missile m)
@@ -521,7 +720,7 @@ namespace AIHWSim.Arcade
 
             foreach (var r in _racers)
             {
-                if (!r.isBot || !r.HasItem || r.car == null) continue;
+                if (!r.isBot || !r.HasItem || r.car == null || r.Wrecked) continue;
                 if (Clock < r.botNextDecision) continue;
 
                 // Re-arm with jitter so a whole pack never fires on one frame.
@@ -563,11 +762,34 @@ namespace AIHWSim.Arcade
                     return SomeoneBehind(r, ArcadeConfig.BotBananaRange);
 
                 case ItemKind.Shield:
-                    // Pop it when something is actually incoming — the director
-                    // owns the missile list, so it can simply look.
-                    foreach (var m in _missiles)
-                        if (m != null && m.target == car) return true;
-                    return false;
+                    // Pop it when something is actually incoming.
+                    return IncomingMissile(car);
+            }
+            return false;
+        }
+
+        /// <summary>
+        /// Is a live missile currently locked onto this car?
+        ///
+        /// The director owns the missile list, so this is just a look. Shared by
+        /// the bot shield policy and the player's incoming warning deliberately:
+        /// a missile the AI would defend against is exactly the one a human
+        /// should be told about, and one implementation cannot drift from two.
+        /// </summary>
+        public bool IncomingMissile(CarVehicle car)
+        {
+            if (car == null) return false;
+            // A client owns no missiles — it is sent their poses, not their
+            // targeting — so the answer arrives in the sync stream instead.
+            if (!IsAuthority)
+            {
+                var mirror = RacerFor(car);
+                return mirror != null && mirror.incomingRemote;
+            }
+            for (int i = 0; i < _missiles.Count; i++)
+            {
+                var m = _missiles[i];
+                if (m != null && m.target == car) return true;
             }
             return false;
         }
@@ -596,6 +818,9 @@ namespace AIHWSim.Arcade
 
         private void ResolveRoulette()
         {
+            // Clients are told what they rolled; deciding locally would hand two
+            // machines two different items for the same box.
+            if (!IsAuthority) return;
             foreach (var r in _racers)
             {
                 if (!r.rolling) continue;
@@ -621,18 +846,54 @@ namespace AIHWSim.Arcade
                 var car = r.car;
                 if (car == null) continue;
 
-                car.arcadeBoostAccel = Clock < r.boostUntil ? ArcadeConfig.BoostAccel : 0f;
+                // The limp phase has expired: lift them back onto the line. Done
+                // here rather than on a timer so it can never fire twice, and so
+                // a paused race resumes the recovery instead of skipping it.
+                // Authority only — a client teleporting its own ghost would fight
+                // the pose stream.
+                if (IsAuthority && r.awaitingRecover && Clock >= r.wreckedUntil)
+                    RecoverFromWreck(r);
 
-                if (Clock < r.spinUntil)
+                bool wrecked = Clock < r.wreckedUntil;
+                bool spun = !wrecked && Clock < r.spinUntil;
+
+                // Boost, faded out as it approaches BoostTopSpeed. The force is
+                // applied to the body with no ceiling of its own, so without this
+                // a 1.6 s boost just keeps accelerating past anything the
+                // drivetrain could reach. Surface boost pads are maxed in
+                // separately inside CarVehicle and are NOT capped by this.
+                car.arcadeBoostAccel = (!wrecked && Clock < r.boostUntil)
+                    ? ArcadeConfig.BoostAccel * Mathf.Clamp01(
+                        (ArcadeConfig.BoostTopSpeed - car.ForwardSpeed) / ArcadeConfig.BoostFadeBand)
+                    : 0f;
+
+                // Clients mirror effects for the VISUALS only (shield bubble,
+                // HUD); the physics channels below are the host's business and
+                // writing them on a kinematic ghost would be meaningless anyway.
+                if (!IsAuthority) { UpdateShieldViz(r, dt); continue; }
+
+                if (wrecked)
                 {
-                    car.arcadeGripMult = ArcadeConfig.SpinGripMult;
+                    // Limp: no drive, no grip, no held torque — it is tumbling
+                    // from the impulse the hit already gave it.
+                    car.arcadeGripMult = ArcadeConfig.SpinGripMult * r.gripBase;
+                    car.arcadeYawTorque = 0f;
+                    car.arcadeDriveMult = 0f;
+                }
+                else if (spun)
+                {
+                    car.arcadeGripMult = ArcadeConfig.SpinGripMult * r.gripBase;
                     car.arcadeYawTorque = r.spinTorqueSigned;
+                    car.arcadeDriveMult = ArcadeConfig.SpinDriveMult * r.driveBase;
                 }
                 else
                 {
-                    car.arcadeGripMult = 1f;
+                    car.arcadeGripMult = r.gripBase;
                     car.arcadeYawTorque = 0f;
+                    car.arcadeDriveMult = r.driveBase;
                 }
+
+                UpdateShieldViz(r, dt);
 
                 // Off-track penalty: bleed speed down to the cap with a rearward
                 // drag. Needs the frame clock, not the 10 Hz limits sampler.
@@ -643,6 +904,28 @@ namespace AIHWSim.Arcade
                     car.ArcadeImpulse(-car.transform.forward * (over * ArcadeConfig.PenaltyDragGain * dt),
                         car.transform.position);
             }
+        }
+
+        /// <summary>
+        /// Raise, spin and drop the shield visual from <c>shieldUntil</c> alone.
+        ///
+        /// Driving it off the deadline rather than from the use/block call sites
+        /// means every way a shield can end — used up, blocked a hit, respawned,
+        /// race restarted — is covered by one check, and a car can never be left
+        /// wearing a bubble it no longer owns.
+        /// </summary>
+        private void UpdateShieldViz(ArcadeRacer r, float dt)
+        {
+            bool up = Clock < r.shieldUntil && r.car != null;
+
+            if (!up) { r.HideShield(); return; }
+            if (r.shieldViz == null)
+            {
+                r.shieldViz = ArcadeVfx.BuildShield(r.car.transform);
+                r.shieldOrbs = r.shieldViz.Find("Orbs");
+            }
+            if (r.shieldOrbs != null)
+                r.shieldOrbs.Rotate(0f, ShieldOrbDegPerSec * dt, 0f, Space.Self);
         }
 
         // ================= track limits =================
@@ -677,6 +960,15 @@ namespace AIHWSim.Arcade
                 if (car == null) continue;
                 int n = car.WheelCount;
                 if (n == 0) continue;
+
+                // Being blown into the scenery is punishment enough; don't also
+                // hand out an off-track penalty for the flight and the landing.
+                if (r.Wrecked || Clock < r.invulnUntil)
+                {
+                    r.offTrackTime = 0f;
+                    r.ungroundedTime = 0f;
+                    continue;
+                }
 
                 int off = 0, air = 0;
                 for (int i = 0; i < n; i++)
@@ -745,7 +1037,10 @@ namespace AIHWSim.Arcade
         /// </summary>
         private void UpdatePositions()
         {
-            if (Spine == null) return;
+            // Client positions arrive in the arcade sync stream — recomputing them
+            // from ghost poses that are ~120 ms behind would disagree with the
+            // host's board for no benefit.
+            if (!IsAuthority || Spine == null) return;
 
             foreach (var r in _racers)
             {

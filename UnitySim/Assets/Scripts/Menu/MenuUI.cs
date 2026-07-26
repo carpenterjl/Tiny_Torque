@@ -42,6 +42,7 @@ namespace AIHWSim.Menu
         private int _spCountdown = 3; // race-start countdown seconds (0..60)
         private bool _spArcade;       // power-ups, weapons, arcade board
         private bool _spTrackLimits = true;
+        private bool _spArcadeHandling = true;   // false = race the circuits on raw sim physics
         private static readonly List<string> DiffNames = new List<string> { "Easy", "Medium", "Hard" };
         private static readonly List<string> ControlNames =
             new List<string> { "Manual", "Autonomous (firmware)", "Autonomous (bot AI)" };
@@ -75,6 +76,7 @@ namespace AIHWSim.Menu
             _spRubber = s.spRubberBand;
             _spCountdown = Mathf.Clamp(s.spCountdown, 0, 60);
             _spArcade = s.spArcade;
+            _spArcadeHandling = s.spArcadeHandling;
             _spTrackLimits = s.spTrackLimits;
         }
 
@@ -208,8 +210,13 @@ namespace AIHWSim.Menu
             if (_spArcade)
             {
                 _spTrackLimits = GUILayout.Toggle(_spTrackLimits, "    Track limits (off-track penalty)");
+                _spArcadeHandling = GUILayout.Toggle(_spArcadeHandling,
+                    "    Arcade handling (extra grip + driving assists)");
                 GUILayout.Label("    Item boxes on track · use with Left Shift / gamepad X.\n" +
-                                "    Built for the ★ themed circuits; works on any map with a finish line.",
+                                "    Built for the ★ themed circuits; works on any map with a finish line.\n" +
+                                (_spArcadeHandling
+                                    ? "    Handling: ARCADE — everyone, bots included, gets grip and assists."
+                                    : "    Handling: SIM — raw brush-tyre physics. The circuits bite."),
                                 GarageSkin.StatLabel);
             }
             GUI.enabled = true;
@@ -237,6 +244,7 @@ namespace AIHWSim.Menu
             // Assigned AFTER SetSinglePlayer, which clears them.
             SessionConfig.Arcade = _spArcade && _spLaps > 0 && _spControl != 1;
             SessionConfig.TrackLimits = SessionConfig.Arcade && _spTrackLimits;
+            SessionConfig.ArcadeHandling = _spArcadeHandling;
             GameFlow.ActiveDesign = ResolveVehicle(vehicle);
             GameFlow.ActiveTrack = ResolveTrack(track);
 
@@ -265,6 +273,7 @@ namespace AIHWSim.Menu
             s.spCountdown = _spCountdown;
             s.spArcade = _spArcade;
             s.spTrackLimits = _spTrackLimits;
+            s.spArcadeHandling = _spArcadeHandling;
             SettingsStore.Save();
 
             LoadIfBuilt(GameFlow.TrackSceneName, GameFlow.LoadTrack);
@@ -316,6 +325,8 @@ namespace AIHWSim.Menu
             if (_spArcade)
             {
                 _spTrackLimits = GUILayout.Toggle(_spTrackLimits, "    Track limits (off-track penalty)");
+                _spArcadeHandling = GUILayout.Toggle(_spArcadeHandling,
+                    "    Arcade handling (extra grip + driving assists)");
                 GUILayout.Label("    Both players pick up independently; one shared board.",
                                 GarageSkin.StatLabel);
             }
@@ -391,6 +402,7 @@ namespace AIHWSim.Menu
             SessionConfig.CountdownSeconds = 0; // split-screen has no countdown control (yet)
             SessionConfig.Arcade = _spArcade && _mpLaps > 0;
             SessionConfig.TrackLimits = SessionConfig.Arcade && _spTrackLimits;
+            SessionConfig.ArcadeHandling = _spArcadeHandling;
             SessionConfig.Players.Clear();
             SessionConfig.Players.Add(MakeSlot(s.player1Name, _mpVeh1, _mpDev1, SessionConfig.P1Assists(s)));
             SessionConfig.Players.Add(MakeSlot(s.player2Name, _mpVeh2, _mpDev2, SessionConfig.P2Assists(s)));
@@ -401,6 +413,9 @@ namespace AIHWSim.Menu
             s.p1DeviceKind = _mpDev1 == 0 ? (int)InputDeviceKind.Keyboard : (int)InputDeviceKind.Gamepad;
             s.p2DeviceKind = _mpDev2 == 0 ? (int)InputDeviceKind.Keyboard : (int)InputDeviceKind.Gamepad;
             s.p2GamepadIndex = Mathf.Max(0, _mpDev2 - 1);
+            s.spArcade = _spArcade;
+            s.spTrackLimits = _spTrackLimits;
+            s.spArcadeHandling = _spArcadeHandling;
             SettingsStore.Save();
 
             LoadIfBuilt(GameFlow.TrackSceneName, GameFlow.LoadTrack);
@@ -519,6 +534,21 @@ namespace AIHWSim.Menu
             _vehicleIdx = CyclePicker("Vehicle", _vehicles, _vehicleIdx, v => v == "" ? "Stock Default" : v);
             _trackIdx = CyclePicker("Track", _tracks, _trackIdx, t => t == "" ? "Classic Oval" : t);
             GUILayout.Space(4);
+
+            // The host's arcade rules are the session's — joiners are told them
+            // in the welcome and never consult their own settings, so a lobby is
+            // never half arcade.
+            _spArcade = GUILayout.Toggle(_spArcade, " Arcade mode (power-ups & weapons)");
+            if (_spArcade)
+            {
+                _spTrackLimits = GUILayout.Toggle(_spTrackLimits, "    Track limits (off-track penalty)");
+                _spArcadeHandling = GUILayout.Toggle(_spArcadeHandling,
+                    "    Arcade handling (extra grip + driving assists)");
+                GUILayout.Label("    Item boxes are live in free roam too, so there is\n" +
+                                "    something to do between races.", GarageSkin.StatLabel);
+            }
+
+            GUILayout.Space(4);
             GUILayout.Label("Players join into free roam; you start races and\nchange maps from the in-game Esc menu.",
                 GarageSkin.StatLabel);
             GUILayout.Space(6);
@@ -540,6 +570,16 @@ namespace AIHWSim.Menu
 
             SessionConfig.Mode = SessionMode.LanHost;
             SessionConfig.TargetLaps = 0; // free roam; races start in-game
+            // LAN arcade is gated on the map having a finish line rather than on
+            // a lap target: free roam has no laps, but item boxes still need a
+            // racing line to be laid out along.
+            SessionConfig.Arcade = _spArcade;
+            SessionConfig.TrackLimits = _spArcade && _spTrackLimits;
+            SessionConfig.ArcadeHandling = _spArcadeHandling;
+            s.spArcade = _spArcade;
+            s.spTrackLimits = _spTrackLimits;
+            s.spArcadeHandling = _spArcadeHandling;
+            SettingsStore.Save();
             SessionConfig.Players.Clear();
             SessionConfig.Players.Add(new PlayerSlot
             {
@@ -667,6 +707,14 @@ namespace AIHWSim.Menu
             GUILayout.Label($"Master volume: {s.masterVolume:P0}");
             float vol = GUILayout.HorizontalSlider(s.masterVolume, 0f, 1f);
             if (!Mathf.Approximately(vol, s.masterVolume)) { s.masterVolume = vol; changed = true; }
+
+            GUILayout.Label($"Sound effects: {s.sfxVolume:P0}");
+            float sfx = GUILayout.HorizontalSlider(s.sfxVolume, 0f, 1f);
+            if (!Mathf.Approximately(sfx, s.sfxVolume)) { s.sfxVolume = sfx; changed = true; }
+
+            GUILayout.Label($"Engine + tyres: {s.engineVolume:P0}");
+            float eng = GUILayout.HorizontalSlider(s.engineVolume, 0f, 1f);
+            if (!Mathf.Approximately(eng, s.engineVolume)) { s.engineVolume = eng; changed = true; }
 
             GUILayout.Space(4);
             string[] quality = QualitySettings.names;

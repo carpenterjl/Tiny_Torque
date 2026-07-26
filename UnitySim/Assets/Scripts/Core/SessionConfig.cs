@@ -66,6 +66,17 @@ namespace AIHWSim.Core
         /// <summary>Off-track detection + penalty (sub-toggle of arcade).</summary>
         public static bool TrackLimits;
 
+        /// <summary>
+        /// Arcade handling: every car in the session — humans and bots alike — is
+        /// raised to an assist floor and a grip baseline, so the themed circuits
+        /// can be driven on a keyboard without catching a slide.
+        ///
+        /// False races the same maps on the honest I22 brush-tyre model. This
+        /// exists as a choice rather than an always-on because the sim fidelity is
+        /// the point of the project; arcade is just a different way to use it.
+        /// </summary>
+        public static bool ArcadeHandling = true;
+
         /// <summary>Reset to a plain single-player session (legacy entry paths).</summary>
         public static void SetSinglePlayer()
         {
@@ -79,6 +90,7 @@ namespace AIHWSim.Core
             // to clear arcade — otherwise a race's flags leak into a free-drive.
             Arcade = false;
             TrackLimits = false;
+            ArcadeHandling = true;   // the default the menu offers next time
         }
 
         /// <summary>The roster TrackBootstrap builds from — always at least one slot.</summary>

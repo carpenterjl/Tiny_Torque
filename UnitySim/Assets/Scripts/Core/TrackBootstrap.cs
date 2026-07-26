@@ -137,6 +137,11 @@ namespace AIHWSim.Core
                 ahud.director = _arcade;
                 ahud.splitScreen = _splitScreen;
                 ahud.localRig = _humanRig;
+
+                // Arcade SFX, hung off the director's event stream.
+                var aaudio = new GameObject("ArcadeAudio").AddComponent<Arcade.ArcadeAudio>();
+                aaudio.director = _arcade;
+                aaudio.localRig = _humanRig;
             }
         }
 
@@ -149,7 +154,46 @@ namespace AIHWSim.Core
             _arcade.trackLimits = SessionConfig.TrackLimits;
             _arcade.lapTimer = _lapTimer;
             _arcade.SetTrack(_built, _botPath, _botPathClosed);
-            foreach (var rig in _rigs) _arcade.Register(rig);
+            foreach (var rig in _rigs)
+            {
+                var racer = _arcade.Register(rig);
+                // A client's cars are kinematic ghosts posed by the host — there
+                // is no physics on them to raise to a handling floor.
+                if (authority) ApplyArcadeHandling(racer);
+            }
+        }
+
+        /// <summary>
+        /// Raise one arcade car to the handling floor.
+        ///
+        /// Applied here — after every rig exists — rather than where the menu
+        /// builds its slots, because the slot path is not the only way a session
+        /// starts: a snapshot resume rebuilds the roster without ever visiting
+        /// the menu, and bots are constructed with a zeroed AssistSettings by
+        /// design. One call site covers humans, bots, split-screen and the LAN
+        /// host alike.
+        ///
+        /// Assists are a per-channel MAX, so a player who dialled in higher
+        /// values in Options keeps them. Firmware rigs never reach here — Register
+        /// refuses them — so C controllers still face the raw physics they are
+        /// meant to be validated against.
+        /// </summary>
+        private void ApplyArcadeHandling(Arcade.ArcadeRacer racer)
+        {
+            if (racer == null || racer.car == null) return;
+            if (!SessionConfig.ArcadeHandling) return;   // Sim handling: leave it alone
+
+            var floor = Arcade.ArcadeConfig.HandlingAssists;
+            var a = racer.car.assists;
+            a.steer = Mathf.Max(a.steer, floor.steer);
+            a.stability = Mathf.Max(a.stability, floor.stability);
+            a.traction = Mathf.Max(a.traction, floor.traction);
+            a.abs = Mathf.Max(a.abs, floor.abs);
+            racer.car.assists = a;
+
+            racer.gripBase = Arcade.ArcadeConfig.HandlingGripBonus;
+            racer.driveBase = Arcade.ArcadeConfig.HandlingDriveScale;
+            racer.RestoreCar();   // push the new baselines onto the car immediately
         }
 
         // ================= LAN (host simulates everyone; clients render ghosts) ===
@@ -172,6 +216,13 @@ namespace AIHWSim.Core
             BuildEnvironment();
             if (_lapTimer != null) _lapTimer.showDefaultHud = false;
 
+            // The racing line. LAN has never run bots, so nothing built this
+            // before — but the arcade layer needs it for item-box placement,
+            // live positions, missile targeting and wreck recovery, so without
+            // it arcade over LAN would silently do almost nothing.
+            _botPath = BotPath.Build(GameFlow.ActiveTrack, _lapTimer, _ovalPath,
+                _spawnPos, _spawnRot * Vector3.forward, out _botPathClosed);
+
             foreach (var p in session.Roster)
                 _rigs.Add(BuildLanRig(p));
             _runner = _rigs.Count > 0 ? _rigs[0].runner : null;
@@ -185,6 +236,36 @@ namespace AIHWSim.Core
             session.GridProvider = TeleportToGrid;
             session.PlayerJoined += OnLanPlayerJoined;
             session.PlayerLeft += OnLanPlayerLeft;
+
+            if (session.Arcade && _lapTimer != null) BuildLanArcade(authority: true);
+        }
+
+        /// <summary>
+        /// The arcade layer in a LAN session. Identical on both sides except for
+        /// the authority flag: the host decides and publishes, a client mirrors
+        /// and renders. Everything above the director — HUD, feedback, sound — is
+        /// the same component reading the same fields on both machines, which is
+        /// the point of keeping arcade state on <c>ArcadeRacer</c> rather than in
+        /// the HUD.
+        /// </summary>
+        private void BuildLanArcade(bool authority)
+        {
+            BuildArcade(authority);
+
+            var local = _rigs.Find(r => r.slot != null && r.slot.isLocal);
+
+            var ahud = new GameObject("ArcadeHud").AddComponent<Arcade.ArcadeHud>();
+            ahud.director = _arcade;
+            ahud.localRig = local;
+            ahud.splitScreen = false;
+            ahud.showBoard = false;   // LanHud already owns the shared board
+
+            var aaudio = new GameObject("ArcadeAudio").AddComponent<Arcade.ArcadeAudio>();
+            aaudio.director = _arcade;
+            aaudio.localRig = local;
+
+            var link = new GameObject("ArcadeNetLink").AddComponent<Net.ArcadeNetLink>();
+            link.director = _arcade;
         }
 
         private PlayerRig BuildLanRig(Net.NetSession.NetPlayer p)
@@ -308,12 +389,18 @@ namespace AIHWSim.Core
             }
         }
 
-        private void OnLanPlayerJoined(Net.NetSession.NetPlayer p) => _rigs.Add(BuildLanRig(p));
+        private void OnLanPlayerJoined(Net.NetSession.NetPlayer p)
+        {
+            var rig = BuildLanRig(p);
+            _rigs.Add(rig);
+            if (_arcade != null) ApplyArcadeHandling(_arcade.Register(rig));
+        }
 
         private void OnLanPlayerLeft(Net.NetSession.NetPlayer p)
         {
             var rig = _rigs.Find(r => r.netSlot == p.slot);
             if (rig == null) return;
+            _arcade?.Unregister(rig);
             _rigs.Remove(rig);
             if (_lapTimer != null && rig.car != null) _lapTimer.ResetTimer(rig.car);
             if (rig.car != null) Destroy(rig.car.transform.root.gameObject);
@@ -334,6 +421,9 @@ namespace AIHWSim.Core
             }
             _lapTimer?.ResetTimer();
             for (int i = 0; i < _lastCp.Length; i++) _lastCp[i] = 0;
+            // Nobody starts a race holding a missile they picked up in free roam,
+            // and the clock that every arcade deadline hangs off restarts here.
+            _arcade?.ResetArcade();
             return poses.ToArray();
         }
 
@@ -342,6 +432,14 @@ namespace AIHWSim.Core
         {
             var session = Net.NetSession.Instance;
             BuildEnvironment();
+
+            // The racing line, built while the lap timer still exists (BotPath
+            // falls back to the checkpoint order on maps with no spline). The
+            // mirroring arcade director needs the same line the host used, or the
+            // two would lay their item boxes out differently.
+            bool timed = _lapTimer != null;
+            _botPath = BotPath.Build(GameFlow.ActiveTrack, _lapTimer, _ovalPath,
+                _spawnPos, _spawnRot * Vector3.forward, out _botPathClosed);
 
             // Lap timing is host-authoritative: destroy (not disable — physics
             // callbacks fire on disabled behaviours) the trigger components so
@@ -362,6 +460,9 @@ namespace AIHWSim.Core
 
             session.CarStateReceived += OnCarState;
             session.RosterChanged += OnClientRosterChanged;
+
+            if (session.Arcade && timed) BuildLanArcade(authority: false);
+
             session.SendReady();
         }
 
@@ -376,6 +477,26 @@ namespace AIHWSim.Core
             view.slot = p.slot;
             view.car = built.car;
             _ghosts[p.slot] = view;
+
+            // Ghosts get rigs too, so the arcade director sees the same shape of
+            // world on a client as on the host: one ArcadeRacer per car, carrying
+            // the inventory and effects the sync stream fills in. Without it the
+            // HUD, the shield bubble and the hit banners would all need a second,
+            // client-only implementation.
+            var rig = new PlayerRig
+            {
+                slot = new PlayerSlot
+                {
+                    name = p.name,
+                    profileId = p.name,
+                    design = design,
+                    isLocal = p.slot == Net.NetSession.Instance.LocalSlot,
+                },
+                car = built.car,
+                netSlot = p.slot,
+            };
+            _rigs.Add(rig);
+            if (_arcade != null) _arcade.Register(rig);
         }
 
         private void OnCarState(byte epoch, float hostTime, Net.CarState s)
@@ -396,6 +517,10 @@ namespace AIHWSim.Core
             {
                 if (_ghosts[slot] != null) Destroy(_ghosts[slot].gameObject);
                 _ghosts.Remove(slot);
+                var rig = _rigs.Find(r => r.netSlot == slot);
+                if (rig == null) continue;
+                _arcade?.Unregister(rig);
+                _rigs.Remove(rig);
             }
         }
 
@@ -445,6 +570,12 @@ namespace AIHWSim.Core
             var carInput = built.car.gameObject.AddComponent<CarInput>();
             carInput.car = built.car;
             carInput.lapTimer = _lapTimer;
+
+            // Motor, tyre and impact sound. Every rig gets it, bots included, so
+            // the field around you is audible. Attached here rather than in
+            // VehicleFactory so the garage preview and the menu attract cars stay
+            // silent. Read-only, which is why it is safe on firmware rigs too.
+            Audio.VehicleAudio.Attach(built.car.gameObject, built.car);
 
             // Input source: bot AI (opponents & the player's "autonomous (bot AI)")
             // drives via CarInput exactly like a human; C-firmware autonomous uses

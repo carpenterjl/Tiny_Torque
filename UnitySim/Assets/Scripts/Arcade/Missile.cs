@@ -64,8 +64,16 @@ namespace AIHWSim.Arcade
                 Vector3 want = target.transform.position - pos;
                 want.y = 0f;
                 if (want.sqrMagnitude > 1e-4f)
-                    fwd = Vector3.RotateTowards(fwd, want.normalized,
-                        ArcadeConfig.MissileTurnRate * dt, 0f);
+                {
+                    // Commit: once this close the missile can barely steer, so a
+                    // well-timed swerve makes it miss. It keeps flying and may
+                    // come back around — a miss costs the shooter the shot, not
+                    // the missile.
+                    float rate = want.magnitude <= ArcadeConfig.MissileCommitRange
+                        ? ArcadeConfig.MissileCommitTurnRate
+                        : ArcadeConfig.MissileTurnRate;
+                    fwd = Vector3.RotateTowards(fwd, want.normalized, rate * dt, 0f);
+                }
             }
             fwd.y = 0f;
             if (fwd.sqrMagnitude < 1e-6f) fwd = Vector3.forward;
@@ -111,6 +119,8 @@ namespace AIHWSim.Arcade
             var car = other.GetComponentInParent<CarVehicle>();
             if (car == null) return;
             if (car == ownerCar) return;                       // reference identity, always
+            if (ArcadeConfig.LogHits)
+                Debug.Log($"[arcade] missile {objId} struck {car.name} at t={ArcadeDirector.Clock:0.00}");
 
             ArcadeDirector.Instance?.OnMissileHit(this, car);
         }

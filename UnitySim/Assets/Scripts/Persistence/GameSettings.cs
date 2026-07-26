@@ -11,6 +11,14 @@ namespace AIHWSim.Persistence
 
         // Options page.
         public float masterVolume = 1f;
+        /// <summary>Game sound effects — pickups, weapons, impacts. Sits under
+        /// <see cref="masterVolume"/>, which is applied globally to the
+        /// AudioListener. Field initializers are the back-compat mechanism:
+        /// JsonUtility leaves them alone for keys an old settings.json predates.</summary>
+        public float sfxVolume = 0.8f;
+        /// <summary>Vehicle motor and tyre sound, separately adjustable because a
+        /// continuous drone is the first thing anyone wants to turn down.</summary>
+        public float engineVolume = 0.7f;
         public int qualityLevel = -1;      // -1 = leave the project default
         public bool fullscreen = true;
         public bool vSync = true;
@@ -55,6 +63,11 @@ namespace AIHWSim.Persistence
         public int spCountdown = 3;     // race-start countdown seconds (0..60)
         public bool spArcade = false;      // power-ups, weapons, arcade scoreboard
         public bool spTrackLimits = true;  // off-track penalty (only used in arcade)
+        /// <summary>Arcade handling: grip baseline + assist floor for everyone in
+        /// the session. The field initializer is the back-compat mechanism —
+        /// JsonUtility leaves it alone for keys a saved settings.json predates,
+        /// so an existing install reads as Arcade rather than as false.</summary>
+        public bool spArcadeHandling = true;
     }
 
     /// <summary>

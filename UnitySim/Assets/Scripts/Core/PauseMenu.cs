@@ -218,6 +218,30 @@ namespace AIHWSim.Core
             GUILayout.Label(s.logTelemetry
                 ? "Logging starts when you resume."
                 : "Logging is off (starts next session if enabled).");
+
+            // Volume, mid-race. Apply() as well as Save(): masterVolume drives
+            // AudioListener.volume, so without it the slider would move and
+            // nothing would change until the next scene load.
+            GUILayout.Space(6);
+            bool vChanged = false;
+
+            GUILayout.Label($"Master volume: {s.masterVolume:P0}");
+            float mv = GUILayout.HorizontalSlider(s.masterVolume, 0f, 1f);
+            if (!Mathf.Approximately(mv, s.masterVolume)) { s.masterVolume = mv; vChanged = true; }
+
+            GUILayout.Label($"Sound effects: {s.sfxVolume:P0}");
+            float sv = GUILayout.HorizontalSlider(s.sfxVolume, 0f, 1f);
+            if (!Mathf.Approximately(sv, s.sfxVolume)) { s.sfxVolume = sv; vChanged = true; }
+
+            GUILayout.Label($"Engine + tyres: {s.engineVolume:P0}");
+            float ev = GUILayout.HorizontalSlider(s.engineVolume, 0f, 1f);
+            if (!Mathf.Approximately(ev, s.engineVolume)) { s.engineVolume = ev; vChanged = true; }
+
+            if (vChanged)
+            {
+                Persistence.SettingsStore.Apply();
+                Persistence.SettingsStore.Save();
+            }
         }
 
         private void DrawTuning()
