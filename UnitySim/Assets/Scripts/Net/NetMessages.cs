@@ -6,9 +6,21 @@ namespace AIHWSim.Net
 {
     /// <summary>
     /// LAN message catalog. Low-rate control messages are JsonUtility payloads
-    /// (versionable, matches the codebase idiom); the two 30 Hz streams
-    /// (client input, host state) are hand-packed binary. All named messages
-    /// are prefixed "aihw.".
+    /// (versionable, matches the codebase idiom); the high-rate streams (client
+    /// input, client own-state, host state) are hand-packed binary. All named
+    /// messages are prefixed "aihw.".
+    ///
+    /// Protocol 4 made the session OWNER-AUTHORITATIVE for each player's own
+    /// car: a client simulates its own car and streams the result up
+    /// (<see cref="OwnState"/>), the host follows it kinematically and relays it
+    /// back out in <see cref="State"/>. <see cref="Input"/> survives because the
+    /// host still needs the use-item and respawn edges, and because a silent
+    /// input stream is the dead-man signal.
+    ///
+    /// Protocol 5 added the area hazards: smoke and oil ride the projectile
+    /// stream (<see cref="NetPack.ProjSmoke"/>), <see cref="ArcEffect"/> widened
+    /// to a ushort to fit the slick flag, and one byte per racer carries the
+    /// blind's remaining time.
     /// </summary>
     public static class NetMsg
     {
@@ -21,10 +33,12 @@ namespace AIHWSim.Net
         public const string Lap = "aihw.lap";                // H→all reliable
         public const string RaceEnd = "aihw.race_end";       // H→all reliable
         public const string SessionState = "aihw.session";   // H→all reliable
-        public const string Input = "aihw.input";            // C→H  unreliable-seq 30 Hz
-        public const string State = "aihw.state";            // H→all unreliable-seq 30 Hz
+        public const string Input = "aihw.input";            // C→H  unreliable-seq 60 Hz
+        public const string OwnState = "aihw.ownstate";      // C→H  unreliable-seq 60 Hz
+        public const string State = "aihw.state";            // H→all unreliable-seq 60 Hz
         public const string ArcSync = "aihw.arc_sync";       // H→all unreliable-seq 15 Hz
         public const string ArcEvt = "aihw.arc_evt";         // H→all reliable
+        public const string ArcFx = "aihw.arc_fx";           // H→one   reliable
     }
 
     // ---- JSON control payloads ------------------------------------------------
@@ -149,17 +163,71 @@ namespace AIHWSim.Net
         public Quaternion rot = Quaternion.identity;
     }
 
-    // ---- binary 30 Hz streams --------------------------------------------------
+    /// <summary>
+    /// One arcade effect's PHYSICS, sent to the machine that owns the victim's
+    /// car. The host still rolls every random number — the spin direction, the
+    /// wreck tumble, the recovery pose — and ships the results here, so the
+    /// owner replays the host's decision rather than making its own. Without
+    /// this an owner would spin the wrong way and land somewhere else.
+    /// </summary>
+    [Serializable]
+    public class ArcFxMsg
+    {
+        public const int KindSpin = 1;
+        public const int KindWreck = 2;
+        public const int KindRecover = 3;
 
-    /// <summary>One car's streamed pose/motion (host → clients).</summary>
+        public int kind;
+        public int slot;
+        public Vector3 impulse;          // ArcadeImpulse, world-space
+        public Vector3 torqueImpulse;    // wreck tumble
+        public float spinTorqueSigned;   // signed yaw torque held for the spin's duration
+        public Vector3 pos;              // recovery pose (KindRecover)
+        public Quaternion rot = Quaternion.identity;
+    }
+
+    // ---- binary 60 Hz streams --------------------------------------------------
+
+    /// <summary>
+    /// One car's streamed pose/motion. Host → clients for every car; client →
+    /// host for the client's own car (which the client simulates).
+    ///
+    /// <c>carEpoch</c> is per car and bumped by whoever teleports it — respawn,
+    /// wreck recovery, race grid. Receivers snap and flush their interpolation
+    /// buffer when it changes, so a teleport reads as a teleport rather than a
+    /// 120 ms streak across the map. The stream header carries a separate global
+    /// epoch for scene-wide events (map change, scene rebuild).
+    /// </summary>
     public struct CarState
     {
         public int slot;
+        public byte carEpoch;
         public Vector3 pos;
         public Quaternion rot;
         public Vector3 vel;
+        public Vector3 angVel;      // lets a receiver extrapolate rotation, not just position
         public float steerDeg;
         public float wheelRadPerSec;
+    }
+
+    /// <summary>
+    /// A client's own-car state (client → host). Same payload as
+    /// <see cref="CarState"/> minus the slot (the host maps sender→slot) plus
+    /// the owner's clock and its own track-limit verdict — the host's copy of
+    /// this car is kinematic, so its wheels never touch the surface map.
+    /// </summary>
+    public struct OwnStateMsg
+    {
+        public byte carEpoch;
+        public float ownerTime;
+        public Vector3 pos;
+        public Quaternion rot;
+        public Vector3 vel;
+        public Vector3 angVel;
+        public float steerDeg;
+        public float wheelRadPerSec;
+        public bool penalized;
+        public bool warned;
     }
 
     public struct InputState
@@ -170,9 +238,16 @@ namespace AIHWSim.Net
         public bool useItemEdge;   // arcade: fire the held power-up
     }
 
-    /// <summary>Active arcade effects on one car, as a wire byte.</summary>
+    /// <summary>
+    /// Active arcade effects on one car, as a wire ushort.
+    ///
+    /// Protocol 5 widened this from a byte, whose eight bits were all spoken for.
+    /// The extra byte costs ~120 B/s at a full grid and buys eight bits of
+    /// headroom back — cheap next to discovering later that the next effect has
+    /// nowhere to go.
+    /// </summary>
     [Flags]
-    public enum ArcEffect : byte
+    public enum ArcEffect : ushort
     {
         None = 0,
         Rolling = 1,
@@ -183,6 +258,12 @@ namespace AIHWSim.Net
         Penalized = 32,
         Warned = 64,
         Incoming = 128,
+        /// <summary>Standing in (or just out of) an oil slick. A boolean is enough
+        /// here — the effect is a grip multiplier that is either applied this
+        /// frame or not, and <c>SlickLingerSeconds</c> is short enough that a
+        /// stale hold costs nothing. Blindness is NOT a flag for the opposite
+        /// reason; see <see cref="ArcRacerState.blindLeftDs"/>.</summary>
+        Slicked = 256,
     }
 
     /// <summary>One car's arcade state (host → clients).</summary>
@@ -195,21 +276,48 @@ namespace AIHWSim.Net
         public ArcEffect effects;
         public int position;     // 1 = leader
         public int points;
+        /// <summary>
+        /// Smoke blindness left, in 20ths of a second (0 = not blinded).
+        ///
+        /// A duration rather than a flag, because the receiver has to rebuild an
+        /// ENVELOPE and not just a boolean: <c>ArcadeFeedback.DrawBlind</c> ramps
+        /// in, holds, and fades out over the last <c>BlindFadeSeconds</c> of the
+        /// deadline. Held as a bit and re-armed to "now + one sync period" like
+        /// the other effects, that fade term would read 0.25/0.9 forever and peg a
+        /// client's green wash at a third of the alpha the host is drawing — an
+        /// effect that looks like it is working while not costing the corner it
+        /// exists to cost. One byte buys the exact same envelope on both machines.
+        /// </summary>
+        public byte blindLeftDs;
     }
 
-    /// <summary>One live projectile's pose (host → clients).</summary>
+    /// <summary>One live projectile or dropped area hazard's pose (host → clients).</summary>
     public struct ArcProjState
     {
         public int objId;
-        public int kind;         // 1 = missile, 2 = banana
+        public int kind;         // NetPack.Proj*
         public Vector3 pos;
         public Quaternion rot;
     }
 
     public static class NetPack
     {
+        // APPEND-ONLY — the kind goes on the wire as a byte.
         public const int ProjMissile = 1;
         public const int ProjBanana = 2;
+        // Area hazards ride the projectile stream rather than the event stream
+        // because their EXISTENCE is state, not a happening: a cloud lives for
+        // nine seconds, so streaming it self-heals a lost packet and a late join,
+        // where a one-shot "dropped" event would leave a client staring through
+        // a hazard the host is still catching it with.
+        public const int ProjSmoke = 3;
+        public const int ProjSlick = 4;
+
+        /// <summary>Seconds → the wire's 20ths-of-a-second byte (0 … 12.75 s).</summary>
+        public static byte PackDs(float seconds) =>
+            (byte)Mathf.Clamp(Mathf.RoundToInt(seconds * 20f), 0, 255);
+
+        public static float UnpackDs(byte ds) => ds * 0.05f;
 
         public static void WriteInput(FastBufferWriter w, in InputState s)
         {
@@ -253,9 +361,10 @@ namespace AIHWSim.Net
             w.WriteValueSafe((byte)s.held);
             w.WriteValueSafe((byte)Mathf.Clamp(s.charges, 0, 255));
             w.WriteValueSafe((byte)s.rollFace);
-            w.WriteValueSafe((byte)s.effects);
+            w.WriteValueSafe((ushort)s.effects);
             w.WriteValueSafe((byte)Mathf.Clamp(s.position, 0, 255));
             w.WriteValueSafe((ushort)Mathf.Clamp(s.points, 0, 65535));
+            w.WriteValueSafe(s.blindLeftDs);
         }
 
         public static ArcRacerState ReadArcRacer(FastBufferReader r)
@@ -265,9 +374,10 @@ namespace AIHWSim.Net
             r.ReadValueSafe(out byte held); s.held = held;
             r.ReadValueSafe(out byte charges); s.charges = charges;
             r.ReadValueSafe(out byte face); s.rollFace = face;
-            r.ReadValueSafe(out byte fx); s.effects = (ArcEffect)fx;
+            r.ReadValueSafe(out ushort fx); s.effects = (ArcEffect)fx;
             r.ReadValueSafe(out byte pos); s.position = pos;
             r.ReadValueSafe(out ushort pts); s.points = pts;
+            r.ReadValueSafe(out s.blindLeftDs);
             return s;
         }
 
@@ -299,11 +409,44 @@ namespace AIHWSim.Net
         public static void WriteCarState(FastBufferWriter w, in CarState c)
         {
             w.WriteValueSafe((byte)c.slot);
+            w.WriteValueSafe(c.carEpoch);
             w.WriteValueSafe(c.pos);
             w.WriteValueSafe(c.rot);
             w.WriteValueSafe(c.vel);
+            w.WriteValueSafe(c.angVel);
             w.WriteValueSafe(c.steerDeg);
             w.WriteValueSafe(c.wheelRadPerSec);
+        }
+
+        public static void WriteOwnState(FastBufferWriter w, in OwnStateMsg s)
+        {
+            w.WriteValueSafe(s.carEpoch);
+            w.WriteValueSafe(s.ownerTime);
+            w.WriteValueSafe(s.pos);
+            w.WriteValueSafe(s.rot);
+            w.WriteValueSafe(s.vel);
+            w.WriteValueSafe(s.angVel);
+            w.WriteValueSafe(s.steerDeg);
+            w.WriteValueSafe(s.wheelRadPerSec);
+            byte flags = (byte)((s.penalized ? 1 : 0) | (s.warned ? 2 : 0));
+            w.WriteValueSafe(flags);
+        }
+
+        public static OwnStateMsg ReadOwnState(FastBufferReader r)
+        {
+            var s = new OwnStateMsg();
+            r.ReadValueSafe(out s.carEpoch);
+            r.ReadValueSafe(out s.ownerTime);
+            r.ReadValueSafe(out s.pos);
+            r.ReadValueSafe(out s.rot);
+            r.ReadValueSafe(out s.vel);
+            r.ReadValueSafe(out s.angVel);
+            r.ReadValueSafe(out s.steerDeg);
+            r.ReadValueSafe(out s.wheelRadPerSec);
+            r.ReadValueSafe(out byte flags);
+            s.penalized = (flags & 1) != 0;
+            s.warned = (flags & 2) != 0;
+            return s;
         }
 
         public static void ReadStateHeader(FastBufferReader r, out byte epoch, out float hostTime, out byte carCount)
@@ -318,9 +461,11 @@ namespace AIHWSim.Net
             var c = new CarState();
             r.ReadValueSafe(out byte slot);
             c.slot = slot;
+            r.ReadValueSafe(out c.carEpoch);
             r.ReadValueSafe(out c.pos);
             r.ReadValueSafe(out c.rot);
             r.ReadValueSafe(out c.vel);
+            r.ReadValueSafe(out c.angVel);
             r.ReadValueSafe(out c.steerDeg);
             r.ReadValueSafe(out c.wheelRadPerSec);
             return c;

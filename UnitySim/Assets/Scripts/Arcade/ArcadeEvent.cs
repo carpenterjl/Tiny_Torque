@@ -27,6 +27,34 @@ namespace AIHWSim.Arcade
         Finished = 12,
         Wrecked = 13,       // missile hit: destroyed, about to be recovered
         Recovered = 14,     // lifted back onto the racing line
+        // Area hazards (smoke, oil) share one set of kinds and are told apart by
+        // ArcadeEvent.item — the lifecycle is identical and only the effect differs,
+        // so two more kinds per hazard would be three ways to say the same thing.
+        HazardDropped = 15,
+        HazardHit = 16,     // entered a hazard; fires on the rising edge only
+        HazardExpired = 17,
+    }
+
+    /// <summary>
+    /// The PHYSICS of one arcade effect, for a car this machine decided about
+    /// but does not simulate (a LAN client's own car, seen from the host).
+    ///
+    /// It exists because every one of these carries a random draw — which way
+    /// the spin throws you, how the wreck tumbles, where the recovery sets you
+    /// down. The host rolls them once and ships the results; if the owner rolled
+    /// its own, the two machines would disagree about the same hit.
+    /// </summary>
+    public struct ArcadeFx
+    {
+        public enum Kind { Spin = 1, Wreck = 2, Recover = 3 }
+
+        public Kind kind;
+        public int slot;
+        public Vector3 impulse;
+        public Vector3 torqueImpulse;
+        public float spinTorqueSigned;
+        public Vector3 pos;             // recovery pose
+        public Quaternion rot;
     }
 
     public struct ArcadeEvent

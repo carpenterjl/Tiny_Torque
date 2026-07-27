@@ -70,6 +70,28 @@ namespace AIHWSim.Core
         /// <summary>Rubber-band multiplier on target speed (1 = none). Set by the RaceDirector.</summary>
         public float SpeedScale = 1f;
 
+        // Smoke-cloud blindness, pushed in by ArcadeDirector.
+        private float _blindLeft, _blindSteerRelease = 0.5f, _blindThrottle = 0.35f;
+
+        /// <summary>
+        /// This bot is inside (or has just left) a smoke cloud: for the next
+        /// <paramref name="secondsLeft"/> it drives straight instead of following
+        /// the racing line.
+        ///
+        /// A settable seam in the <see cref="SpeedScale"/> style, never a
+        /// constructor argument — <c>MenuAttract</c> builds a BotDriver too and
+        /// must keep compiling. The tuning arrives as arguments rather than being
+        /// read from <c>ArcadeConfig</c> because Arcade depends on Core and not
+        /// the other way round; pushing the numbers in is what keeps that
+        /// one-directional.
+        /// </summary>
+        public void SetBlind(float secondsLeft, float steerRelease, float throttle)
+        {
+            _blindLeft = secondsLeft;
+            _blindSteerRelease = steerRelease;
+            _blindThrottle = throttle;
+        }
+
         public BotDriver(CarVehicle car, IReadOnlyList<Vector3> path, bool closed, BotDifficulty diff)
         {
             _car = car;
@@ -95,6 +117,7 @@ namespace AIHWSim.Core
         public float Steer() { EnsureFresh(); return _steer; }
         public float Brake() { EnsureFresh(); return _brake; }
         public bool Handbrake() => false;
+        public bool LookBackHeld() => false;      // no camera to swing
         public float MouseSteerDelta() => 0f;
 
         /// <summary>
@@ -150,6 +173,29 @@ namespace AIHWSim.Core
                 _stuckTimer = 0f;
                 _reversing = false;
                 _reverseTimer = 0f;
+                return;
+            }
+
+            // Blinded by a smoke cloud. Returns early on purpose, so the whole
+            // pure-pursuit block below is skipped — a bot that cannot see must
+            // not be following a racing line, which is the entire point of the
+            // item.
+            if (_blindLeft > 0f)
+            {
+                // Ease the wheel back to centre rather than snapping to zero
+                // (which reads as a magic correction) or latching the last steer
+                // (which makes a bot blinded mid-corner carve a perfect circle).
+                _steer = Mathf.MoveTowards(_steer, 0f, dt / Mathf.Max(0.01f, _blindSteerRelease));
+                _throttle = _blindThrottle;
+                _brake = 0f;
+                // The same resets the Frozen branch does, plus the respawn latch:
+                // without that last one a blinded bot that noses a wall escalates
+                // to a respawn and teleports itself clear of the cloud — a free
+                // escape, and a teleport nobody asked for.
+                _stuckTimer = 0f;
+                _reversing = false;
+                _reverseTimer = 0f;
+                _respawnLatch = false;
                 return;
             }
 

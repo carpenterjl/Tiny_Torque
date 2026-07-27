@@ -14,6 +14,11 @@ namespace AIHWSim.Arcade
         public const float BoxRespawnSeconds = 4f;
         public const float RouletteSeconds = 0.9f;   // spin time before the item lands
         public const float RouletteFaceHz = 12f;     // how fast the displayed face cycles
+        /// <summary>Number of real items, i.e. <see cref="ItemKind"/> values above
+        /// None. The roulette animation cycles faces 1..this while spinning; it was
+        /// a hardcoded literal, which meant a new item silently never appeared on
+        /// the spinner. Bump it whenever ItemKind grows.</summary>
+        public const int RouletteFaceCount = 7;
         /// <summary>Auto-placement spacing along the racing line when a map has no
         /// authored boxes (metres of arc length between rows of three).</summary>
         public const float AutoBoxSpacingMetres = 22f;
@@ -139,6 +144,188 @@ namespace AIHWSim.Arcade
         /// mid-corner could spawn already touching its own dropper.</summary>
         public const float BananaDropOffset = 0.55f;
 
+        // ---- area hazards (smoke cloud, oil slick) ----
+        /// <summary>Full gameplay radius once grown. Deliberately a poll radius and
+        /// not a collider: the car root BoxCollider and all four WheelColliders hang
+        /// off one transform, so a trigger fires several times per car per pass (the
+        /// problem ArcadeItemBox documents), and OnTriggerStay — which re-arming the
+        /// effect would need — stops firing once a parked car's body sleeps. A
+        /// distance test has neither failure, and a hazard with no collider can never
+        /// accidentally become a wall.</summary>
+        public const float SmokeRadius = 0.75f;
+        public const float SmokeStartRadius = 0.18f;
+        /// <summary>Grow-in time. The gameplay radius follows the visual so an
+        /// unexpanded puff cannot blind someone two car-lengths away.</summary>
+        public const float SmokeGrowSeconds = 0.55f;
+        public const float SmokeLifetime = 9f;
+        public const float SmokeFadeSeconds = 1.5f;
+        public const float SmokeDriftSpeed = 0.12f;  // m/s, flat, rolled once at spawn
+        /// <summary>Oil spreads flatter and wider than smoke billows.</summary>
+        public const float SlickRadius = 0.85f;
+        public const float SlickLifetime = 12f;
+        public const float SlickGripMult = 0.45f;
+        /// <summary>Grace before a hazard can catch its own dropper. Longer than the
+        /// banana's 0.4 s because an area you are still inside of would otherwise
+        /// catch you the instant you laid it.</summary>
+        public const float HazardOwnerGrace = 1.0f;
+        /// <summary>Drop distance behind the car centre: 0.21 m chassis half-length
+        /// plus most of a radius, so it lands clear rather than on the bumper.</summary>
+        public const float HazardDropOffset = 0.90f;
+        public const float HazardHeight = 0.18f;     // centre above the surface
+        public const int MaxHazardsPerPlayer = 1;
+        /// <summary>Half-height of the containment test. Without it the poll is
+        /// purely horizontal, and a cloud dropped on Neon Vortex II's bridge would
+        /// blind cars passing metres underneath it.</summary>
+        public const float HazardVerticalBand = 0.6f;
+        /// <summary>How long grip stays down after LEAVING a slick. Far shorter
+        /// than <see cref="BlindSeconds"/> on purpose: oil comes off the tyres in
+        /// a moment, whereas not being able to see stays with you.</summary>
+        public const float SlickLingerSeconds = 0.4f;
+
+        // ---- blinded (smoke cloud) ----
+        public const float BlindSeconds = 2.6f;
+        public const float BlindRampSeconds = 0.15f;
+        public const float BlindFadeSeconds = 0.9f;
+        /// <summary>Peak tint alpha. Much heavier than the hit flash's 0.30: that is
+        /// a punch you already took and only has to register, this is a state you are
+        /// in and has to actually cost you the corner.</summary>
+        public const float BlindTintAlpha = 0.62f;
+        public static readonly Color BlindFeedbackColor = new Color(0.42f, 0.85f, 0.32f);
+        public static readonly Color SlickFeedbackColor = new Color(0.55f, 0.45f, 0.75f);
+        /// <summary>How long a blinded bot needs to ease the wheel back to centre.
+        /// Not an instant zero — that snaps straight and reads as a magic correction.</summary>
+        public const float BlindBotSteerRelease = 0.5f;
+        public const float BlindBotThrottle = 0.35f;
+
+        // ---- drift boost (mini-turbo) ----
+        // The drift is LATCHED, not detected. Pass 3 shipped a detector — it
+        // watched for handbrake + speed + slip angle and paid out if it saw all
+        // three — and the trouble with a detector is that it makes the mechanic
+        // something the physics might grant you rather than something you do.
+        // Here, pulling the handbrake while turned commits the car to a slide in
+        // that direction and holds it there until you let go.
+
+        /// <summary>Below this the handbrake is a handbrake, not a drift.</summary>
+        public const float DriftMinSpeed = 3.5f;
+        /// <summary>Steering deflection needed to commit. Above a keyboard's own
+        /// smoothed ramp (SteerSmoother reaches ~0.35 in the first 100 ms) so a
+        /// twitch of the wheel while braking in a straight line cannot latch a
+        /// drift, and low enough that a deliberate turn always does.</summary>
+        public const float DriftEntrySteer = 0.30f;
+        /// <summary>Speed at which a latched drift gives up. Hysteresis against
+        /// <see cref="DriftMinSpeed"/> — a drift that scrubs momentarily below
+        /// the entry speed should not drop you out mid-corner.</summary>
+        public const float DriftHoldSpeed = 2.2f;
+
+        /// <summary>The "jump": a small vertical impulse (N·s) on the moment of
+        /// commitment. It is mostly theatre — you see the car set itself — but it
+        /// also briefly unloads the tyres, which is exactly what makes the slide
+        /// start crisply instead of washing in.</summary>
+        public const float DriftHopImpulse = 1.1f;
+        /// <summary>How long the yaw controller may use <see cref="DriftYawKick"/>
+        /// instead of <see cref="DriftYawHold"/>. This is what snaps the car into
+        /// the slide; after it, the same controller only maintains the angle.</summary>
+        public const float DriftKickSeconds = 0.28f;
+
+        /// <summary>Slip angle held at full counter-steer (steering out of the
+        /// slide) and at full lock into it. The player picks a point on this band
+        /// with the stick, which is what turns the drift into an arc you steer
+        /// rather than a state you are in.</summary>
+        public const float DriftAngleMinDeg = 11f;
+        public const float DriftAngleMaxDeg = 34f;
+
+        /// <summary>Yaw torque per degree of angle error (N·m/deg).</summary>
+        public const float DriftYawGain = 0.055f;
+        /// <summary>Torque clamp during <see cref="DriftKickSeconds"/>. Under the
+        /// spin-out's 1.2 N·m on purpose: getting hit must always out-rotate
+        /// anything you can do to yourself.</summary>
+        public const float DriftYawKick = 0.95f;
+        /// <summary>Torque clamp once the slide is established.</summary>
+        public const float DriftYawHold = 0.45f;
+        /// <summary>Torque clamp while straightening out on release.</summary>
+        public const float DriftYawStraighten = 0.70f;
+        /// <summary>Longest the exit straighten may run. It also ends early, the
+        /// moment the slip angle is small — this is the ceiling, not the duration.</summary>
+        public const float DriftStraightenSeconds = 0.5f;
+        /// <summary>Residual slip angle that counts as "pointing where you are
+        /// going", ending the straighten.</summary>
+        public const float DriftStraightenDoneDeg = 4f;
+
+        /// <summary>Grip while sliding. Between neutral and the spin-out's 0.35:
+        /// enough to keep the slide alive without the tyres giving up entirely,
+        /// which would make the angle uncontrollable rather than steerable.</summary>
+        public const float DriftGripMult = 0.70f;
+        /// <summary>Assist scale while sliding — see CarVehicle.arcadeAssistMult.
+        /// Not zero: a fifth of the countersteer assist keeps a full-lock entry
+        /// from becoming a spin, which is a help rather than a correction.</summary>
+        public const float DriftAssistMult = 0.20f;
+        /// <summary>Handbrake torque scale while sliding — see
+        /// CarVehicle.arcadeHandbrakeMult. This is the single most important
+        /// number here: a drift button that keeps the rear axle locked scrubs the
+        /// speed out of the arc, and no amount of carry acceleration buys it back.
+        /// A quarter leaves the back end willing without braking the corner
+        /// away.</summary>
+        public const float DriftHandbrakeMult = 0.25f;
+
+        /// <summary>Forward acceleration (m/s²) fed into the boost channel while
+        /// sliding, so the arc CARRIES momentum instead of scrubbing to a halt.
+        /// Applied along the car's NOSE, which is why it also rotates the velocity
+        /// vector toward where the car is pointing — the slide tightens onto its
+        /// own heading rather than washing out sideways forever.</summary>
+        public const float DriftCarryAccel = 4.5f;
+        /// <summary>Ceiling for the carry, below <see cref="BoostTopSpeed"/>: a
+        /// drift must never be a way to exceed the straight-line pace. It used to
+        /// be 8.5, which several designs simply cruise past — a carry that is
+        /// already faded to nothing at corner-entry speed is a carry that does not
+        /// exist.</summary>
+        public const float DriftCarryTopSpeed = 10f;
+        /// <summary>Speed band over which the carry fades out below the ceiling.</summary>
+        public const float DriftCarryFadeBand = 2.5f;
+
+        /// <summary>
+        /// Charge multipliers at full lock INTO the slide and at full counter-steer.
+        ///
+        /// This is what gives the player something to do while the drift is held.
+        /// Steering in both tightens the arc (it raises the target angle, above)
+        /// and pays better; steering out widens it and nearly stops the clock. One
+        /// stick axis, one decision — commit or bail — and the reward follows the
+        /// commitment rather than the stopwatch.
+        /// </summary>
+        public const float DriftChargeInto = 1.5f;
+        public const float DriftChargeOut = 0.35f;
+
+        // Tier gates, in units of CHARGE, not seconds — at full commitment they
+        // arrive in about 0.6 / 1.3 / 2.0 s, and a car being nursed sideways on
+        // counter-steer may never reach tier 3 at all.
+        public const float DriftTier1Seconds = 0.9f;
+        public const float DriftTier2Seconds = 1.9f;
+        public const float DriftTier3Seconds = 3.0f;
+        /// <summary>Charge at which the meter reads full (tier 3 plus a little, so
+        /// the bar has somewhere to go once the last tier lands).</summary>
+        public const float DriftChargeFull = 3.5f;
+        /// <summary>Boost duration granted per tier on release.</summary>
+        public const float DriftBoostSeconds = 0.8f;
+        /// <summary>Forward impulse (N·s) per tier on release, through the centre
+        /// of mass. The timed acceleration alone ramps in over a few frames, which
+        /// reads as the car gradually recovering rather than as being fired out of
+        /// the corner; this is the kick that makes the exit an event. At ~1.8 kg,
+        /// tier 3 is a shade under 1 m/s of instant speed.</summary>
+        public const float DriftExitImpulse = 0.55f;
+        public static readonly Color[] DriftTierColors =
+        {
+            new Color(0.35f, 0.70f, 1.00f),   // tier 1 — blue
+            new Color(1.00f, 0.60f, 0.15f),   // tier 2 — orange
+            new Color(0.75f, 0.40f, 1.00f),   // tier 3 — purple
+        };
+        /// <summary>Meter colour before the first tier lands.</summary>
+        public static readonly Color DriftChargeColor = new Color(0.72f, 0.76f, 0.82f);
+
+        // ---- slipstream ----
+        public const float DraftRange = 3.0f;        // metres behind the car ahead
+        public const float DraftConeDeg = 25f;       // heading alignment required
+        public const float DraftAccel = 4f;          // m/s², well under a boost's 14
+        public const float DraftTopSpeed = 11f;
+
         // ---- track limits ----
         /// <summary>A surface at or below this friction multiplier is off-track.
         /// Against TrackCatalog.Floors that means grass/sand/ice/mud (and the
@@ -218,9 +405,13 @@ namespace AIHWSim.Arcade
         // Front-runners get defensive/utility items, back-markers get the weapons.
         // This is the arcade catch-up mechanism and is independent of
         // SessionConfig.RubberBand, which only scales bot speed.
-        private static readonly float[] Lead = { 0f, 3.0f, 0.5f, 4.0f, 2.0f, 0.5f };
-        private static readonly float[] Mid = { 0f, 3.0f, 2.5f, 2.5f, 1.5f, 1.0f };
-        private static readonly float[] Back = { 0f, 2.0f, 4.0f, 1.0f, 1.0f, 3.0f };
+        //             None  Boost  Missile Banana Shield Triple Smoke  Oil
+        // Roll() loops w.Length, so extending these is all it takes to put a new
+        // ItemKind into circulation — and forgetting to extend them is a SILENT
+        // failure, not an error: the item simply never appears.
+        private static readonly float[] Lead = { 0f, 3.0f, 0.5f, 4.0f, 2.0f, 0.5f, 3.0f, 2.5f };
+        private static readonly float[] Mid = { 0f, 3.0f, 2.5f, 2.5f, 1.5f, 1.0f, 2.0f, 1.5f };
+        private static readonly float[] Back = { 0f, 2.0f, 4.0f, 1.0f, 1.0f, 3.0f, 1.0f, 1.0f };
 
         /// <summary>Roll an item for a racer in <paramref name="position"/> (1 = leader)
         /// out of <paramref name="fieldSize"/>.</summary>
@@ -255,6 +446,8 @@ namespace AIHWSim.Arcade
             ItemKind.Banana => "BANANA",
             ItemKind.Shield => "SHIELD",
             ItemKind.TripleBoost => "BOOST ×3",
+            ItemKind.SmokeCloud => "SMOKE",
+            ItemKind.OilSlick => "OIL",
             _ => "",
         };
     }

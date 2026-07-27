@@ -42,6 +42,7 @@ namespace AIHWSim.Core
         private bool _paused;
         private bool _showTune;
         private bool _showSettings;
+        private Vector2 _bodyScroll;
         private string _status = "";
         private PendingExit _pending;
 
@@ -53,6 +54,10 @@ namespace AIHWSim.Core
 
         private void Update()
         {
+            // While the settings panel is waiting for a key, Escape belongs to it:
+            // cancelling a rebind must not also close the menu you were rebinding
+            // from.
+            if (SettingsPanel.Capturing) return;
             if (InputReader.PausePressed())
                 SetPaused(!_paused);
         }
@@ -65,6 +70,7 @@ namespace AIHWSim.Core
             {
                 _showTune = false;
                 _showSettings = false;
+                SettingsPanel.Reset();
                 // If telemetry logging was just enabled in Settings, start it now
                 // that the menu is closing. EnableLogging is idempotent and only
                 // acts on loggable runners (never bots/split-screen).
@@ -77,10 +83,20 @@ namespace AIHWSim.Core
         {
             if (!_paused) return;
 
+            // Match the rest of the in-game UI. ArcadeHud and LanSessionMenu both
+            // set this and either can be on screen at the same moment, so leaving
+            // this menu on the default skin made it the odd one out.
+            GUI.skin = GarageSkin.Skin;
+
             if (_pending != PendingExit.None) { DrawSavePrompt(); return; }
 
-            float w = _showTune ? 380f : 280f;
-            float h = (_showTune && _tunable != null) ? 480f : (_showSettings ? 360f : 290f);
+            // The ten-button stack alone is taller than the old 290 px, so this
+            // panel was clipping inside BeginArea long before the settings panel
+            // was added to it. The scroll view below is the actual fix — with it,
+            // the height only has to be reasonable rather than exactly right.
+            float w = _showSettings ? 460f : (_showTune ? 380f : 300f);
+            float h = Mathf.Min(Screen.height - 60f,
+                _showSettings ? 620f : (_showTune && _tunable != null ? 560f : 470f));
             var area = new Rect((Screen.width - w) * 0.5f, (Screen.height - h) * 0.5f, w, h);
             GUILayout.BeginArea(area, GUI.skin.box);
 
@@ -92,6 +108,7 @@ namespace AIHWSim.Core
             };
             GUILayout.Label("PAUSED", title);
             GUILayout.Space(6);
+            _bodyScroll = GUILayout.BeginScrollView(_bodyScroll);
 
             if (GUILayout.Button("Resume (Esc)", GUILayout.Height(30))) SetPaused(false);
             bool inRace = _race != null && _race.isActiveAndEnabled;
@@ -128,6 +145,7 @@ namespace AIHWSim.Core
                 GUILayout.Label(_status);
             }
 
+            GUILayout.EndScrollView();
             GUILayout.EndArea();
         }
 
@@ -204,44 +222,15 @@ namespace AIHWSim.Core
             GameFlow.LoadTrackBuilder();  // GameFlow.ActiveTrack persists, so the builder reopens the driven map
         }
 
+        /// <summary>One line, because the panel is shared with the LAN menu — see
+        /// <see cref="SettingsPanel"/> for why it cannot live in here.</summary>
         private void DrawSettings()
         {
             GUILayout.Space(8);
-            GUILayout.Label("Settings:");
-            var s = Persistence.SettingsStore.Current;
-            bool lg = GUILayout.Toggle(s.logTelemetry, " Log sensor/telemetry data");
-            if (lg != s.logTelemetry)
-            {
-                s.logTelemetry = lg;
-                Persistence.SettingsStore.Save();
-            }
-            GUILayout.Label(s.logTelemetry
+            SettingsPanel.Draw(rigs, 330f);
+            GUILayout.Label(Persistence.SettingsStore.Current.logTelemetry
                 ? "Logging starts when you resume."
-                : "Logging is off (starts next session if enabled).");
-
-            // Volume, mid-race. Apply() as well as Save(): masterVolume drives
-            // AudioListener.volume, so without it the slider would move and
-            // nothing would change until the next scene load.
-            GUILayout.Space(6);
-            bool vChanged = false;
-
-            GUILayout.Label($"Master volume: {s.masterVolume:P0}");
-            float mv = GUILayout.HorizontalSlider(s.masterVolume, 0f, 1f);
-            if (!Mathf.Approximately(mv, s.masterVolume)) { s.masterVolume = mv; vChanged = true; }
-
-            GUILayout.Label($"Sound effects: {s.sfxVolume:P0}");
-            float sv = GUILayout.HorizontalSlider(s.sfxVolume, 0f, 1f);
-            if (!Mathf.Approximately(sv, s.sfxVolume)) { s.sfxVolume = sv; vChanged = true; }
-
-            GUILayout.Label($"Engine + tyres: {s.engineVolume:P0}");
-            float ev = GUILayout.HorizontalSlider(s.engineVolume, 0f, 1f);
-            if (!Mathf.Approximately(ev, s.engineVolume)) { s.engineVolume = ev; vChanged = true; }
-
-            if (vChanged)
-            {
-                Persistence.SettingsStore.Apply();
-                Persistence.SettingsStore.Save();
-            }
+                : "Logging is off (starts next session if enabled).", GarageSkin.StatLabel);
         }
 
         private void DrawTuning()

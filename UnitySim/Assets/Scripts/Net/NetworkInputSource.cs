@@ -35,6 +35,9 @@ namespace AIHWSim.Net
         public float Steer() => Live ? _last.steer : 0f;
         public float Brake() => Live ? _last.brake : (Time.unscaledTime - _receivedAt >= StaleAfter ? 1f : 0f);
         public bool Handbrake() => Live && _last.handbrake;
+        /// <summary>Never: this drives a car on somebody else's screen, and where
+        /// they point their own camera is not on the wire and does not need to be.</summary>
+        public bool LookBackHeld() => false;
         public float MouseSteerDelta() => 0f;
 
         public bool RespawnPressed()
@@ -73,6 +76,9 @@ namespace AIHWSim.Net
         public bool Handbrake() => !Frozen && _inner.Handbrake();
         public bool RespawnPressed() => !Frozen && _inner.RespawnPressed();
         public bool UseItemPressed() => !Frozen && _inner.UseItemPressed();
+        // Not gated: looking around during the countdown is harmless, and having
+        // the camera refuse to move would just read as a broken key.
+        public bool LookBackHeld() => _inner.LookBackHeld();
         public float MouseSteerDelta() => Frozen ? 0f : _inner.MouseSteerDelta();
     }
 }

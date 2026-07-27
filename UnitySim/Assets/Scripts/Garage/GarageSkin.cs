@@ -94,6 +94,28 @@ namespace AIHWSim.Garage
             TabActive.normal.textColor = Color.white;
         }
 
+        /// <summary>
+        /// A labelled 0..1 slider with the value shown as a percentage, returning
+        /// true when it moved.
+        ///
+        /// Named Slider01 rather than Slider because <c>GarageUI</c> already has a
+        /// differently-shaped Slider of its own, and two overloads that took the
+        /// same first argument and meant different things would be a trap. It
+        /// lives here rather than in a menu because three separate screens draw
+        /// this exact row — the options page, the pause panel and the LAN panel —
+        /// and a private copy in each is how they drift apart.
+        /// </summary>
+        public static bool Slider01(string label, ref float value)
+        {
+            GUILayout.BeginHorizontal();
+            GUILayout.Label($"{label}: {value:P0}", GUILayout.Width(150));
+            float v = GUILayout.HorizontalSlider(value, 0f, 1f, GUILayout.ExpandWidth(true));
+            GUILayout.EndHorizontal();
+            if (Mathf.Approximately(v, value)) return false;
+            value = v;
+            return true;
+        }
+
         private static GUIStyle Style(GUIStyle s, Color normal, Color text, Color hover)
         {
             s.normal.background = Solid(normal);

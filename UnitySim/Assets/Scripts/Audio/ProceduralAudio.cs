@@ -48,6 +48,7 @@ namespace AIHWSim.Audio
         public const string MissileFire = "missile_fire";
         public const string Explosion = "explosion";
         public const string BananaDrop = "banana_drop";
+        public const string Smoke = "smoke";
         public const string Spin = "spin";
         public const string ShieldUp = "shield_up";
         public const string ShieldBlock = "shield_block";
@@ -74,6 +75,7 @@ namespace AIHWSim.Audio
             MissileFire => BuildMissileFire(),
             Explosion => BuildExplosion(),
             BananaDrop => BuildBananaDrop(),
+            Smoke => BuildSmoke(),
             Spin => BuildSpin(),
             ShieldUp => BuildShieldUp(),
             ShieldBlock => BuildShieldBlock(),
@@ -314,6 +316,44 @@ namespace AIHWSim.Audio
             }
             Normalize(d, 0.6f);
             return Make(BananaDrop, d);
+        }
+
+        /// <summary>
+        /// The smoke cloud going off: a pressure release, not steam and not an
+        /// explosion. Three deliberate departures from the neighbouring clips:
+        ///
+        ///   * a very low cutoff (0.06, against BuildBoost's 0.35) is what makes
+        ///     it read as breath rather than hiss — above roughly 400 Hz there is
+        ///     no version of this that isn't a leaking valve;
+        ///   * ONE LOW-Q resonator, the exact opposite of BuildSkid's sharp pair.
+        ///     A high Q would give it a pitch, and a pitched fart is a kazoo;
+        ///     low Q gives body without a note;
+        ///   * a slow attack (0.18, against BuildImpact's 0.005) — the attack
+        ///     alone is the difference between a release of pressure and a
+        ///     gunshot, whatever the spectrum underneath is doing.
+        ///
+        /// A one-shot, not a loop, so none of the wrap machinery applies.
+        /// </summary>
+        private static AudioClip BuildSmoke()
+        {
+            int n = Samples(0.85f);
+            var d = new float[n];
+            var rng = new Rng(0x5D0CE);
+            for (int i = 0; i < n; i++) d[i] = rng.Next();
+
+            LowPass(d, 0.06f);
+            Resonate(d, 95f, 2.5f);
+
+            // A slow downward flutter over the top: the pitch of a release drops
+            // as the pressure behind it does, and without it this is just a puff.
+            for (int i = 0; i < n; i++)
+            {
+                float t = i / (float)n;
+                float flutter = 1f + 0.35f * Mathf.Sin(2f * Mathf.PI * Mathf.Lerp(26f, 11f, t) * t);
+                d[i] *= flutter * Env(t, 0.18f, 1.6f);
+            }
+            Normalize(d, 0.8f);
+            return Make(Smoke, d);
         }
 
         private static AudioClip BuildSpin()

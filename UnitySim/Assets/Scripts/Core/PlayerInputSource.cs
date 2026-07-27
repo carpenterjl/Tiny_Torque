@@ -28,6 +28,10 @@ namespace AIHWSim.Core
         /// so each press reaches exactly one item use. Always false outside
         /// arcade sessions — nothing listens.</summary>
         bool UseItemPressed();
+        /// <summary>Held: swing the chase camera round to look behind. Purely a
+        /// camera concern — it reaches no physics and no controller — which is
+        /// why the network and bot implementations simply return false.</summary>
+        bool LookBackHeld();
         float MouseSteerDelta();
     }
 
@@ -38,12 +42,19 @@ namespace AIHWSim.Core
     /// gamepads are resolved from <c>Gamepad.all</c> on every call so hot-plugs
     /// are safe (a missing pad just reads zeros). Under a legacy-only input
     /// build the exclusive kinds degrade to the merged behavior.
+    ///
+    /// Since the rebind layer, the exclusive kinds do not name any key or button
+    /// themselves: they call <see cref="InputReader"/>'s device-scoped readers,
+    /// which resolve the player's bindings once. There is ONE keyboard binding
+    /// set, for the obvious reason that there is one physical keyboard — two
+    /// keyboard players already collided before this and remain unsupported.
     /// </summary>
     public sealed class PlayerInputSource : IDriverInputSource
     {
         private readonly InputDeviceKind _kind;
         private readonly int _gamepadIndex;
         private readonly SteerSmoother _kbSteer = new SteerSmoother(); // Keyboard kind only
+        private readonly ThrottleSmoother _kbThrottle = new ThrottleSmoother();
 
         public PlayerInputSource(InputDeviceKind kind, int gamepadIndex = 0)
         {
@@ -62,13 +73,9 @@ namespace AIHWSim.Core
             {
 #if ENABLE_INPUT_SYSTEM
                 case InputDeviceKind.Keyboard:
-                {
-                    var kb = Keyboard.current;
-                    if (kb == null) return 0f;
-                    if (kb.wKey.isPressed || kb.upArrowKey.isPressed) return 1f;
-                    if (kb.sKey.isPressed || kb.downArrowKey.isPressed) return -1f;
-                    return 0f;
-                }
+                    // The shared raw reader is already keyboard-only; this kind
+                    // differs from Merged solely in not folding a gamepad in.
+                    return _kbThrottle.Step(InputReader.ThrottleDigitalRaw(), Time.time);
                 case InputDeviceKind.Gamepad:
                 {
                     var gp = Pad;
@@ -87,17 +94,8 @@ namespace AIHWSim.Core
             {
 #if ENABLE_INPUT_SYSTEM
                 case InputDeviceKind.Keyboard:
-                {
-                    var kb = Keyboard.current;
-                    float raw = 0f;
-                    if (kb != null)
-                    {
-                        if (kb.dKey.isPressed || kb.rightArrowKey.isPressed) raw = 1f;
-                        else if (kb.aKey.isPressed || kb.leftArrowKey.isPressed) raw = -1f;
-                    }
                     // Digital keys get the transmitter-style ramp (see SteerSmoother).
-                    return _kbSteer.Step(raw, Time.time);
-                }
+                    return _kbSteer.Step(InputReader.SteerDigitalRaw(), Time.time);
                 case InputDeviceKind.Gamepad:
                 {
                     var gp = Pad;
@@ -115,15 +113,9 @@ namespace AIHWSim.Core
             {
 #if ENABLE_INPUT_SYSTEM
                 case InputDeviceKind.Keyboard:
-                {
-                    var kb = Keyboard.current;
-                    return kb != null && kb.leftCtrlKey.isPressed ? 1f : 0f;
-                }
+                    return InputReader.BrakeKeyHeld() ? 1f : 0f;
                 case InputDeviceKind.Gamepad:
-                {
-                    var gp = Pad;
-                    return gp != null && gp.buttonEast.isPressed ? 1f : 0f;
-                }
+                    return InputReader.BrakePadHeld(Pad) ? 1f : 0f;
 #endif
                 default:
                     return InputReader.Brake();
@@ -136,15 +128,9 @@ namespace AIHWSim.Core
             {
 #if ENABLE_INPUT_SYSTEM
                 case InputDeviceKind.Keyboard:
-                {
-                    var kb = Keyboard.current;
-                    return kb != null && kb.spaceKey.isPressed;
-                }
+                    return InputReader.HandbrakeKeyHeld();
                 case InputDeviceKind.Gamepad:
-                {
-                    var gp = Pad;
-                    return gp != null && gp.buttonSouth.isPressed;
-                }
+                    return InputReader.HandbrakePadHeld(Pad);
 #endif
                 default:
                     return InputReader.Handbrake();
@@ -157,15 +143,9 @@ namespace AIHWSim.Core
             {
 #if ENABLE_INPUT_SYSTEM
                 case InputDeviceKind.Keyboard:
-                {
-                    var kb = Keyboard.current;
-                    return kb != null && kb.rKey.wasPressedThisFrame;
-                }
+                    return InputReader.RespawnKeyPressed();
                 case InputDeviceKind.Gamepad:
-                {
-                    var gp = Pad;
-                    return gp != null && gp.buttonNorth.wasPressedThisFrame;
-                }
+                    return InputReader.RespawnPadPressed(Pad);
 #endif
                 default:
                     return InputReader.RespawnPressed();
@@ -178,18 +158,27 @@ namespace AIHWSim.Core
             {
 #if ENABLE_INPUT_SYSTEM
                 case InputDeviceKind.Keyboard:
-                {
-                    var kb = Keyboard.current;
-                    return kb != null && kb.leftShiftKey.wasPressedThisFrame;
-                }
+                    return InputReader.UseItemKeyPressed();
                 case InputDeviceKind.Gamepad:
-                {
-                    var gp = Pad;
-                    return gp != null && gp.buttonWest.wasPressedThisFrame;
-                }
+                    return InputReader.UseItemPadPressed(Pad);
 #endif
                 default:
                     return InputReader.UseItemPressed();
+            }
+        }
+
+        public bool LookBackHeld()
+        {
+            switch (_kind)
+            {
+#if ENABLE_INPUT_SYSTEM
+                case InputDeviceKind.Keyboard:
+                    return InputReader.LookBackKeyHeld();
+                case InputDeviceKind.Gamepad:
+                    return InputReader.LookBackPadHeld(Pad);
+#endif
+                default:
+                    return InputReader.LookBackHeld();
             }
         }
 

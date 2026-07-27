@@ -5,19 +5,29 @@ namespace AIHWSim.Net
 {
     /// <summary>
     /// Client-side input pump: samples the local devices (merged keyboard +
-    /// gamepad, countdown-gated) at 30 Hz and streams them to the host, where a
-    /// <see cref="NetworkInputSource"/> feeds them into this player's simulated
-    /// car. Respawn and use-item presses are edge-latched between sends so none
-    /// are dropped in the 33 ms between packets.
+    /// gamepad, countdown-gated) every frame and streams the latest values to
+    /// the host at 60 Hz.
+    ///
+    /// Since protocol 4 the client drives its own car directly, so this stream
+    /// no longer steers anything — it carries the use-item and respawn edges the
+    /// host adjudicates, and its silence is the dead-man signal
+    /// (<see cref="NetworkInputSource"/>). The analog channels ride along
+    /// because they cost nothing and keep the host's fallback path honest.
+    ///
+    /// Sampling every frame rather than at send time matters: reading the
+    /// keyboard only 60 times a second adds up to a whole send interval of
+    /// avoidable lag to whatever still depends on it.
     /// </summary>
     public sealed class ClientInputSender : MonoBehaviour
     {
-        private const float Interval = 1f / 30f;
+        private const float Interval = 1f / 60f;
 
         private IDriverInputSource _source;
         private float _accum;
         private bool _respawnLatch;
         private bool _useItemLatch;
+        private float _throttle, _steer, _brake;
+        private bool _handbrake;
 
         private void Awake()
         {
@@ -32,16 +42,23 @@ namespace AIHWSim.Net
             if (_source.RespawnPressed()) _respawnLatch = true;
             if (_source.UseItemPressed()) _useItemLatch = true;
 
+            _throttle = _source.Throttle();
+            _steer = _source.Steer();
+            _brake = _source.Brake();
+            _handbrake = _source.Handbrake();
+
             _accum += Time.unscaledDeltaTime;
             if (_accum < Interval) return;
-            _accum = 0f;
+            // Subtract, don't zero — zeroing rounds the period up to a whole
+            // frame and quietly drops the rate below 60 Hz.
+            _accum = Mathf.Min(_accum - Interval, Interval);
 
             NetSession.Instance.SendInput(new InputState
             {
-                throttle = _source.Throttle(),
-                steer = _source.Steer(),
-                brake = _source.Brake(),
-                handbrake = _source.Handbrake(),
+                throttle = _throttle,
+                steer = _steer,
+                brake = _brake,
+                handbrake = _handbrake,
                 respawnEdge = _respawnLatch,
                 useItemEdge = _useItemLatch,
             });

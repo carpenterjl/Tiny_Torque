@@ -14,17 +14,32 @@ namespace AIHWSim.Net
     /// </summary>
     public sealed class LanSessionMenu : MonoBehaviour
     {
+        /// <summary>This machine's rigs, set by TrackBootstrap. Only used to give
+        /// <see cref="SettingsPanel"/> something to apply a moved assist slider
+        /// to — which in LAN is exactly the right list, because since protocol 4
+        /// each machine simulates its own car and a local assist change therefore
+        /// needs no wire message at all.</summary>
+        public System.Collections.Generic.List<PlayerRig> rigs;
+
         private bool _open;
         private bool _showMaps;
+        private bool _showSettings;
         private int _laps = 3;
         private Vector2 _mapScroll;
+        private Vector2 _bodyScroll;
         private bool _resultsDismissed;
 
         private NetSession S => NetSession.Instance;
 
         private void Update()
         {
-            if (InputReader.PausePressed()) _open = !_open;
+            // Escape belongs to the rebind capture while one is open — see
+            // PauseMenu.Update for the same guard and the same reason.
+            if (!SettingsPanel.Capturing && InputReader.PausePressed())
+            {
+                _open = !_open;
+                if (!_open) SettingsPanel.Reset();
+            }
             if (S != null && S.State == NetSession.LanState.Racing) _resultsDismissed = false;
         }
 
@@ -41,15 +56,17 @@ namespace AIHWSim.Net
             }
             if (!_open) return;
 
-            float w = _showMaps ? 480f : 300f, h = 380f;
+            float w = _showMaps ? 480f : (_showSettings ? 460f : 300f);
+            float h = Mathf.Min(Screen.height - 60f, _showSettings ? 600f : 380f);
             var area = new Rect((Screen.width - w) * 0.5f, (Screen.height - h) * 0.5f, w, h);
             GUILayout.BeginArea(area, GUI.skin.box);
             GUILayout.BeginHorizontal();
 
-            GUILayout.BeginVertical(GUILayout.Width(280f));
+            GUILayout.BeginVertical(GUILayout.Width(_showSettings ? 440f : 280f));
             var title = new GUIStyle(GarageSkin.Header) { fontSize = 18, alignment = TextAnchor.MiddleCenter };
             GUILayout.Label(S.IsHost ? "LAN SESSION (HOST)" : "LAN SESSION", title);
             GUILayout.Space(6);
+            _bodyScroll = GUILayout.BeginScrollView(_bodyScroll);
 
             foreach (var p in S.Roster)
             {
@@ -87,11 +104,26 @@ namespace AIHWSim.Net
                     GUILayout.Label("(map has no finish line — free roam only)", GarageSkin.StatLabel);
             }
 
+            // The same panel the pause menu shows. A LAN scene never creates a
+            // PauseMenu, so without this a networked player could not reach a
+            // single setting without leaving the session.
+            GUILayout.Space(6);
+            if (GUILayout.Button(_showSettings ? "Hide settings" : "Settings…", GUILayout.Height(28)))
+            {
+                _showSettings = !_showSettings;
+                SettingsPanel.Reset();
+            }
+            if (_showSettings) SettingsPanel.Draw(rigs, 340f);
+
             GUILayout.FlexibleSpace();
             if (GUILayout.Button("Leave Session", GUILayout.Height(30)))
                 S.Leave();
             if (GUILayout.Button("Close (Esc)", GUILayout.Height(26)))
+            {
                 _open = false;
+                SettingsPanel.Reset();
+            }
+            GUILayout.EndScrollView();
             GUILayout.EndVertical();
 
             if (_showMaps && S.IsHost) DrawMapList();

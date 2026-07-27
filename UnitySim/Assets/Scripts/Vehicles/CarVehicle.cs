@@ -118,6 +118,45 @@ namespace AIHWSim.Vehicles
         /// stop dead.</summary>
         public float arcadeDriveMult = 1f;
 
+        /// <summary>
+        /// Scales the two SLIP-KILLING assists (steer countersteer and the
+        /// stability yaw damper) while an arcade effect wants the car to slide on
+        /// purpose. MUST default to 1 — at 1 both multiplies are exact and every
+        /// non-arcade session stays bit-identical.
+        ///
+        /// It exists because those two assists are, by construction, machines
+        /// that remove body slip angle, and a deliberate drift is the player
+        /// asking for body slip angle. The stability assist is the worse of the
+        /// pair: it damps yaw rate toward the bicycle-model intent, which is
+        /// precisely the yaw the drift is generating. With assists now defaulting
+        /// to Standard, leaving them on would quietly undo the slide and the
+        /// mechanic would read as "the handbrake does nothing".
+        ///
+        /// Traction control and ABS are deliberately NOT scaled — they act on
+        /// wheel slip ratio, not on body attitude, and a drift has no quarrel
+        /// with either.
+        /// </summary>
+        public float arcadeAssistMult = 1f;
+
+        /// <summary>
+        /// Scales <see cref="handbrakeTorque"/> while an arcade drift is holding a
+        /// slide. MUST default to 1 — at 1 the multiply is exact and every
+        /// non-arcade session stays bit-identical.
+        ///
+        /// A real handbrake is a brake, and that is the right answer everywhere
+        /// except inside a committed drift, where it is the reason the mechanic
+        /// felt wrong: locking the rear axle for two seconds scrubs most of the
+        /// speed out of the arc, so the slide dies, the exit is slow, and the
+        /// reward never pays for the corner. An arcade drift button is not a
+        /// brake — it is a request to slide — so during one this turns the lock
+        /// down to a drag. Not to zero: a little rear brake is what keeps the
+        /// back end willing rather than merely permitted.
+        ///
+        /// Only the torque is scaled, not the <c>_handbrake</c> flag itself, so
+        /// ABS stays exempt from the deliberate lock exactly as before.
+        /// </summary>
+        public float arcadeHandbrakeMult = 1f;
+
         [Header("Composite mass (factory-set)")]
         public bool useCompositeMass = false;
         public float compositeMass = 1.6f;
@@ -225,6 +264,23 @@ namespace AIHWSim.Vehicles
         public int SetpointCount => 2;
         public float ForwardSpeed => _body != null ? Vector3.Dot(_body.linearVelocity, transform.forward) : 0f;
 
+        /// <summary>Lateral velocity in the body frame — positive to the right.
+        /// Paired with <see cref="ForwardSpeed"/> it gives the body slip angle,
+        /// which is how the arcade layer decides a slide is a drift and not just
+        /// a fast corner.</summary>
+        public float LateralSpeed => _body != null ? Vector3.Dot(_body.linearVelocity, transform.right) : 0f;
+
+        /// <summary>Is the handbrake currently pulled? Read-only, for the arcade
+        /// drift-boost charge; the physics still reads the private field.</summary>
+        public bool Handbraking => _handbrake;
+
+        /// <summary>The latched steering COMMAND [-1, 1], not the servo angle.
+        /// The arcade drift reads intent — "which way did you ask to go when you
+        /// pulled the handbrake" — and <see cref="CurrentSteerAngle"/> is the
+        /// servo's slewed, load-limited answer to that question, which lags by up
+        /// to a couple of hundred milliseconds under cornering load.</summary>
+        public float SteerCommand => Mathf.Clamp(_cmd[SteerActuator], -1f, 1f);
+
         public int WheelCount => _wheels.Count;
 
         public float CurrentSteerAngle
@@ -326,6 +382,22 @@ namespace AIHWSim.Vehicles
         }
 
         /// <summary>
+        /// Impulse straight through the centre of mass, so it adds speed and no
+        /// rotation whatsoever.
+        ///
+        /// The positioned overload above is not interchangeable with this one for
+        /// a HORIZONTAL push: the composite CoM sits a few centimetres off the
+        /// transform origin, and against a pitch inertia of order 0.01 kg·m² that
+        /// lever arm turns a 2 N·s shove into hundreds of degrees per second of
+        /// somersault. (The drift hop gets away with it only because a vertical
+        /// impulse on a vertical lever arm has a zero cross product.)
+        /// </summary>
+        public void ArcadeImpulse(Vector3 impulse)
+        {
+            if (_body != null) _body.AddForce(impulse, ForceMode.Impulse);
+        }
+
+        /// <summary>
         /// Apply an angular impulse (the missile-hit tumble). Separate from the
         /// sustained <see cref="arcadeYawTorque"/>: that one is a torque held for
         /// the length of a spin-out, this is a single kick that lets the car
@@ -343,7 +415,13 @@ namespace AIHWSim.Vehicles
             _body.linearDamping = 0.02f;   // real drag is modeled explicitly
             _body.angularDamping = 0.5f;
             _body.interpolation = RigidbodyInterpolation.Interpolate;
-            _body.collisionDetectionMode = CollisionDetectionMode.ContinuousDynamic;
+            // ContinuousDynamic is invalid on a kinematic body — Unity warns and
+            // falls back. Ghosts and host-side followers are kinematic and still
+            // need continuous detection, because they cross the 0.25 m lap and
+            // checkpoint gates in one step at racing speed.
+            _body.collisionDetectionMode = _body.isKinematic
+                ? CollisionDetectionMode.ContinuousSpeculative
+                : CollisionDetectionMode.ContinuousDynamic;
             _body.centerOfMass = centerOfMass;
             // Composite mass model (set by the factory from MassProperties): total
             // mass, CoM, and a diagonal inertia tensor derived from the chassis box
@@ -859,6 +937,21 @@ namespace AIHWSim.Vehicles
         public void ResetVehicle()
         {
             if (!_spawnCaptured) CaptureSpawn();
+            ResetVehicleTo(_spawnPos, _spawnRot);
+        }
+
+        /// <summary>
+        /// <see cref="ResetVehicle"/> to an arbitrary pose: same full reset of
+        /// motors, pack, wheels, encoders and IMU, different destination.
+        ///
+        /// Split out for the respawn key, which now puts the car back on the
+        /// nearest point of the racing line instead of the start line (see
+        /// <c>Core.TrackRespawn</c>). Everything that resets a RUN rather than a
+        /// stuck car — SimulationRunner, the mission harness — still calls
+        /// <see cref="ResetVehicle"/> and still goes to the spawn point.
+        /// </summary>
+        public void ResetVehicleTo(Vector3 pos, Quaternion rot)
+        {
             System.Array.Clear(_cmd, 0, _cmd.Length);
             _handbrake = false;
             foreach (var m in _motors) m?.ResetMotor();
@@ -872,11 +965,16 @@ namespace AIHWSim.Vehicles
             _body.collisionDetectionMode = CollisionDetectionMode.Discrete;
             _body.linearVelocity = Vector3.zero;
             _body.angularVelocity = Vector3.zero;
-            _body.position = _spawnPos;
-            _body.rotation = _spawnRot;
-            transform.SetPositionAndRotation(_spawnPos, _spawnRot);
+            _body.position = pos;
+            _body.rotation = rot;
+            transform.SetPositionAndRotation(pos, rot);
             Physics.SyncTransforms();
             _body.collisionDetectionMode = mode;
+
+            // A respawn is also the one guaranteed way out of a boost-pad pin, so
+            // clear the latch rather than making the player wait it out.
+            _padStallTime = 0f;
+            _padPinned = false;
 
             foreach (var w in _wheels)
             {
@@ -933,6 +1031,35 @@ namespace AIHWSim.Vehicles
         /// RaceDirector; covers every drive mode (manual, bot, firmware).</summary>
         public bool Frozen;
 
+        // ---- boost-pad pin escape ----
+        // A pad pushes along transform.forward for as long as a wheel is on it,
+        // which is correct while you are moving and a trap when you are not: nose
+        // into a wall on a pad and the pad holds you there, out-torquing reverse
+        // and pinning the car straight so steering cannot walk it off either. The
+        // only way out was the respawn key.
+        //
+        // Rather than special-case walls, this watches the outcome — on a pad and
+        // not going anywhere — and stands the pad down until the car is genuinely
+        // rolling forward again. Self-clearing, needs no notion of what is in the
+        // way, and works the same for a bot as for a player.
+        //
+        // Provably inert off a pad: the whole block is inside `padBoost > 0`, and
+        // a surface with no boostAccel never sets it. Nothing about the arcade
+        // boost channel (items, drift carry, slipstream) is touched — those are
+        // seconds long and end on their own.
+
+        /// <summary>Forward speed below which a pad counts as not carrying you.</summary>
+        private const float PadPinSpeed = 1.0f;
+        /// <summary>Forward speed that proves the car is away and re-arms the pad.
+        /// Above <see cref="PadPinSpeed"/> so the pad cannot chatter on and off.</summary>
+        private const float PadFreeSpeed = 1.6f;
+        /// <summary>How long pinned before the pad gives up. Long enough that
+        /// crawling onto a pad from a standstill still gets its shove.</summary>
+        private const float PadPinSeconds = 0.7f;
+
+        private float _padStallTime;
+        private bool _padPinned;
+
         public void StepPhysics(float dt)
         {
             // Battery bus: terminal voltage sags with LAST step's total current
@@ -979,6 +1106,11 @@ namespace AIHWSim.Vehicles
             float steerCmd = Mathf.Clamp(_cmd[SteerActuator], -1f, 1f);
             float brake = Mathf.Clamp01(_cmd[BrakeActuator]) * maxBrakeTorque;
             float boost = arcadeBoostAccel;   // 0 outside arcade; pads max against it
+            // Pads are accumulated separately so the pin latch below can stand
+            // THEM down without touching an item boost or a drift carry. Maxing
+            // the two together afterwards gives the identical number the single
+            // variable used to.
+            float padBoost = 0f;
 
             // Race countdown hold: full brakes, no drive/steer until GO.
             if (Frozen) { brake = maxBrakeTorque; steerCmd = 0f; }
@@ -993,6 +1125,9 @@ namespace AIHWSim.Vehicles
 
             // Arcade assists (0 = pure physics). Forced off in Autonomous mode.
             AssistSettings a = assistsActive ? assists : default;
+            // Neutral (1) everywhere except inside an arcade drift; see the field.
+            a.steer *= arcadeAssistMult;
+            a.stability *= arcadeAssistMult;
 
             // Brush path: decide whether PhysX's low-speed "sticky tire"
             // constraints may engage. They pin a near-stationary car's contact
@@ -1021,13 +1156,16 @@ namespace AIHWSim.Vehicles
             if (a.steer > 0f)
             {
                 float sp = Mathf.Abs(ForwardSpeed);
-                steerCmd *= Mathf.Lerp(1f, Mathf.Min(1f, 4f / Mathf.Max(0.5f, sp)), a.steer);
+                steerCmd *= Mathf.Lerp(1f, Mathf.Min(1f,
+                    AssistTuning.SteerLimitRef(a.steer) / Mathf.Max(AssistTuning.SteerLimitMinSpeed, sp)),
+                    a.steer);
                 Vector3 vLoc = transform.InverseTransformDirection(_body.linearVelocity);
-                if (Mathf.Abs(vLoc.z) > 1f)
+                if (Mathf.Abs(vLoc.z) > AssistTuning.CounterSteerMinLongSpeed)
                 {
                     float slipAngle = Mathf.Atan2(vLoc.x, Mathf.Abs(vLoc.z)); // + = sliding right
                     steerCmd = Mathf.Clamp(
-                        steerCmd + a.steer * Mathf.Clamp(slipAngle * 0.5f, -0.35f, 0.35f),
+                        steerCmd + a.steer * Mathf.Clamp(slipAngle * AssistTuning.CounterSteerGain,
+                            -AssistTuning.CounterSteerClamp, AssistTuning.CounterSteerClamp),
                         -1f, 1f);
                 }
             }
@@ -1078,7 +1216,10 @@ namespace AIHWSim.Vehicles
                 w.col.steerAngle = w.currentSteer;
 
                 // Foot brake everywhere; handbrake locks the non-steering wheels.
-                float b = brake + ((_handbrake && !w.cfg.allowsSteering) ? handbrakeTorque : 0f);
+                // arcadeHandbrakeMult is 1 outside a drift, so this is the same
+                // expression it has always been.
+                float b = brake + ((_handbrake && !w.cfg.allowsSteering)
+                    ? handbrakeTorque * arcadeHandbrakeMult : 0f);
 
                 // Per-tile surface (custom maps only): friction scaling, rolling
                 // resistance, boost pads, rumble strips. Off tile maps SurfaceMap
@@ -1091,7 +1232,7 @@ namespace AIHWSim.Vehicles
                     // Legacy path: rolling resistance rides the brake torque.
                     // Brush path: it becomes a torque in the spin integrator below.
                     if (!TyreModel.Enabled) b += surf.rollingResist * rollScale;
-                    if (surf.boostAccel > boost) boost = surf.boostAccel;
+                    if (surf.boostAccel > padBoost) padBoost = surf.boostAccel;
                     if (surf.bumpAmp > 0f)
                     {
                         // Position-based vertical buzz: crossing the strip oscillates
@@ -1194,12 +1335,14 @@ namespace AIHWSim.Vehicles
                     // foot brake toward lockup (deliberate handbrake locks exempt).
                     if (grounded)
                     {
-                        if (a.traction > 0f && w.cfg.powered && w.slipRatio > 0.25f)
+                        float tcOn = AssistTuning.TractionOnsetFor(a.traction);
+                        float absOn = AssistTuning.AbsOnsetFor(a.abs);
+                        if (a.traction > 0f && w.cfg.powered && w.slipRatio > tcOn)
                             w.driveTorque *= 1f - a.traction *
-                                Mathf.Clamp01((w.slipRatio - 0.25f) / 0.35f);
-                        if (a.abs > 0f && b > 0f && w.slipRatio < -0.3f &&
+                                Mathf.Clamp01((w.slipRatio - tcOn) / AssistTuning.TractionBand);
+                        if (a.abs > 0f && b > 0f && w.slipRatio < -absOn &&
                             !(_handbrake && !w.cfg.allowsSteering))
-                            b *= 1f - a.abs * Mathf.Clamp01((-w.slipRatio - 0.3f) / 0.4f);
+                            b *= 1f - a.abs * Mathf.Clamp01((-w.slipRatio - absOn) / AssistTuning.AbsBand);
                     }
 
                     float fx = 0f, fy = 0f;
@@ -1256,17 +1399,41 @@ namespace AIHWSim.Vehicles
 
                     if (grounded)
                     {
-                        if (a.traction > 0f && w.cfg.powered && hit.forwardSlip > 0.25f)
+                        float tcOn = AssistTuning.TractionOnsetFor(a.traction);
+                        float absOn = AssistTuning.AbsOnsetFor(a.abs);
+                        if (a.traction > 0f && w.cfg.powered && hit.forwardSlip > tcOn)
                             w.col.motorTorque *= 1f - a.traction *
-                                Mathf.Clamp01((hit.forwardSlip - 0.25f) / 0.35f);
-                        if (a.abs > 0f && b > 0f && hit.forwardSlip < -0.3f &&
+                                Mathf.Clamp01((hit.forwardSlip - tcOn) / AssistTuning.TractionBand);
+                        if (a.abs > 0f && b > 0f && hit.forwardSlip < -absOn &&
                             !(_handbrake && !w.cfg.allowsSteering))
-                            b *= 1f - a.abs * Mathf.Clamp01((-hit.forwardSlip - 0.3f) / 0.4f);
+                            b *= 1f - a.abs * Mathf.Clamp01((-hit.forwardSlip - absOn) / AssistTuning.AbsBand);
                     }
 
                     w.col.brakeTorque = b;
                 }
             }
+
+            // Pad pin latch — see the constants above. Off a pad this resets and
+            // nothing else here runs, which is what keeps it invisible to any
+            // surface that does not boost.
+            if (padBoost > 0f)
+            {
+                float fwd = ForwardSpeed;
+                // Signed, not absolute: reversing off a pad must count as pinned
+                // too, or backing away would re-arm the pad and shove you in again.
+                if (fwd < PadPinSpeed) _padStallTime += dt;
+                else _padStallTime = 0f;
+
+                if (_padStallTime >= PadPinSeconds) _padPinned = true;
+                if (fwd > PadFreeSpeed) { _padPinned = false; _padStallTime = 0f; }
+                if (_padPinned) padBoost = 0f;
+            }
+            else
+            {
+                _padStallTime = 0f;
+                _padPinned = false;
+            }
+            if (padBoost > boost) boost = padBoost;
 
             // Boost pad: push the car forward while any wheel is on one (never during the hold).
             if (!Frozen && boost > 0f)
@@ -1281,7 +1448,8 @@ namespace AIHWSim.Vehicles
                 float yawIntent = ForwardSpeed / _wheelbaseEst *
                                   Mathf.Tan(CurrentSteerAngle * Mathf.Deg2Rad);
                 float yawErr = _body.angularVelocity.y - yawIntent;
-                float tq = Mathf.Clamp(-yawErr * 0.08f * a.stability, -0.3f, 0.3f);
+                float cap = AssistTuning.StabilityClamp(a.stability);
+                float tq = Mathf.Clamp(-yawErr * AssistTuning.StabilityGain * a.stability, -cap, cap);
                 _body.AddTorque(0f, tq, 0f, ForceMode.Force);
             }
 

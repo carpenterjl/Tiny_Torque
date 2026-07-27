@@ -126,14 +126,38 @@ port 7777 forwarded). Players join into **free roam** on the host's map with
 their own garage vehicles; the host's Esc menu can **change the map** for
 everyone and **start a race** — all cars teleport to a grid behind the line,
 a 3-2-1 countdown freezes inputs, and first-to-N-laps rules apply with live
-standings and shared results (host can rematch). The host simulates all
-physics; clients stream inputs and render smooth interpolated cars. Windows
-Firewall will ask to allow the game on private networks the first time you host
-(the game uses **UDP 7777** for transport and **UDP 47777** for LAN discovery).
-Wi-Fi is fine — the streams are a few KB/s and clients render 120 ms behind the
-host to absorb jitter; what matters is that everyone is on the same network and
-*not* a guest network, which usually blocks PCs from seeing each other.
+standings and shared results (host can rematch). Windows Firewall will ask to
+allow the game on private networks the first time you host (the game uses
+**UDP 7777** for transport and **UDP 47777** for LAN discovery). Wi-Fi is fine —
+the streams are a few KB/s; what matters is that everyone is on the same network
+and *not* a guest network, which usually blocks PCs from seeing each other.
 Telemetry/graphs/autonomous controllers remain single-player features.
+
+**Every machine drives its own car.** Each player simulates the car they are
+steering and streams the result at 60 Hz; the host follows each client's car
+with a kinematic copy and relays it on to everyone else, who render it as an
+interpolated ghost ~60 ms in the past. So your own controls answer immediately —
+there is no round trip between pressing a key and seeing the car respond, and no
+correction snaps, because nobody ever overrules you about your own car. This is
+how racing games generally do it (and unlike a shooter, where the server is
+right about where you are): the alternative — the host simulating everyone and
+clients predicting — costs about 170 ms of control lag here, or a permanent
+rubber-band if you correct it, because PhysX cannot rewind a single car.
+
+The host is still the authority on everything *shared*: laps and checkpoints,
+race state and standings, item pickups, and every random roll. It keeps those by
+having a real collider for each client's car to be adjudicated against — which
+is why the follower is a moved rigidbody and not a row in a table. When an
+arcade effect lands on a car the host does not simulate, the host still rolls
+the dice (which way the spin throws you, how the wreck tumbles, where the
+recovery sets you down) and ships the numbers to that car's owner to apply, so
+both machines agree about the same hit. Track limits are the one judgement that
+moves the other way: a kinematic copy has no wheels touching the road, so each
+owner tests its own car and sends the verdict up with its pose.
+
+One consequence worth knowing: cars no longer trade momentum in a collision.
+Each machine treats everyone else's car as immovable, so a shunt pushes you and
+not them. That was already true between clients; it is now true of the host too.
 
 **Sharing & installers.** **Tools ▸ AIHWSim ▸ Build Standalone (Dev)** makes a
 development build for one-PC testing (editor hosts, build joins via 127.0.0.1).
@@ -416,9 +440,9 @@ all funnel through it, so no free-drive can inherit a stale arcade session.
 
 | | |
 |---|---|
-| Use item | **Left Shift** (keyboard) · **X / square** (gamepad) |
-| Items | boost, triple-boost, homing missile, dropped banana, shield |
-| Roulette | weighted by live position — leaders draw boost/banana/shield, back-markers draw missile/triple-boost |
+| Use item | **Left Shift** (keyboard) · **X / square** (gamepad) — rebindable |
+| Items | boost, triple-boost, homing missile, dropped banana, shield, smoke cloud, oil slick |
+| Roulette | weighted by live position — leaders draw boost/banana/shield/smoke, back-markers draw missile/triple-boost |
 | Track limits | all four wheels off a surface below 0.90 friction for 2.5 s → a 2 s speed cap; two wheels off at an apex is racing, and jumps are exempt |
 | Points | 15/12/10/8/6/4/2/1 on finish |
 
@@ -466,6 +490,115 @@ miss and fly on. The first build used 3.2 rad/s, which is a 3.4 m radius, about
 as tight as the car itself; it simply followed you in, and calling it dodgeable
 was a claim the geometry did not support.
 
+### Area denial: smoke and oil
+
+Two items you leave behind you rather than fire. A **smoke cloud** grows to 0.75 m
+over half a second, drifts slowly, and fogs the screen of anyone who drives
+through it for 2.6 s — a green wash that *holds* at full strength and only fades
+at the end, because a flash is a punch you already took while this is a state you
+are in and is meant to cost you the corner. A bot caught in one stops following
+the racing line and drives straight. An **oil slick** is flatter, wider (0.85 m),
+lasts twelve seconds and cuts grip to 45 % while you are on it, recovering 0.4 s
+after you leave. Shields deliberately block neither: a shield absorbs one *hit*,
+and losing your sight or your grip is not a hit — which is the role these two have
+that Shield does not already cover.
+
+Neither carries a collider at all, which is the central design decision rather
+than an omission. Containment is a distance poll in the director. A car is one
+transform with a root box collider *and* four wheel colliders, so a trigger fires
+several times per car per pass; re-arming an effect while you sit inside would
+need `OnTriggerStay`, which stops firing the moment a parked car's rigidbody
+sleeps; and LAN host followers are kinematic, which is exactly where trigger
+callbacks get murky. A poll has none of those failures, costs eight racers times
+sixteen hazards of `sqrMagnitude` per frame, and means a cloud can never
+accidentally become a wall — which for an item whose whole point is that you
+drive through it is worth more than the poll costs.
+
+The hazard and its visual share one GameObject, so a drifting cloud carries its
+effect with it instead of leaving an invisible trap behind a harmless decoration,
+and the gameplay radius is copied off the visual at spawn — what catches you is by
+construction what you can see.
+
+### Drifting
+
+Turn, pull the **handbrake**, and the car *commits*: it hops, sets itself into a
+slide in the direction you were steering, and holds that slide until you let go.
+The drift is **latched, not detected** — the first version watched for handbrake
+plus speed plus slip angle and paid out when it happened to see all three, which
+made the mechanic something the physics might grant you rather than something you
+did. Now the handbrake is the commitment and the direction is read from the wheel
+at that instant.
+
+While it is held:
+
+- **The angle is yours.** Steering further into the slide opens it out toward 34°
+  of body slip; counter-steering closes it down toward 11°. A yaw controller
+  holds whatever you ask for, with a much larger torque clamp for the first
+  0.28 s — that is the snap into the slide, and it is a torque rather than an
+  angular impulse so it feels the same whatever inertia the garage handed the
+  design.
+- **The drift button stops being a brake.** The handbrake torque drops to a
+  quarter for the frames a slide is held. This is the difference between an arc
+  and a handbrake turn: a locked rear axle bleeds the speed out of the corner
+  faster than anything can put it back, which is why the first version felt like
+  a punishment for drifting.
+- **The arc carries.** A forward acceleration pays back the lateral scrub, fading
+  out at 10 m/s so it can never take you past straight-line pace. It pushes along
+  the *nose*, not along the velocity, which is also what rotates the car's motion
+  onto its heading — the slide tightens onto its own line instead of washing out.
+- **The assists stand down.** Countersteer and the stability yaw damper are
+  turned down to a fifth, because both are machines for removing body slip angle
+  and a drift is a request for body slip angle. Without this a Standard-assist
+  car simply refuses to drift. Traction control and ABS are untouched — they act
+  on wheel slip, not on body attitude.
+
+A **mini-turbo** charges through three tiers, and the charge rate follows your
+*commitment* rather than the clock: leaning into the slide pays about four times
+what nursing it on counter-steer does. One stick axis makes both decisions — how
+tight the arc is and how fast the reward builds — so holding a drift is something
+you are doing rather than something you are waiting through. Sparks tint blue,
+orange, then purple, and a meter above the item panel marks where the next tier
+is.
+
+Releasing the handbrake straightens the car out — the same controller, aimed at
+zero slip — and fires a per-tier impulse along the nose, so the exit lands as an
+event pointing down the road rather than a gradual recovery pointing sideways. A
+banner names what the slide was worth. A spin or a wreck mid-drift drops the
+charge unpaid and skips the straighten: you are supposed to be out of control.
+
+### Slipstream and look-back
+
+Sit behind another car on a straight and you pick up a **slipstream**, recomputed
+at the existing 5 Hz position tick. Both effects feed the same `arcadeBoostAccel`
+channel the item boost uses — the draft is *maxed* in rather than added, so
+drafting closes a gap instead of stacking on top of a mushroom and launching you
+past the field, and both inherit the boost's top-speed fade for free.
+
+**Look back** (**C**, or the right stick click) mirrors the chase camera's offset
+while held. Held rather than toggled, so you cannot leave the camera facing
+backwards and wonder why you keep hitting walls.
+
+### Getting unstuck
+
+A **boost pad** pushes along the car's nose for as long as a wheel is on it,
+which is right while you are moving and a trap when you are not: nose into a wall
+on a pad and it holds you there, out-torquing reverse and pinning the car too
+straight for steering to walk it off. The pad now watches the outcome rather than
+the geometry — on a pad and below 1 m/s for 0.7 s and it stands down, re-arming
+once the car is genuinely rolling again at 1.6 m/s. It needs no idea of what is in
+the way, and it works the same for a bot. Item boosts, drift carry and slipstream
+are untouched: those last seconds and end on their own.
+
+**Respawn** (**R**) puts the car back on the nearest point of the racing line
+facing down-track, not at the start line. It uses the same arc-length spine and
+floor-only raycast the missile recovery does, so it lands on the bridge rather
+than under it. Your lap still dies — you have to cross the line again to arm a new
+one — because keeping both the free position correction and the lap in progress
+would make **R** a shortcut past any corner you were about to lose time in. On a
+map with no racing line at all it falls back to the spawn point. Resets that
+restart a *run* rather than rescue a car (the mode toggle, the mission harness)
+still go to the spawn point as they always did.
+
 ### Arcade over LAN
 
 Arcade runs in LAN too, host-authoritative like everything else in a LAN session:
@@ -476,7 +609,10 @@ roam as well as in races, so there is something to do between them.
 
 The host owns every decision. It runs the whole director, and clients build the
 same director with `IsAuthority` false: they roll no roulette, grant no items,
-recover no wrecks and detonate nothing. What they get is two streams.
+choose no recovery spot and detonate nothing. What they get is two streams — and,
+since each player simulates their own car, a third message that hands them the
+physics of an effect the host decided (`aihw.arc_fx`): the impulse, the tumble,
+the spin's direction, the recovery pose. Applying is theirs; deciding is not.
 
 **State**, 15 Hz and unreliable: inventories, effects, live positions, points,
 projectile poses, and a bitmask of which item boxes are up. All of it idempotent,
@@ -503,9 +639,32 @@ and the incoming warning be one implementation instead of two. The one thing a
 client genuinely cannot derive is whether a missile is locked onto it — it owns
 no missiles, only their poses — so that arrives as a flag.
 
-This is **protocol v3**: a previously-always-zero input flag bit now means "use
-item", so a v2 client would connect and silently never fire anything. The exact
-version check at connection approval rejects mixed builds instead.
+This is **protocol v5**. Every machine in a session must run the same build; the
+exact version check at connection approval rejects a mismatch cleanly rather than
+letting it half-work. Two things moved in v5, and both are worth knowing:
+
+`ArcEffect` widened from a byte to a `ushort`, because all eight of its bits were
+spoken for and the oil slick needed a ninth. That flag is not cosmetic — since v4
+each client simulates its own car, so it is the *only* route by which oil reaches
+a human player's physics; without it a slick would affect the host and the bots
+and nobody else.
+
+Blindness, by contrast, is **not** a flag. It goes on the wire as one byte of
+remaining time, because the receiver has to rebuild an envelope rather than a
+boolean: the green wash ramps in, holds, and fades over its last 0.9 s. Held as a
+bit and re-armed to "now plus one sync period" like every other effect, that fade
+term would have read 0.25/0.9 forever and pegged a client's tint at a third of the
+alpha the host was drawing — an effect that looks like it works while not costing
+the corner it exists to cost. One byte per racer, about 120 B/s at a full grid,
+buys the identical envelope on both machines.
+
+Area hazards ride the projectile stream as new kinds rather than the event stream,
+because their *existence* is state and not a happening — a cloud lives for nine
+seconds, so streaming it self-heals a lost packet, where a one-shot "dropped"
+event would leave a client staring through a hazard the host is still catching it
+with. An unknown projectile kind now renders **nothing** and logs once; it used to
+fall through to a banana, which is the worst available failure — a real-looking
+hazard that exists on neither machine's rules.
 
 A race also now ends 45 s after the leader crosses, with everyone still out there
 recorded DNF. One player who parks, gets stuck or disconnects badly used to hold
@@ -813,14 +972,68 @@ starts in **Manual** mode.
 | Throttle / reverse | W / S or ↑ / ↓     | Right / Left trigger       |
 | Steer         | A / D or ← / →           | Left stick X               |
 | Brake         | Left Ctrl                | ⓔ (east button)            |
-| Handbrake     | Space                    | ⓐ (south button)           |
-| Respawn       | R                        | ⓨ (north button)           |
-| Manual ⇄ Auto | M                        | Start                      |
+| Handbrake / drift | Space                | ⓐ (south button)           |
+| Respawn (to nearest track point) | R     | ⓨ (north button)           |
+| Use item (arcade) | Left Shift           | ⓧ (west button)            |
+| Look back     | C (held)                 | Right stick click          |
+| Manual ⇄ Auto | M                        | Select                     |
+| Pause         | Esc                      | Start                      |
 
 Send the car off a dirt jump, weave the cone slalom, and cross the finish line
 to start the lap timer (bottom-right). Press **M** to hand control to
 `car_controller.dll`, which then holds the stick-commanded speed while you still
 steer; press **M** again to take back over.
+
+### Rebinding
+
+Every control above is rebindable from **Options** or from **Esc ▸ Settings**
+mid-race, with **WASD** and **Arrows** layouts and a reset. `Core/KeyTable` is the
+single canonical key list both input backends resolve through, so no driving
+control names a key anywhere else — a missed call site would be a control that
+silently ignores its rebind, which is the one failure mode this layer exists to
+make impossible.
+
+Three deliberate exceptions:
+
+- The four driving axes keep an **alternate** binding, because W-or-↑ and A-or-←
+  both worked before rebinding existed and quietly dropping that would read as the
+  feature having broken the controls.
+- **Escape always pauses**, whatever `Pause` is bound to. Pause is the only route
+  to the screen that holds the bindings, so binding it somewhere unreachable would
+  otherwise lock you out of the one place that could undo it.
+- On a gamepad only the **digital** actions rebind. Throttle and steering stay on
+  the triggers and the left stick — binding an analog axis to a button is offering
+  to make the controller worse.
+
+The developer overlays (**G** graph, **J** metrics, **K** mission, **P**
+pause-graph, **[** / **]** window size) are pinned on purpose. They are tools
+rather than controls, and documenting a fixed key is only honest if it is one.
+
+### Reverse, throttle shaping and assists
+
+Holding **S** from speed now brakes, stops and reverses on that single press. The
+ESC models a real hobby unit, which holds neutral for a dwell before arming
+reverse and resets that dwell on any non-zero command — so a reverse command
+acting as a brake kept resetting its own lockout, and the player had to release
+and press again. The fix is at the *input* layer: `CarInput` performs the neutral
+blip the player was performing by hand. The ESC state machine itself is untouched
+byte-for-byte, because the Opus mission's brake calibration depends on it.
+
+Digital keyboard throttle is ramped like a transmitter trigger (≈0.45 s to full),
+the same treatment steering already had. Stabbing S from full throttle still
+passes through zero at the faster *release* rate, so braking stays crisp. Gamepad
+triggers are never shaped — that would only throw away fidelity they already have
+— and both ramps have a 0–100 % slider in Options, where 0 % restores the old
+instant step.
+
+Driving assists now default to **Standard** in *every* session type, not just
+arcade — plain races used to run with the assist sliders at zero. Presets are
+Off / Standard / Full / Custom, and moving any slider flips you to Custom, so the
+preset is a shortcut rather than a cage. Every strengthened assist is the identity
+function at and below the arcade floor and only gains authority above it, which
+preserves the arcade tuning mechanically rather than by re-deriving numbers.
+Firmware rigs are skipped explicitly at every application site: C code always
+faces the raw physics.
 
 ## The tune/iterate loop
 

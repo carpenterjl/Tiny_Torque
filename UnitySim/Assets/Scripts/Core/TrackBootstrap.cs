@@ -78,6 +78,7 @@ namespace AIHWSim.Core
             // The ordered racing line bots follow (null on finish-less maps).
             _botPath = BotPath.Build(GameFlow.ActiveTrack, _lapTimer, _ovalPath,
                 _spawnPos, _spawnRot * Vector3.forward, out _botPathClosed);
+            TrackRespawn.SetTrack(_built, _botPath, _botPathClosed);
 
             for (int i = 0; i < slots.Count; i++)
                 _rigs.Add(BuildPlayerRig(slots[i], i, slots.Count, _splitScreen));
@@ -157,9 +158,12 @@ namespace AIHWSim.Core
             foreach (var rig in _rigs)
             {
                 var racer = _arcade.Register(rig);
-                // A client's cars are kinematic ghosts posed by the host — there
-                // is no physics on them to raise to a handling floor.
-                if (authority) ApplyArcadeHandling(racer);
+                // The handling floor is a physics change, so it belongs on
+                // machines that actually simulate the car: every rig on the
+                // host, and on a client the one car it owns. The rest of a
+                // client's cars are ghosts posed from the stream — there is no
+                // grip or drive on them to raise.
+                if (authority || rig == _ownRig) ApplyArcadeHandling(racer);
             }
         }
 
@@ -202,6 +206,12 @@ namespace AIHWSim.Core
             new System.Collections.Generic.Dictionary<int, Net.ClientCarView>();
         private float _lanPollAccum;
         private readonly int[] _lastCp = new int[Net.NetSession.MaxPlayers];
+        // Client only: the one car this machine simulates, and its publisher.
+        private PlayerRig _ownRig;
+        private Net.OwnStateSender _ownSender;
+        // Host only: kinematic stand-ins for the cars its clients simulate.
+        private readonly System.Collections.Generic.Dictionary<int, Net.HostCarFollower> _followers =
+            new System.Collections.Generic.Dictionary<int, Net.HostCarFollower>();
 
         private void BuildEnvironment()
         {
@@ -209,7 +219,13 @@ namespace AIHWSim.Core
             else BuildOvalEnvironment();
         }
 
-        /// <summary>Host: full physics rigs for every roster player; remote slots drive via the net.</summary>
+        /// <summary>
+        /// Host: a full physics rig for the host's own car, and a kinematic
+        /// follower for every remote player — since protocol 4 each client
+        /// simulates its own car and streams the result, so the host's copy
+        /// exists to be adjudicated against (laps, checkpoints, item boxes,
+        /// projectiles) rather than to be driven.
+        /// </summary>
         private void BuildLanHostScene()
         {
             var session = Net.NetSession.Instance;
@@ -222,14 +238,18 @@ namespace AIHWSim.Core
             // it arcade over LAN would silently do almost nothing.
             _botPath = BotPath.Build(GameFlow.ActiveTrack, _lapTimer, _ovalPath,
                 _spawnPos, _spawnRot * Vector3.forward, out _botPathClosed);
+            TrackRespawn.SetTrack(_built, _botPath, _botPathClosed);
 
             foreach (var p in session.Roster)
-                _rigs.Add(BuildLanRig(p));
+                _rigs.Add(p.slot == session.LocalSlot ? BuildLanRig(p) : BuildLanFollower(p));
             _runner = _rigs.Count > 0 ? _rigs[0].runner : null;
+            HookCarEpochs();
+            session.OwnStateReceived += OnOwnState;
 
             var hud = new GameObject("LanHud").AddComponent<Net.LanHud>();
             hud.ownCar = _rigs.Count > 0 ? _rigs[0].car : null;
-            new GameObject("LanSessionMenu").AddComponent<Net.LanSessionMenu>();
+            var hostMenu = new GameObject("LanSessionMenu").AddComponent<Net.LanSessionMenu>();
+            hostMenu.rigs = _rigs;   // so its settings panel can apply assists live
 
             HookLanLapPublish();
             session.RegisterHostRigs(_rigs);
@@ -280,14 +300,27 @@ namespace AIHWSim.Core
 
             var built = VehicleFactory.Build(design, pos, rot, previewKinematic: false);
             built.car.SetSpawn(pos, rot);
-            built.car.assists = p.assists;   // each player's own prefs, host-applied
+            // Assists: the host stores each joiner's prefs on the roster entry;
+            // on a client, the only rig built here is our own, so our live
+            // Options settings are the better source (and the roster copy of our
+            // own entry is the same thing anyway).
+            built.car.assists = Net.NetSession.Instance.IsHost
+                ? p.assists
+                : SessionConfig.P1Assists(Persistence.SettingsStore.Current);
+            if (isLocal)
+                AssistApplier.ApplyFloor(built.car, SessionConfig.PresetValues(
+                    (SessionConfig.AssistPreset)Mathf.Clamp(
+                        Persistence.SettingsStore.Current.assistPreset, 0, 3)));
 
             var carInput = built.car.gameObject.AddComponent<CarInput>();
             carInput.car = built.car;
-            carInput.lapTimer = _lapTimer;
+            carInput.lapTimer = _lapTimer;   // null on a client: lap timing is the host's
             carInput.source = isLocal
                 ? new Net.GatedInputSource(new PlayerInputSource(InputDeviceKind.MergedKeyboardGamepad))
                 : (IDriverInputSource)Net.NetSession.Instance.InputSourceFor(p.slot);
+
+            // Motor, tyre and impact sound, same as every local rig gets.
+            Audio.VehicleAudio.Attach(built.car.gameObject, built.car);
 
             Camera cam = null;
             if (isLocal) cam = BuildLanCamera(built.car.transform);
@@ -327,6 +360,54 @@ namespace AIHWSim.Core
             };
         }
 
+        /// <summary>
+        /// Host: the local stand-in for a car a client owns. Kinematic, no
+        /// input, no runner, no camera — it is driven entirely by that client's
+        /// stream. It still carries the full car (colliders included) because
+        /// every shared rule the host adjudicates resolves by touching one.
+        /// </summary>
+        private PlayerRig BuildLanFollower(Net.NetSession.NetPlayer p)
+        {
+            var (pos, rot) = SpawnPose(p.slot, Net.NetSession.MaxPlayers);
+            var design = !string.IsNullOrEmpty(p.vehicleJson)
+                ? JsonUtility.FromJson<VehicleDesign>(p.vehicleJson)
+                : null;
+            design ??= VehicleDesign.Default();
+
+            var built = VehicleFactory.Build(design, pos, rot, previewKinematic: true);
+            built.car.SetSpawn(pos, rot);
+
+            var rig = new PlayerRig
+            {
+                slot = new PlayerSlot
+                {
+                    name = p.name,
+                    profileId = p.name,
+                    design = design,
+                    isLocal = false,
+                },
+                car = built.car,
+                sensorRig = built.rig,
+                lapTimer = _lapTimer,
+                netSlot = p.slot,
+            };
+
+            var follower = built.root.AddComponent<Net.HostCarFollower>();
+            follower.slot = p.slot;
+            follower.car = built.car;
+            follower.rig = rig;
+            _followers[p.slot] = follower;
+            return rig;
+        }
+
+        private void OnOwnState(int slot, Net.OwnStateMsg s)
+        {
+            if (_followers.TryGetValue(slot, out var f) && f != null) f.Receive(s);
+            // Track limits are judged by the machine with the wheels; the host's
+            // copy is kinematic, so the verdict rides in with the pose.
+            _arcade?.NotifyRemoteTrackLimit(slot, s.penalized, s.warned);
+        }
+
         private Camera BuildLanCamera(Transform target)
         {
             Camera cam = Camera.main;
@@ -344,7 +425,31 @@ namespace AIHWSim.Core
             follow.target = target;
             follow.offset = new Vector3(0f, 1.1f, -2.2f);
             follow.followLerp = 5f;
+            // Look-back key. Bound here rather than at every call site because
+            // the camera already knows which car it is following, and in
+            // split-screen that pairing is the only thing that gets it right.
+            var lookBackOwner = target != null ? target.GetComponent<CarInput>() : null;
+            if (lookBackOwner != null) lookBackOwner.chase = follow;
             return cam;
+        }
+
+        /// <summary>
+        /// Host: a car this machine simulates just teleported (R respawn), so
+        /// tell the clients to snap it rather than lerp a 200 m/s streak across
+        /// the map. Cars a client owns bump their own epoch at the source, and
+        /// their followers never call ResetVehicle at all.
+        /// </summary>
+        private void HookCarEpochs()
+        {
+            var session = Net.NetSession.Instance;
+            if (session == null) return;
+            foreach (var rig in _rigs)
+            {
+                if (rig?.car == null || rig.netSlot < 0) continue;
+                if (_followers.ContainsKey(rig.netSlot)) continue;
+                int slot = rig.netSlot;
+                rig.car.VehicleReset += () => Net.NetSession.Instance?.BumpCarEpoch(slot);
+            }
         }
 
         /// <summary>Host: publish lap + checkpoint progress and feed the race logic.</summary>
@@ -391,13 +496,16 @@ namespace AIHWSim.Core
 
         private void OnLanPlayerJoined(Net.NetSession.NetPlayer p)
         {
-            var rig = BuildLanRig(p);
+            // A joiner owns its own car, so we build the follower, not a rig to
+            // drive. (Only ever called on the host.)
+            var rig = BuildLanFollower(p);
             _rigs.Add(rig);
-            if (_arcade != null) ApplyArcadeHandling(_arcade.Register(rig));
+            if (_arcade != null) _arcade.Register(rig);
         }
 
         private void OnLanPlayerLeft(Net.NetSession.NetPlayer p)
         {
+            _followers.Remove(p.slot);
             var rig = _rigs.Find(r => r.netSlot == p.slot);
             if (rig == null) return;
             _arcade?.Unregister(rig);
@@ -415,8 +523,21 @@ namespace AIHWSim.Core
             {
                 if (rig?.car == null) continue;
                 var (pos, rot) = SpawnPose(rig.netSlot, Net.NetSession.MaxPlayers);
-                rig.car.RestoreState(pos, rot, Vector3.zero, Vector3.zero);
-                rig.car.SetSpawn(pos, rot);
+                if (_followers.TryGetValue(rig.netSlot, out var follower) && follower != null)
+                {
+                    // A follower is kinematic — RestoreState would try to write
+                    // velocities PhysX won't accept. Park it and wait for the
+                    // owner to acknowledge with a fresh epoch, so unreliable
+                    // packets already in flight can't drag it back off the grid.
+                    follower.SnapAwaitEpoch(pos, rot);
+                    rig.car.SetSpawn(pos, rot);
+                }
+                else
+                {
+                    rig.car.RestoreState(pos, rot, Vector3.zero, Vector3.zero);
+                    rig.car.SetSpawn(pos, rot);
+                    Net.NetSession.Instance?.BumpCarEpoch(rig.netSlot);
+                }
                 poses.Add(new Net.GridPose { slot = rig.netSlot, pos = pos, rot = rot });
             }
             _lapTimer?.ResetTimer();
@@ -427,7 +548,16 @@ namespace AIHWSim.Core
             return poses.ToArray();
         }
 
-        /// <summary>Client: track from JSON, ghost cars posed from the host's stream.</summary>
+        /// <summary>
+        /// Client: track from JSON, our own car simulated locally, everyone
+        /// else's posed from the host's stream.
+        ///
+        /// The own car is a full physics rig — the same one the host builds for
+        /// itself — because an interpolation delay on the car you are steering
+        /// is pure latency with nothing bought for it. Lap timing, item pickups
+        /// and every random draw stay host-authoritative; only the driving is
+        /// ours.
+        /// </summary>
         private void BuildLanClientScene()
         {
             var session = Net.NetSession.Instance;
@@ -440,6 +570,9 @@ namespace AIHWSim.Core
             bool timed = _lapTimer != null;
             _botPath = BotPath.Build(GameFlow.ActiveTrack, _lapTimer, _ovalPath,
                 _spawnPos, _spawnRot * Vector3.forward, out _botPathClosed);
+            // A client owns its own car, so its respawn key is its own business —
+            // it needs the line locally even though lap timing is the host's.
+            TrackRespawn.SetTrack(_built, _botPath, _botPathClosed);
 
             // Lap timing is host-authoritative: destroy (not disable — physics
             // callbacks fire on disabled behaviours) the trigger components so
@@ -448,22 +581,64 @@ namespace AIHWSim.Core
             foreach (var cp in FindObjectsByType<Checkpoint>(FindObjectsSortMode.None)) Destroy(cp);
             _lapTimer = null;
 
-            foreach (var p in session.Roster) AddGhost(p);
-
-            var ownView = _ghosts.TryGetValue(session.LocalSlot, out var v) ? v : null;
-            if (ownView != null) BuildLanCamera(ownView.transform);
+            foreach (var p in session.Roster)
+            {
+                if (p.slot == session.LocalSlot) _ownRig = BuildLanRig(p);
+                else AddGhost(p);
+            }
+            if (_ownRig != null)
+            {
+                _rigs.Add(_ownRig);
+                BuildLanCamera(_ownRig.car.transform);
+            }
 
             new GameObject("ClientInputSender").AddComponent<Net.ClientInputSender>();
             var hud = new GameObject("LanHud").AddComponent<Net.LanHud>();
-            hud.ownView = ownView;
-            new GameObject("LanSessionMenu").AddComponent<Net.LanSessionMenu>();
+            hud.ownCar = _ownRig?.car;
+            var clientMenu = new GameObject("LanSessionMenu").AddComponent<Net.LanSessionMenu>();
+            // On a client this is just our own rig, which is the only car this
+            // machine simulates — and therefore the only one an assist applies to.
+            clientMenu.rigs = _ownRig != null ? new List<PlayerRig> { _ownRig } : null;
 
             session.CarStateReceived += OnCarState;
             session.RosterChanged += OnClientRosterChanged;
+            session.RaceStarted += OnClientRaceStarted;
 
             if (session.Arcade && timed) BuildLanArcade(authority: false);
 
+            // Created after the arcade layer so the sender can read this rig's
+            // ArcadeRacer for the track-limit flags it carries upstream.
+            if (_ownRig != null)
+            {
+                var sender = new GameObject("OwnStateSender").AddComponent<Net.OwnStateSender>();
+                sender.car = _ownRig.car;
+                sender.rig = _ownRig;
+                var wheels = _ownRig.slot?.design?.wheels;
+                sender.wheelRadius = wheels is { Count: > 0 } ? wheels[0].radius : 0.033f;
+                _ownSender = sender;
+            }
+
             session.SendReady();
+        }
+
+        /// <summary>
+        /// Client: the host called the grid. We own our car, so we place it
+        /// ourselves and bump its epoch — the host's follower and the other
+        /// clients then snap rather than lerping us onto the grid from wherever
+        /// we were loitering.
+        /// </summary>
+        private void OnClientRaceStarted(Net.RaceStartMsg m)
+        {
+            if (_ownRig?.car == null || m?.poses == null) return;
+            int slot = _ownRig.netSlot;
+            foreach (var g in m.poses)
+            {
+                if (g.slot != slot) continue;
+                _ownRig.car.RestoreState(g.pos, g.rot, Vector3.zero, Vector3.zero);
+                _ownRig.car.SetSpawn(g.pos, g.rot);
+                _ownSender?.BumpEpoch();
+                break;
+            }
         }
 
         private void AddGhost(Net.NetSession.NetPlayer p)
@@ -501,6 +676,10 @@ namespace AIHWSim.Core
 
         private void OnCarState(byte epoch, float hostTime, Net.CarState s)
         {
+            // Our own car is simulated here, not received. The host relays our
+            // state back out for everyone else; taking it back would overwrite
+            // the live sim with a round-trip-old copy of itself.
+            if (_ownRig != null && s.slot == _ownRig.netSlot) return;
             if (_ghosts.TryGetValue(s.slot, out var view) && view != null)
                 view.Receive(epoch, hostTime, s);
         }
@@ -509,7 +688,9 @@ namespace AIHWSim.Core
         {
             var session = Net.NetSession.Instance;
             if (session == null) return;
-            foreach (var p in session.Roster) AddGhost(p);
+            // Never a ghost for our own slot — we simulate that one.
+            foreach (var p in session.Roster)
+                if (_ownRig == null || p.slot != _ownRig.netSlot) AddGhost(p);
             var stale = new System.Collections.Generic.List<int>();
             foreach (var kv in _ghosts)
                 if (!session.Roster.Exists(p => p.slot == kv.Key)) stale.Add(kv.Key);
@@ -532,6 +713,8 @@ namespace AIHWSim.Core
             session.PlayerLeft -= OnLanPlayerLeft;
             session.CarStateReceived -= OnCarState;
             session.RosterChanged -= OnClientRosterChanged;
+            session.RaceStarted -= OnClientRaceStarted;
+            session.OwnStateReceived -= OnOwnState;
             if (session.GridProvider == TeleportToGrid) session.GridProvider = null;
         }
 
@@ -566,6 +749,13 @@ namespace AIHWSim.Core
             var built = VehicleFactory.Build(design, pos, rot, previewKinematic: false);
             built.car.SetSpawn(pos, rot);
             built.car.assists = slot.assists;
+            // Universal floor. It lives here rather than in the menu path for the
+            // same reason ApplyArcadeHandling does: a snapshot resume rebuilds a
+            // roster without ever visiting the menu, so a menu-side write would
+            // simply not happen for that session.
+            AssistApplier.ApplyFloor(built.car, slot, SessionConfig.PresetValues(
+                (SessionConfig.AssistPreset)Mathf.Clamp(
+                    Persistence.SettingsStore.Current.assistPreset, 0, 3)));
 
             var carInput = built.car.gameObject.AddComponent<CarInput>();
             carInput.car = built.car;
@@ -721,6 +911,11 @@ namespace AIHWSim.Core
             follow.target = target;
             follow.offset = new Vector3(0f, 1.1f, -2.2f);
             follow.followLerp = 5f;
+            // Look-back key. Bound here rather than at every call site because
+            // the camera already knows which car it is following, and in
+            // split-screen that pairing is the only thing that gets it right.
+            var lookBackOwner = target != null ? target.GetComponent<CarInput>() : null;
+            if (lookBackOwner != null) lookBackOwner.chase = follow;
             return cam;
         }
 
@@ -959,6 +1154,11 @@ namespace AIHWSim.Core
             follow.target = target;
             follow.offset = new Vector3(0f, 1.1f, -2.2f);
             follow.followLerp = 5f;
+            // Look-back key. Bound here rather than at every call site because
+            // the camera already knows which car it is following, and in
+            // split-screen that pairing is the only thing that gets it right.
+            var lookBackOwner = target != null ? target.GetComponent<CarInput>() : null;
+            if (lookBackOwner != null) lookBackOwner.chase = follow;
 
             var graph = cam.gameObject.GetComponent<GraphOverlay>() ?? cam.gameObject.AddComponent<GraphOverlay>();
             return (cam, graph);

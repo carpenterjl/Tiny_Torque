@@ -48,10 +48,35 @@ namespace AIHWSim.Arcade
         /// later, the replay recorder's highlight index.</summary>
         public event Action<ArcadeEvent> Event;
 
+        /// <summary>
+        /// "This slot's car is simulated by somebody else." Set by the LAN link
+        /// on the host; null everywhere else, which is why solo, split-screen and
+        /// bot races are untouched by any of the owner-authority handling below.
+        ///
+        /// The director still DECIDES what happens to a remote-owned car — it
+        /// rolls the spin direction, the tumble, the recovery pose — but it
+        /// cannot apply the result to a body it does not simulate, so it hands
+        /// the numbers over through <see cref="EffectDispatch"/> instead.
+        /// </summary>
+        public Func<int, bool> RemoteOwned;
+
+        /// <summary>One arcade effect's physics, for the machine that owns the
+        /// car. Consumed by the LAN link, which is the only thing here that
+        /// knows what a network is.</summary>
+        public event Action<ArcadeFx> EffectDispatch;
+
+        private bool Remote(ArcadeRacer r) =>
+            RemoteOwned != null && r != null && r.netSlot >= 0 && RemoteOwned(r.netSlot);
+
+        /// <summary>True when THIS machine simulates the physics of r's car.</summary>
+        private bool DrivesPhysics(ArcadeRacer r) =>
+            IsAuthority ? !Remote(r) : (r != null && r.slotIsLocal);
+
         private readonly List<ArcadeRacer> _racers = new List<ArcadeRacer>();
         private readonly List<ArcadeItemBox> _boxes = new List<ArcadeItemBox>();
         private readonly List<Banana> _bananas = new List<Banana>();
         private readonly List<Missile> _missiles = new List<Missile>();
+        private readonly List<AreaHazard> _hazards = new List<AreaHazard>();
         private readonly List<ArcadeRacer> _sortBuf = new List<ArcadeRacer>();
 
         /// <summary>Clearance above the surface for a recovered car. The wheels sit
@@ -78,6 +103,7 @@ namespace AIHWSim.Arcade
 
         public IReadOnlyList<Missile> Missiles => _missiles;
         public IReadOnlyList<Banana> Bananas => _bananas;
+        public IReadOnlyList<AreaHazard> Hazards => _hazards;
         public int BoxCount => _boxes.Count;
 
         public bool BoxActive(int i) =>
@@ -148,6 +174,9 @@ namespace AIHWSim.Arcade
             racer.car = rig.car;
             racer.netSlot = rig.netSlot;
             racer.isBot = rig.slot != null && rig.slot.isBot;
+            // The rig carries a runner exactly when this machine simulates the
+            // car; ghosts and host-side followers have none.
+            racer.slotIsLocal = rig.runner != null;
             racer.botNextDecision = Clock + UnityEngine.Random.Range(
                 ArcadeConfig.BotReactionMin, ArcadeConfig.BotReactionMax);
 
@@ -206,8 +235,10 @@ namespace AIHWSim.Arcade
             foreach (var r in _racers) r.ClearAll();
             foreach (var m in _missiles) if (m != null) Destroy(m.gameObject);
             foreach (var b in _bananas) if (b != null) Destroy(b.gameObject);
+            foreach (var h in _hazards) if (h != null) Destroy(h.gameObject);
             _missiles.Clear();
             _bananas.Clear();
+            _hazards.Clear();
             foreach (var box in _boxes) if (box != null && !box.Active) box.Respawn();
         }
 
@@ -358,6 +389,11 @@ namespace AIHWSim.Arcade
                 case ItemKind.Missile:
                     FireMissile(racer);
                     break;
+
+                case ItemKind.SmokeCloud:
+                case ItemKind.OilSlick:
+                    DropHazard(racer, kind);
+                    break;
             }
 
             Raise(ArcadeEventKind.ItemUsed, racer, null, kind, 0,
@@ -402,6 +438,55 @@ namespace AIHWSim.Arcade
 
             Raise(ArcadeEventKind.BananaDropped, racer, null, ItemKind.Banana, b.objId,
                 go.transform.position, go.transform.rotation);
+        }
+
+        /// <summary>
+        /// Lay a smoke cloud or an oil slick behind the car.
+        ///
+        /// The <see cref="AreaHazard"/> and its <see cref="AreaHazardViz"/> share
+        /// one GameObject deliberately: a smoke cloud drifts, and if the effect
+        /// area lived on a separate object it would stay behind on the tarmac
+        /// while the visible cloud wandered off — an invisible trap plus a
+        /// harmless decoration. Sharing the transform makes that impossible, and
+        /// copying the radius off the viz means what catches you is by
+        /// construction what you can see.
+        /// </summary>
+        private void DropHazard(ArcadeRacer racer, ItemKind kind)
+        {
+            var car = racer.car;
+            Vector3 pos = car.transform.position - car.transform.forward * ArcadeConfig.HazardDropOffset;
+            if (DropToSurface(pos, out var onSurface))
+                pos = onSurface + Vector3.up * ArcadeConfig.HazardHeight;
+
+            int id = _nextObjId++;
+            float life = kind == ItemKind.OilSlick ? ArcadeConfig.SlickLifetime
+                                                   : ArcadeConfig.SmokeLifetime;
+
+            var viz = AreaHazardViz.Spawn(kind, pos, id, life);
+            viz.selfDestruct = false;          // the director owns the lifetime
+
+            var h = viz.gameObject.AddComponent<AreaHazard>();
+            h.objId = id;
+            h.ownerSlot = SlotOf(racer);
+            h.ownerCar = car;
+            h.kind = kind;
+            h.droppedAt = Clock;
+            h.expiresAt = Clock + life;
+            h.fullRadius = viz.radius;
+            h.startRadius = viz.startRadius;
+            h.growSeconds = viz.growSeconds;
+            _hazards.Add(h);
+
+            // Cap per player, exactly as the banana does — one player holding two
+            // items in a long race should not be able to fog a whole sector.
+            int mine = 0;
+            for (int i = _hazards.Count - 1; i >= 0; i--)
+            {
+                if (_hazards[i] == null || _hazards[i].ownerSlot != h.ownerSlot) continue;
+                if (++mine > ArcadeConfig.MaxHazardsPerPlayer) RemoveHazard(_hazards[i], false);
+            }
+
+            Raise(ArcadeEventKind.HazardDropped, racer, null, kind, id, pos, Quaternion.identity);
         }
 
         private void FireMissile(ArcadeRacer racer)
@@ -522,6 +607,50 @@ namespace AIHWSim.Arcade
         }
 
         /// <summary>
+        /// A car is inside a hazard this frame. Called from the containment poll
+        /// once per racer per hazard, so it has to be safe to call every frame —
+        /// the deadline is simply re-armed, and only the RISING edge (the frame
+        /// the racer was not already affected) raises an event or a banner.
+        ///
+        /// Re-arming rather than setting once is what makes "parked in a cloud"
+        /// work without being a special case: it is LEAVING that starts the
+        /// recovery, so sitting in it keeps you in it.
+        ///
+        /// Shields deliberately do NOT block either hazard. A shield absorbs one
+        /// HIT, and losing your sight or your grip is not a hit — which is the
+        /// role these two items have that Shield does not already cover.
+        /// </summary>
+        public void OnHazardHit(AreaHazard h, ArcadeRacer victim)
+        {
+            if (!IsAuthority || h == null || victim == null) return;
+            if (Clock < victim.invulnUntil) return;
+
+            bool rising;
+            if (h.kind == ItemKind.OilSlick)
+            {
+                rising = !victim.OnSlick;
+                victim.slickUntil = Clock + ArcadeConfig.SlickLingerSeconds;
+                if (!rising) return;
+                victim.ShowHit("OIL SLICK!", ArcadeConfig.SlickFeedbackColor,
+                    ArcadeConfig.HitBannerSeconds, ArcadeConfig.HitFlashSeconds);
+            }
+            else
+            {
+                rising = !victim.Blinded;
+                victim.blindUntil = Clock + ArcadeConfig.BlindSeconds;
+                if (!rising) return;
+                victim.blindStartedAt = Clock;
+                victim.ShowHit("SMOKED!", ArcadeConfig.BlindFeedbackColor,
+                    ArcadeConfig.HitBannerSeconds, ArcadeConfig.HitFlashSeconds);
+            }
+
+            var car = victim.car;
+            Raise(ArcadeEventKind.HazardHit, null, victim, h.kind, h.objId,
+                car != null ? car.transform.position : h.transform.position,
+                car != null ? car.transform.rotation : Quaternion.identity);
+        }
+
+        /// <summary>
         /// Banana: spin the victim out. Grip collapses, drive is cut so they
         /// cannot power through it, a yaw torque throws the tail one way or the
         /// other at random, and one impulse punts them off line.
@@ -535,8 +664,12 @@ namespace AIHWSim.Arcade
             victim.spinTorqueSigned = _rng.NextDouble() < 0.5 ? -ArcadeConfig.SpinTorque
                                                               : ArcadeConfig.SpinTorque;
             dir = Flat(dir, car.transform.forward);
-            car.ArcadeImpulse(dir * ArcadeConfig.HitImpulseFwd + Vector3.up * ArcadeConfig.HitImpulseUp,
-                car.transform.position);
+            Vector3 punt = dir * ArcadeConfig.HitImpulseFwd + Vector3.up * ArcadeConfig.HitImpulseUp;
+
+            if (Remote(victim))
+                DispatchFx(ArcadeFx.Kind.Spin, victim, punt, Vector3.zero);
+            else
+                car.ArcadeImpulse(punt, car.transform.position);
 
             victim.ShowHit("SPUN OUT!", ArcadeConfig.SpinFeedbackColor,
                 ArcadeConfig.HitBannerSeconds, ArcadeConfig.HitFlashSeconds);
@@ -561,20 +694,31 @@ namespace AIHWSim.Arcade
             victim.awaitingRecover = true;
             victim.spinUntil = 0f;              // the wreck supersedes any spin
             victim.boostUntil = 0f;
+            victim.driftBoostUntil = 0f;        // a mini-turbo does not survive a missile
 
             dir = Flat(dir, car.transform.forward);
-            car.ArcadeImpulse(dir * ArcadeConfig.WreckImpulseFwd
-                              + Vector3.up * ArcadeConfig.WreckImpulseUp,
-                car.transform.position);
+            Vector3 punt = dir * ArcadeConfig.WreckImpulseFwd
+                           + Vector3.up * ArcadeConfig.WreckImpulseUp;
 
             // One torque impulse rather than a sustained torque: the car should
             // tumble ballistically and land however it lands, not be driven round
-            // like the banana spin.
+            // like the banana spin. The draws happen here whoever owns the car —
+            // the host is the only place that decides.
             float sign = _rng.NextDouble() < 0.5 ? -1f : 1f;
-            car.ArcadeTorqueImpulse(new Vector3(
+            var tumble = new Vector3(
                 (float)(_rng.NextDouble() - 0.5) * ArcadeConfig.WreckTorque,
                 sign * ArcadeConfig.WreckTorque,
-                (float)(_rng.NextDouble() - 0.5) * ArcadeConfig.WreckTorque));
+                (float)(_rng.NextDouble() - 0.5) * ArcadeConfig.WreckTorque);
+
+            if (Remote(victim))
+            {
+                DispatchFx(ArcadeFx.Kind.Wreck, victim, punt, tumble);
+            }
+            else
+            {
+                car.ArcadeImpulse(punt, car.transform.position);
+                car.ArcadeTorqueImpulse(tumble);
+            }
 
             ArcadeBurst.Spawn(at, 0.9f, ArcadeConfig.SpinFeedbackColor,
                 ArcadeConfig.ExplosionSeconds);
@@ -617,9 +761,14 @@ namespace AIHWSim.Arcade
 
             if (DropToSurface(pos, out var surf)) pos = surf;
             pos += Vector3.up * RecoverRideHeight;
+            var landing = Quaternion.LookRotation(fwd, Vector3.up);
 
-            car.RestoreState(pos, Quaternion.LookRotation(fwd, Vector3.up),
-                Vector3.zero, Vector3.zero);
+            // The host picks the spot — it has the spine and the surface — but
+            // only the owner can put the car there.
+            if (Remote(r))
+                DispatchFx(ArcadeFx.Kind.Recover, r, Vector3.zero, Vector3.zero, pos, landing);
+            else
+                car.RestoreState(pos, landing, Vector3.zero, Vector3.zero);
 
             r.spinUntil = 0f;
             r.wreckedUntil = 0f;
@@ -628,6 +777,49 @@ namespace AIHWSim.Arcade
 
             Raise(ArcadeEventKind.Recovered, null, r, ItemKind.None, 0,
                 pos, car.transform.rotation);
+        }
+
+        private void DispatchFx(ArcadeFx.Kind kind, ArcadeRacer victim,
+            Vector3 impulse, Vector3 torque, Vector3 pos = default, Quaternion rot = default)
+        {
+            EffectDispatch?.Invoke(new ArcadeFx
+            {
+                kind = kind,
+                slot = victim.netSlot,
+                impulse = impulse,
+                torqueImpulse = torque,
+                spinTorqueSigned = victim.spinTorqueSigned,
+                pos = pos,
+                rot = rot == default ? Quaternion.identity : rot,
+            });
+        }
+
+        /// <summary>
+        /// A client reported its own off-track verdict. Its car is kinematic
+        /// here, so its wheels never touch the surface map and this machine
+        /// cannot see it leave the road.
+        ///
+        /// The events are raised on the rising edge only, which is what keeps
+        /// the shared board, the banners and the audio identical to a
+        /// host-simulated car's.
+        /// </summary>
+        public void NotifyRemoteTrackLimit(int slot, bool penalized, bool warned)
+        {
+            if (!IsAuthority) return;
+            var r = RacerForSlot(slot);
+            if (r == null) return;
+
+            var car = r.car;
+            Vector3 pos = car != null ? car.transform.position : Vector3.zero;
+            Quaternion rot = car != null ? car.transform.rotation : Quaternion.identity;
+
+            if (penalized && !r.penalized)
+                Raise(ArcadeEventKind.OffTrackPenalty, null, r, ItemKind.None, 0, pos, rot);
+            else if (warned && !r.warned && !penalized)
+                Raise(ArcadeEventKind.OffTrackWarning, null, r, ItemKind.None, 0, pos, rot);
+
+            r.penalized = penalized;
+            r.warned = warned;
         }
 
         /// <summary>Consume a shield. One place, so the visual teardown and the
@@ -668,6 +860,52 @@ namespace AIHWSim.Arcade
             Destroy(b.gameObject);
         }
 
+        private void RemoveHazard(AreaHazard h, bool expired)
+        {
+            _hazards.Remove(h);
+            if (h == null) return;
+            if (expired && IsAuthority)
+                Raise(ArcadeEventKind.HazardExpired, null, null, h.kind, h.objId,
+                    h.transform.position, Quaternion.identity);
+            Destroy(h.gameObject);
+        }
+
+        /// <summary>
+        /// Expire hazards, and on the authority poll every racer against every
+        /// live one. This is the whole hit path for the area items — see
+        /// <see cref="AreaHazard"/> for why it is a poll and not a trigger.
+        ///
+        /// Runs unconditionally rather than behind an authority gate, because a
+        /// LAN client still has to tear its own copies down; the CONTAINMENT half
+        /// is host-only, since the client would be testing its own interpolated
+        /// ghosts (60–120 ms behind) and the two machines would then disagree
+        /// about when a screen goes green.
+        /// </summary>
+        private void UpdateAreaHazards()
+        {
+            for (int i = _hazards.Count - 1; i >= 0; i--)
+            {
+                var h = _hazards[i];
+                if (h == null) { _hazards.RemoveAt(i); continue; }
+                if (Clock >= h.expiresAt) { RemoveHazard(h, true); continue; }
+                if (!IsAuthority) continue;
+
+                float rad = h.Radius;
+                for (int k = 0; k < _racers.Count; k++)
+                {
+                    var r = _racers[k];
+                    var car = r.car;
+                    if (car == null || r.Wrecked) continue;
+                    // The dropper gets a grace, then the hazard catches them too —
+                    // otherwise parking on your own smoke is a free rear shield.
+                    if (car == h.ownerCar && Clock - h.droppedAt < ArcadeConfig.HazardOwnerGrace)
+                        continue;
+                    if (!h.Contains(car.transform.position, rad)) continue;
+                    OnHazardHit(h, r);
+                }
+            }
+        }
+
         // ================= per-frame =================
 
         private void Update()
@@ -679,6 +917,7 @@ namespace AIHWSim.Arcade
             ApplyEffects(dt);
             RespawnBoxes();
             ExpireBananas();
+            UpdateAreaHazards();
 
             _limitAccum += dt;
             float limitStep = 1f / ArcadeConfig.TrackLimitSampleHz;
@@ -693,6 +932,7 @@ namespace AIHWSim.Arcade
             {
                 _posAccum = 0f;
                 UpdatePositions();
+                UpdateDraft();
             }
 
             _botAccum += dt;
@@ -759,6 +999,10 @@ namespace AIHWSim.Arcade
                 }
 
                 case ItemKind.Banana:
+                case ItemKind.SmokeCloud:
+                case ItemKind.OilSlick:
+                    // All three are rear-facing area denial: worth nothing at all
+                    // unless somebody is close enough behind to drive into it.
                     return SomeoneBehind(r, ArcadeConfig.BotBananaRange);
 
                 case ItemKind.Shield:
@@ -825,7 +1069,8 @@ namespace AIHWSim.Arcade
             {
                 if (!r.rolling) continue;
                 // Cycle the displayed face while it spins (HUD only).
-                int face = 1 + (int)(Clock * ArcadeConfig.RouletteFaceHz) % 5;
+                int face = 1 + (int)(Clock * ArcadeConfig.RouletteFaceHz)
+                                   % ArcadeConfig.RouletteFaceCount;
                 r.rollFace = (ItemKind)face;
 
                 if (Clock < r.rollEndsAt) continue;
@@ -862,15 +1107,38 @@ namespace AIHWSim.Arcade
                 // a 1.6 s boost just keeps accelerating past anything the
                 // drivetrain could reach. Surface boost pads are maxed in
                 // separately inside CarVehicle and are NOT capped by this.
-                car.arcadeBoostAccel = (!wrecked && Clock < r.boostUntil)
+                car.arcadeBoostAccel = (!wrecked && r.Boosting)
                     ? ArcadeConfig.BoostAccel * Mathf.Clamp01(
                         (ArcadeConfig.BoostTopSpeed - car.ForwardSpeed) / ArcadeConfig.BoostFadeBand)
                     : 0f;
 
-                // Clients mirror effects for the VISUALS only (shield bubble,
-                // HUD); the physics channels below are the host's business and
-                // writing them on a kinematic ghost would be meaningless anyway.
-                if (!IsAuthority) { UpdateShieldViz(r, dt); continue; }
+                // The channels below are physics, so they belong to whichever
+                // machine simulates this car — the host for its own and the
+                // bots', each client for the one car it owns. Everywhere else
+                // this is a ghost or a kinematic follower with nothing to write
+                // to, and only the visuals matter.
+                //
+                // The deadlines themselves (spinUntil, wreckedUntil) arrive
+                // through the sync stream, so an owner reads exactly the state
+                // the host decided.
+                if (!DrivesPhysics(r)) { UpdateShieldViz(r, dt); continue; }
+
+                // Bot blindness is PUSHED, where the human tint is PULLED by the
+                // HUD at draw time. Control only exists on the machine that
+                // simulates the car — which is exactly what the gate above just
+                // established — whereas a tint only needs the deadline, which
+                // every machine has.
+                if (r.isBot && r.rig != null && r.rig.input != null &&
+                    r.rig.input.source is BotDriver bot)
+                    bot.SetBlind(r.blindUntil - Clock,
+                        ArcadeConfig.BlindBotSteerRelease, ArcadeConfig.BlindBotThrottle);
+
+                // Re-asserted here with the rest of them so the drift is the only
+                // thing that can ever turn the slip-killing assists down, and only
+                // for the frames it is actually holding a slide. UpdateDrift runs
+                // below and overwrites this when it wants to.
+                car.arcadeAssistMult = 1f;
+                car.arcadeHandbrakeMult = 1f;
 
                 if (wrecked)
                 {
@@ -888,12 +1156,24 @@ namespace AIHWSim.Arcade
                 }
                 else
                 {
-                    car.arcadeGripMult = r.gripBase;
+                    // The slick multiplies INTO this write rather than being set
+                    // once when the car enters: ApplyEffects re-asserts every
+                    // arcade channel every frame, so anything written outside
+                    // this block is stomped on the following one.
+                    car.arcadeGripMult = r.gripBase *
+                        (r.OnSlick ? ArcadeConfig.SlickGripMult : 1f);
                     car.arcadeYawTorque = 0f;
                     car.arcadeDriveMult = r.driveBase;
                 }
 
                 UpdateShieldViz(r, dt);
+                UpdateDrift(r, car, dt, wrecked || spun);
+
+                // Slipstream, maxed into the same channel the item boost uses
+                // rather than added: drafting should close a gap, not stack on
+                // top of a mushroom and launch you past the field.
+                if (!wrecked && r.draftAccel > 0f)
+                    car.arcadeBoostAccel = Mathf.Max(car.arcadeBoostAccel, r.draftAccel);
 
                 // Off-track penalty: bleed speed down to the cap with a rearward
                 // drag. Needs the frame clock, not the 10 Hz limits sampler.
@@ -903,6 +1183,298 @@ namespace AIHWSim.Arcade
                 if (over > 0f)
                     car.ArcadeImpulse(-car.transform.forward * (over * ArcadeConfig.PenaltyDragGain * dt),
                         car.transform.position);
+            }
+        }
+
+        // ================= drift boost + slipstream =================
+
+        /// <summary>
+        /// The drift: commit to a slide, hold it as a steerable arc, straighten
+        /// out of it and pay a mini-turbo proportional to how long it was held.
+        ///
+        /// This is LATCHED rather than detected. The first version watched for
+        /// handbrake + speed + slip angle and paid out if it happened to see all
+        /// three, which made the drift something the physics might grant you.
+        /// Pulling the handbrake while turned now COMMITS the car — direction
+        /// latched from the steering command at that instant — and only releasing
+        /// it ends the slide. Three consequences worth stating, because each one
+        /// is the difference between a mechanic and an accident:
+        ///
+        ///   * <b>Entry</b> kicks. The same yaw controller that later maintains
+        ///     the angle runs with a much larger clamp for a fifth of a second,
+        ///     so the car sets itself into the slide instead of easing in. Using
+        ///     a torque rather than an angular impulse keeps it independent of
+        ///     whatever inertia tensor the garage handed this design.
+        ///   * <b>Sustain</b> is an arc you steer, and the stick does two jobs at
+        ///     once: it picks the held slip angle between <c>DriftAngleMin/MaxDeg</c>
+        ///     AND sets the charge rate, so leaning into the slide both tightens
+        ///     the line and pays better than nursing it on counter-steer. The car
+        ///     keeps its speed through all of this because the handbrake stops
+        ///     being a brake (<c>CarVehicle.arcadeHandbrakeMult</c>) and
+        ///     <c>DriftCarryAccel</c> pushes along the nose, which is also what
+        ///     rotates the velocity vector onto the heading. Both slip-killing
+        ///     assists are turned down — see <c>CarVehicle.arcadeAssistMult</c>,
+        ///     without which a Standard-assist car simply refuses to drift.
+        ///   * <b>Exit</b> straightens and pops. Releasing aims the same controller
+        ///     at zero slip and fires a per-tier impulse along the nose, so the
+        ///     mini-turbo lands as an event pointing down the road rather than as a
+        ///     gradual recovery pointing sideways.
+        ///
+        /// The payout goes to <see cref="ArcadeRacer.driftBoostUntil"/>, not to
+        /// <c>boostUntil</c>: see that field for why a LAN client needs its own.
+        /// </summary>
+        private void UpdateDrift(ArcadeRacer r, CarVehicle car, float dt, bool disabled)
+        {
+            if (disabled)
+            {
+                // Spun or wrecked: drop everything without paying. Being hit
+                // mid-drift should cost you the turbo, not hand you one.
+                if (r.Drifting || r.driftCharge > 0f) EndDrift(r, car, false);
+                r.driftStraightenUntil = 0f;
+                return;
+            }
+
+            float v = car.ForwardSpeed;
+            // Signed body slip: positive when the nose points RIGHT of where the
+            // car is actually travelling, i.e. a right-hand drift. LateralSpeed is
+            // positive to the right, so it carries the opposite sign — the
+            // negation here is the whole convention and is easy to lose.
+            float slipSigned = -Mathf.Atan2(car.LateralSpeed, Mathf.Max(0.5f, Mathf.Abs(v)))
+                               * Mathf.Rad2Deg;
+
+            if (r.Drifting)
+            {
+                if (car.Handbraking && v > ArcadeConfig.DriftHoldSpeed)
+                {
+                    SustainDrift(r, car, dt, slipSigned);
+                    return;
+                }
+                EndDrift(r, car, true);
+                return;
+            }
+
+            // Not drifting. Commit if the handbrake is down, we are moving, and
+            // the wheel is actually turned — the turn is the request, the
+            // handbrake is the commitment.
+            float steer = car.SteerCommand;
+            if (car.Handbraking && v > ArcadeConfig.DriftMinSpeed &&
+                Mathf.Abs(steer) >= ArcadeConfig.DriftEntrySteer)
+            {
+                BeginDrift(r, car, steer);
+                SustainDrift(r, car, dt, slipSigned);
+                return;
+            }
+
+            // Still unwinding the last one.
+            if (Clock < r.driftStraightenUntil) StraightenDrift(r, car, slipSigned);
+        }
+
+        private void BeginDrift(ArcadeRacer r, CarVehicle car, float steer)
+        {
+            r.driftDir = steer > 0f ? 1 : -1;
+            r.driftCharge = 0f;
+            r.driftTier = 0;
+            r.driftKickUntil = Clock + ArcadeConfig.DriftKickSeconds;
+            r.driftStraightenUntil = 0f;
+
+            // The "jump". Mostly so the commitment is visible, but it also
+            // unloads the tyres for a moment, which is what makes the slide start
+            // crisply rather than washing in. Applied at the body centre so it
+            // lifts rather than pitches.
+            car.ArcadeImpulse(Vector3.up * ArcadeConfig.DriftHopImpulse, car.transform.position);
+            ShowDriftSparks(r);
+
+            // No event is raised here on purpose. The only kind that fits is
+            // BoostStarted, and the audio layer would answer it with the boost
+            // whoosh — announcing a reward at the moment the player has merely
+            // asked for one. The hop, the tyres and the meter are the entry
+            // feedback; the whoosh belongs to the payout.
+        }
+
+        /// <summary>One frame of a committed slide: hold the angle, keep the
+        /// speed, bank the charge.</summary>
+        private void SustainDrift(ArcadeRacer r, CarVehicle car, float dt, float slipSigned)
+        {
+            int dir = r.driftDir;
+            float slipIn = slipSigned * dir;          // + = sliding the way we asked
+
+            // The stick picks a point on the angle band: full lock into the slide
+            // opens it out, counter-steer closes it down. This is the "arc you
+            // steer" — without it the drift is one fixed radius and the player is
+            // a passenger.
+            float steerIn = Mathf.Clamp(car.SteerCommand * dir, -1f, 1f);
+            float target = Mathf.Lerp(ArcadeConfig.DriftAngleMinDeg, ArcadeConfig.DriftAngleMaxDeg,
+                (steerIn + 1f) * 0.5f);
+
+            float clamp = Clock < r.driftKickUntil
+                ? ArcadeConfig.DriftYawKick : ArcadeConfig.DriftYawHold;
+            float torque = Mathf.Clamp((target - slipIn) * ArcadeConfig.DriftYawGain, -clamp, clamp);
+            car.arcadeYawTorque = torque * dir;
+
+            // Multiplied INTO whatever ApplyEffects just wrote (the slick lives in
+            // the same product), never assigned over it — a drift on oil should be
+            // both, not the more recent of the two.
+            car.arcadeGripMult *= ArcadeConfig.DriftGripMult;
+            car.arcadeAssistMult = ArcadeConfig.DriftAssistMult;
+
+            // Stop the drift button being a brake. This is the difference between
+            // an arc and a handbrake turn: a locked rear axle bleeds the speed the
+            // rest of this method is trying to preserve, and it bleeds it faster
+            // than DriftCarryAccel can put it back.
+            car.arcadeHandbrakeMult = ArcadeConfig.DriftHandbrakeMult;
+
+            // Pay back the lateral scrub so the arc carries its momentum. Maxed
+            // into the boost channel rather than added, for the same reason the
+            // draft is: this must never stack into a second top speed.
+            car.arcadeBoostAccel = Mathf.Max(car.arcadeBoostAccel,
+                ArcadeConfig.DriftCarryAccel * Mathf.Clamp01(
+                    (ArcadeConfig.DriftCarryTopSpeed - car.ForwardSpeed) /
+                    ArcadeConfig.DriftCarryFadeBand));
+
+            // Charge follows COMMITMENT, not the clock: the same stick position
+            // that just chose the angle also sets the rate. Holding a lazy
+            // counter-steered slide is now worth roughly a quarter of what leaning
+            // on it is, which is what makes the drift something you are doing
+            // rather than something you are waiting through.
+            r.driftCharge += dt * Mathf.Lerp(ArcadeConfig.DriftChargeOut,
+                ArcadeConfig.DriftChargeInto, (steerIn + 1f) * 0.5f);
+
+            int tier = r.driftCharge >= ArcadeConfig.DriftTier3Seconds ? 3
+                     : r.driftCharge >= ArcadeConfig.DriftTier2Seconds ? 2
+                     : r.driftCharge >= ArcadeConfig.DriftTier1Seconds ? 1 : 0;
+            if (tier != r.driftTier)
+            {
+                r.driftTier = tier;
+                ShowDriftSparks(r);
+            }
+        }
+
+        /// <summary>The exit arc: same controller, target zero. Grip and the
+        /// assists are already back to normal by here — those are what was holding
+        /// the slide open — so this only has to finish the rotation.</summary>
+        private void StraightenDrift(ArcadeRacer r, CarVehicle car, float slipSigned)
+        {
+            float slipIn = slipSigned * r.driftDirLast;
+            if (slipIn <= ArcadeConfig.DriftStraightenDoneDeg)
+            {
+                r.driftStraightenUntil = 0f;
+                return;
+            }
+            float torque = Mathf.Clamp(-slipIn * ArcadeConfig.DriftYawGain,
+                -ArcadeConfig.DriftYawStraighten, ArcadeConfig.DriftYawStraighten);
+            car.arcadeYawTorque = torque * r.driftDirLast;
+        }
+
+        /// <summary>Sparks appear the moment the drift is COMMITTED, not when the
+        /// first tier lands — they are the in-world half of the charge meter, and
+        /// a mechanic you latched into should show something immediately. Tier 0
+        /// wears the neutral colour and the three tiers repaint the same geometry
+        /// through a property block.</summary>
+        private void ShowDriftSparks(ArcadeRacer r)
+        {
+            if (!r.Drifting || r.car == null) { r.HideDriftSparks(); return; }
+            if (r.driftSparks == null) r.driftSparks = ArcadeVfx.BuildDriftSparks(r.car.transform);
+
+            var c = r.driftTier <= 0
+                ? ArcadeConfig.DriftChargeColor
+                : ArcadeConfig.DriftTierColors[Mathf.Clamp(r.driftTier - 1, 0,
+                    ArcadeConfig.DriftTierColors.Length - 1)];
+            var mpb = new MaterialPropertyBlock();
+            mpb.SetColor("_Color", c);
+            mpb.SetColor("_EmissionColor", c * 2f);
+            foreach (var rend in r.driftSparks.GetComponentsInChildren<Renderer>(true))
+                rend.SetPropertyBlock(mpb);
+        }
+
+        private void EndDrift(ArcadeRacer r, CarVehicle car, bool award)
+        {
+            int tier = r.driftTier;
+            if (r.driftDir != 0) r.driftDirLast = r.driftDir;
+            r.driftDir = 0;
+            r.driftCharge = 0f;
+            r.driftTier = 0;
+            r.driftKickUntil = 0f;
+            r.HideDriftSparks();
+
+            // Straighten on any voluntary exit, tier or no tier: a slide you drop
+            // out of at half a second still leaves the car pointing sideways, and
+            // finishing that rotation is the half of the mechanic that has nothing
+            // to do with the reward. Forfeits (spun, wrecked) get nothing — the
+            // car is supposed to be out of control.
+            if (!award) { r.driftStraightenUntil = 0f; return; }
+            r.driftStraightenUntil = Clock + ArcadeConfig.DriftStraightenSeconds;
+            if (tier <= 0) return;
+
+            // Owner-local, deliberately not boostUntil — see the field.
+            r.driftBoostUntil = Mathf.Max(r.driftBoostUntil,
+                Clock + ArcadeConfig.DriftBoostSeconds * tier);
+
+            // Fired along the NOSE, not along the velocity: the car is still
+            // sideways at this instant and the straighten below is about to bring
+            // the two together, so pushing on the heading is what makes the exit
+            // hook up. Through the CoM — the positioned overload would somersault
+            // it (see CarVehicle.ArcadeImpulse).
+            car.ArcadeImpulse(car.transform.forward *
+                (ArcadeConfig.DriftExitImpulse * tier));
+
+            // The meter vanishes on release, so this is what tells the player what
+            // the slide was actually worth. It reuses the hit banner's channel
+            // (ShowHit is the general "say something over this player's viewport"
+            // path, not a hit-only one) with a zero-length flash, because a
+            // full-viewport colour wash is a punishment and this is a reward.
+            r.ShowHit(tier >= 3 ? "MINI-TURBO ×3" : tier == 2 ? "MINI-TURBO ×2" : "MINI-TURBO",
+                ArcadeConfig.DriftTierColors[tier - 1], 0.9f, 0f);
+
+            // Raised as a BoostStarted so the audio layer needs no new case — it
+            // IS a boost starting, and the item field says which flavour.
+            Raise(ArcadeEventKind.BoostStarted, r, null, ItemKind.Boost, 0,
+                car.transform.position, car.transform.rotation);
+        }
+
+        /// <summary>
+        /// Slipstream: a car tucked in behind another, inside a heading cone, gets
+        /// a modest tow. Systemic catch-up that costs no item and no pickup, so
+        /// closing a gap on a straight is something you can do by driving.
+        ///
+        /// Computed at the 5 Hz position tick rather than per frame — it is an
+        /// O(n²) search over the field, and at RC speeds a 200 ms update is
+        /// indistinguishable from a per-frame one.
+        /// </summary>
+        private void UpdateDraft()
+        {
+            for (int i = 0; i < _racers.Count; i++) _racers[i].draftAccel = 0f;
+            if (!IsAuthority) return;
+
+            float cos = Mathf.Cos(ArcadeConfig.DraftConeDeg * Mathf.Deg2Rad);
+            float rangeSq = ArcadeConfig.DraftRange * ArcadeConfig.DraftRange;
+
+            for (int i = 0; i < _racers.Count; i++)
+            {
+                var r = _racers[i];
+                var car = r.car;
+                if (car == null || r.Wrecked) continue;
+
+                float speed = car.ForwardSpeed;
+                if (speed <= 0.5f) continue;      // no tow from a standstill
+
+                Vector3 fwd = car.transform.forward;
+                for (int k = 0; k < _racers.Count; k++)
+                {
+                    if (k == i) continue;
+                    var o = _racers[k];
+                    if (o.car == null || o.Wrecked) continue;
+
+                    Vector3 d = o.car.transform.position - car.transform.position;
+                    float dsq = d.sqrMagnitude;
+                    if (dsq > rangeSq || dsq < 1e-4f) continue;
+                    if (Vector3.Dot(d / Mathf.Sqrt(dsq), fwd) < cos) continue;   // not ahead
+
+                    // Fades out as the tow approaches its own ceiling, exactly
+                    // like the item boost — a draft must not be a second top speed.
+                    r.draftAccel = ArcadeConfig.DraftAccel *
+                        Mathf.Clamp01((ArcadeConfig.DraftTopSpeed - speed) / 2f);
+                    break;
+                }
             }
         }
 
@@ -948,7 +1520,7 @@ namespace AIHWSim.Arcade
         /// </summary>
         private void UpdateTrackLimits(float step)
         {
-            if (!IsAuthority || !trackLimits) return;
+            if (!trackLimits) return;
             // No tile/ribbon surface data (classic oval, diff-drive scene): every
             // hit resolves to Baseline, i.e. "on track" everywhere. Stay silent
             // rather than pretend.
@@ -956,6 +1528,12 @@ namespace AIHWSim.Arcade
 
             foreach (var r in _racers)
             {
+                // Judged by whoever has the wheels. A kinematic follower or ghost
+                // never runs its WheelColliders, so GetGroundHit would report
+                // every wheel airborne and hand out a penalty for standing still.
+                // The owner tests its own car and sends the verdict up.
+                if (!DrivesPhysics(r)) continue;
+
                 var car = r.car;
                 if (car == null) continue;
                 int n = car.WheelCount;
@@ -998,14 +1576,21 @@ namespace AIHWSim.Arcade
                     r.offTrackTime = 0f;
                     r.penaltyUntil = Clock + ArcadeConfig.PenaltyDuration;
                     r.penaltyCooldownUntil = r.penaltyUntil + ArcadeConfig.PenaltyCooldownSeconds;
-                    Raise(ArcadeEventKind.OffTrackPenalty, null, r, ItemKind.None, 0,
-                        car.transform.position, car.transform.rotation);
+                    // An owning client detects its own penalty but does not
+                    // announce it: the flag rides up with its pose, the host
+                    // raises the event, and the broadcast reaches every machine
+                    // including this one. Announcing here too would double the
+                    // banner and the sound on the one screen that matters most.
+                    if (IsAuthority)
+                        Raise(ArcadeEventKind.OffTrackPenalty, null, r, ItemKind.None, 0,
+                            car.transform.position, car.transform.rotation);
                 }
                 else if (!r.warned && r.offTrackTime > ArcadeConfig.OffTrackWarnSeconds)
                 {
                     r.warned = true;
-                    Raise(ArcadeEventKind.OffTrackWarning, null, r, ItemKind.None, 0,
-                        car.transform.position, car.transform.rotation);
+                    if (IsAuthority)
+                        Raise(ArcadeEventKind.OffTrackWarning, null, r, ItemKind.None, 0,
+                            car.transform.position, car.transform.rotation);
                 }
             }
         }

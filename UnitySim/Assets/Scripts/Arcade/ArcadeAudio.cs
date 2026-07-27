@@ -99,6 +99,21 @@ namespace AIHWSim.Arcade
                     Play(mine, ProceduralAudio.Spin, e.pos, 0.9f);
                     break;
 
+                // Both area hazards arrive on one pair of kinds and are told
+                // apart by e.item — see ArcadeEventKind. Oil borrows the banana
+                // plop for the drop (it IS a splat) and the tyre squeal for the
+                // hit, which is literally what losing grip on it sounds like.
+                case ArcadeEventKind.HazardDropped:
+                    Play(mine, e.item == ItemKind.OilSlick
+                            ? ProceduralAudio.BananaDrop : ProceduralAudio.Smoke,
+                        e.pos, 0.8f);
+                    break;
+
+                case ArcadeEventKind.HazardHit:
+                    if (e.item == ItemKind.OilSlick) Play(mine, ProceduralAudio.Skid, e.pos, 0.6f);
+                    else Play(mine, ProceduralAudio.Smoke, e.pos, 0.7f);
+                    break;
+
                 // Wrecked is raised by ApplyWreck and MissileHit by the hit
                 // handler, for the same impact — take one, or every hit
                 // double-fires.
@@ -156,7 +171,7 @@ namespace AIHWSim.Arcade
 
             if (_boostLoop != null)
             {
-                bool boosting = ArcadeDirector.Clock < me.boostUntil && Time.timeScale > 0f;
+                bool boosting = me.Boosting && Time.timeScale > 0f;
                 float target = boosting ? 0.55f * SfxPlayer.SfxGain : 0f;
                 _boostLoop.volume = Mathf.MoveTowards(_boostLoop.volume, target, Time.deltaTime * 3f);
             }

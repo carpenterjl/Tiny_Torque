@@ -64,6 +64,42 @@ namespace AIHWSim.Sensors
         /// and the pack sees none of it.</summary>
         public float PackCurrent => _braking ? 0f : Mathf.Abs(_current);
 
+        /// <summary>
+        /// Would a reverse command engage right now, or would the ESC hold
+        /// neutral waiting out its lockout?
+        ///
+        /// Read-only, read by nothing inside this class — the state machine in
+        /// <see cref="StepDrive"/> is byte-identical and stays that way, because
+        /// the Opus mission's brake calibration depends on it. It exists purely
+        /// so <c>CarInput</c> can tell three states apart that look identical
+        /// from outside: "commanded reverse and the ESC is stalling", "reversing
+        /// into a wall", and "reverse already engaged at 0.05 m/s". Any heuristic
+        /// without this signal confuses them and introduces a subtler bug than
+        /// the one it fixes.
+        ///
+        /// True when the state machine is off: there is no lockout to wait for.
+        /// </summary>
+        public bool ReverseReady => !StateMachineEnabled || _reverseArmed;
+
+        /// <summary>
+        /// How long a neutral blip has to be held for this ESC to arm reverse:
+        /// the configured dwell plus a margin for the output lag ahead of it.
+        ///
+        /// Derived rather than hardcoded because <c>GarageUI</c> puts
+        /// <c>escReverseLockMs</c> on a slider — a fixed 200 ms would silently
+        /// stop working on a tuned ESC, which is exactly the kind of failure
+        /// nobody would connect back to a garage setting.
+        /// </summary>
+        public float ReverseBlipSeconds
+        {
+            get
+            {
+                float lockMs = motor.escReverseLockMs > 0f ? motor.escReverseLockMs : 150f;
+                float lagMs = Mathf.Max(40f, motor.escTimeConstMs * 3f);
+                return (lockMs + lagMs) * 0.001f;
+            }
+        }
+
         /// <summary>Motor shaft speed (rad/s, signed) — for vibration modeling.</summary>
         public float MotorOmega =>
             _vehicle != null ? _vehicle.WheelOmega(wheelIndex) * motor.gearRatio : 0f;

@@ -17,6 +17,7 @@ namespace AIHWSim.Arcade
     public static class ArcadeVfx
     {
         private static Material _box, _glow, _banana, _missile, _fin, _shield, _burst;
+        private static Material _smoke, _slick;
 
         private static Material Mat(ref Material slot, Color c, float smooth, Color emission)
         {
@@ -74,6 +75,47 @@ namespace AIHWSim.Arcade
             }
         }
 
+        /// <summary>
+        /// Alpha-blended, depth-write-off material for the area hazards.
+        ///
+        /// Same transparency setup as <see cref="BurstSkin"/> with one constant
+        /// changed — <c>_DstBlend = OneMinusSrcAlpha</c> instead of <c>One</c> —
+        /// and that constant is the whole difference between a cloud and a
+        /// fireball. Additive blending can only ADD light, so additive "smoke"
+        /// glows and the track stays perfectly visible through it; smoke has to
+        /// OCCLUDE, which needs a real over-blend. No emission, for the same
+        /// reason.
+        /// </summary>
+        private static Material AlphaSkin(ref Material slot, Color c, float smooth)
+        {
+            if (slot == null)
+            {
+                slot = TrackBuilder.StandardMat(c);
+                slot.SetFloat("_Mode", 3f);                         // Transparent
+                slot.SetInt("_SrcBlend", (int)UnityEngine.Rendering.BlendMode.SrcAlpha);
+                slot.SetInt("_DstBlend", (int)UnityEngine.Rendering.BlendMode.OneMinusSrcAlpha);
+                slot.SetInt("_ZWrite", 0);
+                slot.DisableKeyword("_ALPHATEST_ON");
+                slot.EnableKeyword("_ALPHABLEND_ON");
+                slot.DisableKeyword("_ALPHAPREMULTIPLY_ON");
+                slot.SetFloat("_Glossiness", smooth);
+                slot.renderQueue = 3000;
+            }
+            return slot;
+        }
+
+        /// <summary>Murky yellow-green, matte. Alpha lives in the property block
+        /// <see cref="AreaHazardViz"/> drives, so the value here is only the
+        /// starting point.</summary>
+        private static Material SmokeSkin =>
+            AlphaSkin(ref _smoke, new Color(0.60f, 0.72f, 0.42f, 0.72f), 0.05f);
+
+        /// <summary>Near-black and glossy — an oil slick reads as a slick almost
+        /// entirely through its specular sheen, so this is the one hazard skin
+        /// that wants high smoothness.</summary>
+        private static Material SlickSkin =>
+            AlphaSkin(ref _slick, new Color(0.07f, 0.06f, 0.09f, 0.85f), 0.95f);
+
         /// <summary>Collider-free primitive piece on the parent's layer.</summary>
         private static Transform Piece(PrimitiveType type, Transform parent, Material mat,
             Vector3 pos, Vector3 euler, Vector3 scale)
@@ -127,6 +169,71 @@ namespace AIHWSim.Arcade
                     new Vector3(0.022f, 0.05f, 0.022f));
         }
 
+        /// <summary>
+        /// Fixed puff layout for <see cref="BuildSmoke"/>: offset, then diameter.
+        ///
+        /// Fixed rather than randomised on purpose. In a LAN session the host and
+        /// every client build their own copy of the same cloud, and a hazard that
+        /// is a different shape on two screens is a hazard two players disagree
+        /// about — one of them drives through an edge that is only there locally.
+        /// The irregularity comes from the table, not from a draw.
+        /// </summary>
+        private static readonly (Vector3 pos, float size)[] SmokePuffs =
+        {
+            (new Vector3( 0.00f,  0.02f,  0.00f), 1.00f),
+            (new Vector3( 0.36f,  0.10f,  0.14f), 0.82f),
+            (new Vector3(-0.31f,  0.06f,  0.26f), 0.90f),
+            (new Vector3( 0.08f,  0.14f, -0.38f), 0.86f),
+            (new Vector3(-0.22f, -0.06f, -0.28f), 0.74f),
+            (new Vector3( 0.28f, -0.08f, -0.10f), 0.68f),
+            (new Vector3(-0.05f,  0.26f,  0.09f), 0.72f),
+            (new Vector3( 0.15f, -0.02f,  0.35f), 0.64f),
+        };
+
+        /// <summary>
+        /// A smoke cloud, authored at radius 1 — <see cref="AreaHazardViz"/> owns
+        /// the scale, so growth and fade need no geometry changes here.
+        ///
+        /// The caller is responsible for putting the root on
+        /// <see cref="PartVisualFactory.VizLayer"/>. That is the deliberate
+        /// asymmetry with <see cref="BuildBanana"/>, which builds at layer 0: a
+        /// peel in front of a CameraSensor is a small yellow object, whereas a
+        /// 1.5 m opaque blob is a blindfold, and the on-car sensors are supposed
+        /// to see the world, not the effects layer.
+        /// </summary>
+        public static void BuildSmoke(Transform parent)
+        {
+            if (TryMesh("arc_smoke", parent, SmokeSkin,
+                    ("puff", SmokeSkin), ("cloud", SmokeSkin), ("smoke", SmokeSkin)) != null)
+                return;
+
+            foreach (var (pos, size) in SmokePuffs)
+                Piece(PrimitiveType.Sphere, parent, SmokeSkin, pos, Vector3.zero,
+                    new Vector3(size, size * 0.85f, size));
+        }
+
+        /// <summary>
+        /// An oil slick, authored at radius 1 in XZ and nearly flat — the same
+        /// contract as <see cref="BuildSmoke"/>, so one viz can animate both.
+        /// </summary>
+        public static void BuildSlick(Transform parent)
+        {
+            if (TryMesh("arc_slick", parent, SlickSkin,
+                    ("slick", SlickSkin), ("oil", SlickSkin), ("pool", SlickSkin)) != null)
+                return;
+
+            // A cylinder primitive is radius 0.5 and height 2, hence (2, y, 2).
+            Piece(PrimitiveType.Cylinder, parent, SlickSkin, Vector3.zero, Vector3.zero,
+                new Vector3(1.7f, 0.006f, 1.7f));
+
+            // Three lobes off-centre, so the pool has an outline rather than
+            // reading as a decal someone stamped on the tarmac.
+            for (int i = 0; i < 3; i++)
+                Piece(PrimitiveType.Cylinder, parent, SlickSkin,
+                    Quaternion.Euler(0f, i * 118f, 0f) * new Vector3(0f, 0f, 0.42f),
+                    Vector3.zero, new Vector3(1.0f - i * 0.14f, 0.005f, 1.0f - i * 0.14f));
+        }
+
         /// <summary>A homing missile (~0.16 m long, nose along +Z).</summary>
         public static void BuildMissile(Transform parent)
         {
@@ -164,6 +271,29 @@ namespace AIHWSim.Arcade
                     new Vector3(20f - i * 7f, a, 0f),
                     new Vector3(0.09f, 0.09f, 0.7f));
             }
+        }
+
+        /// <summary>
+        /// Drift sparks at the rear wheels. Built on the additive
+        /// <see cref="BurstSkin"/> — this one really is light being added, which
+        /// is exactly what the smoke skin exists to avoid — and tinted per tier
+        /// through a property block by the director, so the geometry is authored
+        /// once and never rebuilt as the tier climbs.
+        ///
+        /// VizLayer, like every other cosmetic: a car's own CameraSensor must not
+        /// see its own sparks.
+        /// </summary>
+        public static Transform BuildDriftSparks(Transform car)
+        {
+            var root = new GameObject("DriftSparks");
+            root.layer = PartVisualFactory.VizLayer;
+            root.transform.SetParent(car, false);
+
+            for (int i = -1; i <= 1; i += 2)
+                Piece(PrimitiveType.Sphere, root.transform, BurstSkin,
+                    new Vector3(i * 0.10f, -0.03f, -0.14f), Vector3.zero,
+                    new Vector3(0.09f, 0.05f, 0.14f));
+            return root.transform;
         }
 
         /// <summary>One of the three orbs that make up an active shield.</summary>

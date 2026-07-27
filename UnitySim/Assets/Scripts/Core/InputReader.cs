@@ -17,26 +17,72 @@ namespace AIHWSim.Core
     /// </summary>
     public static class InputReader
     {
-        // Forward/back throttle in [-1, 1] (negative = reverse).
+        /// <summary>
+        /// The player's bindings. Every driving read below goes through this and
+        /// through <see cref="KeyTable"/> / <see cref="PadTable"/> — no driving
+        /// control names a KeyCode or a pad button directly any more, because a
+        /// single missed call site is a control that ignores its rebind and gives
+        /// no sign of having done so.
+        ///
+        /// The DEVELOPER overlays below (graph, metrics, mission, window size)
+        /// deliberately stay hardcoded. They are tools rather than controls, and
+        /// pinning them keeps the documented hotkeys true whatever a player has
+        /// done to their bindings.
+        /// </summary>
+        private static KeyBindings B => KeyBindings.Current;
+
+        // Digital keyboard throttle is shaped like a transmitter trigger (see
+        // ThrottleSmoother); one static instance, for one physical keyboard —
+        // exactly the same reasoning as KbSteer below.
+        private static readonly ThrottleSmoother KbThrottle = new ThrottleSmoother();
+
+        // Forward/back throttle in [-1, 1] (negative = reverse). Split the same
+        // way Steer() is: triggers are analog and stay raw, the keys are ramped.
         public static float Throttle()
+        {
+            float v = ThrottleAnalog();
+            v = MaxMag(v, KbThrottle.Step(ThrottleDigitalRaw(), Time.time));
+            return Mathf.Clamp(v, -1f, 1f);
+        }
+
+        /// <summary>Gamepad triggers only (raw, unshaped) — shaping a real analog
+        /// trigger would only throw away the fidelity it already has.</summary>
+        public static float ThrottleAnalog()
         {
             float v = 0f;
 #if ENABLE_INPUT_SYSTEM
             var gp = Gamepad.current;
             if (gp != null)
                 v = gp.rightTrigger.ReadValue() - gp.leftTrigger.ReadValue();
-            var kb = Keyboard.current;
-            if (kb != null)
-            {
-                if (kb.wKey.isPressed || kb.upArrowKey.isPressed) v = 1f;
-                else if (kb.sKey.isPressed || kb.downArrowKey.isPressed) v = -1f;
-            }
-#endif
-#if ENABLE_LEGACY_INPUT_MANAGER
-            v = MaxMag(v, SafeAxis("Vertical"));
 #endif
             return Mathf.Clamp(v, -1f, 1f);
         }
+
+        /// <summary>
+        /// Digital throttle keys as a raw ±1 step (pre-smoothing), honouring the
+        /// player's bindings.
+        ///
+        /// The legacy <c>Vertical</c> axis used to be maxed in here and is gone on
+        /// purpose: an Input Manager axis has its own hardcoded key list, so it
+        /// would have kept driving the car from W and the up arrow no matter what
+        /// the player rebound — the exact silent-stale-binding failure this layer
+        /// exists to make impossible. <see cref="KeyTable"/>'s legacy path reads
+        /// the bound keys directly instead.
+        /// </summary>
+        public static float ThrottleDigitalRaw()
+        {
+            float v = 0f;
+            if (Held(DriveAction.ThrottleUp)) v = 1f;
+            else if (Held(DriveAction.ThrottleDown)) v = -1f;
+            return v;
+        }
+
+        /// <summary>Either binding for an action — primary or alternate.</summary>
+        private static bool Held(DriveAction a) =>
+            KeyTable.Held(B.Key(a)) || KeyTable.Held(B.AltKey(a));
+
+        private static bool Pressed(DriveAction a) =>
+            KeyTable.Pressed(B.Key(a)) || KeyTable.Pressed(B.AltKey(a));
 
         // Digital keyboard steering is shaped like a transmitter stick (see
         // SteerSmoother); one static instance is correct — one physical keyboard.
@@ -62,111 +108,78 @@ namespace AIHWSim.Core
             return Mathf.Clamp(v, -1f, 1f);
         }
 
-        /// <summary>Digital steering keys as a raw ±1 step (pre-smoothing).</summary>
+        /// <summary>Digital steering keys as a raw ±1 step (pre-smoothing),
+        /// honouring the player's bindings. The legacy <c>Horizontal</c> axis is
+        /// gone for the same reason the Vertical one is — see
+        /// <see cref="ThrottleDigitalRaw"/>.</summary>
         public static float SteerDigitalRaw()
         {
             float v = 0f;
-#if ENABLE_INPUT_SYSTEM
-            var kb = Keyboard.current;
-            if (kb != null)
-            {
-                if (kb.dKey.isPressed || kb.rightArrowKey.isPressed) v = 1f;
-                else if (kb.aKey.isPressed || kb.leftArrowKey.isPressed) v = -1f;
-            }
-#endif
-#if ENABLE_LEGACY_INPUT_MANAGER
-            // Legacy Horizontal already carries the Input Manager's own smoothing.
-            v = MaxMag(v, SafeAxis("Horizontal"));
-#endif
-            return Mathf.Clamp(v, -1f, 1f);
-        }
-
-        // Foot brake in [0, 1].
-        public static float Brake()
-        {
-            float v = 0f;
-#if ENABLE_INPUT_SYSTEM
-            var gp = Gamepad.current;
-            if (gp != null && gp.buttonEast.isPressed) v = 1f;
-            var kb = Keyboard.current;
-            if (kb != null && kb.leftCtrlKey.isPressed) v = 1f;
-#endif
-#if ENABLE_LEGACY_INPUT_MANAGER
-            if (SafeKey(KeyCode.LeftControl)) v = 1f;
-#endif
+            if (Held(DriveAction.SteerRight)) v = 1f;
+            else if (Held(DriveAction.SteerLeft)) v = -1f;
             return v;
         }
 
-        public static bool Handbrake()
-        {
-#if ENABLE_INPUT_SYSTEM
-            var gp = Gamepad.current;
-            if (gp != null && gp.buttonSouth.isPressed) return true;
-            var kb = Keyboard.current;
-            if (kb != null && kb.spaceKey.isPressed) return true;
-#endif
-#if ENABLE_LEGACY_INPUT_MANAGER
-            if (SafeKey(KeyCode.Space)) return true;
-#endif
-            return false;
-        }
+        // ---- keyboard-only reads -------------------------------------------
+        // These exist so PlayerInputSource's exclusive-Keyboard kind can call the
+        // same code the merged kind uses rather than naming the keys a second
+        // time. Two copies of a binding read is exactly how one of them ends up
+        // stale.
 
-        public static bool RespawnPressed()
-        {
-#if ENABLE_INPUT_SYSTEM
-            var gp = Gamepad.current;
-            if (gp != null && gp.buttonNorth.wasPressedThisFrame) return true;
-            var kb = Keyboard.current;
-            if (kb != null && kb.rKey.wasPressedThisFrame) return true;
-#endif
-#if ENABLE_LEGACY_INPUT_MANAGER
-            if (SafeKeyDown(KeyCode.R)) return true;
-#endif
-            return false;
-        }
+        public static bool BrakeKeyHeld() => KeyTable.Held(B.Key(DriveAction.Brake));
+        public static bool HandbrakeKeyHeld() => KeyTable.Held(B.Key(DriveAction.Handbrake));
+        public static bool RespawnKeyPressed() => KeyTable.Pressed(B.Key(DriveAction.Respawn));
+        public static bool UseItemKeyPressed() => KeyTable.Pressed(B.Key(DriveAction.UseItem));
+        public static bool LookBackKeyHeld() => KeyTable.Held(B.Key(DriveAction.LookBack));
 
-        // Arcade: fire the held power-up. LeftShift and the west face button are
-        // the only bindings still free (LeftCtrl brake, Space handbrake, R/north
-        // respawn, south handbrake, east brake, M/select mode toggle).
-        public static bool UseItemPressed()
-        {
 #if ENABLE_INPUT_SYSTEM
-            var gp = Gamepad.current;
-            if (gp != null && gp.buttonWest.wasPressedThisFrame) return true;
-            var kb = Keyboard.current;
-            if (kb != null && kb.leftShiftKey.wasPressedThisFrame) return true;
+        // ---- pad-only reads, for one specific pad (split-screen) ----
+        public static bool BrakePadHeld(Gamepad gp) => PadTable.Held(gp, B.Pad(DriveAction.Brake));
+        public static bool HandbrakePadHeld(Gamepad gp) => PadTable.Held(gp, B.Pad(DriveAction.Handbrake));
+        public static bool RespawnPadPressed(Gamepad gp) => PadTable.Pressed(gp, B.Pad(DriveAction.Respawn));
+        public static bool UseItemPadPressed(Gamepad gp) => PadTable.Pressed(gp, B.Pad(DriveAction.UseItem));
+        public static bool LookBackPadHeld(Gamepad gp) => PadTable.Held(gp, B.Pad(DriveAction.LookBack));
 #endif
-#if ENABLE_LEGACY_INPUT_MANAGER
-            if (SafeKeyDown(KeyCode.LeftShift)) return true;
-#endif
-            return false;
-        }
 
-        public static bool ModeTogglePressed()
-        {
-#if ENABLE_INPUT_SYSTEM
-            var gp = Gamepad.current;
-            if (gp != null && gp.selectButton.wasPressedThisFrame) return true;
-            var kb = Keyboard.current;
-            if (kb != null && kb.mKey.wasPressedThisFrame) return true;
-#endif
-#if ENABLE_LEGACY_INPUT_MANAGER
-            if (SafeKeyDown(KeyCode.M)) return true;
-#endif
-            return false;
-        }
+        // Foot brake in [0, 1].
+        public static float Brake() =>
+            BrakeKeyHeld() || PadTable.HeldAny(B.Pad(DriveAction.Brake)) ? 1f : 0f;
 
-        // Pause menu (Escape / any gamepad's Start — either split-screen player can pause).
+        public static bool Handbrake() =>
+            HandbrakeKeyHeld() || PadTable.HeldAny(B.Pad(DriveAction.Handbrake));
+
+        public static bool RespawnPressed() =>
+            RespawnKeyPressed() || PadTable.PressedAny(B.Pad(DriveAction.Respawn));
+
+        /// <summary>Arcade: fire the held power-up.</summary>
+        public static bool UseItemPressed() =>
+            UseItemKeyPressed() || PadTable.PressedAny(B.Pad(DriveAction.UseItem));
+
+        /// <summary>Held: look behind. Held rather than toggled so you cannot
+        /// leave the camera facing backwards.</summary>
+        public static bool LookBackHeld() =>
+            LookBackKeyHeld() || PadTable.HeldAny(B.Pad(DriveAction.LookBack));
+
+        public static bool ModeTogglePressed() =>
+            KeyTable.Pressed(B.Key(DriveAction.ModeToggle)) ||
+            PadTable.PressedAny(B.Pad(DriveAction.ModeToggle));
+
+        /// <summary>
+        /// Pause menu. The bound key, ANY pad's Start (either split-screen player
+        /// can pause), and Escape unconditionally.
+        ///
+        /// Escape is accepted whatever the binding says because pause is the way
+        /// back out to the settings that contain the bindings: a player who binds
+        /// it to something unreachable would otherwise have locked themselves out
+        /// of the only screen that could undo it.
+        /// </summary>
         public static bool PausePressed()
         {
+            if (KeyTable.Pressed(B.Key(DriveAction.Pause))) return true;
+            if (KeyTable.Pressed(KeyCode.Escape)) return true;
 #if ENABLE_INPUT_SYSTEM
-            var kb = Keyboard.current;
-            if (kb != null && kb.escapeKey.wasPressedThisFrame) return true;
             for (int i = 0; i < Gamepad.all.Count; i++)
                 if (Gamepad.all[i].startButton.wasPressedThisFrame) return true;
-#endif
-#if ENABLE_LEGACY_INPUT_MANAGER
-            if (SafeKeyDown(KeyCode.Escape)) return true;
 #endif
             return false;
         }

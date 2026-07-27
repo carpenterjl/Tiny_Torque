@@ -17,16 +17,30 @@ namespace AIHWSim.Net
     /// project is 100% runtime-generated; cars are arbitrary VehicleDesigns that
     /// are transferred as JSON and rebuilt locally).
     ///
-    /// Host-authoritative: the host simulates every car; clients stream inputs
-    /// (30 Hz) and render interpolated ghosts from the host's state stream.
+    /// Owner-authoritative for each player's own car (protocol 4): every
+    /// machine simulates the car it drives and streams the result at 60 Hz, so
+    /// nobody's controls wait for a round trip. The host remains authoritative
+    /// over everything shared — laps, race state, item adjudication and every
+    /// random draw — and relays each owner's state on to the other clients,
+    /// which render it as an interpolated ghost.
     /// </summary>
     public sealed class NetSession : MonoBehaviour
     {
-        // v3: arcade over LAN — a previously-always-zero input flag bit now means
-        // "use item", and three new messages carry the arcade layer. The exact
-        // equality check in approval rejects mixed builds cleanly, which matters
-        // here because a v2 client would silently never fire anything.
-        public const int ProtocolVersion = 3;
+        // v4: owner-authoritative own car. A client simulates its own car and
+        // streams the result up; the host follows it kinematically and relays it
+        // on. CarState grew an angular velocity and a per-car epoch, and two new
+        // messages carry the owner's state and the arcade effects it must
+        // replay. The exact equality check in approval rejects mixed builds
+        // cleanly, which matters more than ever here: a v3 client would drive a
+        // car nobody else can see move.
+        //
+        // v5: area hazards (smoke, oil). The arcade sync grew three bytes per
+        // racer — ArcEffect widened from byte to ushort for the slick flag, plus
+        // one byte of remaining blind time — and hazards ride the projectile
+        // stream as new kinds. Every field in that block moved, so a v4 client
+        // would not mis-render the new items, it would mis-read the whole
+        // packet; the equality check is doing real work here.
+        public const int ProtocolVersion = 5;
         public const int MaxPlayers = 4;
         public const ushort DefaultPort = 7777;
 
@@ -101,12 +115,30 @@ namespace AIHWSim.Net
         public event Action<RaceStartMsg> RaceStarted;  // scene layer: snap to grid
         public event Action<RaceEndMsg> RaceEnded;      // results overlay
 
+        /// <summary>Host: a client's own-car state arrived (scene layer feeds its follower).</summary>
+        public event Action<int, OwnStateMsg> OwnStateReceived;
+        /// <summary>Client: the host handed us an arcade effect to apply to our own car.</summary>
+        public event Action<ArcFxMsg> ArcFxReceived;
+
         private NetworkManager _nm;
         private UnityTransport _utp;
         private GameObject _nmGo;
         private byte _epoch;
         private float _stateAccum;
-        private const float StreamInterval = 1f / 30f;
+        private const float StreamInterval = 1f / 60f;
+
+        // Per-car teleport counters. The global _epoch means "the whole scene
+        // changed"; these mean "this one car jumped" — respawn, wreck recovery,
+        // race grid — so one car snapping doesn't flush everyone's buffers.
+        private readonly byte[] _carEpochs = new byte[MaxPlayers];
+
+        /// <summary>Latest own-state from a client-owned slot, held for relay.</summary>
+        private struct OwnedCar
+        {
+            public OwnStateMsg state;
+            public float receivedAt;
+        }
+        private readonly Dictionary<int, OwnedCar> _ownedCars = new Dictionary<int, OwnedCar>();
 
         // Host-side per-slot remote input sources and the rigs being simulated.
         private readonly Dictionary<int, NetworkInputSource> _inputSources =
@@ -303,6 +335,7 @@ namespace AIHWSim.Net
             Roster.Remove(p);
             SessionConfig.Players.RemoveAll(s => !s.isLocal && s.name == p.name);
             _inputSources.Remove(p.slot);
+            _ownedCars.Remove(p.slot);
             Standings[p.slot] = new LapStanding();
             PlayerLeft?.Invoke(p);
             BroadcastRoster();
@@ -319,7 +352,9 @@ namespace AIHWSim.Net
             cm.RegisterNamedMessageHandler(NetMsg.Roster, OnRoster);
             cm.RegisterNamedMessageHandler(NetMsg.Ready, OnReady);
             cm.RegisterNamedMessageHandler(NetMsg.Input, OnInput);
+            cm.RegisterNamedMessageHandler(NetMsg.OwnState, OnOwnState);
             cm.RegisterNamedMessageHandler(NetMsg.State, OnState);
+            cm.RegisterNamedMessageHandler(NetMsg.ArcFx, OnArcFx);
             cm.RegisterNamedMessageHandler(NetMsg.Lap, OnLap);
             cm.RegisterNamedMessageHandler(NetMsg.Map, OnMap);
             cm.RegisterNamedMessageHandler(NetMsg.RaceStart, OnRaceStart);
@@ -587,6 +622,8 @@ namespace AIHWSim.Net
         public void RegisterHostRigs(List<PlayerRig> rigs)
         {
             _hostRigs = rigs;
+            // Poses from the previous scene must not be relayed into this one.
+            _ownedCars.Clear();
             BumpEpoch();
         }
 
@@ -601,8 +638,21 @@ namespace AIHWSim.Net
             return src;
         }
 
-        /// <summary>Invalidate client interpolation buffers (teleports, map loads).</summary>
+        /// <summary>Invalidate every client interpolation buffer (map loads, scene rebuilds).</summary>
         public void BumpEpoch() => _epoch++;
+
+        /// <summary>
+        /// One car teleported. Receivers snap it and drop their history rather
+        /// than lerping across the gap — the difference between a respawn and a
+        /// car streaking across the map at 200 m/s.
+        /// </summary>
+        public void BumpCarEpoch(int slot)
+        {
+            if (slot >= 0 && slot < _carEpochs.Length) _carEpochs[slot]++;
+        }
+
+        public byte CarEpoch(int slot) =>
+            slot >= 0 && slot < _carEpochs.Length ? _carEpochs[slot] : (byte)0;
 
         public void SendInput(in InputState input)
         {
@@ -623,6 +673,43 @@ namespace AIHWSim.Net
             InputSourceFor(p.slot).Receive(input);
         }
 
+        /// <summary>Client: publish the car we simulate. 60 Hz, ~66 bytes.</summary>
+        public void SendOwnState(in OwnStateMsg s)
+        {
+            if (IsHost || _nm == null || !_nm.IsListening ||
+                _nm.LocalClientId == NetworkManager.ServerClientId) return;
+            using var w = new FastBufferWriter(96, Unity.Collections.Allocator.Temp);
+            NetPack.WriteOwnState(w, s);
+            _nm.CustomMessagingManager.SendNamedMessage(NetMsg.OwnState,
+                NetworkManager.ServerClientId, w, NetworkDelivery.UnreliableSequenced);
+        }
+
+        private void OnOwnState(ulong sender, FastBufferReader reader)
+        {
+            if (!IsHost) return;
+            var p = Roster.Find(r => r.clientId == sender);
+            if (p == null) return;
+            var s = NetPack.ReadOwnState(reader);
+            _ownedCars[p.slot] = new OwnedCar { state = s, receivedAt = Time.unscaledTime };
+            OwnStateReceived?.Invoke(p.slot, s);
+        }
+
+        /// <summary>Host: hand one arcade effect to the machine that owns the car.</summary>
+        public void SendArcFxTo(int slot, ArcFxMsg msg)
+        {
+            if (!IsHost || _nm == null || !_nm.IsListening) return;
+            var p = Roster.Find(r => r.slot == slot);
+            if (p == null || p.clientId == NetworkManager.ServerClientId) return;
+            SendJson(NetMsg.ArcFx, p.clientId, msg);
+        }
+
+        private void OnArcFx(ulong sender, FastBufferReader reader)
+        {
+            if (IsHost) return;
+            var m = ReadJson<ArcFxMsg>(reader);
+            if (m != null) ArcFxReceived?.Invoke(m);
+        }
+
         private void Update()
         {
             if (State == LanState.Countdown && Time.unscaledTime >= CountdownEndTime)
@@ -636,7 +723,10 @@ namespace AIHWSim.Net
             if (!IsHost || _nm == null || !_nm.IsListening || _hostRigs == null) return;
             _stateAccum += Time.unscaledDeltaTime;
             if (_stateAccum < StreamInterval) return;
-            _stateAccum = 0f;
+            // Subtract rather than zero: zeroing rounds the period up to the
+            // next whole frame, so a 60 Hz stream silently becomes 50 Hz at
+            // 100 fps. Clamp the backlog so a hitch doesn't burst.
+            _stateAccum = Mathf.Min(_stateAccum - StreamInterval, StreamInterval);
             BroadcastState();
         }
 
@@ -646,20 +736,45 @@ namespace AIHWSim.Net
             foreach (var rig in _hostRigs) if (rig?.car != null) n++;
             if (n == 0) return;
 
-            using var w = new FastBufferWriter(16 + n * 64, Unity.Collections.Allocator.Temp);
+            using var w = new FastBufferWriter(16 + n * 80, Unity.Collections.Allocator.Temp);
             NetPack.WriteStateHeader(w, _epoch, Time.unscaledTime, (byte)n);
             foreach (var rig in _hostRigs)
             {
                 if (rig?.car == null) continue;
+                int slot = SlotOfRig(rig);
+
+                // A client-owned car is RELAYED, never re-derived. Our copy of it
+                // is a kinematic follower, so its rigidbody reports zero velocity
+                // and its wheels never turn — reading them would hand every other
+                // client a car that slides along at a dead stop.
+                if (_ownedCars.TryGetValue(slot, out var owned))
+                {
+                    var o = owned.state;
+                    NetPack.WriteCarState(w, new CarState
+                    {
+                        slot = slot,
+                        carEpoch = o.carEpoch,
+                        pos = o.pos,
+                        rot = o.rot,
+                        vel = o.vel,
+                        angVel = o.angVel,
+                        steerDeg = o.steerDeg,
+                        wheelRadPerSec = o.wheelRadPerSec,
+                    });
+                    continue;
+                }
+
                 var body = rig.car.GetComponent<Rigidbody>();
                 float wheelSpeed = rig.car.ForwardSpeed /
                     Mathf.Max(0.05f, rig.slot.design?.wheels is { Count: > 0 } ws ? ws[0].radius : 0.3f);
                 NetPack.WriteCarState(w, new CarState
                 {
-                    slot = SlotOfRig(rig),
+                    slot = slot,
+                    carEpoch = CarEpoch(slot),
                     pos = body.position,
                     rot = body.rotation,
                     vel = body.linearVelocity,
+                    angVel = body.angularVelocity,
                     steerDeg = rig.car.CurrentSteerAngle,
                     wheelRadPerSec = wheelSpeed,
                 });

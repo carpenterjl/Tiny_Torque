@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using AIHWSim.Garage;
+using UnityEngine;
 
 namespace AIHWSim.Core
 {
@@ -118,19 +119,58 @@ namespace AIHWSim.Core
             };
         }
 
-        /// <summary>Player 1's / player 2's assist prefs from the saved options.</summary>
-        public static Vehicles.AssistSettings P1Assists(Persistence.GameSettings s) =>
-            new Vehicles.AssistSettings
+        /// <summary>Named assist levels. Custom means "use the four sliders".</summary>
+        public enum AssistPreset { Off = 0, Standard = 1, Full = 2, Custom = 3 }
+
+        /// <summary>
+        /// The four values behind a preset. Standard is the shipping default and
+        /// is meant to feel like a well-sorted car rather than like help: enough
+        /// traction control that the rears do not light up out of every slow
+        /// corner, not enough that the tyre model stops deciding whether you make
+        /// the turn.
+        /// </summary>
+        public static Vehicles.AssistSettings PresetValues(AssistPreset p) => p switch
+        {
+            AssistPreset.Standard => new Vehicles.AssistSettings
+            { steer = 0.45f, stability = 0.50f, traction = 0.60f, abs = 0.60f },
+            // Full sits deliberately ABOVE each ramp's floor (steer .80 /
+            // stability .70 / traction .90 / abs .90 — see AssistTuning), because
+            // a preset that landed exactly on them would get none of the extra
+            // authority those ramps exist to provide and would feel identical to
+            // Arcade handling.
+            AssistPreset.Full => new Vehicles.AssistSettings
+            { steer = 0.90f, stability = 0.90f, traction = 0.95f, abs = 0.95f },
+            _ => default,     // Off, and Custom (whose caller reads the sliders)
+        };
+
+        /// <summary>
+        /// Player 1's / player 2's assist prefs from the saved options.
+        ///
+        /// These two methods are the single choke point every entry path already
+        /// funnels through — the menu, the LAN session, and the local player
+        /// resolver all call them — which is why routing the preset through HERE
+        /// puts it into every session type without editing any of those files.
+        /// </summary>
+        public static Vehicles.AssistSettings P1Assists(Persistence.GameSettings s)
+        {
+            var p = (AssistPreset)Mathf.Clamp(s.assistPreset, 0, 3);
+            if (p != AssistPreset.Custom) return PresetValues(p);
+            return new Vehicles.AssistSettings
             {
                 steer = s.p1AssistSteer, stability = s.p1AssistStability,
                 traction = s.p1AssistTraction, abs = s.p1AssistAbs,
             };
+        }
 
-        public static Vehicles.AssistSettings P2Assists(Persistence.GameSettings s) =>
-            new Vehicles.AssistSettings
+        public static Vehicles.AssistSettings P2Assists(Persistence.GameSettings s)
+        {
+            var p = (AssistPreset)Mathf.Clamp(s.assistPreset, 0, 3);
+            if (p != AssistPreset.Custom) return PresetValues(p);
+            return new Vehicles.AssistSettings
             {
                 steer = s.p2AssistSteer, stability = s.p2AssistStability,
                 traction = s.p2AssistTraction, abs = s.p2AssistAbs,
             };
+        }
     }
 }

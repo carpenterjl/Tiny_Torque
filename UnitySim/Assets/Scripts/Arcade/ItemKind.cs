@@ -12,5 +12,18 @@ namespace AIHWSim.Arcade
         Banana = 3,       // dropped behind; spins out whoever touches it
         Shield = 4,       // absorbs one hit
         TripleBoost = 5,  // three boosts on one pickup
+        SmokeCloud = 6,   // dropped behind; blinds whoever drives through it
+        OilSlick = 7,     // dropped behind; kills grip inside it
+    }
+
+    /// <summary>
+    /// The two <see cref="ItemKind"/>s that deploy a persistent area rather than a
+    /// projectile or a self-buff. Both are handled by one <c>AreaHazard</c> and one
+    /// containment poll; only the effect they apply differs.
+    /// </summary>
+    public static class ItemKindExt
+    {
+        public static bool IsAreaHazard(this ItemKind k) =>
+            k == ItemKind.SmokeCloud || k == ItemKind.OilSlick;
     }
 }

@@ -17,6 +17,13 @@ namespace AIHWSim.Core
         public float followLerp = 4f;
         public float lookAtHeight = 0.12f;
 
+        /// <summary>Swing round to look behind. Set every frame by
+        /// <c>CarInput</c> from the driver's input source. It mirrors the offset
+        /// rather than snapping the camera to a second rig, so the existing
+        /// follow lerp does the whole transition for free — and because the lerp
+        /// is what carries it, releasing the key eases back rather than cutting.</summary>
+        public bool lookBack;
+
         private void LateUpdate()
         {
             if (target == null) return;
@@ -28,7 +35,10 @@ namespace AIHWSim.Core
             if (flatFwd.sqrMagnitude < 1e-4f) flatFwd = Vector3.forward;
             Quaternion heading = Quaternion.LookRotation(flatFwd.normalized, Vector3.up);
 
-            Vector3 desired = target.position + heading * offset;
+            Vector3 off = offset;
+            if (lookBack) off.z = -off.z;              // in front, looking back
+
+            Vector3 desired = target.position + heading * off;
             transform.position = Vector3.Lerp(transform.position, desired, followLerp * Time.deltaTime);
             transform.LookAt(target.position + Vector3.up * lookAtHeight);
         }

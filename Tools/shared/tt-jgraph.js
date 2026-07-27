@@ -86,8 +86,10 @@ show();
 
         if (!X.supported) {
             X.downloadAll(fig.files);
-            say('<span class="ok">Downloaded ' + fig.id + '.m and .csv.</span> Put both in one folder and run ' +
-                '<code>' + fig.command + ' -sd "&lt;that folder&gt;"</code>');
+            say('<span class="ok">Downloaded ' + fig.id + '.m and .csv.</span> This browser has no ' +
+                'directory access, so the bridge cannot be used — put both in one folder and run ' +
+                '<code>' + fig.command + ' -sd "&lt;that folder&gt;"</code>. ' +
+                'Chrome or Edge can write straight into the watched folder instead.');
             return Promise.resolve();
         }
         return X.savedDirectory('jgraph').then(function (found) {
@@ -100,8 +102,21 @@ show();
         }).then(function (dir) {
             return X.writeFiles(dir, fig.files).then(function () { return dir; });
         }).then(function (dir) {
-            say('<span class="ok">Wrote ' + fig.id + '.m and .csv to ' + (dir.name || 'the chosen folder') + '.</span> ' +
-                'With the bridge running it should open by itself; otherwise run <code>' + fig.command + '</code> there.');
+            const where = dir.name || 'the chosen folder';
+            let msg = '<span class="ok">Wrote ' + fig.id + '.m and .csv to ' + where + '.</span> ';
+            // The page cannot see whether the watcher is alive, but it can see
+            // whether the files went somewhere the watcher looks. A wrong folder
+            // is the quiet failure — the write succeeds and nothing ever opens.
+            if (dir.name && dir.name.toLowerCase() !== 'jgraph-out') {
+                msg += '<span class="warn">The bridge watches <code>Tools\\jgraph-out</code>, not ' + where +
+                    ', so it will not pick this up.</span> Re-pick that folder, or run <code>' +
+                    fig.command + '</code> here yourself.';
+            } else {
+                msg += 'It opens by itself if the bridge is running — start it with ' +
+                    '<code>powershell -ExecutionPolicy Bypass -File Tools\\jgraph-bridge.ps1</code>. ' +
+                    'Otherwise run <code>' + fig.command + '</code> there.';
+            }
+            say(msg);
         }).catch(function (e) {
             if (e && e.name === 'AbortError') { say('Cancelled.'); return; }
             // Falling back to a download is better than failing outright.

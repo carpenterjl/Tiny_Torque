@@ -736,6 +736,9 @@ namespace AIHWSim.Menu
             // Keyboard-only feel: ramps the digital A/D step like a transmitter
             // stick. Gamepad sticks are never shaped. 0% = old instant response.
             changed |= AssistSlider("KB steer smoothing", ref s.kbSteerSmoothing);
+            // Same idea on the other axis: W is an instant step to full voltage,
+            // which is why the car lights up the rears out of every slow corner.
+            changed |= AssistSlider("KB throttle smoothing", ref s.kbThrottleSmoothing);
 
             GUILayout.Space(6);
             GUILayout.BeginHorizontal();
@@ -753,16 +756,41 @@ namespace AIHWSim.Menu
             // your own values travel with you to the host.
             GUILayout.Space(6);
             GUILayout.Label("ASSISTS — P1  (0% = realistic)", GarageSkin.Header);
-            changed |= AssistSlider("Steering help", ref s.p1AssistSteer);
-            changed |= AssistSlider("Stability", ref s.p1AssistStability);
-            changed |= AssistSlider("Traction ctrl", ref s.p1AssistTraction);
-            changed |= AssistSlider("ABS", ref s.p1AssistAbs);
+
+            // Preset row. The sliders below stay live: touching any of them flips
+            // the preset to Custom, so this is a shortcut rather than a cage.
+            GUILayout.BeginHorizontal();
+            GUILayout.Label("Preset", GUILayout.Width(60));
+            string[] presetNames = { "Off", "Standard", "Full", "Custom" };
+            int preset = Mathf.Clamp(s.assistPreset, 0, 3);
+            for (int i = 0; i < presetNames.Length; i++)
+            {
+                bool on = preset == i;
+                if (GUILayout.Toggle(on, presetNames[i], GarageSkin.Skin.button,
+                        GUILayout.Width(70)) != on && !on)
+                {
+                    s.assistPreset = i;
+                    changed = true;
+                }
+            }
+            GUILayout.EndHorizontal();
+
+            bool sliderMoved = false;
+            sliderMoved |= AssistSlider("Steering help", ref s.p1AssistSteer);
+            sliderMoved |= AssistSlider("Stability", ref s.p1AssistStability);
+            sliderMoved |= AssistSlider("Traction ctrl", ref s.p1AssistTraction);
+            sliderMoved |= AssistSlider("ABS", ref s.p1AssistAbs);
             GUILayout.Space(4);
             GUILayout.Label("ASSISTS — P2 (split-screen)", GarageSkin.Header);
-            changed |= AssistSlider("Steering help", ref s.p2AssistSteer);
-            changed |= AssistSlider("Stability", ref s.p2AssistStability);
-            changed |= AssistSlider("Traction ctrl", ref s.p2AssistTraction);
-            changed |= AssistSlider("ABS", ref s.p2AssistAbs);
+            sliderMoved |= AssistSlider("Steering help", ref s.p2AssistSteer);
+            sliderMoved |= AssistSlider("Stability", ref s.p2AssistStability);
+            sliderMoved |= AssistSlider("Traction ctrl", ref s.p2AssistTraction);
+            sliderMoved |= AssistSlider("ABS", ref s.p2AssistAbs);
+            if (sliderMoved)
+            {
+                s.assistPreset = (int)SessionConfig.AssistPreset.Custom;
+                changed = true;
+            }
 
             // Simulation realism — deterministic noise + control-loop latency.
             GUILayout.Space(6);
@@ -801,16 +829,11 @@ namespace AIHWSim.Menu
             if (MenuButton("← Back")) _page = Page.Root;
         }
 
-        private static bool AssistSlider(string label, ref float value)
-        {
-            GUILayout.BeginHorizontal();
-            GUILayout.Label($"{label}: {value:P0}", GUILayout.Width(150));
-            float v = GUILayout.HorizontalSlider(value, 0f, 1f, GUILayout.ExpandWidth(true));
-            GUILayout.EndHorizontal();
-            if (Mathf.Approximately(v, value)) return false;
-            value = v;
-            return true;
-        }
+        /// <summary>Moved to <see cref="GarageSkin.Slider01"/> so the pause and LAN
+        /// settings panels draw the identical row. Kept as a thin alias rather
+        /// than rewriting eleven call sites for no behaviour change.</summary>
+        private static bool AssistSlider(string label, ref float value) =>
+            GarageSkin.Slider01(label, ref value);
 
         // ---- helpers -----------------------------------------------------------
 

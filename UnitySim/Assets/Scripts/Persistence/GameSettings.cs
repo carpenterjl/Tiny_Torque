@@ -29,6 +29,23 @@ namespace AIHWSim.Persistence
         // defaults for missing fields). Gamepad sticks are never shaped.
         public float kbSteerSmoothing = 1f;
 
+        // Keyboard throttle shaping, same 0..1 scale and the same back-compat
+        // trick: an existing settings.json has no such key, so the initializer
+        // is what an upgrading player gets — which is deliberately full shaping,
+        // because a raw digital throttle is most of why keyboard driving is hard.
+        public float kbThrottleSmoothing = 1f;
+
+        /// <summary>
+        /// Driving-assist preset: 0 Off, 1 Standard, 2 Full, 3 Custom (use the
+        /// p1/p2 sliders below).
+        ///
+        /// The initializer is 1 and NOT 0, deliberately. An existing settings.json
+        /// has p1Assist* fields saved as zeroes, so defaulting the preset to Off
+        /// would leave every upgrading player with exactly what they have now —
+        /// no assists at all — and no reason to ever discover the feature.
+        /// </summary>
+        public int assistPreset = 1;
+
         // Defaults for the menu pages.
         public string player1Name = "Player 1";
         public string player2Name = "Player 2";
@@ -68,6 +85,15 @@ namespace AIHWSim.Persistence
         /// JsonUtility leaves it alone for keys a saved settings.json predates,
         /// so an existing install reads as Arcade rather than as false.</summary>
         public bool spArcadeHandling = true;
+
+        /// <summary>
+        /// Keyboard and gamepad bindings. Nested rather than flattened into
+        /// twenty more fields here because it is one coherent thing the player
+        /// resets as a unit — and JsonUtility serializes a nested [Serializable]
+        /// class fine. A settings.json written before this existed leaves the
+        /// initializer alone, which is the default WASD layout.
+        /// </summary>
+        public Core.KeyBindings keys = new Core.KeyBindings();
     }
 
     /// <summary>
