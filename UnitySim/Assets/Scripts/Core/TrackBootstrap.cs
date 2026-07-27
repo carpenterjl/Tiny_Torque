@@ -48,6 +48,9 @@ namespace AIHWSim.Core
         private Vector3[] _ovalPath;                 // classic-oval centerline for bots
         private IReadOnlyList<Vector3> _botPath;     // ordered racing line (null = no path)
         private bool _botPathClosed;
+        /// <summary>Half road width at each _botPath node (null on LAN paths,
+        /// which never run bots). Lets BotDriver size its wander to the road.</summary>
+        private List<float> _botHalfWidths;
         private bool _splitScreen;                   // 2+ local humans (not a bot race)
         private PlayerRig _humanRig;
         private readonly List<BotDriver> _bots = new List<BotDriver>();
@@ -77,7 +80,8 @@ namespace AIHWSim.Core
 
             // The ordered racing line bots follow (null on finish-less maps).
             _botPath = BotPath.Build(GameFlow.ActiveTrack, _lapTimer, _ovalPath,
-                _spawnPos, _spawnRot * Vector3.forward, out _botPathClosed);
+                _spawnPos, _spawnRot * Vector3.forward, out _botPathClosed,
+                out _botHalfWidths);
             TrackRespawn.SetTrack(_built, _botPath, _botPathClosed);
 
             for (int i = 0; i < slots.Count; i++)
@@ -197,6 +201,7 @@ namespace AIHWSim.Core
 
             racer.gripBase = Arcade.ArcadeConfig.HandlingGripBonus;
             racer.driveBase = Arcade.ArcadeConfig.HandlingDriveScale;
+            racer.stabilityBase = Arcade.ArcadeConfig.HandlingStabilityBoost;
             racer.RestoreCar();   // push the new baselines onto the car immediately
         }
 
@@ -773,7 +778,8 @@ namespace AIHWSim.Core
             if (slot.control == DriveControl.BotAI)
             {
                 var bot = new BotDriver(built.car, _botPath, _botPathClosed,
-                    (BotDifficulty)Mathf.Clamp(slot.botDifficulty, 0, 2));
+                    (BotDifficulty)Mathf.Clamp(slot.botDifficulty, 0, 2),
+                    _botHalfWidths);
                 carInput.source = bot;
                 if (slot.isBot) _bots.Add(bot); // only opponents get rubber-banded
             }

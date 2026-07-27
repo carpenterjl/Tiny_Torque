@@ -35,6 +35,13 @@ namespace AIHWSim.Audio
         /// frame when <see cref="car"/> is null.</summary>
         public float externalSpeed;
 
+        /// <summary>Ghost fallback for the skid: 0-1 slide intensity, pushed in
+        /// alongside <see cref="externalSpeed"/>. A ghost has no tyres to read,
+        /// but its streamed velocity expressed in its own frame gives a lateral
+        /// slip angle that is a perfectly good proxy for "audibly sliding" —
+        /// ClientCarView computes it, this component only listens.</summary>
+        public float externalSlip01;
+
         // Idle whine so a stationary car is not silent, and the pitch band the
         // motor sweeps through. Clamped hard: a runaway pitch multiplier on a
         // synthesized loop sounds like a fault, not like speed.
@@ -46,11 +53,23 @@ namespace AIHWSim.Audio
         /// shaft.</summary>
         private const float MotorOmegaFullScale = 2400f;
         /// <summary>Slide reading below which nothing is heard. CarVehicle.TyreSlip01
-        /// is already zero until the tyres are genuinely past the grip limit, so
-        /// this is only a deadband against the last sliver of numerical noise —
-        /// the "is the car actually sliding" decision lives with the physics, not
-        /// here.</summary>
-        private const float SkidThreshold = 0.04f;
+        /// is already zero until the tyres are genuinely past the grip limit —
+        /// the "is the car actually sliding" decision lives with the physics —
+        /// but a car driven on the limit crosses that line dozens of times a
+        /// lap, and answering every crossing with a chirp is what wore the
+        /// sound out. So the gate here asks for a slide, not a touch: this
+        /// deadband, HELD for <see cref="SkidOnsetSeconds"/>, at real road
+        /// speed (<see cref="SkidMinSpeed"/>).</summary>
+        private const float SkidThreshold = 0.10f;
+        /// <summary>How long the slip must stay past the threshold before the
+        /// squeal opens. One noisy physics step, a kerb strike, a momentary
+        /// scrub — none of them survives this, a real slide barely notices it.</summary>
+        private const float SkidOnsetSeconds = 0.09f;
+        /// <summary>Ground speed below which a slide is silent, and the speed
+        /// at which it reaches full voice. Parking-lot scrubs and the first
+        /// half-metre of a launch have real slip and no audible drama.</summary>
+        private const float SkidMinSpeed = 1.2f;
+        private const float SkidFullSpeed = 4.5f;
         private const float ImpactMinSpeed = 0.8f;   // ignore resting contact chatter
 
         private AudioSource _engine;
@@ -60,6 +79,12 @@ namespace AIHWSim.Audio
         private float _skidVol;
         private float _skidPitch = 1f;
         private float _lastImpact;
+        private float _slipHeldFor;
+        /// <summary>Per-instance voice: a fixed pitch offset plus a Perlin seed,
+        /// so two cars sliding together are two voices, not one loop doubled —
+        /// and one car's long slide wanders instead of holding a note.</summary>
+        private float _skidPitchBase = 1f;
+        private float _skidSeed;
 
         /// <summary>Attach to a car (or to a ghost root with a null car).</summary>
         public static VehicleAudio Attach(GameObject host, CarVehicle vehicle)
@@ -74,6 +99,12 @@ namespace AIHWSim.Audio
         {
             _engine = MakeLoop(ProceduralAudio.Engine);
             _skid = MakeLoop(ProceduralAudio.Skid);
+
+            // Deterministic per-instance, not random: the instance ID is stable
+            // for the life of the object, which is all a voice needs.
+            int id = Mathf.Abs(GetInstanceID());
+            _skidPitchBase = Mathf.Lerp(0.93f, 1.08f, (id % 997) / 996f);
+            _skidSeed = (id % 4093) * 0.113f;
         }
 
         private AudioSource MakeLoop(string key)
@@ -109,16 +140,9 @@ namespace AIHWSim.Audio
                 targetPitch = Mathf.Lerp(MinPitch, MaxPitch, n);
                 targetEngine = IdleVolume + (1f - IdleVolume) * n;
 
-                // TyreSlip01 is already zero until the tyres are past the grip
-                // limit, so this is a straight remap, not a decision.
-                float slip = car.TyreSlip01;
-                targetSkid = slip <= SkidThreshold
-                    ? 0f
-                    : Mathf.Clamp01((slip - SkidThreshold) / (1f - SkidThreshold));
-                // A deeper slide squeals lower and rougher; a light one is just
-                // a chirp. Holding one fixed pitch is what makes a synthesized
-                // skid sound like a sample on repeat.
-                targetSkidPitch = Mathf.Lerp(1.15f, 0.78f, targetSkid);
+                float speed = Mathf.Sqrt(car.ForwardSpeed * car.ForwardSpeed +
+                                         car.LateralSpeed * car.LateralSpeed);
+                ComputeSkid(car.TyreSlip01, speed, out targetSkid, out targetSkidPitch);
             }
             else
             {
@@ -126,14 +150,20 @@ namespace AIHWSim.Audio
                 float n = Mathf.Clamp01(Mathf.Abs(externalSpeed) / 10f);
                 targetPitch = Mathf.Lerp(MinPitch, MaxPitch, n);
                 targetEngine = IdleVolume + (1f - IdleVolume) * n;
-                targetSkid = 0f;
+                // The same skid voice as a real car, fed the pushed-in proxy —
+                // a sliding ghost squeals from where it actually is.
+                ComputeSkid(externalSlip01, Mathf.Abs(externalSpeed),
+                    out targetSkid, out targetSkidPitch);
             }
 
             // Smooth, so a single noisy frame does not click the pitch.
             float k = 1f - Mathf.Exp(-Time.deltaTime * 12f);
             _pitch = Mathf.Lerp(_pitch, targetPitch, k);
             _engineVol = Mathf.Lerp(_engineVol, targetEngine, k);
-            float ks = 1f - Mathf.Exp(-Time.deltaTime * 8f);
+            // Asymmetric on the skid: it swells in (so the gate opening is a
+            // sound starting, not a switch flipping) and dies quickly (grip
+            // returning is instant, and a squeal outliving it reads as lag).
+            float ks = 1f - Mathf.Exp(-Time.deltaTime * (targetSkid > _skidVol ? 6f : 14f));
             _skidVol = Mathf.Lerp(_skidVol, targetSkid, ks);
             _skidPitch = Mathf.Lerp(_skidPitch, targetSkidPitch, ks);
 
@@ -147,6 +177,39 @@ namespace AIHWSim.Audio
                 _skid.pitch = _skidPitch;
                 _skid.volume = _skidVol * gain * 0.8f;
             }
+        }
+
+        /// <summary>
+        /// The one skid voice, shared by the real-car path (TyreSlip01) and the
+        /// ghost path (the streamed proxy). The gate wants a SLIDE, not a slip
+        /// reading: past the deadband, held for the onset time, at road speed —
+        /// each leg kills a different false trigger (noise spikes, kerb taps,
+        /// and standing-start scrubs respectively).
+        /// </summary>
+        private void ComputeSkid(float slip01, float speed, out float vol, out float pitch)
+        {
+            if (slip01 > SkidThreshold) _slipHeldFor += Time.deltaTime;
+            else _slipHeldFor = 0f;
+
+            float depth = slip01 <= SkidThreshold
+                ? 0f
+                : Mathf.Clamp01((slip01 - SkidThreshold) / (1f - SkidThreshold));
+            float speedGain = Mathf.Clamp01(
+                (speed - SkidMinSpeed) / (SkidFullSpeed - SkidMinSpeed));
+
+            vol = _slipHeldFor >= SkidOnsetSeconds ? depth * speedGain : 0f;
+
+            // Slow Perlin wander on level and pitch, seeded per car. This is
+            // what keeps a long slide from holding one note, and two cars from
+            // being the same loop twice — the clip itself only has to be a
+            // texture, not a performance.
+            vol *= 0.78f + 0.22f * Mathf.PerlinNoise(Time.time * 0.9f, _skidSeed);
+
+            // A deeper slide squeals lower and rougher; a light one is just a
+            // chirp. Holding one fixed pitch is what makes a synthesized skid
+            // sound like a sample on repeat.
+            pitch = Mathf.Lerp(1.15f, 0.78f, depth) * _skidPitchBase *
+                (0.96f + 0.08f * Mathf.PerlinNoise(Time.time * 1.4f, _skidSeed + 7.3f));
         }
 
         private void Silence()

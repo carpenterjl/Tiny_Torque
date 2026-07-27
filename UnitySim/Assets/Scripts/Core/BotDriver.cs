@@ -14,19 +14,31 @@ namespace AIHWSim.Core
     /// physics or control-loop changes. Opponents and the player's
     /// "autonomous (bot AI)" option both use it.
     ///
-    /// Each bot holds a slightly different line (a constant lateral bias plus a
-    /// slow sine weave, perpendicular to the racing line) so a pack doesn't run
-    /// nose-to-tail on rails. If it gets wedged it reverses to free itself, and
-    /// only respawns as a last resort.
+    /// The lateral line has two layers, both scaled to the local road width.
+    /// A racing-line term runs each corner out-in-out — wide on approach, cut
+    /// to the inside at the apex, released wide on exit — with Hard bots using
+    /// most of the corridor and Easy bots only half-heartedly. On straights a
+    /// per-bot weave (a constant bias plus a slow sine, faded out as corners
+    /// approach) spreads the pack across the track so it doesn't run
+    /// nose-to-tail on rails. If a bot gets wedged it reverses to free itself,
+    /// and only respawns as a last resort.
     /// </summary>
     public sealed class BotDriver : IDriverInputSource
     {
         private struct Params
         {
-            public float baseSpeed;     // target straight-line speed (m/s)
-            public float lookAhead;     // pure-pursuit distance (m)
-            public float cornerCaution; // higher = slows more for upcoming curvature
-            public float lockDeg;       // heading error (deg) that maps to full steer lock
+            public float baseSpeed;       // target straight-line speed (m/s)
+            public float lookAhead;       // pure-pursuit distance (m)
+            public float cornerCaution;   // higher = slows more for upcoming curvature
+            public float lockDeg;         // heading error (deg) that maps to full steer lock
+            // Racing line + spread personality. All lateral numbers are
+            // FRACTIONS of the local usable half-width, never metres — that is
+            // what keeps a bot honest on a 2.2 m bridge and lively on a 4.4 m
+            // straight with one set of numbers.
+            public float lineGain;        // how much of the corridor the out-in-out line uses
+            public float weaveAmpFrac;    // straightaway weave amplitude ceiling
+            public float weaveBiasFrac;   // constant inside/outside bias range
+            public float anticipationSec; // corner look-ahead horizon (seconds of travel)
         }
 
         private static Params ForDifficulty(BotDifficulty d)
@@ -34,11 +46,14 @@ namespace AIHWSim.Core
             switch (d)
             {
                 case BotDifficulty.Easy:
-                    return new Params { baseSpeed = 5.5f, lookAhead = 1.6f, cornerCaution = 3.2f, lockDeg = 32f };
+                    return new Params { baseSpeed = 5.5f, lookAhead = 1.6f, cornerCaution = 3.2f, lockDeg = 32f,
+                        lineGain = 0.50f, weaveAmpFrac = 0.45f, weaveBiasFrac = 0.30f, anticipationSec = 0.55f };
                 case BotDifficulty.Hard:
-                    return new Params { baseSpeed = 9.5f, lookAhead = 1.1f, cornerCaution = 2.2f, lockDeg = 20f };
+                    return new Params { baseSpeed = 9.5f, lookAhead = 1.1f, cornerCaution = 2.2f, lockDeg = 20f,
+                        lineGain = 0.92f, weaveAmpFrac = 0.12f, weaveBiasFrac = 0.08f, anticipationSec = 1.05f };
                 default: // Medium
-                    return new Params { baseSpeed = 7.5f, lookAhead = 1.3f, cornerCaution = 2.6f, lockDeg = 26f };
+                    return new Params { baseSpeed = 7.5f, lookAhead = 1.3f, cornerCaution = 2.6f, lockDeg = 26f,
+                        lineGain = 0.75f, weaveAmpFrac = 0.28f, weaveBiasFrac = 0.20f, anticipationSec = 0.80f };
             }
         }
 
@@ -48,8 +63,25 @@ namespace AIHWSim.Core
         private readonly bool _closed;
         private readonly Params _p;
 
-        // Per-bot line personality (its own offset from the racing line).
-        private const float MaxOffset = 0.9f;   // metres, kept well inside the ribbon
+        // Track annotations, precomputed once in the constructor.
+        private readonly float[] _half;   // half road width per node (m)
+        private readonly float[] _kappa;  // signed curvature per node (rad/m, + = right turn)
+        private readonly float _totalLen; // lap length incl. the closing segment when closed
+
+        /// <summary>Half width assumed when the caller has none (the old fixed
+        /// ±0.9 m clamp plus margins, in feel).</summary>
+        private const float DefaultHalfWidth = 1.1f;
+        /// <summary>Half a car, reserved out of the corridor.</summary>
+        private const float CarHalfWidth = 0.20f;
+        /// <summary>Extra corridor margin — track-limit penalties need all four
+        /// wheels off, so this plus <see cref="CarHalfWidth"/> keeps the whole
+        /// spread penalty-safe by construction.</summary>
+        private const float EdgeMargin = 0.30f;
+        /// <summary>Curvature at which a corner counts as fully a corner
+        /// (≈ 5.5 m radius). Divides into the saturation terms below.</summary>
+        private const float KappaRef = 0.18f;
+
+        // Per-bot line personality, as FRACTIONS of the usable corridor.
         private readonly float _offBias;        // constant inside/outside bias
         private readonly float _offAmp;         // weave amplitude
         private readonly float _offFreq;        // weave rate (rad per metre of track)
@@ -92,21 +124,74 @@ namespace AIHWSim.Core
             _blindThrottle = throttle;
         }
 
-        public BotDriver(CarVehicle car, IReadOnlyList<Vector3> path, bool closed, BotDifficulty diff)
+        /// <summary><paramref name="halfWidths"/> is the per-node half road
+        /// width from <see cref="BotPath"/>'s widths overload; null (the
+        /// MenuAttract path and any older caller) falls back to
+        /// <see cref="DefaultHalfWidth"/> everywhere.</summary>
+        public BotDriver(CarVehicle car, IReadOnlyList<Vector3> path, bool closed,
+            BotDifficulty diff, IReadOnlyList<float> halfWidths = null)
         {
             _car = car;
             _path = path != null ? new List<Vector3>(path) : new List<Vector3>();
             _closed = closed && _path.Count >= 3;
             _p = ForDifficulty(diff);
+            int n = _path.Count;
 
             // Cumulative arc length (drives the weave phase along the lap).
-            _cum = new float[_path.Count];
-            for (int i = 1; i < _path.Count; i++)
+            _cum = new float[n];
+            for (int i = 1; i < n; i++)
                 _cum[i] = _cum[i - 1] + Vector3.Distance(_path[i - 1], _path[i]);
+            _totalLen = n >= 2
+                ? _cum[n - 1] + (_closed ? Vector3.Distance(_path[n - 1], _path[0]) : 0f)
+                : 0f;
+
+            _half = new float[n];
+            for (int i = 0; i < n; i++)
+            {
+                float w = halfWidths != null && i < halfWidths.Count
+                    ? halfWidths[i] : DefaultHalfWidth;
+                _half[i] = Mathf.Clamp(w, 0.3f, 5f);
+            }
+
+            // Signed curvature per node from the turn angle between adjacent
+            // segments over the local arc length. Sign convention: positive =
+            // right turn, matching right = Cross(up, tangent) in Compute, so a
+            // positive offset is toward the right edge — which for a right
+            // turn is the inside. Raw per-node angles on dense spline samples
+            // are noisy, so a ±2-node box smooth follows.
+            var raw = new float[n];
+            for (int i = 0; i < n; i++)
+            {
+                int prev = _closed ? (i + n - 1) % n : Mathf.Max(0, i - 1);
+                int next = _closed ? (i + 1) % n : Mathf.Min(n - 1, i + 1);
+                if (prev == i || next == i) continue;   // open-path endpoints, patched below
+                Vector3 a = Flat(_path[i] - _path[prev]);
+                Vector3 b = Flat(_path[next] - _path[i]);
+                if (a.sqrMagnitude < 1e-6f || b.sqrMagnitude < 1e-6f) continue;
+                raw[i] = Vector3.SignedAngle(a, b, Vector3.up) * Mathf.Deg2Rad /
+                    Mathf.Max(0.05f, 0.5f * (a.magnitude + b.magnitude));
+            }
+            if (!_closed && n >= 3) { raw[0] = raw[1]; raw[n - 1] = raw[n - 2]; }
+
+            _kappa = new float[n];
+            for (int i = 0; i < n; i++)
+            {
+                float sum = 0f;
+                int count = 0;
+                for (int j = -2; j <= 2; j++)
+                {
+                    int k = _closed ? (i + j + n) % n : i + j;
+                    if (k < 0 || k >= n) continue;
+                    sum += raw[k];
+                    count++;
+                }
+                _kappa[i] = count > 0 ? sum / count : 0f;
+            }
 
             // A distinct line per bot (constructed sequentially, so each differs).
-            _offBias = Random.Range(-0.35f, 0.35f);
-            _offAmp = Random.Range(0.25f, 0.7f);
+            // Fractional, scaled by the local corridor at apply time.
+            _offBias = Random.Range(-1f, 1f) * _p.weaveBiasFrac;
+            _offAmp = Random.Range(0.5f, 1f) * _p.weaveAmpFrac;
             _offFreq = Random.Range(0.05f, 0.12f);
             _offPhase = Random.Range(0f, Mathf.PI * 2f);
         }
@@ -212,14 +297,41 @@ namespace AIHWSim.Core
             if (dNear.sqrMagnitude > 1e-4f && dFar.sqrMagnitude > 1e-4f)
                 curv = Mathf.Clamp01(Vector3.Angle(dNear, dFar) / 60f);
 
-            // Shift the aim point off the centerline by this bot's personal line,
-            // easing back toward the line in tight corners so it never cuts wide.
+            // Shift the aim point off the centerline: a racing-line term that
+            // runs the corner out-in-out, plus this bot's personal weave on the
+            // straights. Everything below is scaled by the LOCAL corridor, so a
+            // narrow bridge collapses the whole spread toward centre.
             Vector3 tangent = Flat(AdvanceAlong(near, _p.lookAhead + 0.6f) - aimCenter);
             if (tangent.sqrMagnitude < 1e-5f) tangent = dNear;
             Vector3 right = Vector3.Cross(Vector3.up, tangent).normalized;
-            float off = _offBias + _offAmp * Mathf.Sin(_cum[near] * _offFreq + _offPhase);
-            off *= 1f - 0.5f * curv;
-            off = Mathf.Clamp(off, -MaxOffset, MaxOffset);
+
+            // Continuous arc position — the old quantized _cum[near] stepped
+            // the weave phase node to node instead of gliding.
+            float s = ArcPos(pos, near);
+
+            float usable = Mathf.Max(0f, HalfAt(s) - CarHalfWidth - EdgeMargin);
+            float lookM = Mathf.Max(2f, v * _p.anticipationSec);
+            float kHere = KappaAt(s);
+            float kAhead = KappaAt(s + lookM);
+            float cHere = Mathf.Min(1f, Mathf.Abs(kHere) / KappaRef);
+            float cAhead = Mathf.Min(1f, Mathf.Abs(kAhead) / KappaRef);
+
+            // Out-in-out from the sign arithmetic alone: on the approach
+            // (cHere≈0) the -sign(kAhead) term pulls to the OUTSIDE of the
+            // corner coming up; as cHere rises it hands over continuously to
+            // +sign(kHere), the INSIDE of the corner being driven; an S-curve
+            // flips kAhead's sign early and the crossover falls out for free.
+            float line01 = cHere * Mathf.Sign(kHere)
+                         - (1f - cHere) * cAhead * Mathf.Sign(kAhead);
+            float offRacing = _p.lineGain * Mathf.Clamp(line01, -1f, 1f) * usable;
+
+            // The personality weave survives on straights only — a corner is
+            // driven on the line, which is the whole "arcade but competent" ask.
+            float weaveGate = 1f - Mathf.Max(cHere, cAhead);
+            float offWeave = (_offBias + _offAmp * Mathf.Sin(s * _offFreq + _offPhase))
+                             * usable * weaveGate;
+
+            float off = Mathf.Clamp(offRacing + offWeave, -usable, usable);
             Vector3 aim = aimCenter + right * off;
 
             // Pure-pursuit steering toward the (offset) aim point.
@@ -301,6 +413,45 @@ namespace AIHWSim.Core
                 cur = nxt;
             }
             return _path[cur];
+        }
+
+        /// <summary>Continuous arc-length position: project onto the segment
+        /// leaving the nearest node instead of snapping to the node.</summary>
+        private float ArcPos(Vector3 pos, int near)
+        {
+            int n = _path.Count;
+            int nxt = near + 1 < n ? near + 1 : (_closed ? 0 : near);
+            if (nxt == near) return _cum[near];
+            Vector3 seg = _path[nxt] - _path[near];
+            float t = Mathf.Clamp01(Vector3.Dot(pos - _path[near], seg) /
+                Mathf.Max(1e-4f, seg.sqrMagnitude));
+            return _cum[near] + t * seg.magnitude;
+        }
+
+        private float KappaAt(float s) => TableAt(_kappa, s);
+        private float HalfAt(float s) => TableAt(_half, s);
+
+        /// <summary>Lerped lookup of a per-node table by arc position, wrapping
+        /// on a closed lap (so "curvature 6 m ahead" works across the line).</summary>
+        private float TableAt(float[] table, float s)
+        {
+            int n = _path.Count;
+            if (n == 0) return 0f;
+            if (n == 1) return table[0];
+            if (_closed && _totalLen > 0.01f) s = Mathf.Repeat(s, _totalLen);
+            else s = Mathf.Clamp(s, 0f, _cum[n - 1]);
+
+            // Greatest node with _cum <= s.
+            int lo = 0, hi = n - 1;
+            while (lo < hi)
+            {
+                int mid = (lo + hi + 1) >> 1;
+                if (_cum[mid] <= s) lo = mid; else hi = mid - 1;
+            }
+            int nxt = lo + 1 < n ? lo + 1 : 0;                     // closing segment wraps to 0
+            float segLen = (lo + 1 < n ? _cum[lo + 1] : _totalLen) - _cum[lo];
+            float t = segLen > 1e-4f ? (s - _cum[lo]) / segLen : 0f;
+            return Mathf.Lerp(table[lo], table[nxt], Mathf.Clamp01(t));
         }
 
         private int NearestIndex(Vector3 p)

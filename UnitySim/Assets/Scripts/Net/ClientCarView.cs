@@ -104,7 +104,18 @@ namespace AIHWSim.Net
 
         private void Update()
         {
-            if (_audio != null) _audio.externalSpeed = SpeedEstimate;
+            if (_audio != null)
+            {
+                _audio.externalSpeed = SpeedEstimate;
+                // Skid proxy: how sideways is the streamed velocity in this
+                // ghost's own frame. Zeroed while extrapolating — a dry buffer
+                // holds vel constant while the rotation keeps integrating,
+                // which reads as slip that never happened. VehicleAudio's own
+                // deadband + onset hold eats the rest of the jitter.
+                _audio.externalSlip01 = (_wasExtrapolating || _buffer.Count == 0)
+                    ? 0f
+                    : SlipProxy(_buffer[_buffer.Count - 1].vel);
+            }
             if (_buffer.Count == 0) return;
             float renderTime = Time.unscaledTime + _clockOffset - RenderDelay;
 
@@ -199,6 +210,26 @@ namespace AIHWSim.Net
                     Quaternion.Euler(0f, steers ? _curSteer : 0f, 0f) *
                     Quaternion.Euler(Mathf.Rad2Deg * _wheelSpin, 0f, 0f);
             }
+        }
+
+        // The slip band brackets the drift's authored angle window (11°-34°),
+        // so a committed slide reads ~0.1-0.9 and clean driving reads 0. The 8°
+        // floor sits well above interpolation noise.
+        private const float SkidSlipMinDeg = 8f;
+        private const float SkidSlipMaxDeg = 30f;
+
+        /// <summary>0-1 slide intensity from a world velocity against the
+        /// ghost's current heading. The 1 m/s floor in the denominator shrinks
+        /// the angle at crawling speeds, so a nudged or spawning ghost stays
+        /// silent without a second gate.</summary>
+        private float SlipProxy(Vector3 velWorld)
+        {
+            if (velWorld.sqrMagnitude < 0.25f) return 0f;
+            Vector3 local = transform.InverseTransformDirection(velWorld);
+            float slipDeg = Mathf.Atan2(Mathf.Abs(local.x),
+                Mathf.Max(1f, Mathf.Abs(local.z))) * Mathf.Rad2Deg;
+            return Mathf.Clamp01((slipDeg - SkidSlipMinDeg) /
+                                 (SkidSlipMaxDeg - SkidSlipMinDeg));
         }
 
         /// <summary>Own-car velocity estimate for the client HUD's speed readout.</summary>

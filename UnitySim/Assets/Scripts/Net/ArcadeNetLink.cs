@@ -62,6 +62,10 @@ namespace AIHWSim.Net
                 // hands the physics over instead of applying it.
                 director.RemoteOwned = slot => slot >= 0 && slot != S.LocalSlot;
                 director.EffectDispatch += OnEffectDispatch;
+                // Drift visibility (protocol 6): the owner's own-state uplink
+                // is the only machine that knows a client is sliding, so the
+                // host mirrors it here and the 15 Hz sync fans it back out.
+                S.OwnStateReceived += OnOwnState;
             }
             else
             {
@@ -80,9 +84,37 @@ namespace AIHWSim.Net
                 director.RemoteOwned = null;
             }
             if (S == null) return;
+            S.OwnStateReceived -= OnOwnState;
             S.ArcSyncReceived -= OnSync;
             S.ArcEventReceived -= OnRemoteEvent;
             S.ArcFxReceived -= OnArcFx;
+        }
+
+        /// <summary>Host: mirror the drift bits a client's own-state uplink
+        /// carries onto its racer, so the visuals and the sync stream can read
+        /// them exactly where they read the host's own drift state.</summary>
+        private void OnOwnState(int slot, OwnStateMsg m)
+        {
+            if (director == null) return;
+            var r = director.RacerForSlot(slot);
+            if (r == null) return;
+
+            float clock = ArcadeDirector.Clock;
+            if (m.drifting)
+            {
+                r.remoteDriftUntil = clock + EffectHold;
+                r.remoteDriftTier = m.driftTier;
+            }
+            // The mini-turbo pays into the racer's own driftBoostUntil: that one
+            // write makes EffectsOf's existing r.Boosting check relay a client's
+            // payout to everyone, and lights the flame on the host's own screen.
+            // (It also echoes back to the owner as ArcEffect.Boost, which
+            // Hold-arms their boostUntil — harmless, they are already Boosting
+            // via the real driftBoostUntil; the flame outlives the payout by at
+            // most the 0.25 s hold. The host's follower body is kinematic, so
+            // the arcadeBoostAccel this racer earns in ApplyEffects is inert.)
+            if (m.miniTurbo)
+                r.driftBoostUntil = Mathf.Max(r.driftBoostUntil, clock + EffectHold);
         }
 
         /// <summary>Host: ship one effect's physics to the machine that owns the car.</summary>
@@ -195,12 +227,22 @@ namespace AIHWSim.Net
             float clock = ArcadeDirector.Clock;
             var fx = ArcEffect.None;
             if (r.rolling) fx |= ArcEffect.Rolling;
-            // Boosting, not boostUntil: a mini-turbo the host awarded to itself or
-            // to a bot is a real boost and other machines should see the trail.
-            // (A CLIENT's mini-turbo is invisible here by construction — the host
-            // does not simulate that car and never learns about its drift. Purely
-            // cosmetic, and the alternative is an upward wire field for a spark.)
+            // Boosting, not boostUntil: a mini-turbo is a real boost and other
+            // machines should see the flame. Since protocol 6 that includes a
+            // CLIENT's mini-turbo — OnOwnState mirrors it into this racer's
+            // driftBoostUntil, so Boosting is true here for every payout in the
+            // session no matter which machine earned it.
             if (r.Boosting) fx |= ArcEffect.Boost;
+            // Drift visibility (protocol 6). r.Drifting is the host's own truth
+            // (its car, its bots); RemoteDrifting is the owner's uplinked truth
+            // for a client car. Tier rides in the two bits above the flag.
+            bool drifting = r.Drifting || r.RemoteDrifting;
+            if (drifting)
+            {
+                fx |= ArcEffect.Drifting;
+                int tier = r.Drifting ? r.driftTier : r.remoteDriftTier;
+                fx |= (ArcEffect)((tier & 3) << 10);
+            }
             if (clock < r.shieldUntil) fx |= ArcEffect.Shield;
             if (clock < r.spinUntil) fx |= ArcEffect.Spun;
             if (r.Wrecked) fx |= ArcEffect.Wrecked;
@@ -268,6 +310,12 @@ namespace AIHWSim.Net
                 {
                     r.penalized = (a.effects & ArcEffect.Penalized) != 0;
                     r.warned = (a.effects & ArcEffect.Warned) != 0;
+                    // Drift mirror, ghosts only — our own car's drift is decided
+                    // by our own handbrake (the same owner-truth reasoning as
+                    // the off-track verdict above), and taking the echo would
+                    // add a round trip of smoke to every slide.
+                    r.remoteDriftUntil = Hold(a.effects, ArcEffect.Drifting, clock);
+                    r.remoteDriftTier = ((int)a.effects >> 10) & 3;
                 }
                 r.incomingRemote = (a.effects & ArcEffect.Incoming) != 0;
 

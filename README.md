@@ -107,7 +107,13 @@ quadcopter and hardware-in-the-loop over serial are planned follow-ons.
 **Single-player races vs bots**: opponents drive a variety of preset cars in
 distinct paint colours, following the track's racing line (spline centerline, the
 oval loop, or ordered checkpoints) with pure-pursuit steering and corner-aware
-speed. They share the map with real collisions, count laps/checkpoints like you,
+speed. The pack spreads across the road on straights — each bot carries its own
+lateral bias and slow weave, sized to the local track width — and gathers back
+onto a real out-in-out line through corners: wide on approach, cut to the apex,
+released wide on exit. Hard bots use most of the corridor and barely weave; Easy
+bots wander half the road and only half-commit to the line. The spread reserves
+half a car plus a margin from every edge, so bots never farm their own
+track-limit penalties. They share the map with real collisions, count laps/checkpoints like you,
 and appear in the live standings banner + results overlay (Keep driving / Rematch
 / Main Menu). Three dedicated **race circuits** ship as track presets — **Boost
 Speedway**, **Dust Devil Rally**, and **Neon Vortex** — closed-spline loops with
@@ -560,6 +566,18 @@ you are doing rather than something you are waiting through. Sparks tint blue,
 orange, then purple, and a meter above the item panel marks where the next tier
 is.
 
+The tyres also pour **smoke in the car's own colour** while the slide is held —
+a pale tint of the body paint, so every drifting car signs its slide. The puffs
+live in world space and finish fading after you release, leaving a short double
+trail where the rear wheels were rather than a decal glued to the bumper.
+
+Every boost — item, pad or mini-turbo — now also lights a **rear thruster
+flame**: an orange plume with a near-white core that flickers in length while
+the push lasts. Like every cosmetic it lives on the viz layer, so a car's own
+camera sensor never sees its own exhaust. Over LAN (protocol v6) the whole
+drift show travels: smoke, tier-coloured sparks, the flame and the mini-turbo
+that lit it are visible on every machine, whichever machine earned them.
+
 Releasing the handbrake straightens the car out — the same controller, aimed at
 zero slip — and fires a per-tier impulse along the nose, so the exit lands as an
 event pointing down the road rather than a gradual recovery pointing sideways. A
@@ -639,9 +657,19 @@ and the incoming warning be one implementation instead of two. The one thing a
 client genuinely cannot derive is whether a missile is locked onto it — it owns
 no missiles, only their poses — so that arrives as a flag.
 
-This is **protocol v5**. Every machine in a session must run the same build; the
+This is **protocol v6**. Every machine in a session must run the same build; the
 exact version check at connection approval rejects a mismatch cleanly rather than
-letting it half-work. Two things moved in v5, and both are worth knowing:
+letting it half-work.
+
+v6 is drift visibility. Three spare `ArcEffect` bits carry drifting + tier down
+to every client, and four spare own-state flag bits carry drifting, tier and the
+mini-turbo up from the owner — so a client's slide pours smoke, tints sparks and
+lights the boost flame on every machine, which under v5 only the host's own
+drifts could do. No field moved and no byte was added; the bump exists because a
+v5 host would silently never show a v6 client's drift. Sliding ghosts also
+squeal now, but that needed no wire change at all — the skid intensity is
+derived on each client from how sideways the streamed velocity is in the ghost's
+own frame. Two things moved in v5, and both are worth knowing:
 
 `ArcEffect` widened from a byte to a `ushort`, because all eight of its bits were
 spoken for and the oil slick needed a ninth. That flag is not cosmetic — since v4
@@ -673,16 +701,29 @@ than less — a well-timed missile can cost most of a lap.
 
 ### Handling: Arcade or Sim
 
-Arcade mode raises **every** car in the session, bots included, to an assist floor
-(steering, stability, traction control, ABS) and a 25 % tyre-grip baseline. The
-grip rides the existing `arcadeGripMult` channel, already folded into µ on both
-friction paths, so it costs no new physics code.
+Arcade mode pins **every** car in the session, bots included, to **Full assists**
+on all four channels and a 45 % tyre-grip baseline. The grip rides the existing
+`arcadeGripMult` channel, already folded into µ on both friction paths, so it
+costs no new physics code. Steering at Full is also most of why arcade feels less
+twitchy: the lock limiter's reference speed drops from 4 to 2.5 m/s, roughly
+halving the available lock at racing speed.
+
+On top of that, the stability assist gets **triple authority** in arcade
+(`arcadeStabilityMult`, neutral 1 everywhere else). The sim-sized ESC caps out at
+0.75 N·m against roughly 2 N·m of tyre moment — a fair fight in sim, a lost one
+in arcade, where boost pads and item boosts shove the body directly with forces
+the tyres never see. This is why arcade cars used to spin out over pads and on
+full-throttle launches *at any assist setting*. The boost stands down during a
+drift (the slide is yaw you asked for) and during a spin-out or wreck (a hit must
+out-rotate anything helping you), so none of those is retuned by it. Lap time in
+arcade is meant to come from the racing line and the item luck, never from
+catching slides.
 
 Untick **Arcade handling** to race the same circuits on the raw brush-tyre model
 instead. That is what the mode shipped as, and it is genuinely hard on a keyboard
-— which is the point of making it a choice rather than a decision. Assists are
-applied as a per-channel maximum, so anything higher you set in Options survives.
-C firmware is never touched either way: `ArcadeDirector.Register` refuses firmware
+— which is the point of making it a choice rather than a decision. The Options
+assist preset still governs sim sessions; in arcade it is simply maxed. C
+firmware is never touched either way: `ArcadeDirector.Register` refuses firmware
 rigs outright, so a controller under validation always faces the honest physics.
 
 Arcade handling also drops the drive command to 85 %, which takes the cars from
@@ -715,21 +756,33 @@ Noise uses a fixed-seed generator, so a given clip is bit-identical every run.
 Every car carries motor whine pitched from its own motor speed, tyre squeal when
 it slides, and an impact thud scaled by how hard it hit. Bots included, so you
 hear the field around you; LAN ghosts too, pitched from the streamed speed
-estimate since they have no drivetrain to read. The arcade layer hangs its own
+estimate since they have no drivetrain to read. Ghosts even squeal when they
+slide — the lateral component of the streamed velocity in the ghost's own frame
+is a good enough slip reading to feed the same gated skid voice a real car uses,
+so a slide across the room sounds like one, from where it is. The arcade layer hangs its own
 sounds off `ArcadeDirector.Event`, which had been raised from fourteen call sites
 since the mode was built and had never had a subscriber.
 
 The tyres are a stick-slip oscillator, not a hiss. Rubber breaking away grabs,
-tears loose and grabs again at an audible rate, so the clip is a vibrato'd squeal
-tone over two sharp resonators and a low rubber growl — filtered white noise
-cannot get there however it is shaped, and the pitch drops as the slide deepens.
+tears loose and grabs again at an audible rate, so the clip is a pair of detuned
+squeal tones (their few-Hz beat is the slow "wow" a real slide has) over two
+sharp resonators and a low rubber growl — filtered white noise cannot get there
+however it is shaped, and the pitch drops as the slide deepens. The loop is
+1.6 s with three internal modulations at different rates (vibrato, beat, swell)
+that only line up once per loop, so no half-second of it resembles another.
 
-They also stay quiet unless the car is genuinely losing grip. `TyreSlip01` is not
-"how much slip is there" — every loaded tyre slips a little, and a readout that
-rises with ordinary cornering squeals through every corner you take cleanly. It
-is the tyre model's **own** combined slip, where 1.0 is exactly the peak of the
-force curve, and it reads zero until you are past it. Wheels that are airborne or
-barely moving are excluded, because neither can scrub.
+They also stay quiet unless the car is genuinely *sliding*, not merely slipping.
+`TyreSlip01` is not "how much slip is there" — every loaded tyre slips a little,
+and a readout that rises with ordinary cornering squeals through every corner you
+take cleanly. It is the tyre model's **own** combined slip, where 1.0 is exactly
+the peak of the force curve, and it reads zero until you are past it. Wheels that
+are airborne or barely moving are excluded, because neither can scrub. On top of
+that the squeal opens only when the slip has *held* past a deadband for a tenth
+of a second at real road speed — a noisy physics step, a kerb tap or a
+standing-start scrub no longer chirps — it swells in and cuts off quickly, and
+each car carries its own voice: a fixed per-car pitch offset plus a slow wander
+on level and pitch, so a long slide never holds one note and two sliding cars
+are two voices rather than the same loop twice.
 
 **Master volume**, **Sound effects** and **Engine + tyres** are separate sliders
 in Options and in the pause menu, where they now take effect immediately.

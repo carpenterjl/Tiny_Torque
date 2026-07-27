@@ -116,6 +116,14 @@ namespace AIHWSim.Arcade
         private static Material SlickSkin =>
             AlphaSkin(ref _slick, new Color(0.07f, 0.06f, 0.09f, 0.85f), 0.95f);
 
+        private static Material _driftSmoke;
+        /// <summary>Base for drift tire smoke: alpha-blended like the hazards
+        /// (smoke must occlude, so no additive), authored white — the per-car
+        /// colour and the fade arrive through <see cref="DriftSmoke"/>'s
+        /// property block, so one material serves the whole field.</summary>
+        public static Material DriftSmokeSkin =>
+            AlphaSkin(ref _driftSmoke, new Color(1f, 1f, 1f, 0.5f), 0.05f);
+
         /// <summary>Collider-free primitive piece on the parent's layer.</summary>
         private static Transform Piece(PrimitiveType type, Transform parent, Material mat,
             Vector3 pos, Vector3 euler, Vector3 scale)
@@ -294,6 +302,54 @@ namespace AIHWSim.Arcade
                     new Vector3(i * 0.10f, -0.03f, -0.14f), Vector3.zero,
                     new Vector3(0.09f, 0.05f, 0.14f));
             return root.transform;
+        }
+
+        /// <summary>Body of the boost flame — a saturated exhaust orange. Alpha
+        /// matters even on the additive skin: it is the source-blend factor, so
+        /// it sets how hard the flame adds over the track.</summary>
+        private static readonly Color BoostFlameOuter = new Color(1.00f, 0.55f, 0.15f, 0.85f);
+        /// <summary>Hot near-white core of the boost flame.</summary>
+        private static readonly Color BoostFlameCore = new Color(1.00f, 0.92f, 0.62f, 0.95f);
+
+        /// <summary>
+        /// Rear thruster flame shown while any boost is burning — item, pad or
+        /// mini-turbo. New in protocol 6's pass: boost previously had no visual
+        /// at all, so a remote car's mini-turbo had nothing to light up.
+        ///
+        /// Additive <see cref="BurstSkin"/> (a flame genuinely is added light),
+        /// tinted once at build time through property blocks — the geometry is
+        /// never repainted, the director only pulses the root's length. VizLayer
+        /// like every cosmetic: a car's own CameraSensor must not see its own
+        /// exhaust.
+        /// </summary>
+        public static Transform BuildBoostFlame(Transform car)
+        {
+            var root = new GameObject("BoostFlame");
+            root.layer = PartVisualFactory.VizLayer;
+            root.transform.SetParent(car, false);
+
+            // The car body is ~0.42 m long; the rear face sits near z = -0.21,
+            // so the plume hangs just behind it.
+            TintPiece(Piece(PrimitiveType.Sphere, root.transform, BurstSkin,
+                new Vector3(0f, 0.02f, -0.26f), Vector3.zero,
+                new Vector3(0.10f, 0.08f, 0.26f)), BoostFlameOuter, 2f);
+            TintPiece(Piece(PrimitiveType.Sphere, root.transform, BurstSkin,
+                new Vector3(0f, 0.02f, -0.22f), Vector3.zero,
+                new Vector3(0.055f, 0.045f, 0.15f)), BoostFlameCore, 3f);
+            for (int i = -1; i <= 1; i += 2)
+                TintPiece(Piece(PrimitiveType.Sphere, root.transform, BurstSkin,
+                    new Vector3(i * 0.06f, 0f, -0.20f), Vector3.zero,
+                    new Vector3(0.04f, 0.035f, 0.10f)), BoostFlameOuter, 2f);
+            return root.transform;
+        }
+
+        /// <summary>Per-piece colour on a shared material, the shield-bubble way.</summary>
+        private static void TintPiece(Transform piece, Color c, float emission)
+        {
+            var mpb = new MaterialPropertyBlock();
+            mpb.SetColor("_Color", c);
+            mpb.SetColor("_EmissionColor", c * emission);
+            piece.GetComponent<Renderer>().SetPropertyBlock(mpb);
         }
 
         /// <summary>One of the three orbs that make up an active shield.</summary>

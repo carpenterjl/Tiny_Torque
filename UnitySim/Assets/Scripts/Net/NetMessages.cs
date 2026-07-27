@@ -21,6 +21,15 @@ namespace AIHWSim.Net
     /// stream (<see cref="NetPack.ProjSmoke"/>), <see cref="ArcEffect"/> widened
     /// to a ushort to fit the slick flag, and one byte per racer carries the
     /// blind's remaining time.
+    ///
+    /// Protocol 6 is drift visibility. Three spare <see cref="ArcEffect"/> bits
+    /// carry drifting + tier down to every client; four spare
+    /// <see cref="OwnStateMsg"/> flag bits carry drifting/tier/mini-turbo up
+    /// from the owner, so a client's slide and its payout light up on every
+    /// machine. No field moved and no byte was added — the bump exists because
+    /// a v5 host would silently never show a v6 client's drift (and vice
+    /// versa), and mixed-cosmetics sessions are exactly what the equality
+    /// check is for.
     /// </summary>
     public static class NetMsg
     {
@@ -228,6 +237,17 @@ namespace AIHWSim.Net
         public float wheelRadPerSec;
         public bool penalized;
         public bool warned;
+        /// <summary>Committed to a slide this instant. The host does not
+        /// simulate this car, so without these three fields a client's drift
+        /// is invisible to the whole session — this uplink is the entire v6
+        /// reason-to-exist.</summary>
+        public bool drifting;
+        /// <summary>Drift charge tier 0-3 while drifting (the spark colour).</summary>
+        public int driftTier;
+        /// <summary>Mini-turbo payout currently burning (Clock &lt;
+        /// driftBoostUntil). Rides up so the host can relay it as
+        /// <see cref="ArcEffect.Boost"/> like any boost it awarded itself.</summary>
+        public bool miniTurbo;
     }
 
     public struct InputState
@@ -264,6 +284,19 @@ namespace AIHWSim.Net
         /// stale hold costs nothing. Blindness is NOT a flag for the opposite
         /// reason; see <see cref="ArcRacerState.blindLeftDs"/>.</summary>
         Slicked = 256,
+        /// <summary>Committed to a slide right now. Owner-truth: for a remote
+        /// car the host learned this from the owner's own-state uplink. A flag,
+        /// not a duration — smoke and sparks are on/off visuals, and the
+        /// receiver's 0.25 s liveness hold bridges a lost packet without a
+        /// fade envelope to get wrong.</summary>
+        Drifting = 512,
+        /// <summary>Low bit of the 2-bit drift charge tier (0 = still charging,
+        /// 1-3 = mini-turbo tiers, the spark colours). Meaningful only while
+        /// <see cref="Drifting"/> is set. Encode <c>(tier &amp; 3) &lt;&lt; 10</c>,
+        /// decode <c>((int)fx &gt;&gt; 10) &amp; 3</c>.</summary>
+        DriftTier1 = 1024,
+        /// <summary>High bit of the drift tier field; see <see cref="DriftTier1"/>.</summary>
+        DriftTier2 = 2048,
     }
 
     /// <summary>One car's arcade state (host → clients).</summary>
@@ -428,7 +461,11 @@ namespace AIHWSim.Net
             w.WriteValueSafe(s.angVel);
             w.WriteValueSafe(s.steerDeg);
             w.WriteValueSafe(s.wheelRadPerSec);
-            byte flags = (byte)((s.penalized ? 1 : 0) | (s.warned ? 2 : 0));
+            byte flags = (byte)((s.penalized ? 1 : 0) |
+                                (s.warned ? 2 : 0) |
+                                (s.drifting ? 4 : 0) |
+                                ((s.driftTier & 3) << 3) |
+                                (s.miniTurbo ? 32 : 0));
             w.WriteValueSafe(flags);
         }
 
@@ -446,6 +483,9 @@ namespace AIHWSim.Net
             r.ReadValueSafe(out byte flags);
             s.penalized = (flags & 1) != 0;
             s.warned = (flags & 2) != 0;
+            s.drifting = (flags & 4) != 0;
+            s.driftTier = (flags >> 3) & 3;
+            s.miniTurbo = (flags & 32) != 0;
             return s;
         }
 

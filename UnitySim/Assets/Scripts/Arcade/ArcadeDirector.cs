@@ -88,6 +88,13 @@ namespace AIHWSim.Arcade
         /// glance from another car, slow enough not to strobe.</summary>
         private const float ShieldOrbDegPerSec = 180f;
 
+        /// <summary>Boost flame flicker rate — fast enough to read as fire,
+        /// below anything that strobes.</summary>
+        private const float BoostFlamePulseHz = 12f;
+        /// <summary>Boost flame length pulse, as a fraction of the authored
+        /// plume. Length only: a flame breathes along its axis.</summary>
+        private const float BoostFlamePulseAmp = 0.30f;
+
         private BuiltTrack _built;                  // for surface drops (null on the oval)
         private System.Random _rng;
         private float _posAccum, _botAccum, _limitAccum;
@@ -1121,7 +1128,7 @@ namespace AIHWSim.Arcade
                 // The deadlines themselves (spinUntil, wreckedUntil) arrive
                 // through the sync stream, so an owner reads exactly the state
                 // the host decided.
-                if (!DrivesPhysics(r)) { UpdateShieldViz(r, dt); continue; }
+                if (!DrivesPhysics(r)) { UpdateGhostVfx(r, dt); continue; }
 
                 // Bot blindness is PUSHED, where the human tint is PULLED by the
                 // HUD at draw time. Control only exists on the machine that
@@ -1143,16 +1150,20 @@ namespace AIHWSim.Arcade
                 if (wrecked)
                 {
                     // Limp: no drive, no grip, no held torque — it is tumbling
-                    // from the impulse the hit already gave it.
+                    // from the impulse the hit already gave it. The stability
+                    // boost stands down here and while spun: a hit must
+                    // out-rotate anything that is normally helping you.
                     car.arcadeGripMult = ArcadeConfig.SpinGripMult * r.gripBase;
                     car.arcadeYawTorque = 0f;
                     car.arcadeDriveMult = 0f;
+                    car.arcadeStabilityMult = 1f;
                 }
                 else if (spun)
                 {
                     car.arcadeGripMult = ArcadeConfig.SpinGripMult * r.gripBase;
                     car.arcadeYawTorque = r.spinTorqueSigned;
                     car.arcadeDriveMult = ArcadeConfig.SpinDriveMult * r.driveBase;
+                    car.arcadeStabilityMult = 1f;
                 }
                 else
                 {
@@ -1164,9 +1175,11 @@ namespace AIHWSim.Arcade
                         (r.OnSlick ? ArcadeConfig.SlickGripMult : 1f);
                     car.arcadeYawTorque = 0f;
                     car.arcadeDriveMult = r.driveBase;
+                    car.arcadeStabilityMult = r.stabilityBase;
                 }
 
                 UpdateShieldViz(r, dt);
+                UpdateBoostViz(r);
                 UpdateDrift(r, car, dt, wrecked || spun);
 
                 // Slipstream, maxed into the same channel the item boost uses
@@ -1316,6 +1329,12 @@ namespace AIHWSim.Arcade
             // both, not the more recent of the two.
             car.arcadeGripMult *= ArcadeConfig.DriftGripMult;
             car.arcadeAssistMult = ArcadeConfig.DriftAssistMult;
+            // The arcade ESC boost stands all the way down: a drift is the
+            // player asking for yaw, and a damper strong enough to stop a
+            // spin-out is strong enough to iron the slide flat. The residual
+            // fifth of sim-strength stability (assist mult above) is the only
+            // safety net the slide keeps.
+            car.arcadeStabilityMult = 1f;
 
             // Stop the drift button being a brake. This is the difference between
             // an arc and a handbrake turn: a locked rear axle bleeds the speed the
@@ -1347,6 +1366,12 @@ namespace AIHWSim.Arcade
                 r.driftTier = tier;
                 ShowDriftSparks(r);
             }
+
+            // Tire smoke in the car's own colour. Attached lazily (most cars
+            // never drift — the bots don't handbrake at all), then only the
+            // flag is touched: the component owns its puffs' lives.
+            if (r.driftSmoke == null) r.driftSmoke = DriftSmoke.Attach(car);
+            if (r.driftSmoke != null) r.driftSmoke.emitting = true;
         }
 
         /// <summary>The exit arc: same controller, target zero. Grip and the
@@ -1374,10 +1399,17 @@ namespace AIHWSim.Arcade
         {
             if (!r.Drifting || r.car == null) { r.HideDriftSparks(); return; }
             if (r.driftSparks == null) r.driftSparks = ArcadeVfx.BuildDriftSparks(r.car.transform);
+            TintDriftSparks(r, r.driftTier);
+        }
 
-            var c = r.driftTier <= 0
+        /// <summary>One colour table for the sparks, two callers: the owner's
+        /// tier machine above, and the ghost path below painting the tier the
+        /// sync stream reported.</summary>
+        private static void TintDriftSparks(ArcadeRacer r, int tier)
+        {
+            var c = tier <= 0
                 ? ArcadeConfig.DriftChargeColor
-                : ArcadeConfig.DriftTierColors[Mathf.Clamp(r.driftTier - 1, 0,
+                : ArcadeConfig.DriftTierColors[Mathf.Clamp(tier - 1, 0,
                     ArcadeConfig.DriftTierColors.Length - 1)];
             var mpb = new MaterialPropertyBlock();
             mpb.SetColor("_Color", c);
@@ -1395,6 +1427,7 @@ namespace AIHWSim.Arcade
             r.driftTier = 0;
             r.driftKickUntil = 0f;
             r.HideDriftSparks();
+            if (r.driftSmoke != null) r.driftSmoke.emitting = false;
 
             // Straighten on any voluntary exit, tier or no tier: a slide you drop
             // out of at half a second still leaves the car pointing sideways, and
@@ -1498,6 +1531,51 @@ namespace AIHWSim.Arcade
             }
             if (r.shieldOrbs != null)
                 r.shieldOrbs.Rotate(0f, ShieldOrbDegPerSec * dt, 0f, Space.Self);
+        }
+
+        /// <summary>
+        /// Rear flame from <c>r.Boosting</c> alone, the shield-viz way: every
+        /// path a boost can end — expiry, wreck, respawn, restart — is covered
+        /// by the one state check. Works unchanged on a ghost, because the sync
+        /// stream Hold-arms its <c>boostUntil</c>.
+        /// </summary>
+        private void UpdateBoostViz(ArcadeRacer r)
+        {
+            bool on = r.car != null && Clock >= r.wreckedUntil && r.Boosting;
+            if (!on) { r.HideBoostFlame(); return; }
+
+            if (r.boostViz == null) r.boostViz = ArcadeVfx.BuildBoostFlame(r.car.transform);
+            float pulse = 1f + BoostFlamePulseAmp *
+                Mathf.Sin(Clock * BoostFlamePulseHz * 2f * Mathf.PI);
+            r.boostViz.localScale = new Vector3(1f, 1f, pulse);
+        }
+
+        /// <summary>
+        /// Everything a non-simulated car shows: the visuals-only half of
+        /// ApplyEffects, run for LAN ghosts and the host's follower copies.
+        /// Shield and boost read the same deadlines the owned path reads
+        /// (Hold-armed by the sync stream); smoke and sparks read the protocol-6
+        /// remote-drift mirror. Sparks are tinted only when the reported tier
+        /// actually changes — TintDriftSparks allocates a property block, and
+        /// 60 Hz of those for a 15 Hz signal is pure garbage.
+        /// </summary>
+        private void UpdateGhostVfx(ArcadeRacer r, float dt)
+        {
+            UpdateShieldViz(r, dt);
+            UpdateBoostViz(r);
+
+            bool drifting = r.car != null && r.RemoteDrifting;
+            if (r.driftSmoke == null && drifting) r.driftSmoke = DriftSmoke.Attach(r.car);
+            if (r.driftSmoke != null) r.driftSmoke.emitting = drifting;
+
+            if (!drifting) { r.HideDriftSparks(); return; }
+            if (r.driftSparks == null || r.remoteDriftTier != r.remoteDriftTierShown)
+            {
+                if (r.driftSparks == null)
+                    r.driftSparks = ArcadeVfx.BuildDriftSparks(r.car.transform);
+                TintDriftSparks(r, r.remoteDriftTier);
+                r.remoteDriftTierShown = r.remoteDriftTier;
+            }
         }
 
         // ================= track limits =================

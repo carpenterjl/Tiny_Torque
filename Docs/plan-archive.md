@@ -8,8 +8,253 @@ describe is documented in [README.md](../README.md).
 Active work lives in the session plan file, not here; a plan moves into this archive
 once its milestones are done.
 
-Covering the project bootstrap through arcade pass 3 (403780 chars, 29 plans).
-Last updated 2026-07-26.
+Covering the project bootstrap through the arcade play-test follow-ups (419054 chars, 30 plans).
+Last updated 2026-07-27.
+
+---
+# Arcade pass 3 — play-test pass + follow-ups 1-4 (2026-07-26/27)
+
+**Archived with every play-test checklist still UNDRIVEN.** The `- [ ]` items
+below were never driven; the pass was superseded by the LAN-visual-parity /
+bot-racing-line plan before a play-test session happened. They remain valid
+things to check.
+
+# Arcade pass 3 — play-test pass
+
+The build work is done and archived. **Arcade pass 3** — area-denial items,
+kart-feel mechanics, the reverse fix, keyboard throttle shaping, assist presets,
+LAN protocol v5, rebindable keys and the shared settings panel — is in
+[`Docs/plan-archive.md`](../../../EE%20Projects/Tiny_Torque/Docs/plan-archive.md)
+as the newest entry, with every step's deviations recorded.
+
+What survives here is the part a compiler cannot answer.
+
+## What is verified
+
+- **Every step compiles clean** — 13 of 13, editor closed, 0 `error CS`.
+- **The Opus mission is bit-identical to the R4 reference row** after M1, after
+  M3 and again at the end: leg A −13.6156 mm, turn +0.1874°, leg B +15.8038 mm,
+  brake +42.3414 mm, total +58.1455 mm, drift −42.4042 mm, `completed: true`,
+  `fault: 0`. `CarVehicle.cs` and `MotorPart.cs` are both in the diff, so this is
+  the load-bearing check rather than a formality.
+- **`TrackPresetValidator.Report`: 12/12 PASS**, no failures.
+- **Standalone release player rebuilt** at
+  `UnitySim/Builds/Release/AI Hardware Control Sim.exe` — required, because
+  protocol v5 refuses a v4 client.
+
+## What is NOT verified — the play-test list
+
+**Nothing in this pass has been driven.** Compile-clean plus an unmoved Opus
+mission proves the physics is safe; it says nothing about whether any of it feels
+right. In rough order of how likely each is to need a number changed:
+
+- [ ] **Smoke balance.** 0.75 m radius, 9 s, on a 100–140 m RC circuit. The risk
+      is that it is unavoidable rather than un-fun. `MaxHazardsPerPlayer` is 1;
+      tune `SmokeRadius` and `SmokeLifetime` first.
+- [ ] **The drift, which is now latched rather than detected** (see below). Entry
+      is handbrake + >3.5 m/s + >0.30 of steering, so the old "can a keyboard even
+      reach the slip threshold" question is gone — but four new ones replace it,
+      listed in their own section.
+- [ ] **The reverse blip.** From 8 m/s, hold S: brake → stop → reverse on that
+      one press. At speed S must still just brake and not blip.
+- [ ] **Oil slick:** grip visibly drops inside, recovers on exit, never a wall.
+- [ ] **Blinded bot into a wall** — it should sit there for the blind duration
+      and resume, and specifically must NOT respawn out of the cloud.
+- [ ] **Look-back framing** — does the mirrored offset actually show the car
+      behind, or the sky?
+- [ ] **Assists.** A plain (non-arcade) race now has Standard assists, which is a
+      deliberate feel change for every existing install. Full should read as a
+      well-sorted touring car, not as being on rails. Arcade sessions must feel
+      exactly as they do today (the identity-at-floor rule).
+- [ ] **Throttle:** holding W ramps in ~0.45 s; the Options slider at 0 restores
+      today's instant step; gamepad triggers unchanged.
+- [ ] **The pause panel at 1920×1080 and in a small editor game view.** It gained
+      `GarageSkin`, which changes every metric, and it already overflowed before
+      that. The body scrolls now, so the failure should be ugly rather than
+      invisible — but eyeball it.
+- [ ] **Rebinding end to end:** rebind a key, drive with it, restart the game and
+      confirm it persisted; Reset-to-defaults restores WASD; the Arrows layout
+      works; Escape still pauses after binding Pause elsewhere.
+- [ ] **LAN, two machines** (editor host + the rebuilt standalone): smoke and
+      slick appear on both, blindness triggers on the same car on both screens,
+      the settings panel is reachable from `LanSessionMenu`, and a v4 client is
+      refused with a version mismatch.
+- [ ] **Regression by hand:** split-screen (per-viewport tint, independent
+      reverse), garage, builder, snapshots, the diff-drive scene, a firmware
+      session.
+
+## Follow-up 4: arcade grip, drift smoke, tyre voice (2026-07-26)
+
+Three play-test items: arcade spins out too easily even at Full assists (boost
+pads, hard launches), drifts should pour car-coloured tire smoke, and the skid
+sound is repetitive and trigger-happy.
+
+1. **Anti-spin.** Arcade now pins every car to Full assists (floor was
+   .80/.70/.90/.90), `HandlingGripBonus` 1.25 → 1.45, and a new
+   `CarVehicle.arcadeStabilityMult` (neutral 1) gives the ESC **3×** gain and
+   clamp in arcade — the sim-sized 0.75 N·m cap loses against pad/boost forces
+   that shove the body without going through the tyres. Stood down to 1 during
+   drift, spin-out and wreck, so those mechanics are untouched.
+2. **Drift smoke.** New `Arcade/DriftSmoke.cs`: pooled world-space puffs at the
+   rear wheels, tinted `Lerp(bodyColor, white, 0.4)`, emitting only while the
+   slide is held; the component persists on the car so the trail fades out
+   after release. Shares the hazards' alpha material via
+   `ArcadeVfx.DriftSmokeSkin`.
+3. **Tyre voice.** `VehicleAudio`: squeal opens only after slip holds past a
+   0.10 deadband for 0.09 s at >1.2 m/s road speed; volume scales to full at
+   4.5 m/s; swells in (6/s), cuts fast (14/s); per-car pitch offset
+   (0.93–1.08) plus slow Perlin wander on level and pitch.
+   `ProceduralAudio.BuildSkid`: loop 0.7 → 1.6 s, detuned squeal pair (~3 Hz
+   beat) + ~2 Hz swell, all whole-cycle so the wrap stays seamless.
+
+Compiles clean (0 `error CS`); **Opus bit-identical to R4** with `CarVehicle.cs`
+in the diff (legA −13.615608, turn +0.187378, total +58.145523, drift
+−42.404175, fault 0).
+
+- [ ] **Can you still spin out?** Boost pad mid-corner and a 100 % launch from
+      standstill — the two reported cases. If it still goes,
+      `HandlingStabilityBoost` (3) and `HandlingGripBonus` (1.45) are the knobs.
+- [ ] **Is it now too planted?** The car should still lean on its tyres, not
+      rail-ride. If corners feel glued, drop the boost before the grip.
+- [ ] **Does the drift still work at the new grip?** Entry, angle band and the
+      carry were tuned at 1.25 grip; the drift multiplies 0.70 into 1.45 now
+      (≈1.02 effective vs ≈0.88 before). If slides refuse to hold, lower
+      `DriftGripMult`.
+- [ ] **Spin-outs and wrecks still read as hits** — the stability stand-down
+      should keep the banana/missile rotation exactly as it was.
+- [ ] **Steering feel at speed**: noticeably calmer, still enough lock for the
+      hairpins.
+- [ ] **Smoke**: colour reads as the car's, trail sits where the wheels were,
+      fades after release, never visible to a car's own CameraSensor, and pausing
+      holds it rather than eating it.
+- [ ] **Tyre sound**: no more chirp spam on clean cornering; a held slide
+      swells, wanders and dies promptly on grip; two bots sliding sound like two
+      cars; the oil-drop one-shot (same clip) is not now comically long.
+
+## Follow-up 3: pad pins and respawn (2026-07-27)
+
+Two play-test bugs, both about being stuck.
+
+1. **Boost pads pinned you against walls.** The pad pushed along `transform.forward`
+   unconditionally while a wheel was on it, out-torquing reverse and holding the
+   car too straight to steer off. New pin latch in `CarVehicle`: on a pad and
+   below `PadPinSpeed = 1.0` m/s for `PadPinSeconds = 0.7`, the pad stands down
+   until forward speed passes `PadFreeSpeed = 1.6`. Pads are accumulated into a
+   separate `padBoost` and maxed into `boost` afterwards, so item boost, drift
+   carry and slipstream are untouched. The speed test is signed, not absolute —
+   otherwise reversing off would re-arm the pad and shove you back in.
+2. **Respawn went to the start line.** New `Core/TrackRespawn` (spine + surface
+   drop, composed by `TrackBootstrap` at all three scene-build sites) and
+   `CarVehicle.ResetVehicleTo(pos, rot)`. `ResetVehicle()` still exists and still
+   goes to spawn, so `SimulationRunner` and the mission harness are unchanged.
+
+Compiles clean (0 `error CS`); **Opus bit-identical to R4** with `CarVehicle.cs`
+in the diff.
+
+- [ ] **Pin escape:** drive nose-first into a wall on a pad. Should free itself in
+      well under a second and let you reverse and steer out.
+- [ ] **Pad still boosts normally** at speed, and crawling onto one from a
+      standstill in open track still gets the shove (the 0.7 s should never
+      elapse there, because the pad accelerates you past 1.0 m/s first).
+- [ ] **Respawn placement** on each of the four circuits, especially Neon Vortex
+      II's bridge and Workshop's plank — must land ON the elevated surface.
+- [ ] **Respawn facing** on a hairpin: `_respawnHint` should keep it on the side
+      the car came down, not snap across the corner.
+- [ ] **A bot's stuck recovery** now uses the same path — confirm a wedged bot
+      rejoins near where it was rather than at the start line.
+- [ ] **LAN:** a client respawning should snap on the host's screen too
+      (`OwnStateSender` bumps the epoch off `VehicleReset`, which the new path
+      still raises).
+
+## Follow-up 2: making the drift carry (2026-07-27)
+
+Second round of play-test feedback — "still feels a bit off", with a Mario-Kart
+reference spec. Three structural gaps against it, fixed:
+
+1. **The handbrake was still braking the rear axle for the whole slide.** New
+   `CarVehicle.arcadeHandbrakeMult` (neutral 1) drops it to `DriftHandbrakeMult
+   = 0.25` while committed. This is the big one: no carry acceleration can
+   outrun a locked rear axle, so the arc died and the exit was slow, which is
+   most of what "off" meant.
+2. **Charge was a stopwatch.** It now scales with the same stick axis that picks
+   the angle — `DriftChargeInto = 1.5` at full lock in, `DriftChargeOut = 0.35`
+   on full counter-steer. Tier gates moved to 0.9 / 1.9 / 3.0 charge (≈0.6 /
+   1.3 / 2.0 s at full commitment), meter full-scale 3.5.
+3. **The exit did not pop.** `DriftExitImpulse = 0.55` N·s per tier along the
+   nose, through the CoM via a new parameterless `CarVehicle.ArcadeImpulse`
+   overload. The positioned overload would have somersaulted the car — a
+   horizontal push on a few centimetres of CoM lever against ~0.01 kg·m² of
+   pitch inertia is hundreds of deg/s.
+
+Also `DriftCarryTopSpeed` 8.5 → 10 with an explicit `DriftCarryFadeBand = 2.5`:
+several designs cruise past 8.5, so the carry was fading to zero at exactly the
+speeds a corner is taken at.
+
+**Compiles clean (0 `error CS`). The Opus regression has NOT been re-run** —
+`CarVehicle.cs` is in the diff, so it is still owed. Three attempts failed on a
+broken editor install (`mono-2.0-bdwgc.dll` then `Unity.dll` failing to load)
+while a `UnityHubSetup-3.19.5-x64` installer was running. Re-run once that is
+done, and delete `UnitySim/Temp/UnityLockfile` first if a crashed batch run left
+one behind.
+
+- [ ] **Re-run the Opus mission** and confirm it is still bit-identical to R4.
+- [ ] **Does the drift keep its speed now?** The whole point of change 1. Compare
+      a drifted corner against the same corner driven normally — drifting should
+      be roughly even, never slower.
+- [ ] **Charge-rate coupling.** Does leaning in vs counter-steering visibly change
+      how fast the meter fills? `DriftChargeInto/Out` are the knobs.
+- [ ] **The exit impulse.** Should read as a kick, not a teleport, and must not
+      pitch the car — if the nose moves at all, the CoM overload is wrong.
+- [ ] **Is the rear still loose enough?** With the brake mostly gone, the slide is
+      now carried by `DriftGripMult = 0.70` and the yaw controller alone. If the
+      car grips up and refuses to hold an angle, lower the grip multiplier before
+      raising the handbrake back.
+- [ ] **Tier timing.** 0.6 / 1.3 / 2.0 s at full commitment — reachable in the
+      corners these tracks actually have?
+
+## Follow-up: the intentional drift (2026-07-27)
+
+Play-test feedback asked for the drift to be something you *do*. It was rebuilt
+from a detector into a latched state machine: turning while pulling the handbrake
+commits the car to a slide in that direction, the angle is steerable between 11°
+and 34°, a carry acceleration keeps the arc from scrubbing to a halt, release
+straightens the car out and pays the mini-turbo, and a charge meter shows the
+tiers filling. Compiles clean; **Opus is bit-identical to R4 again** with
+`CarVehicle.cs` in the diff. Everything below is still undriven.
+
+- [ ] **Entry threshold.** `DriftEntrySteer = 0.30` against the keyboard's own
+      smoothed steering ramp. Too low and braking in a straight line latches a
+      drift by accident; too high and a gentle corner will not commit.
+- [ ] **The kick.** `DriftYawKick = 0.95 N·m` for 0.28 s. Should read as the car
+      *setting* itself, not as being hit — the spin-out's 1.2 N·m is the ceiling
+      it must stay under, and it should feel clearly gentler than one.
+- [ ] **Is the angle steerable, or does it sit at one radius?** This is the whole
+      mechanic. `DriftYawGain`/`DriftAngleMin/MaxDeg` are the knobs.
+- [ ] **Does the arc carry?** `DriftCarryAccel = 4.5` capped at 8.5 m/s. A drift
+      should not be strictly slower than not drifting, and must not be faster.
+- [ ] **The exit straighten** — does the car come out pointing down the road with
+      the boost lit, or still sideways?
+- [ ] **The assist stand-down** (`DriftAssistMult = 0.20`). At Standard and at
+      Full, does the drift still work? That multiplier is the only reason it can.
+      Also confirm the assists come *back*: a car that stays loose after the drift
+      means `arcadeAssistMult` is not being re-asserted.
+- [ ] **The hop** (`DriftHopImpulse = 1.1 N·s`) on a light and on a heavy design —
+      it is a fixed impulse, so a very light car hops higher. Must not launch.
+- [ ] **The charge meter** at 1920×1080 and in a split-screen half.
+- [ ] **LAN:** a client's own mini-turbo now pays into `driftBoostUntil`, which the
+      host's sync no longer stomps — this was broken before and is worth
+      confirming from the client seat. The host will not *see* a client's drift
+      boost trail; that is cosmetic and known.
+
+## Known risks carried forward
+
+1. **Protocol bump.** Every machine must run the same build. Handled by the
+   `hello.ver` equality check, but it is the largest blast radius in the pass.
+2. **Assist default moved to Standard** for every existing install. Deliberate;
+   Options ▸ Preset ▸ Off restores the old behaviour exactly.
+3. **`_setpoints[0]` is now shaped** by the throttle smoother, so `car_pid` and
+   `car_sensors` see a smoothed operator dial. Opus is provably unaffected
+   (`opus_main.c:47` ignores setpoints entirely).
 
 ---
 # Arcade pass 3 — area-denial items, kart-feel mechanics, and a keyboard overhaul

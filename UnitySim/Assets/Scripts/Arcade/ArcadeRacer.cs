@@ -45,6 +45,12 @@ namespace AIHWSim.Arcade
         /// live here rather than being written onto the car once.</summary>
         public float driveBase = 1f;
 
+        /// <summary>Resting stability-assist boost for this car: 1 on Sim
+        /// handling, <see cref="ArcadeConfig.HandlingStabilityBoost"/> on
+        /// Arcade. Third of the ApplyEffects-re-asserts-every-frame triplets;
+        /// see <see cref="gripBase"/> for the pattern.</summary>
+        public float stabilityBase = 1f;
+
         // ---- inventory ----
         public ItemKind held = ItemKind.None;
         public int charges;
@@ -121,6 +127,11 @@ namespace AIHWSim.Arcade
         /// as <see cref="shieldViz"/>: parented to the car so it dies with it, and
         /// still torn down explicitly everywhere the charge can end.</summary>
         [System.NonSerialized] public Transform driftSparks;
+        /// <summary>Car-coloured tire smoke while sliding. Unlike the sparks
+        /// this PERSISTS across drifts — the component owns a world-space puff
+        /// pool that must outlive the slide so the trail fades instead of
+        /// vanishing — and the director only flips its emitting flag.</summary>
+        [System.NonSerialized] public DriftSmoke driftSmoke;
 
         /// <summary>
         /// Mini-turbo payout deadline, kept SEPARATE from <see cref="boostUntil"/>
@@ -135,6 +146,24 @@ namespace AIHWSim.Arcade
         /// </summary>
         public float driftBoostUntil;
 
+        // ---- remote drift mirror (LAN, protocol 6) ----
+        /// <summary>Liveness deadline: some OTHER machine reports this car is
+        /// mid-drift. On the host it is fed by the owner's own-state uplink; on
+        /// a client by the sync stream's <c>ArcEffect.Drifting</c> bit, re-armed
+        /// each packet like the shield. Never set for a car this machine
+        /// simulates — its truth is <see cref="Drifting"/>.</summary>
+        public float remoteDriftUntil;
+        /// <summary>Tier reported alongside <see cref="remoteDriftUntil"/>
+        /// (0 = charging, 1-3 = spark colours).</summary>
+        public int remoteDriftTier;
+        /// <summary>Tier the ghost's sparks were last tinted with, so the
+        /// director only re-tints (and re-allocates a property block) on an
+        /// actual change. -1 = sparks not showing.</summary>
+        [System.NonSerialized] public int remoteDriftTierShown = -1;
+
+        /// <summary>A remote owner says this car is sliding right now.</summary>
+        public bool RemoteDrifting => ArcadeDirector.Clock < remoteDriftUntil;
+
         /// <summary>Currently under any boost — item, pad-independent drift
         /// payout, or both.</summary>
         public bool Boosting =>
@@ -143,6 +172,11 @@ namespace AIHWSim.Arcade
         /// <summary>Committed to a slide right now (not merely straightening out
         /// of one).</summary>
         public bool Drifting => driftDir != 0;
+
+        /// <summary>Rear thruster flame while any boost is burning. Same
+        /// lifecycle rules as <see cref="shieldViz"/>: parented to the car so it
+        /// dies with it, torn down by the director the frame the boost ends.</summary>
+        [System.NonSerialized] public Transform boostViz;
 
         /// <summary>Slipstream acceleration, recomputed at the 5 Hz position tick
         /// and re-applied every frame. A field rather than a per-frame test
@@ -228,8 +262,12 @@ namespace AIHWSim.Arcade
             driftCharge = draftAccel = 0f;
             driftTier = driftDir = 0;
             driftKickUntil = driftStraightenUntil = driftBoostUntil = 0f;
+            remoteDriftUntil = 0f;
+            remoteDriftTier = 0;
             HideDriftSparks();
+            if (driftSmoke != null) driftSmoke.emitting = false;
             HideShield();
+            HideBoostFlame();
             RestoreCar();
         }
 
@@ -246,6 +284,14 @@ namespace AIHWSim.Arcade
         {
             if (driftSparks != null) Destroy(driftSparks.gameObject);
             driftSparks = null;
+            remoteDriftTierShown = -1;
+        }
+
+        /// <summary>Tear down the boost flame if one is up. Idempotent.</summary>
+        public void HideBoostFlame()
+        {
+            if (boostViz != null) Destroy(boostViz.gameObject);
+            boostViz = null;
         }
 
         /// <summary>Put the car's arcade channels back to their no-effect values.</summary>
@@ -258,6 +304,7 @@ namespace AIHWSim.Arcade
             car.arcadeDriveMult = driveBase;
             car.arcadeAssistMult = 1f;
             car.arcadeHandbrakeMult = 1f;
+            car.arcadeStabilityMult = stabilityBase;
         }
     }
 }

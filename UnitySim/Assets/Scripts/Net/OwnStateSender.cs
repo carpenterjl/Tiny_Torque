@@ -73,6 +73,14 @@ namespace AIHWSim.Net
                 wheelRadPerSec = car.ForwardSpeed / Mathf.Max(0.005f, wheelRadius),
                 penalized = arc != null && arc.penalized,
                 warned = arc != null && arc.warned,
+                // Drift visibility (protocol 6): the host does not simulate
+                // this car, so its slide and its mini-turbo payout have to
+                // ride up with the pose or the rest of the session never
+                // sees the smoke, the sparks or the flame.
+                drifting = arc != null && arc.Drifting,
+                driftTier = arc != null ? arc.driftTier : 0,
+                miniTurbo = arc != null &&
+                    Arcade.ArcadeDirector.Clock < arc.driftBoostUntil,
             });
         }
     }

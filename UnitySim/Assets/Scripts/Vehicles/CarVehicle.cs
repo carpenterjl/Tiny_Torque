@@ -157,6 +157,27 @@ namespace AIHWSim.Vehicles
         /// </summary>
         public float arcadeHandbrakeMult = 1f;
 
+        /// <summary>
+        /// Scales the stability assist's gain AND torque clamp. MUST default to
+        /// 1 — at 1 both multiplies are exact and every non-arcade session stays
+        /// bit-identical.
+        ///
+        /// The ESC's ceiling (<see cref="AssistTuning.StabilityClamp"/>, 0.75 N·m
+        /// at full stability) is sized for sim driving, where the tyres are the
+        /// only thing that can rotate the car and ~2 N·m of their resisting
+        /// moment is a fair fight. Arcade adds forces the tyres never see — a
+        /// boost pad is 9 m/s² applied straight to the body — and against those
+        /// the sim-sized nudge loses, which is why arcade cars spun out over
+        /// pads and on full-throttle launches at ANY assist setting. This is the
+        /// arcade layer's permission to give the same controller real authority.
+        ///
+        /// Stood down (set to 1) by the director during a drift, a spin-out and
+        /// a wreck: the first is the player asking for yaw, the other two are
+        /// the game inflicting it, and a damper strong enough to matter would
+        /// erase all three.
+        /// </summary>
+        public float arcadeStabilityMult = 1f;
+
         [Header("Composite mass (factory-set)")]
         public bool useCompositeMass = false;
         public float compositeMass = 1.6f;
@@ -1448,8 +1469,12 @@ namespace AIHWSim.Vehicles
                 float yawIntent = ForwardSpeed / _wheelbaseEst *
                                   Mathf.Tan(CurrentSteerAngle * Mathf.Deg2Rad);
                 float yawErr = _body.angularVelocity.y - yawIntent;
-                float cap = AssistTuning.StabilityClamp(a.stability);
-                float tq = Mathf.Clamp(-yawErr * AssistTuning.StabilityGain * a.stability, -cap, cap);
+                // arcadeStabilityMult is 1 outside arcade, so gain and cap are
+                // the same numbers they have always been.
+                float cap = AssistTuning.StabilityClamp(a.stability) * arcadeStabilityMult;
+                float tq = Mathf.Clamp(
+                    -yawErr * AssistTuning.StabilityGain * a.stability * arcadeStabilityMult,
+                    -cap, cap);
                 _body.AddTorque(0f, tq, 0f, ForceMode.Force);
             }
 

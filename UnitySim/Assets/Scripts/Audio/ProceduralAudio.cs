@@ -455,18 +455,29 @@ namespace AIHWSim.Audio
         /// A sliding tyre is a stick-slip oscillator — the contact patch grabs,
         /// tears loose and grabs again — so the sound is a strong, slightly
         /// unstable pitch with a rubber growl under it, and filtered white noise
-        /// cannot get there however it is shaped. Three parts:
-        ///   * a vibrato'd squeal tone, which carries the character;
+        /// cannot get there however it is shaped. Four parts:
+        ///   * TWO detuned squeal tones. Their beat (a few Hz) is the slow
+        ///     "wow" a real slide has, and it comes free from the physics of
+        ///     two close pitches rather than from an envelope pretending;
         ///   * two sharp resonators on noise, giving the grain a pitch centre;
-        ///   * one low resonator for the rubber growl and the weight.
+        ///   * one low resonator for the rubber growl and the weight;
+        ///   * a slow amplitude swell, at a rate incommensurate with the
+        ///     vibrato and the beat.
         ///
-        /// The tonal parts are built on whole cycles of the loop so they wrap
-        /// exactly; the noise parts cannot, and are cross-faded like every other
-        /// noise loop here.
+        /// The loop is 1.6 s — the 0.7 s original repeated often enough to be
+        /// learned in a single long corner, which is most of why the sound wore
+        /// out. Length alone is not the fix, though: the three modulations
+        /// (vibrato ~9 Hz, beat ~3 Hz, swell ~2 Hz) line up only once per loop,
+        /// so no half-second of it resembles another.
+        ///
+        /// Every tonal and modulation rate is snapped to whole cycles of the
+        /// loop so it wraps exactly (an envelope that ends mid-swell clicks
+        /// just like a tone that ends mid-cycle); the noise parts cannot wrap,
+        /// and are cross-faded like every other noise loop here.
         /// </summary>
         private static AudioClip BuildSkid()
         {
-            float secs = 0.7f;
+            float secs = 1.6f;
             int n = Samples(secs);
             int fade = Samples(0.06f);
 
@@ -481,19 +492,26 @@ namespace AIHWSim.Audio
             Normalize(mid, 1f);
             Normalize(low, 0.6f);
 
-            // The squeal itself. The vibrato is what stops it reading as a test
-            // tone: a real slide wanders in pitch as load moves around the patch.
+            // The squeal pair. The vibrato is what stops it reading as a test
+            // tone: a real slide wanders in pitch as load moves around the
+            // patch. The +5-cycle twin beats at 5/secs ≈ 3 Hz — whole cycles
+            // minus whole cycles is whole cycles, so the beat wraps too.
             float cyc = Mathf.Max(1f, Mathf.Round(760f * secs));
-            float vibCyc = Mathf.Max(1f, Mathf.Round(11f * secs));
+            float cyc2 = cyc + 5f;
+            float vibCyc = Mathf.Max(1f, Mathf.Round(9f * secs));
+            float swellCyc = Mathf.Max(1f, Mathf.Round(2.1f * secs));
 
             var raw = new float[n + fade];
             for (int i = 0; i < raw.Length; i++)
             {
                 float x = i / (float)n;
-                float ph = 2f * Mathf.PI * cyc * x +
-                           0.55f * Mathf.Sin(2f * Mathf.PI * vibCyc * x);
-                float squeal = Mathf.Sin(ph) * 0.5f + Mathf.Sin(ph * 2f) * 0.16f;
-                raw[i] = squeal * 0.85f + mid[i] + hi[i] + low[i];
+                float vib = 0.55f * Mathf.Sin(2f * Mathf.PI * vibCyc * x);
+                float ph = 2f * Mathf.PI * cyc * x + vib;
+                float ph2 = 2f * Mathf.PI * cyc2 * x + vib;
+                float squeal = Mathf.Sin(ph) * 0.40f + Mathf.Sin(ph * 2f) * 0.13f
+                             + Mathf.Sin(ph2) * 0.28f;
+                float swell = 0.82f + 0.18f * Mathf.Sin(2f * Mathf.PI * swellCyc * x);
+                raw[i] = (squeal * 0.85f + mid[i] + hi[i]) * swell + low[i];
             }
 
             var d = LoopFade(raw, n, fade);

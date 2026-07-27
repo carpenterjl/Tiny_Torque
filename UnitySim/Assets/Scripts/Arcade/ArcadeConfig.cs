@@ -354,18 +354,44 @@ namespace AIHWSim.Arcade
         /// Options keeps them. Bots previously got a zeroed AssistSettings with
         /// the comment "bots race on raw physics" — correct for a sim race, but
         /// it is why the AI was visibly spinning off on the banked circuits.
+        ///
+        /// Now pinned to FULL on every channel. Play-testing showed arcade cars
+        /// spinning out at any assist setting — the grip war is not one the sim
+        /// assists can win at sim strength (see the stability boost below) — so
+        /// the arcade answer is: everyone drives the best-assisted car the game
+        /// has, and the Options preset is a SIM-mode preference. Steer at 1 is
+        /// also most of the "less twitchy" ask: the lock limiter's reference
+        /// speed drops from 4 to 2.5 m/s, roughly halving the available lock at
+        /// racing speed. Lap time in arcade is meant to come from the line and
+        /// the items, never from catching slides.
         /// </summary>
         public static readonly Vehicles.AssistSettings HandlingAssists =
             new Vehicles.AssistSettings
             {
-                steer = 0.80f, stability = 0.70f, traction = 0.90f, abs = 0.90f,
+                steer = 1f, stability = 1f, traction = 1f, abs = 1f,
             };
 
         /// <summary>Tyre grip baseline in arcade. Rides the existing
         /// <c>CarVehicle.arcadeGripMult</c> channel, which is already folded into
         /// µ on both the brush and legacy friction paths — so this costs no new
-        /// physics code and no new friction-write site.</summary>
-        public const float HandlingGripBonus = 1.25f;
+        /// physics code and no new friction-write site. Raised 1.25 → 1.45 in
+        /// the anti-spin pass: the extra lateral headroom is what lets a car
+        /// take a boost pad mid-corner, and the extra longitudinal grip is most
+        /// of the full-throttle-launch fix.</summary>
+        public const float HandlingGripBonus = 1.45f;
+
+        /// <summary>
+        /// Multiplier on the stability assist's gain and torque clamp in arcade
+        /// — see <c>CarVehicle.arcadeStabilityMult</c> for why the sim-sized ESC
+        /// cannot hold an arcade car on its own. At 3, the clamp reaches
+        /// 2.25 N·m, finally comparable to the ~2 N·m the tyres themselves can
+        /// put about the yaw axis.
+        ///
+        /// Stood down to 1 during a drift (the slide IS yaw), a spin-out and a
+        /// wreck (both must out-rotate anything helping you), so none of those
+        /// mechanics is retuned by this.
+        /// </summary>
+        public const float HandlingStabilityBoost = 3f;
 
         /// <summary>
         /// Drive-command scale in arcade — the "slow the cars down" knob.

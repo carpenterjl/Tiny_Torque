@@ -40,7 +40,15 @@ namespace AIHWSim.Net
         // stream as new kinds. Every field in that block moved, so a v4 client
         // would not mis-render the new items, it would mis-read the whole
         // packet; the equality check is doing real work here.
-        public const int ProtocolVersion = 5;
+        //
+        // v6: drift visibility. Three spare ArcEffect bits carry drifting + tier
+        // down to every client; four spare OwnState flag bits carry
+        // drifting/tier/mini-turbo up from the owner, so a client's slide and
+        // its payout light up on every machine. No field moved and no byte was
+        // added — the bump exists because a v5 host would silently never show a
+        // v6 client's drift (and vice versa), and a mixed-cosmetics session is
+        // exactly what the equality check exists to refuse.
+        public const int ProtocolVersion = 6;
         public const int MaxPlayers = 4;
         public const ushort DefaultPort = 7777;
 

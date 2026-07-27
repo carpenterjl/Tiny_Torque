@@ -60,14 +60,18 @@ namespace AIHWSim.Vehicles
         // Governing rule for everything below:
         //
         //     Every one of these is the IDENTITY FUNCTION at and below the
-        //     Arcade handling floor (steer .80 / stability .70 / traction .90 /
-        //     abs .90), and only gains authority above it.
+        //     original preset anchor points (steer .80 / stability .70 /
+        //     traction .90 / abs .90), and only gains authority above them.
         //
-        // That is what preserves the Arcade tuning mechanically instead of by
-        // re-deriving numbers and hoping. Mathf.InverseLerp clamps, so the floor
-        // is enforced by the shape of the expression rather than by a check
-        // someone can forget: below it, t is 0 and the Lerp returns exactly the
-        // value that shipped.
+        // Mathf.InverseLerp clamps, so the anchors are enforced by the shape of
+        // the expression rather than by a check someone can forget: below one,
+        // t is 0 and the Lerp returns exactly the value that shipped.
+        //
+        // (These anchors were originally the Arcade handling floor. Arcade now
+        // pins every channel to 1.0 — see ArcadeConfig.HandlingAssists — so in
+        // arcade the ramps run at their top end, deliberately, plus the
+        // arcadeStabilityMult boost on top. The anchors still matter for SIM
+        // sessions, where they keep the Standard preset at the shipped feel.)
         //
         // The intent at Full is a well-set-up touring car, NOT a car on rails.
         // The tyre model still decides whether you make the corner, and top
