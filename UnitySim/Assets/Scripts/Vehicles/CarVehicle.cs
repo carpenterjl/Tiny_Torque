@@ -9,7 +9,7 @@ namespace AIHWSim.Vehicles
     /// <summary>Preset body silhouettes selectable in the garage (append-only —
     /// the enum value is persisted in design JSON). Each carries its own drag
     /// coefficient in <see cref="AeroDynamics.BodyCd"/>.</summary>
-    public enum BodyShape { Box, Wedge, Buggy, Shell, LowRacer }
+    public enum BodyShape { Box, Wedge, Buggy, Shell, LowRacer, Coupe, Baja, Patrol }
 
     /// <summary>
     /// Per-player arcade driving assists, each 0 (off — the pure physics model)
@@ -673,11 +673,13 @@ namespace AIHWSim.Vehicles
                         _bodyMat.mainTexture = liveryTex;
                         _bodyMat.color = Color.white;
                     }
-                    foreach (var r in inst.GetComponentsInChildren<MeshRenderer>(true))
-                    {
-                        r.sharedMaterial = _bodyMat;
-                        _bodyRenderers.Add(r);
-                    }
+                    if (HasAccentTokens(bodyShape)) AssignBodyAccents(inst);
+                    else
+                        foreach (var r in inst.GetComponentsInChildren<MeshRenderer>(true))
+                        {
+                            r.sharedMaterial = _bodyMat;
+                            _bodyRenderers.Add(r);
+                        }
                     return;
                 }
             }
@@ -701,8 +703,53 @@ namespace AIHWSim.Vehicles
             BodyShape.Shell    => "body_shell",
             BodyShape.LowRacer => "body_lowracer",
             BodyShape.Buggy    => "body_buggy",
+            BodyShape.Coupe    => "body_coupe",
+            BodyShape.Baja     => "body_baja",
+            BodyShape.Patrol   => "body_patrol",
             _                  => null,
         };
+
+        /// <summary>
+        /// The TinyTorque show cars (build_vehicles.py) carry per-material
+        /// accent tokens in their object names: only the "paint" panels take
+        /// the tintable body material; chrome/gold/glass/emissive lights keep
+        /// their authored look. The three legacy shells stay on the flatten-
+        /// everything path, bit for bit.
+        /// </summary>
+        private static bool HasAccentTokens(BodyShape s) =>
+            s == BodyShape.Coupe || s == BodyShape.Baja || s == BodyShape.Patrol;
+
+        /// <summary>
+        /// Bind renderers of an accent-token body by object-name token: "paint"
+        /// panels get the tintable body material and are the only renderers
+        /// registered in <see cref="_bodyRenderers"/> (so bodyColor, livery and
+        /// SetBodyMaterial touch nothing else); every other token gets its
+        /// shared accent material; an unmatched name falls back to the body
+        /// material so a renamed export shows up as tintable, not magenta.
+        /// </summary>
+        private void AssignBodyAccents(GameObject inst)
+        {
+            var accents = PartVisualFactory.AccentTokens;
+            foreach (var r in inst.GetComponentsInChildren<MeshRenderer>(true))
+            {
+                string n = r.gameObject.name.ToLowerInvariant();
+                Material hit = null;
+                if (!n.StartsWith("paint"))
+                    foreach (var (token, mat) in accents)
+                        if (n.Contains(token)) { hit = mat; break; }
+                if (hit != null) r.sharedMaterial = hit;
+                else
+                {
+                    r.sharedMaterial = _bodyMat;
+                    _bodyRenderers.Add(r);
+                }
+            }
+        }
+
+        /// <summary>The renderers driven by the tintable body material — the
+        /// paint panels on an accent body, every body renderer otherwise. The
+        /// garage painter cooks its stroke colliders from exactly these.</summary>
+        public IReadOnlyList<MeshRenderer> PaintRenderers => _bodyRenderers;
 
         /// <summary>
         /// Whether this shape shows an authored UV-mapped shell — i.e. the garage

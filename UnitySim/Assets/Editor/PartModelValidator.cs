@@ -61,6 +61,21 @@ namespace AIHWSim.EditorTools
             // Battery renders at authored size - no runtime scale at all.
             new Spec("battery_stick", 0.047f, 0.025f, 0.138f, 800),
             new Spec("antenna_stub",  null,   null,   null,   600),
+            // TinyTorque show cars (build_vehicles.py). Length is pinned by the
+            // exporter's scale-to-0.420 construction; width is free (real widths
+            // 0.17-0.20 after uniform scale). Budgets from the first [PMV] run.
+            new Spec("body_coupe",    null,   null,   0.420f, 12000),
+            new Spec("body_baja",     null,   null,   0.420f, 25000),
+            new Spec("body_patrol",   null,   null,   0.420f, 19000),
+            new Spec("wheel_coupe",   null,   0.066f, 0.066f, 6000),
+            new Spec("wheel_baja",    null,   0.066f, 0.066f, 6000),
+            new Spec("wheel_patrol",  null,   0.066f, 0.066f, 6000),
+            // Cosmetic parts render at authored size, like antenna_stub.
+            new Spec("light_bar",     null,   null,   null,  2500),
+            new Spec("light_pods",    null,   null,   null,  2500),
+            new Spec("antenna_whip",  null,   null,   null,  1500),
+            new Spec("antenna_flag",  null,   null,   null,  2000),
+            new Spec("antenna_twin",  null,   null,   null,  1500),
             // Track props (Resources/TrackProps) are appended here as each family
             // is authored — a listed asset that is missing is a hard FAIL, so a
             // key only goes in once its FBX ships. Budgets: small prop 1500,

@@ -39,6 +39,7 @@ namespace AIHWSim.Garage
                 "suspension"    => p => PartVisualFactory.BuildSuspensionViz(p),
                 "battery"       => p => PartVisualFactory.BuildBatteryViz(p),
                 "antenna"       => p => PartVisualFactory.BuildAntennaViz(p, 15f, 1f),
+                "light"         => p => PartVisualFactory.BuildLightViz(p, 0, 1f),
                 "wing"          => p => PartVisualFactory.BuildWingViz(p, 8f, 1f),
                 "splitter"      => p => PartVisualFactory.BuildSplitterViz(p, 1f),
                 "sidedam"       => p => PartVisualFactory.BuildSideDamViz(p, 1f),

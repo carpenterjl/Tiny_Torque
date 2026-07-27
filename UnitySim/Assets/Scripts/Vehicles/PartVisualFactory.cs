@@ -44,6 +44,68 @@ namespace AIHWSim.Vehicles
         private static Material Emitter => Mat(ref _emitter, new Color(0.55f, 0.08f, 0.08f), 0.5f,  0.1f);
         private static Material Stud    => Mat(ref _stud,    new Color(0.55f, 0.56f, 0.60f), 0.6f,  0.8f);
 
+        // ---- TinyTorque show-car accents (build_vehicles.py token set) ----
+        // One shared table serves bodies, wheels, light parts and antennas:
+        // every exported object is named "<token>_<n>" and the tokens are
+        // globally unambiguous. Colors are lifted from the source blends.
+        private static Material _dark, _gunmetal, _chrome, _gold, _glassMat,
+            _tube, _orangeAcc, _white, _decal,
+            _emHead, _emTail, _emAmber, _emRed, _emBlue, _barWhite;
+
+        private static Material Em(ref Material slot, Color baseCol, Color emit)
+        {
+            if (slot == null)
+            {
+                slot = new Material(Shader.Find("Standard")) { color = baseCol };
+                slot.SetFloat("_Glossiness", 0.9f);
+                slot.SetFloat("_Metallic", 0f);
+                slot.EnableKeyword("_EMISSION");
+                slot.SetColor("_EmissionColor", emit);
+            }
+            return slot;
+        }
+
+        private static Material Glass()
+        {
+            if (_glassMat == null)
+            {
+                _glassMat = MakeGhostMat(new Color(0.05f, 0.07f, 0.10f, 0.78f));
+                _glassMat.SetFloat("_Glossiness", 0.95f);
+            }
+            return _glassMat;
+        }
+
+        internal static Material DarkTrim => Mat(ref _dark,     new Color(0.014f, 0.014f, 0.016f), 0.38f, 0.10f);
+        internal static Material Gunmetal => Mat(ref _gunmetal, new Color(0.075f, 0.080f, 0.090f), 0.70f, 1.00f);
+        internal static Material Chrome   => Mat(ref _chrome,   new Color(0.86f, 0.88f, 0.90f),    0.92f, 1.00f);
+        internal static Material Gold     => Mat(ref _gold,     new Color(1.00f, 0.766f, 0.336f),  0.86f, 1.00f);
+        // "carbon" reuses the aero-section Carbon material (declared below).
+        internal static Material Tube     => Mat(ref _tube,     new Color(0.055f, 0.058f, 0.066f), 0.77f, 1.00f);
+        internal static Material OrangeAccent => Mat(ref _orangeAcc, new Color(0.78f, 0.19f, 0.01f), 0.60f, 0.40f);
+        internal static Material WhiteTrim => Mat(ref _white,   new Color(0.80f, 0.81f, 0.82f),    0.70f, 0.00f);
+        internal static Material Decal    => Mat(ref _decal,    new Color(0.02f, 0.075f, 0.44f),   0.75f, 0.00f);
+        internal static Material HeadLight => Em(ref _emHead, new Color(0.85f, 0.92f, 1f), new Color(2.1f, 2.3f, 2.5f));
+        internal static Material TailLight => Em(ref _emTail, new Color(0.55f, 0.02f, 0.02f), new Color(2.4f, 0.08f, 0.08f));
+        internal static Material Amber     => Em(ref _emAmber, new Color(1f, 0.35f, 0.03f), new Color(3.0f, 1.05f, 0.09f));
+        internal static Material RedStrobe => Em(ref _emRed,  new Color(0.62f, 0.02f, 0.014f), new Color(2.5f, 0.08f, 0.06f));
+        internal static Material BlueStrobe => Em(ref _emBlue, new Color(0.02f, 0.07f, 0.72f), new Color(0.08f, 0.28f, 2.9f));
+        internal static Material BarWhite  => Em(ref _barWhite, new Color(0.86f, 0.90f, 1f), new Color(1.3f, 1.35f, 1.5f));
+
+        /// <summary>
+        /// The full token→material table for build_vehicles.py exports.
+        /// ORDER MATTERS — AssignByName is first-match substring, so "barwhite"
+        /// must precede "white", and the emissive tokens precede plain trims.
+        /// </summary>
+        internal static (string, Material)[] AccentTokens => new (string, Material)[]
+        {
+            ("em_head", HeadLight), ("em_tail", TailLight), ("em_amber", Amber),
+            ("em_red", RedStrobe), ("em_blue", BlueStrobe),
+            ("barwhite", BarWhite), ("white", WhiteTrim),
+            ("gunmetal", Gunmetal), ("chrome", Chrome), ("gold", Gold),
+            ("glass", Glass()), ("carbon", Carbon), ("tube", Tube),
+            ("orange", OrangeAccent), ("decal", Decal), ("dark", DarkTrim),
+        };
+
         // ---- primitive helper ----
 
         private static Transform Piece(PrimitiveType type, Transform parent, Material mat,
@@ -71,6 +133,9 @@ namespace AIHWSim.Vehicles
         {
             1 => "knobby",
             2 => "rally",
+            3 => "coupe",     // TinyTorque gold-rim street tyre
+            4 => "baja",      // TinyTorque orange-rim balloon tyre
+            5 => "patrol",    // TinyTorque chrome steelie
             _ => "slick",
         };
 
@@ -102,9 +167,13 @@ namespace AIHWSim.Vehicles
                 if (inboardSign >= 0f)
                     mesh.transform.localRotation = Quaternion.Euler(0f, 180f, 0f);
 
+                // TinyTorque tokens (gold/orange/chrome/dark) ahead of the
+                // legacy set; both wheel families bind from this one call.
                 PartMeshLibrary.AssignByName(mesh, Tire,
+                    ("gold", Gold), ("orange", OrangeAccent), ("chrome", Chrome),
+                    ("dark", DarkTrim), ("brake", Hub),
                     ("tire", Tire), ("tyre", Tire), ("rim", Rim), ("hub", Hub),
-                    ("stud", Stud), ("brake", Hub));
+                    ("stud", Stud));
                 if (powered) BuildMotorCan(holder, radius, inboardSign);
                 return;
             }
@@ -316,16 +385,30 @@ namespace AIHWSim.Vehicles
         /// Cosmetic antenna: an SMA base + tapered rubber whip, leaned back by
         /// <paramref name="tiltDeg"/> and scaled by <paramref name="sizeScale"/>.
         /// Uses the authored FBX when present, else a primitive tapered stack.
+        /// <paramref name="style"/> picks the mesh: 0 stub, 1 TinyTorque whip
+        /// with amber tip, 2 flag whip, 3 twin trunk whips (any lean the show
+        /// styles have is baked into the mesh — presets pass tiltDeg 0).
         /// </summary>
-        public static void BuildAntennaViz(Transform parent, float tiltDeg, float sizeScale)
+        public static void BuildAntennaViz(Transform parent, float tiltDeg, float sizeScale, int style = 0)
         {
             float s = Mathf.Clamp(sizeScale <= 0f ? 1f : sizeScale, 0.6f, 1.6f);
-            var mesh = PartMeshLibrary.TryInstantiate("antenna_stub", parent);
+            string key = style switch
+            {
+                1 => "antenna_whip",
+                2 => "antenna_flag",
+                3 => "antenna_twin",
+                _ => "antenna_stub",
+            };
+            var mesh = PartMeshLibrary.TryInstantiate(key, parent);
+            if (mesh == null && style != 0)
+                mesh = PartMeshLibrary.TryInstantiate("antenna_stub", parent);
             if (mesh != null)
             {
                 mesh.transform.localRotation = Quaternion.Euler(tiltDeg, 0f, 0f);
                 mesh.transform.localScale = Vector3.one * s;
-                PartMeshLibrary.AssignByName(mesh, Rubber, ("whip", Rubber), ("base", Can), ("sma", Can));
+                PartMeshLibrary.AssignByName(mesh, Rubber,
+                    ("whip", Rubber), ("base", Can), ("sma", Can),
+                    ("em_amber", Amber), ("flag", OrangeAccent));
                 return;
             }
 
@@ -341,6 +424,45 @@ namespace AIHWSim.Vehicles
                 new Vector3(0f, 0.045f, 0f), Vector3.zero, new Vector3(0.007f, 0.030f, 0.007f));
             Piece(PrimitiveType.Cylinder, holder, Rubber,
                 new Vector3(0f, 0.090f, 0f), Vector3.zero, new Vector3(0.004f, 0.020f, 0.004f));
+        }
+
+        // ==================== LIGHTS ====================
+
+        /// <summary>
+        /// Cosmetic light cluster: style 0 = police roof light bar (red/blue
+        /// lenses strobe via <see cref="LightBarStrobe"/>), style 1 = off-road
+        /// pod cluster (steady glow). Authored FBX when present, else a small
+        /// primitive bar with two emissive lenses. Lives on the viz layer like
+        /// every part, so the on-car camera never sees it.
+        /// </summary>
+        public static void BuildLightViz(Transform parent, int style, float sizeScale)
+        {
+            float s = Mathf.Clamp(sizeScale <= 0f ? 1f : sizeScale, 0.6f, 1.6f);
+            string key = style == 1 ? "light_pods" : "light_bar";
+            var mesh = PartMeshLibrary.TryInstantiate(key, parent);
+            if (mesh != null)
+            {
+                mesh.transform.localScale = Vector3.one * s;
+                PartMeshLibrary.AssignByName(mesh, DarkTrim,
+                    ("em_red", RedStrobe), ("em_blue", BlueStrobe),
+                    ("em_head", HeadLight), ("barwhite", BarWhite),
+                    ("chrome", Chrome), ("dark", DarkTrim));
+                if (style == 0) mesh.AddComponent<LightBarStrobe>();
+                return;
+            }
+
+            // Primitive fallback: dark base + red/blue (bar) or white (pods) lenses.
+            var holder = new GameObject("light").transform;
+            holder.SetParent(parent, false);
+            holder.gameObject.layer = VizLayer;
+            holder.localScale = Vector3.one * s;
+            Piece(PrimitiveType.Cube, holder, DarkTrim,
+                new Vector3(0f, 0.006f, 0f), Vector3.zero, new Vector3(0.11f, 0.010f, 0.028f));
+            Piece(PrimitiveType.Cube, holder, style == 0 ? RedStrobe : HeadLight,
+                new Vector3(-0.032f, 0.008f, 0f), Vector3.zero, new Vector3(0.036f, 0.009f, 0.024f));
+            Piece(PrimitiveType.Cube, holder, style == 0 ? BlueStrobe : HeadLight,
+                new Vector3(0.032f, 0.008f, 0f), Vector3.zero, new Vector3(0.036f, 0.009f, 0.024f));
+            if (style == 0) holder.gameObject.AddComponent<LightBarStrobe>();
         }
 
         // ==================== AERO ====================

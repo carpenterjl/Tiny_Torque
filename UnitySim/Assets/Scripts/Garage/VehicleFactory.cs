@@ -24,6 +24,7 @@ namespace AIHWSim.Garage
             public GameObject[] aeroVisuals;    // in design order (aligns with design.aero)
             public GameObject[] batteryVisuals; // in design order (aligns with design.batteries)
             public GameObject[] antennaVisuals; // in design order (aligns with design.antennas)
+            public GameObject[] lightVisuals;   // in design order (aligns with design.lights)
         }
 
         /// <summary>
@@ -166,6 +167,12 @@ namespace AIHWSim.Garage
             for (int i = 0; i < design.antennas.Count; i++)
                 antennaVisuals[i] = CreateAntennaVisual(root.transform, design.antennas[i]);
 
+            // Light clusters: cosmetic children like antennas.
+            design.lights ??= new System.Collections.Generic.List<LightSpec>();
+            var lightVisuals = new GameObject[design.lights.Count];
+            for (int i = 0; i < design.lights.Count; i++)
+                lightVisuals[i] = CreateLightVisual(root.transform, design.lights[i]);
+
             // Aero parts: flatten to runtime configs (forces in CarVehicle) and
             // build each part's visual child.
             design.aero ??= new System.Collections.Generic.List<AeroSpec>();
@@ -194,6 +201,7 @@ namespace AIHWSim.Garage
                 car = car, rig = rig, root = root,
                 sensors = sensorList.ToArray(), aeroVisuals = aeroVisuals,
                 batteryVisuals = batteryVisuals, antennaVisuals = antennaVisuals,
+                lightVisuals = lightVisuals,
             };
         }
 
@@ -205,6 +213,19 @@ namespace AIHWSim.Garage
             go.transform.localPosition = spec.localPos;
             go.transform.localRotation = Quaternion.Euler(0f, spec.yawDeg, 0f);
             PartVisualFactory.BuildAntennaViz(go.transform, spec.tiltDeg,
+                Mathf.Clamp(spec.sizeScale <= 0f ? 1f : spec.sizeScale, 0.6f, 1.6f),
+                spec.antennaStyle);
+            return go;
+        }
+
+        /// <summary>Instantiate one light cluster's cosmetic visual child.</summary>
+        public static GameObject CreateLightVisual(Transform parent, LightSpec spec)
+        {
+            var go = new GameObject(spec.name);
+            go.transform.SetParent(parent, false);
+            go.transform.localPosition = spec.localPos;
+            go.transform.localRotation = Quaternion.Euler(0f, spec.yawDeg, 0f);
+            PartVisualFactory.BuildLightViz(go.transform, spec.style,
                 Mathf.Clamp(spec.sizeScale <= 0f ? 1f : spec.sizeScale, 0.6f, 1.6f));
             return go;
         }

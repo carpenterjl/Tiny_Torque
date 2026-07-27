@@ -35,6 +35,7 @@ namespace AIHWSim.Garage
         public const float WingMass = 0.010f;           // × sizeScale²
         public const float SmallAeroMass = 0.008f;
         public const float AntennaMass = 0.008f;         // SMA + rubber whip
+        public const float LightMass = 0.012f;           // light bar / pod cluster
 
         public static float SensorMass(SensorSpec s)
         {
@@ -81,6 +82,9 @@ namespace AIHWSim.Garage
             if (d.antennas != null)
                 foreach (var a in d.antennas)
                     masses.Add((a.massKg > 0f ? a.massKg : AntennaMass, a.localPos));
+            if (d.lights != null)
+                foreach (var l in d.lights)
+                    masses.Add((l.massKg > 0f ? l.massKg : LightMass, l.localPos));
 
             float total = 0f;
             Vector3 com = Vector3.zero;

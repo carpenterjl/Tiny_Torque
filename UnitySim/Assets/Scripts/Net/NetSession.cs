@@ -48,7 +48,15 @@ namespace AIHWSim.Net
         // added — the bump exists because a v5 host would silently never show a
         // v6 client's drift (and vice versa), and a mixed-cosmetics session is
         // exactly what the equality check exists to refuse.
-        public const int ProtocolVersion = 6;
+        //
+        // v7: TinyTorque show cars. Appearance travels as the full design JSON,
+        // and this build adds three BodyShape values, three wheel styles, an
+        // antenna style field and a whole Light part category to that JSON. Not
+        // a byte of the wire format changed — but a v6 peer receiving a v7
+        // design would render a fallback box with slick wheels and no lights,
+        // and the two machines would disagree about what a car looks like.
+        // Same reasoning as v6: mixed-cosmetics sessions are refused.
+        public const int ProtocolVersion = 7;
         public const int MaxPlayers = 4;
         public const ushort DefaultPort = 7777;
 

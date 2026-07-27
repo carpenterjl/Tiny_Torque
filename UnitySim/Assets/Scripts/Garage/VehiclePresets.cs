@@ -21,10 +21,9 @@ namespace AIHWSim.Garage
         public static readonly (string name, Func<VehicleDesign> build)[] All =
         {
             ("Real Twin 1/10", RealTwin),
-            ("Rally Buggy", RallyBuggy),
-            ("F1 Racer",    F1Racer),
-            ("Crawler",     Crawler),
-            ("Drift Car",   DriftCar),
+            ("TT Coupe",    TTCoupe),
+            ("TT Baja",     TTBaja),
+            ("TT Patrol",   TTPatrol),
             ("Opus Vector", OpusVector),
         };
 
@@ -128,174 +127,120 @@ namespace AIHWSim.Garage
             return d;
         }
 
-        /// <summary>Soft, long-travel 4WD offroader — soaks jumps and whoops.</summary>
-        private static VehicleDesign RallyBuggy()
-        {
-            var d = new VehicleDesign
-            {
-                name = "Rally Buggy",
-                bodyShape = BodyShape.Buggy,
-                bodySize = new Vector3(0.22f, 0.11f, 0.44f),
-                bodyColor = new Color(0.95f, 0.55f, 0.10f),
-                mass = 1.9f,
-                steerRate = 460f,
-            };
-            // Wide stance, all four driven (4WD), long soft travel.
-            for (int i = 0; i < 4; i++)
-            {
-                bool front = i < 2;
-                float x = (i % 2 == 0) ? -0.095f : 0.095f;
-                float z = front ? 0.160f : -0.160f;
-                var w = Wheel(front ? (i == 0 ? "wheel_fl" : "wheel_fr") : (i == 2 ? "wheel_rl" : "wheel_rr"),
-                              x, z, front, true);
-                w.radius = 0.040f;
-                w.suspStiffness = 180f;
-                w.suspDampingRatio = 0.55f;
-                w.suspTravel = 0.06f;
-                w.gripMult = 1.15f;
-                w.wheelStyle = 1;   // knobby off-road tyres
-                // Long visible struts for the soak; mount raised so the hub stays put.
-                w.suspLength = 0.045f;
-                w.localPos.y += w.suspLength;
-                d.wheels.Add(w);
-            }
-            d.sensors.Add(new SensorSpec
-            {
-                name = "cam_front", kind = SensorType.Camera,
-                localPos = new Vector3(0f, 0.11f, 0.06f), aimEuler = new Vector3(6f, 0f, 0f),
-            });
-            d.sensors.Add(new SensorSpec
-            {
-                name = "tof_front", kind = SensorType.Tof,
-                localPos = new Vector3(0f, 0.04f, 0.22f), range = 4f, coneRays = 3, coneAngle = 6f,
-            });
-            AddEncoders(d);
-            d.sensors.Add(Susp("susp_fl", 0));
-            return d;
-        }
+        // ---- TinyTorque show cars --------------------------------------------
+        // The wheel positions, radii and part mount points below are pasted from
+        // the JSON block Blender/build_vehicles.py prints — they are derived from
+        // the source models' own wheel empties, so the arches align by
+        // construction. bodySize is EXACTLY (0.20, 0.10, 0.42): BuildBodyVisual
+        // divides by BodyMeshAuthorSize, so this renders the mesh undistorted at
+        // its authored proportions. bodyColor (0.8 grey) matches the authored
+        // paint channel — the silver the cars were modeled in.
 
-        /// <summary>Stiff, low, aero-heavy tarmac racer — fast and planted.</summary>
-        private static VehicleDesign F1Racer()
+        /// <summary>TT Coupe — RWD street sports coupe, gold trim, glass canopy.</summary>
+        private static VehicleDesign TTCoupe()
         {
             var d = new VehicleDesign
             {
-                name = "F1 Racer",
-                bodyShape = BodyShape.LowRacer,
-                bodySize = new Vector3(0.18f, 0.07f, 0.48f),
-                bodyColor = new Color(0.85f, 0.10f, 0.12f),
-                mass = 1.5f,
-                steerRate = 620f,
-            };
-            // RWD, steered fronts, stiff short travel, extra grip.
-            var motor = MotorParams.Default();
-            motor.maxVoltage = 11.1f;   // 3S
-            motor.gearRatio = 6f;       // taller gearing for speed
-            for (int i = 0; i < 4; i++)
-            {
-                bool front = i < 2;
-                float x = (i % 2 == 0) ? -0.083f : 0.083f;
-                float z = front ? 0.180f : -0.180f;
-                var w = Wheel(front ? (i == 0 ? "wheel_fl" : "wheel_fr") : (i == 2 ? "wheel_rl" : "wheel_rr"),
-                              x, z, front, !front);
-                w.radius = 0.032f;
-                w.suspStiffness = 900f;
-                w.suspDampingRatio = 0.9f;
-                w.suspTravel = 0.012f;
-                w.gripMult = 1.2f;
-                if (!front) w.motor = motor;
-                d.wheels.Add(w);
-            }
-            // Front splitter + rear wing.
-            d.aero.Add(new AeroSpec { name = "splitter", kind = AeroKind.Splitter, localPos = new Vector3(0f, 0.01f, 0.24f), sizeScale = 1.1f });
-            d.aero.Add(new AeroSpec { name = "rear_wing", kind = AeroKind.Wing, localPos = new Vector3(0f, 0.08f, -0.24f), angleDeg = 12f, sizeScale = 1.2f });
-            d.sensors.Add(new SensorSpec
-            {
-                name = "cam_front", kind = SensorType.Camera,
-                localPos = new Vector3(0f, 0.08f, 0.10f), aimEuler = new Vector3(4f, 0f, 0f),
-            });
-            d.sensors.Add(new SensorSpec { name = "tof_front", kind = SensorType.Tof, localPos = new Vector3(0f, 0.03f, 0.25f), range = 4f, coneRays = 3, coneAngle = 5f });
-            AddEncoders(d);
-            d.sensors.Add(Susp("susp_rl", 2));
-            return d;
-        }
-
-        /// <summary>Slow, grippy, huge-travel rock crawler — 4WD, high reduction.</summary>
-        private static VehicleDesign Crawler()
-        {
-            var d = new VehicleDesign
-            {
-                name = "Crawler",
-                bodyShape = BodyShape.Box,
-                bodySize = new Vector3(0.22f, 0.13f, 0.40f),
-                bodyColor = new Color(0.25f, 0.45f, 0.30f),
-                mass = 2.2f,
-                steerRate = 380f,
-            };
-            var motor = MotorParams.Default();
-            motor.gearRatio = 20f;      // torquey, slow
-            for (int i = 0; i < 4; i++)
-            {
-                bool front = i < 2;
-                float x = (i % 2 == 0) ? -0.100f : 0.100f;
-                float z = front ? 0.150f : -0.150f;
-                var w = Wheel(front ? (i == 0 ? "wheel_fl" : "wheel_fr") : (i == 2 ? "wheel_rl" : "wheel_rr"),
-                              x, z, front, true);
-                w.radius = 0.055f;
-                w.suspStiffness = 150f;
-                w.suspDampingRatio = 0.5f;
-                w.suspTravel = 0.08f;
-                w.gripMult = 1.6f;
-                w.wheelStyle = 1;   // knobby crawler tyres
-                w.motor = motor;
-                // Big visible struts for the articulation; mount raised to hold the hub.
-                w.suspLength = 0.05f;
-                w.localPos.y += w.suspLength;
-                d.wheels.Add(w);
-            }
-            d.sensors.Add(new SensorSpec { name = "cam_front", kind = SensorType.Camera, localPos = new Vector3(0f, 0.13f, 0.05f), aimEuler = new Vector3(10f, 0f, 0f) });
-            d.sensors.Add(new SensorSpec { name = "tof_front", kind = SensorType.Tof, localPos = new Vector3(0f, 0.05f, 0.21f), range = 4f, coneRays = 3, coneAngle = 8f });
-            AddEncoders(d);
-            // A strut sensor on every corner — articulation is the whole point.
-            for (int i = 0; i < 4; i++)
-            {
-                string[] tag = { "fl", "fr", "rl", "rr" };
-                d.sensors.Add(Susp("susp_" + tag[i], i));
-            }
-            return d;
-        }
-
-        /// <summary>Stiff RWD with a loose rear end — provokes and holds slides.</summary>
-        private static VehicleDesign DriftCar()
-        {
-            var d = new VehicleDesign
-            {
-                name = "Drift Car",
-                bodyShape = BodyShape.Shell,
-                bodySize = new Vector3(0.19f, 0.09f, 0.44f),
-                bodyColor = new Color(0.20f, 0.35f, 0.85f),
-                mass = 1.6f,
+                name = "TT Coupe",
+                bodyShape = BodyShape.Coupe,
+                bodySize = new Vector3(0.20f, 0.10f, 0.42f),
+                bodyColor = new Color(0.80f, 0.80f, 0.80f),
+                mass = 1.7f,
                 steerRate = 560f,
             };
             for (int i = 0; i < 4; i++)
             {
                 bool front = i < 2;
-                float x = (i % 2 == 0) ? -0.086f : 0.086f;
-                float z = front ? 0.170f : -0.170f;
+                float x = (i % 2 == 0) ? -0.0964f : 0.0964f;
+                float z = front ? 0.1329f : -0.1329f;
                 var w = Wheel(front ? (i == 0 ? "wheel_fl" : "wheel_fr") : (i == 2 ? "wheel_rl" : "wheel_rr"),
                               x, z, front, !front);
-                w.radius = 0.033f;
-                w.suspStiffness = 600f;
-                w.suspDampingRatio = 0.8f;
-                w.suspTravel = 0.02f;
-                // Front grippy, rear deliberately loose so it breaks traction.
-                w.gripMult = front ? 1.0f : 0.55f;
-                if (front) w.steerAngle = 40f;  // more lock for opposite-lock drifting
+                w.radius = 0.0438f;
+                w.wheelStyle = 3;   // coupe gold-rim street tyre
+                w.suspStiffness = 400f;
+                w.suspDampingRatio = 0.7f;
+                w.suspTravel = 0.025f;
                 d.wheels.Add(w);
             }
-            d.sensors.Add(new SensorSpec { name = "cam_front", kind = SensorType.Camera, localPos = new Vector3(0f, 0.09f, 0.08f), aimEuler = new Vector3(6f, 0f, 0f) });
-            d.sensors.Add(new SensorSpec { name = "tof_front", kind = SensorType.Tof, localPos = new Vector3(0f, 0.03f, 0.23f), range = 4f });
+            d.sensors.Add(new SensorSpec { name = "cam_front", kind = SensorType.Camera, localPos = new Vector3(0f, 0.10f, 0.05f), aimEuler = new Vector3(6f, 0f, 0f) });
+            d.sensors.Add(new SensorSpec { name = "tof_front", kind = SensorType.Tof, localPos = new Vector3(0f, 0.03f, 0.22f), range = 4f });
             AddEncoders(d);
-            d.sensors.Add(Susp("susp_rr", 3));
+            // The rear-deck whip with the amber tip, exactly where it is modeled.
+            d.antennas.Add(new AntennaSpec { name = "whip", localPos = new Vector3(0.0609f, 0.005f, -0.1569f), tiltDeg = 0f, antennaStyle = 1 });
+            return d;
+        }
+
+        /// <summary>TT Baja — 4WD tube-frame trophy buggy, roof pods, flag whip.</summary>
+        private static VehicleDesign TTBaja()
+        {
+            var d = new VehicleDesign
+            {
+                name = "TT Baja",
+                bodyShape = BodyShape.Baja,
+                bodySize = new Vector3(0.20f, 0.10f, 0.42f),
+                bodyColor = new Color(0.80f, 0.80f, 0.80f),
+                mass = 1.95f,
+                steerRate = 460f,
+            };
+            for (int i = 0; i < 4; i++)
+            {
+                bool front = i < 2;
+                float x = (i % 2 == 0) ? -0.1129f : 0.1129f;
+                float z = front ? 0.1372f : -0.1372f;
+                var w = Wheel(front ? (i == 0 ? "wheel_fl" : "wheel_fr") : (i == 2 ? "wheel_rl" : "wheel_rr"),
+                              x, z, front, true);   // 4WD
+                w.radius = 0.0522f;
+                w.wheelStyle = 4;   // baja balloon tyre, orange rim
+                w.gripMult = 1.15f;
+                // Soft and long — but suspLength stays 0: the shocks and arms are
+                // authored INTO the body mesh, a procedural strut would double them.
+                w.suspStiffness = 200f;
+                w.suspDampingRatio = 0.55f;
+                w.suspTravel = 0.05f;
+                d.wheels.Add(w);
+            }
+            d.sensors.Add(new SensorSpec { name = "cam_front", kind = SensorType.Camera, localPos = new Vector3(0f, 0.11f, 0.04f), aimEuler = new Vector3(6f, 0f, 0f) });
+            d.sensors.Add(new SensorSpec { name = "tof_front", kind = SensorType.Tof, localPos = new Vector3(0f, 0.04f, 0.21f), range = 4f, coneRays = 3, coneAngle = 6f });
+            AddEncoders(d);
+            d.sensors.Add(Susp("susp_fl", 0));
+            // Roof pod cluster + the rear flag whip, at their authored mounts.
+            d.lights.Add(new LightSpec { name = "pods", localPos = new Vector3(0f, 0.0397f, 0.0301f), style = 1 });
+            d.antennas.Add(new AntennaSpec { name = "flag", localPos = new Vector3(0.0695f, -0.0124f, -0.1416f), tiltDeg = 0f, antennaStyle = 2 });
+            return d;
+        }
+
+        /// <summary>TT Patrol — RWD sedan with push bar, strobing light bar and twin whips.</summary>
+        private static VehicleDesign TTPatrol()
+        {
+            var d = new VehicleDesign
+            {
+                name = "TT Patrol",
+                bodyShape = BodyShape.Patrol,
+                bodySize = new Vector3(0.20f, 0.10f, 0.42f),
+                bodyColor = new Color(0.80f, 0.80f, 0.80f),
+                mass = 1.8f,
+                steerRate = 520f,
+            };
+            for (int i = 0; i < 4; i++)
+            {
+                bool front = i < 2;
+                float x = (i % 2 == 0) ? -0.0805f : 0.0805f;
+                float z = front ? 0.1242f : -0.1242f;
+                var w = Wheel(front ? (i == 0 ? "wheel_fl" : "wheel_fr") : (i == 2 ? "wheel_rl" : "wheel_rr"),
+                              x, z, front, !front);
+                w.radius = 0.0388f;
+                w.wheelStyle = 5;   // chrome steelie
+                w.suspStiffness = 350f;
+                w.suspDampingRatio = 0.65f;
+                w.suspTravel = 0.03f;
+                d.wheels.Add(w);
+            }
+            d.sensors.Add(new SensorSpec { name = "cam_front", kind = SensorType.Camera, localPos = new Vector3(0f, 0.10f, 0.05f), aimEuler = new Vector3(6f, 0f, 0f) });
+            d.sensors.Add(new SensorSpec { name = "tof_front", kind = SensorType.Tof, localPos = new Vector3(0f, 0.03f, 0.22f), range = 4f });
+            AddEncoders(d);
+            // Roof light bar (strobes at runtime) + the twin trunk whips.
+            d.lights.Add(new LightSpec { name = "bar", localPos = new Vector3(0f, 0.0341f, -0.0229f), style = 0 });
+            d.antennas.Add(new AntennaSpec { name = "whips", localPos = new Vector3(0f, -0.0008f, -0.161f), tiltDeg = 0f, antennaStyle = 3 });
             return d;
         }
 

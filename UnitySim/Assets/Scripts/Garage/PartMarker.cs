@@ -3,7 +3,7 @@ using UnityEngine;
 namespace AIHWSim.Garage
 {
     /// <summary>Which kind of design part a marker represents.</summary>
-    public enum PartType { Wheel, Sensor, Aero, Battery, Antenna }
+    public enum PartType { Wheel, Sensor, Aero, Battery, Antenna, Light }
 
     /// <summary>
     /// Tags a clickable marker in the garage preview with the design part it

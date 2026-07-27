@@ -95,18 +95,22 @@ namespace AIHWSim.Garage
                 LoadFromDesign();
             }
 
-            // Temporary MeshColliders on the shell's mesh pieces (body meshes are
-            // imported CPU-readable for exactly this; they sit on the car's own
-            // layer so the pointer ray reaches them).
-            var bodyHolder = _car.transform.Find("BodyMesh");
-            if (bodyHolder != null)
-                foreach (var mf in bodyHolder.GetComponentsInChildren<MeshFilter>(true))
-                {
-                    if (mf.sharedMesh == null || !mf.sharedMesh.isReadable) continue;
-                    var mc = mf.gameObject.AddComponent<MeshCollider>();
-                    mc.sharedMesh = mf.sharedMesh;
-                    _cols.Add(mc);
-                }
+            // Temporary MeshColliders on the shell's PAINT pieces only (body
+            // meshes are imported CPU-readable for exactly this; they sit on
+            // the car's own layer so the pointer ray reaches them). The accent
+            // bodies carry chrome/glass/light renderers that are just as
+            // readable — a collider there would let a stroke on the canopy
+            // stamp garbage into the shared livery texture through that mesh's
+            // UVs, so only the renderers the body material drives are cooked.
+            foreach (var r in _car.PaintRenderers)
+            {
+                var mf = r != null ? r.GetComponent<MeshFilter>() : null;
+                if (mf == null || mf.sharedMesh == null || !mf.sharedMesh.isReadable)
+                    continue;
+                var mc = mf.gameObject.AddComponent<MeshCollider>();
+                mc.sharedMesh = mf.sharedMesh;
+                _cols.Add(mc);
+            }
 
             _car.SetBodyTexture(_tex);
         }

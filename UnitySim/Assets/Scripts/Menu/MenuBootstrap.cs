@@ -76,6 +76,10 @@ namespace AIHWSim.Menu
             {
                 var d = VehicleLibrary.Load(last);
                 if (d != null) return d;
+                // ★ presets are not library files — resolve them like
+                // MenuUI.ResolveVehicle does, so the showcar matches the pick.
+                d = VehiclePresets.Resolve(last);
+                if (d != null) return d;
             }
             return VehicleDesign.Default();
         }

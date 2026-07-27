@@ -48,6 +48,7 @@ namespace AIHWSim.Garage
         private AeroSpec _pendingAero;
         private BatterySpec _pendingBattery;
         private AntennaSpec _pendingAntenna;
+        private LightSpec _pendingLight;
         private int _dragTwinIndex = -1;
 
         private Rect _leftRect, _rightRect, _topRect, _loadRect, _statsRect;
@@ -58,6 +59,7 @@ namespace AIHWSim.Garage
         private bool AeroSelected => _selType == PartType.Aero && _sel >= 0 && _sel < D.aero.Count;
         private bool BatterySelected => _selType == PartType.Battery && _sel >= 0 && _sel < D.batteries.Count;
         private bool AntennaSelected => _selType == PartType.Antenna && _sel >= 0 && _sel < D.antennas.Count;
+        private bool LightSelected => _selType == PartType.Light && _sel >= 0 && _sel < D.lights.Count;
 
         // Palette grouped into sub-categories; each entry carries a one-line
         // description surfaced by the hover tooltip.
@@ -90,6 +92,7 @@ namespace AIHWSim.Garage
             ("MISC", new[]
             {
                 ("antenna", "Antenna", "WiFi whip — cosmetic only. Mirrors like any body part."),
+                ("light", "Lights", "Roof light bar / pod cluster — cosmetic, emissive. The bar strobes."),
             }),
         };
 
@@ -226,6 +229,8 @@ namespace AIHWSim.Garage
                 }
                 case PartType.Antenna when i >= 0 && i < D.antennas.Count:
                     return $"{D.antennas[i].name} — antenna (cosmetic)";
+                case PartType.Light when i >= 0 && i < D.lights.Count:
+                    return $"{D.lights[i].name} — lights (cosmetic)";
                 default:
                     return null;
             }
@@ -339,13 +344,25 @@ namespace AIHWSim.Garage
             else if (type == PartType.Antenna)
             {
                 var a = D.antennas[index];
-                _ghost = PartGhost.ForAntenna(a.tiltDeg, a.sizeScale, a.yawDeg);
+                _ghost = PartGhost.ForAntenna(a.tiltDeg, a.sizeScale, a.yawDeg, a.antennaStyle);
                 var twin = SymmetryUtil.FindTwin(D, a);
                 if (twin != null)
                 {
                     _dragTwinIndex = D.antennas.IndexOf(twin);
                     bootstrap.SetPartVisible(PartType.Antenna, _dragTwinIndex, false);
-                    _ghostTwin = PartGhost.ForAntenna(twin.tiltDeg, twin.sizeScale, twin.yawDeg);
+                    _ghostTwin = PartGhost.ForAntenna(twin.tiltDeg, twin.sizeScale, twin.yawDeg, twin.antennaStyle);
+                }
+            }
+            else if (type == PartType.Light)
+            {
+                var l = D.lights[index];
+                _ghost = PartGhost.ForLight(l.style, l.sizeScale, l.yawDeg);
+                var twin = SymmetryUtil.FindTwin(D, l);
+                if (twin != null)
+                {
+                    _dragTwinIndex = D.lights.IndexOf(twin);
+                    bootstrap.SetPartVisible(PartType.Light, _dragTwinIndex, false);
+                    _ghostTwin = PartGhost.ForLight(twin.style, twin.sizeScale, twin.yawDeg);
                 }
             }
             else
@@ -401,6 +418,13 @@ namespace AIHWSim.Garage
                 _ghost = PartGhost.ForAntenna(_pendingAntenna.tiltDeg, 1f, 0f);
                 if (_mirrorMode) _ghostTwin = PartGhost.ForAntenna(_pendingAntenna.tiltDeg, 1f, 0f);
             }
+            else if (key == "light")
+            {
+                _placingKind = PartType.Light;
+                _pendingLight = new LightSpec { name = UniqueName("light") };
+                _ghost = PartGhost.ForLight(_pendingLight.style, 1f, 0f);
+                if (_mirrorMode) _ghostTwin = PartGhost.ForLight(_pendingLight.style, 1f, 0f);
+            }
             else
             {
                 _placingKind = PartType.Sensor;
@@ -448,7 +472,7 @@ namespace AIHWSim.Garage
                 ComputeAeroPlace(hit, out Vector3 lp, out _);
                 _ghost.SetPose(root.TransformPoint(lp), root.rotation);
             }
-            else if (_placingKind == PartType.Antenna)
+            else if (_placingKind == PartType.Antenna || _placingKind == PartType.Light)
             {
                 ComputeAeroPlace(hit, out Vector3 lp, out float yaw);
                 _ghost.SetPose(root.TransformPoint(lp), root.rotation * Quaternion.Euler(0f, yaw, 0f));
@@ -563,6 +587,28 @@ namespace AIHWSim.Garage
                     FinishDrag(PartType.Antenna, _sel);
                 }
             }
+            else if (_placingKind == PartType.Light)
+            {
+                ComputeAeroPlace(hit, out Vector3 lp, out float yaw);
+                if (_drag == DragState.PlacingNew)
+                {
+                    bootstrap.PushUndo("add");
+                    _pendingLight.localPos = lp; _pendingLight.yawDeg = yaw;
+                    D.lights.Add(_pendingLight);
+                    int idx = D.lights.Count - 1;
+                    if (mirror && Mathf.Abs(lp.x) > SymmetryUtil.CenterDeadzone)
+                        MakeLightTwin(_pendingLight);
+                    FinishDrag(PartType.Light, idx);
+                }
+                else
+                {
+                    bootstrap.PushUndo("move");
+                    var l = D.lights[_sel];
+                    l.localPos = lp; l.yawDeg = yaw;
+                    SymmetryUtil.SyncTwin(D, l);
+                    FinishDrag(PartType.Light, _sel);
+                }
+            }
             else
             {
                 ComputeSensorPlace(hit, out Vector3 lp, out Vector3 aim);
@@ -623,11 +669,20 @@ namespace AIHWSim.Garage
             D.antennas.Add(tw);
         }
 
+        private void MakeLightTwin(LightSpec src)
+        {
+            src.mirrorGroup = SymmetryUtil.NextGroupId(D);
+            var tw = src.Clone();
+            tw.name = src.name + "_m";
+            SymmetryUtil.MirrorInto(src, tw);
+            D.lights.Add(tw);
+        }
+
         private void FinishDrag(PartType type, int index)
         {
             ClearGhosts();
             _drag = DragState.Idle;
-            _pendingWheel = null; _pendingSensor = null; _pendingAero = null; _pendingBattery = null; _pendingAntenna = null;
+            _pendingWheel = null; _pendingSensor = null; _pendingAero = null; _pendingBattery = null; _pendingAntenna = null; _pendingLight = null;
             bootstrap.RebuildPreview();
             Select(type, index);
         }
@@ -641,7 +696,7 @@ namespace AIHWSim.Garage
             }
             ClearGhosts();
             _drag = DragState.Idle;
-            _pendingWheel = null; _pendingSensor = null; _pendingAero = null; _pendingBattery = null; _pendingAntenna = null;
+            _pendingWheel = null; _pendingSensor = null; _pendingAero = null; _pendingBattery = null; _pendingAntenna = null; _pendingLight = null;
             _status = "Cancelled.";
         }
 
@@ -728,6 +783,9 @@ namespace AIHWSim.Garage
             else if (AntennaSelected && bootstrap.PreviewAntennas != null &&
                      _sel < bootstrap.PreviewAntennas.Length && bootstrap.PreviewAntennas[_sel] != null)
                 p = bootstrap.PreviewAntennas[_sel].transform.position;
+            else if (LightSelected && bootstrap.PreviewLights != null &&
+                     _sel < bootstrap.PreviewLights.Length && bootstrap.PreviewLights[_sel] != null)
+                p = bootstrap.PreviewLights[_sel].transform.position;
             if (p.HasValue && bootstrap.Orbit != null) bootstrap.Orbit.FocusOn(p.Value, 1.0f);
         }
 
@@ -915,18 +973,24 @@ namespace AIHWSim.Garage
         private void DrawBodyTab()
         {
             Header("BODY");
-            GUILayout.BeginHorizontal();
-            foreach (BodyShape shape in System.Enum.GetValues(typeof(BodyShape)))
+            // Rows of four — eight shapes no longer fit one line.
+            var shapes = (BodyShape[])System.Enum.GetValues(typeof(BodyShape));
+            for (int row = 0; row < shapes.Length; row += 4)
             {
-                bool on = D.bodyShape == shape;
-                if (GUILayout.Toggle(on, shape.ToString(), GUI.skin.button) && !on)
+                GUILayout.BeginHorizontal();
+                for (int i = row; i < Mathf.Min(row + 4, shapes.Length); i++)
                 {
-                    bootstrap.PushUndo("shape");
-                    D.bodyShape = shape;
-                    bootstrap.RebuildPreview();
+                    BodyShape shape = shapes[i];
+                    bool on = D.bodyShape == shape;
+                    if (GUILayout.Toggle(on, shape.ToString(), GUI.skin.button) && !on)
+                    {
+                        bootstrap.PushUndo("shape");
+                        D.bodyShape = shape;
+                        bootstrap.RebuildPreview();
+                    }
                 }
+                GUILayout.EndHorizontal();
             }
-            GUILayout.EndHorizontal();
 
             D.bodySize.x = Slider("Width", D.bodySize.x, 0.12f, 0.35f);
             D.bodySize.y = Slider("Height", D.bodySize.y, 0.04f, 0.18f);
@@ -1098,6 +1162,15 @@ namespace AIHWSim.Garage
                 if (GUILayout.Toggle(on, $"┃ {a.name}  (antenna){link}", GUI.skin.button) && !on)
                     Select(PartType.Antenna, i);
             }
+            for (int i = 0; i < D.lights.Count; i++)
+            {
+                var l = D.lights[i];
+                bool on = _selType == PartType.Light && _sel == i;
+                string link = l.mirrorGroup >= 0 ? " ⇋" : "";
+                string kind = l.style == 0 ? "light bar" : "light pods";
+                if (GUILayout.Toggle(on, $"▣ {l.name}  ({kind}){link}", GUI.skin.button) && !on)
+                    Select(PartType.Light, i);
+            }
             GUILayout.EndScrollView();
 
             // The inspector scrolls too — motor/aero inspectors outgrow small views.
@@ -1107,6 +1180,7 @@ namespace AIHWSim.Garage
             else if (AeroSelected) DrawAeroInspector(D.aero[_sel]);
             else if (BatterySelected) DrawBatteryInspector(D.batteries[_sel]);
             else if (AntennaSelected) DrawAntennaInspector(D.antennas[_sel]);
+            else if (LightSelected) DrawLightInspector(D.lights[_sel]);
             else GUILayout.Label("Select a part (list or click its marker).\nDrag a marker to move it; grab a palette\nicon to add one.");
             GUILayout.EndScrollView();
 
@@ -1126,7 +1200,7 @@ namespace AIHWSim.Garage
             w.yaw = Slider("Heading°", w.yaw, -180f, 180f);
             w.radius = Slider("Radius", w.radius, 0.02f, 0.07f);
 
-            string[] styleNames = { "Slick", "Knobby", "Rally" };
+            string[] styleNames = { "Slick", "Knobby", "Rally", "Coupe", "Baja", "Steelie" };
             int st = Mathf.Clamp(w.wheelStyle, 0, styleNames.Length - 1);
             if (GUILayout.Button("Tyre style: " + styleNames[st]))
             {
@@ -1292,10 +1366,50 @@ namespace AIHWSim.Garage
             a.tiltDeg = Slider("Tilt°", a.tiltDeg, 0f, 45f);
             a.sizeScale = Slider("Size ×", a.sizeScale, 0.6f, 1.6f);
 
+            string[] antStyles = { "Stub", "Whip", "Flag", "Twin" };
+            int ast = Mathf.Clamp(a.antennaStyle, 0, antStyles.Length - 1);
+            if (GUILayout.Button("Style: " + antStyles[ast]))
+            {
+                bootstrap.PushUndo("antstyle");
+                a.antennaStyle = (ast + 1) % antStyles.Length;
+                bootstrap.RebuildPreview();
+            }
+
             if (D.useCompositeMass)
                 a.massKg = Slider("Mass g (0=auto)", a.massKg * 1000f, 0f, 60f) / 1000f;
 
             SymmetryUtil.SyncTwin(D, a);
+
+            GUILayout.Space(6);
+            if (GUILayout.Button("Delete part")) DeleteSelected();
+        }
+
+        private void DrawLightInspector(LightSpec l)
+        {
+            Header("EDIT: LIGHTS");
+            l.name = NameField(l.name);
+            DrawMirrorRow(l.mirrorGroup, () => BreakLink());
+
+            GUILayout.Label("Position");
+            l.localPos.x = Slider("X", l.localPos.x, -0.18f, 0.18f);
+            l.localPos.y = Slider("Y", l.localPos.y, -0.05f, 0.25f);
+            l.localPos.z = Slider("Z", l.localPos.z, -0.30f, 0.30f);
+            l.yawDeg = Slider("Heading°", l.yawDeg, -180f, 180f);
+            l.sizeScale = Slider("Size ×", l.sizeScale, 0.6f, 1.6f);
+
+            string[] lightStyles = { "Bar", "Pods" };
+            int lst = Mathf.Clamp(l.style, 0, lightStyles.Length - 1);
+            if (GUILayout.Button("Style: " + lightStyles[lst]))
+            {
+                bootstrap.PushUndo("lightstyle");
+                l.style = (lst + 1) % lightStyles.Length;
+                bootstrap.RebuildPreview();
+            }
+
+            if (D.useCompositeMass)
+                l.massKg = Slider("Mass g (0=auto)", l.massKg * 1000f, 0f, 60f) / 1000f;
+
+            SymmetryUtil.SyncTwin(D, l);
 
             GUILayout.Space(6);
             if (GUILayout.Button("Delete part")) DeleteSelected();
@@ -1376,6 +1490,13 @@ namespace AIHWSim.Garage
                 var a = D.antennas[_sel];
                 var twin = SymmetryUtil.FindTwin(D, a);
                 a.mirrorGroup = -1;
+                if (twin != null) twin.mirrorGroup = -1;
+            }
+            else if (LightSelected)
+            {
+                var l = D.lights[_sel];
+                var twin = SymmetryUtil.FindTwin(D, l);
+                l.mirrorGroup = -1;
                 if (twin != null) twin.mirrorGroup = -1;
             }
             _status = "Mirror link broken.";
@@ -1540,6 +1661,13 @@ namespace AIHWSim.Garage
                 if (twin != null) D.antennas.Remove(twin);
                 D.antennas.Remove(a);
             }
+            else if (LightSelected)
+            {
+                var l = D.lights[_sel];
+                var twin = SymmetryUtil.FindTwin(D, l);
+                if (twin != null) D.lights.Remove(twin);
+                D.lights.Remove(l);
+            }
             else return;
             _sel = -1;
             bootstrap.RebuildPreview();
@@ -1553,6 +1681,7 @@ namespace AIHWSim.Garage
             foreach (var a in D.aero) used.Add(a.name);
             foreach (var b in D.batteries) used.Add(b.name);
             foreach (var a in D.antennas) used.Add(a.name);
+            foreach (var l in D.lights) used.Add(l.name);
             int i = 1;
             string n = bas + i;
             while (used.Contains(n)) { i++; n = bas + i; }

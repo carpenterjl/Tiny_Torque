@@ -23,6 +23,8 @@ namespace AIHWSim.Garage
                 foreach (var a in d.aero) if (a.mirrorGroup > max) max = a.mirrorGroup;
             if (d.antennas != null)
                 foreach (var a in d.antennas) if (a.mirrorGroup > max) max = a.mirrorGroup;
+            if (d.lights != null)
+                foreach (var l in d.lights) if (l.mirrorGroup > max) max = l.mirrorGroup;
             return max + 1;
         }
 
@@ -55,6 +57,14 @@ namespace AIHWSim.Garage
             if (a == null || a.mirrorGroup < 0 || d.antennas == null) return null;
             foreach (var o in d.antennas)
                 if (!ReferenceEquals(o, a) && o.mirrorGroup == a.mirrorGroup) return o;
+            return null;
+        }
+
+        public static LightSpec FindTwin(VehicleDesign d, LightSpec l)
+        {
+            if (l == null || l.mirrorGroup < 0 || d.lights == null) return null;
+            foreach (var o in d.lights)
+                if (!ReferenceEquals(o, l) && o.mirrorGroup == l.mirrorGroup) return o;
             return null;
         }
 
@@ -123,6 +133,7 @@ namespace AIHWSim.Garage
             dst.localPos = new Vector3(-src.localPos.x, src.localPos.y, src.localPos.z);
             dst.yawDeg = -src.yawDeg;
             dst.tiltDeg = src.tiltDeg;
+            dst.antennaStyle = src.antennaStyle;
             dst.sizeScale = src.sizeScale;
             dst.massKg = src.massKg;
         }
@@ -147,6 +158,21 @@ namespace AIHWSim.Garage
         }
 
         public static void SyncTwin(VehicleDesign d, AntennaSpec edited)
+        {
+            var twin = FindTwin(d, edited);
+            if (twin != null) MirrorInto(edited, twin);
+        }
+
+        public static void MirrorInto(LightSpec src, LightSpec dst)
+        {
+            dst.localPos = new Vector3(-src.localPos.x, src.localPos.y, src.localPos.z);
+            dst.yawDeg = -src.yawDeg;
+            dst.style = src.style;
+            dst.sizeScale = src.sizeScale;
+            dst.massKg = src.massKg;
+        }
+
+        public static void SyncTwin(VehicleDesign d, LightSpec edited)
         {
             var twin = FindTwin(d, edited);
             if (twin != null) MirrorInto(edited, twin);

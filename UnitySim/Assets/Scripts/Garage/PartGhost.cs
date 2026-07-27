@@ -43,12 +43,22 @@ namespace AIHWSim.Garage
             return g;
         }
 
-        public static PartGhost ForAntenna(float tiltDeg, float sizeScale, float yaw)
+        public static PartGhost ForAntenna(float tiltDeg, float sizeScale, float yaw, int style = 0)
         {
             var g = new PartGhost { Yaw = yaw };
             g.Root = new GameObject("antenna_ghost");
             g.Root.layer = PartVisualFactory.VizLayer;
-            PartVisualFactory.BuildAntennaViz(g.Root.transform, tiltDeg, sizeScale);
+            PartVisualFactory.BuildAntennaViz(g.Root.transform, tiltDeg, sizeScale, style);
+            g.Finish();
+            return g;
+        }
+
+        public static PartGhost ForLight(int style, float sizeScale, float yaw)
+        {
+            var g = new PartGhost { Yaw = yaw };
+            g.Root = new GameObject("light_ghost");
+            g.Root.layer = PartVisualFactory.VizLayer;
+            PartVisualFactory.BuildLightViz(g.Root.transform, style, sizeScale);
             g.Finish();
             return g;
         }

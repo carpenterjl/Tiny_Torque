@@ -8,8 +8,280 @@ describe is documented in [README.md](../README.md).
 Active work lives in the session plan file, not here; a plan moves into this archive
 once its milestones are done.
 
-Covering the project bootstrap through the arcade play-test follow-ups (419054 chars, 30 plans).
+Covering the project bootstrap through the LAN visual parity pass (434179 chars, 31 plans).
 Last updated 2026-07-27.
+
+---
+# LAN visual parity (protocol v6) + arcade bot racing line (2026-07-27)
+
+**Archived with the play-test checklist still UNDRIVEN.** The `- [ ]` items
+at the bottom were never driven; they remain valid things to check.
+
+## Context
+
+Two play-test asks. (1) The arcade visual effects should be **fully online**:
+today a remote car's drift smoke, tier sparks and mini-turbo are invisible on
+other machines — `driftDir`/`driftTier` are owner-local and never sent, and a
+client's mini-turbo is an acknowledged gap ([ArcadeNetLink.cs:198-202]). Boosting
+has **no visual at all**, even locally — just physics + a local audio loop — so
+part of this is a new boost-flame effect. Ghost cars also slide silently
+(`VehicleAudio` hard-zeroes skid on the ghost path). (2) The bots should read
+more arcade: spread out across the track on straights, but follow a real
+**apex-cutting racing line** (outside–inside–outside) through corners. Today
+they weave a fixed ±0.9 m sine around the centerline that never fully converges
+in corners (`off *= 1 - 0.5*curv`) and ignores track width (authored widths
+2.2–4.4 m; track-limit penalties apply to bots).
+
+User decisions: ghost skid audio YES; new boost visual YES (local + synced);
+apex-cutting line (not just converge-to-center); spread scaled to local track
+half-width with difficulty personality (Easy wide/sloppy, Hard tight/fast).
+
+Non-negotiables: `CarVehicle.cs` is untouched by this pass. Bots are local-only
+(never LAN, never Opus mission — `MissionAutorun` uses `DriveControl.Firmware`,
+no bots, no arcade layer), but the Opus regression runs anyway because
+`VehicleAudio`/`BotPath`/`BotDriver` are in the diff. Protocol bumps 5 → 6, which
+forces the standalone release rebuild.
+
+The shield bubble is the template for everything in Task A: it is the one
+car-attached visual that already works on ghosts, via
+`if (!DrivesPhysics(r)) { UpdateShieldViz(r, dt); continue; }`
+([ArcadeDirector.cs:1124]). Ghost cars already carry a real `ArcadeRacer` and
+the correct `bodyColor` (roster `vehicleJson` → `VehicleFactory`), so
+`DriftSmoke`'s per-car tint is free remotely.
+
+## Milestone 0 — plan-file housekeeping
+
+- [x] Append everything below the `MATERIAL TO ARCHIVE` marker (end of this
+      file) as ONE new entry at the TOP of `Docs/plan-archive.md` (newest-first,
+      right after the header + first `---`). Title:
+      `# Arcade pass 3 — play-test pass + follow-ups 1-4 (2026-07-26/27)`.
+      Add a bold note at the entry top: **the play-test checklists were still
+      undriven when archived** — keep every `- [x]` unchecked. Update the archive
+      header's char-count/date line (plan-archive.md:11-12). Append via editor
+      insertion — the file is ~400 KB, do not re-emit it.
+- [x] Delete the archived material from this file, leaving only this plan.
+
+## Task A — arcade visuals/audio fully online
+
+### Wire delta (bit-exact, no packet grows)
+
+`ArcEffect : ushort` (NetMessages.cs:249-267; 512+ free):
+- bit 9 / 512 `Drifting` — car committed to a slide (owner-truth)
+- bits 10-11 / 1024+2048 — 2-bit drift tier; encode `fx |= (ArcEffect)((tier&3)<<10)`,
+  decode `((int)fx>>10)&3`; meaningful only with `Drifting` set (tier 0 = charging).
+
+`OwnStateMsg` flags byte (currently 1=penalized, 2=warned; NetMessages.cs:431):
+- bit 2 / 4 `drifting` (`racer.Drifting`)
+- bits 3-4 / 8+16 drift tier
+- bit 5 / 32 `miniTurbo` (`Clock < racer.driftBoostUntil`)
+
+No new Boost bit: `ArcEffect.Boost` already means `r.Boosting`, which includes
+`driftBoostUntil` — the gap was only that the host never *learned* about a
+client's drift. `NetSession.ProtocolVersion` 5 → 6 (+ version-history comments
+in NetSession.cs:29-42 and NetMessages.cs:12-24). `LanDiscovery` reads the
+constant directly — no second site.
+
+### Milestone A1 — wire + state plumbing (compiles standalone, no visuals)
+
+Files: `Net/NetMessages.cs`, `Net/NetSession.cs`, `Net/OwnStateSender.cs`,
+`Net/ArcadeNetLink.cs`, `Arcade/ArcadeRacer.cs`.
+
+- [x] `NetMessages.cs`: enum bits, `OwnStateMsg` fields
+      (`drifting`/`driftTier`/`miniTurbo`), pack/unpack, header comment.
+- [x] `NetSession.cs`: `ProtocolVersion = 6` + v6 history paragraph.
+- [x] `ArcadeRacer.cs`: `public float remoteDriftUntil; public int
+      remoteDriftTier; int remoteDriftTierShown = -1;` +
+      `RemoteDrifting => ArcadeDirector.Clock < remoteDriftUntil`; reset all in
+      `ClearAll()`.
+- [x] `OwnStateSender.cs` (:63-76): fill the three fields from `rig?.arcade`
+      (null-safe → zeros in non-arcade sessions).
+- [x] `ArcadeNetLink.cs` host uplink: subscribe `S.OwnStateReceived` in the host
+      branch (unsubscribe in `OnDestroy`). On receive for slot's racer `r`:
+      if drifting → `r.remoteDriftUntil = Clock + EffectHold; r.remoteDriftTier
+      = tier;` if miniTurbo → `r.driftBoostUntil = max(r.driftBoostUntil,
+      Clock + EffectHold)` (that one write makes `EffectsOf`'s existing
+      `r.Boosting` relay it to everyone).
+- [x] `EffectsOf` (:193-212): `bool drifting = r.Drifting || r.RemoteDrifting;`
+      set `Drifting` + tier bits (owner's `driftTier` if local, else
+      `remoteDriftTier`). Rewrite the stale "invisible by construction" comment
+      (:198-202).
+- [x] `OnSync` per-racer: for `a.slot != S.LocalSlot` only (owner-truth, same
+      reasoning as penalized/warned at :267-271):
+      `r.remoteDriftUntil = Hold(a.effects, ArcEffect.Drifting, clock);
+      r.remoteDriftTier = ((int)a.effects >> 10) & 3;`
+      Hold (0.25 s) bridges a dropped 15 Hz packet — smoke can't strobe.
+
+### Milestone A2 — boost flame (new, local + ghost) and ghost drift VFX
+
+Files: `Arcade/ArcadeVfx.cs`, `Arcade/ArcadeRacer.cs`, `Arcade/ArcadeDirector.cs`.
+
+- [x] `ArcadeVfx.BuildBoostFlame(Transform car)` — mirror
+      `BuildDriftSparks`/`BuildShield`: root `"BoostFlame"` parented to the car,
+      collider-free primitives on `PartVisualFactory.VizLayer`, additive
+      `BurstSkin`. Car is 0.42 m long, rear ≈ z −0.21: outer plume sphere
+      (0, 0.02, −0.26) scale (0.10, 0.08, 0.26); hot core (0, 0.02, −0.22) scale
+      (0.055, 0.045, 0.15); side jets (±0.06, 0, −0.20) scale (0.04, 0.035, 0.10).
+      Colors (ArcadeVfx, cosmetic consts stay local per the DriftSmoke rule):
+      outer `(1, 0.55, 0.15)` emission ×2, core `(1, 0.92, 0.62)` ×3.
+- [x] `ArcadeRacer`: `[NonSerialized] public Transform boostViz;` +
+      `HideBoostFlame()` (idempotent destroy, shape of `HideDriftSparks`
+      :257-261); call from `ClearAll()`.
+- [x] `ArcadeDirector.UpdateBoostViz(r, dt)` — `UpdateShieldViz` pattern:
+      on = `r.car != null && Clock >= r.wreckedUntil && r.Boosting`; lazy build,
+      hide when off; length-only pulse `1 + 0.30*sin(Clock * 12Hz * 2π)`
+      (consts `BoostFlamePulseHz = 12f`, `BoostFlamePulseAmp = 0.30f` in the
+      director). Works on ghosts because `OnSync` Hold-arms `boostUntil`.
+- [x] `UpdateGhostVfx(r, dt)` replacing the gate at :1124
+      (`if (!DrivesPhysics(r)) { UpdateGhostVfx(r, dt); continue; }`):
+      `UpdateShieldViz` + `UpdateBoostViz`; drive `driftSmoke.emitting` from
+      `r.RemoteDrifting` (lazy `DriftSmoke.Attach` — works unchanged on ghosts,
+      reads only transform + bodyColor); lazy sparks build + retint only when
+      `remoteDriftTier != remoteDriftTierShown`; `HideDriftSparks()` when not
+      drifting.
+- [x] Extract `ShowDriftSparks`'s tint body (:1390-1404) into
+      `TintDriftSparks(r, tier)` — one color table, two callers.
+- [x] Add `UpdateBoostViz(r, dt)` to the owned path next to `UpdateShieldViz`
+      (:1174).
+
+### Milestone A3 — ghost skid audio
+
+Files: `Audio/VehicleAudio.cs`, `Net/ClientCarView.cs`.
+
+- [x] `VehicleAudio`: add `public float externalSlip01;`. Refactor the car
+      branch's skid computation (:140-164) into a shared
+      `ComputeSkid(float slip01, float speed)` — deadband, onset hold, depth,
+      speed gain, both Perlin wanders, byte-identical logic. Car branch passes
+      `(car.TyreSlip01, √(fwd²+lat²))`; ghost branch passes
+      `(externalSlip01, |externalSpeed|)` instead of hard-zeroing.
+- [x] `ClientCarView`: each Update after posing, lateral-slip proxy from the
+      interpolated velocity — `local = InverseTransformDirection(velWorld)`,
+      `slipDeg = atan2(|local.x|, max(1, |local.z|))`, mapped through
+      `SkidSlipMinDeg = 8f` / `SkidSlipMaxDeg = 30f` (brackets the drift band
+      11°–34°) into `_audio.externalSlip01`. No wire change. If extrapolation
+      chirps in testing, zero the proxy while extrapolating.
+- [x] Deliberate decoupling: ghost smoke = synced flag only; ghost audio =
+      motion proxy only. A hit-spin ghost squeals without smoking — correct.
+
+### Milestone A4 — docs
+
+- [x] README:647 protocol v5 → v6 + one-line note (drift smoke/sparks,
+      mini-turbo and boost flame visible on every machine); Drifting section:
+      boost flame + remote visibility + ghost skid voice; Sound section touch.
+
+## Task B — arcade bot racing line
+
+### Milestone B1 — widths out of BotPath
+
+Files: `Core/BotPath.cs`, `Core/TrackBootstrap.cs` (+ optionally
+`Menu/MenuAttract.cs`).
+
+- [x] New `BotPath.Build` overload with `out List<float> halfWidths`; existing
+      6-arg signature delegates and discards (MenuAttract compiles unchanged).
+      Point list stays **byte-identical** — TrackRespawn, the director's spine
+      and item-box layout consume it.
+      Spline source: `halfWidths.Add(s.width * 0.5f)` in the loop at :36.
+      Classic oval: `OvalHalfWidth = 1.25f` (half of TrackBootstrap.roadWidth).
+      Checkpoint gates: `GateHalfWidth = 1.0f`.
+      **The `pts.Reverse()` at :73 must reverse `halfWidths` too.**
+- [x] `TrackBootstrap`: capture widths at the local-session build site and pass
+      to the `BotDriver` ctor (:776).
+
+### Milestone B2 — BotDriver racing line
+
+File: `Core/BotDriver.cs`. Ctor gains optional
+`IReadOnlyList<float> halfWidths = null` (compat with MenuAttract.cs:52,:94).
+
+- [x] Precompute alongside `_cum`: `_half[i]` (clamped [0.3, 5], default
+      `DefaultHalfWidth = 1.1f` when null) and **signed** per-node curvature
+      `_kappa[i]` (rad/m, + = right): `SignedAngle(seg_in, seg_out, up)` over
+      local arc length, wrap when closed, box-smoothed ±2 nodes.
+- [x] Continuous arc position `s` (project onto the near segment) replaces
+      quantized `_cum[near]` for the weave phase and for `KappaAt(s)` /
+      `HalfAt(s)` lerped lookups.
+- [x] Offset math (replaces :217-223 only — the unsigned `curv` speed logic
+      :207-213/:236 stays untouched, isolating risk to lateral placement):
+      ```
+      usable = max(0, HalfAt(s) − CarHalfWidth(0.20) − EdgeMargin(0.30))
+      La     = max(2, v * anticipationSec)
+      cHere  = min(1, |KappaAt(s)|    / KappaRef)      // KappaRef = 0.18
+      cAhead = min(1, |KappaAt(s+La)| / KappaRef)
+      line01 = cHere*sign(kHere) − (1−cHere)*cAhead*sign(kAhead)
+      offRacing = lineGain * clamp(line01, −1, 1) * usable
+      weaveGate = 1 − max(cHere, cAhead)
+      offWeave  = (bias + amp*sin(s*freq+phase)) * usable * weaveGate
+      off = clamp(offRacing + offWeave, −usable, usable)
+      ```
+      Out-in-out falls out of the sign arithmetic (approach: −sign(kAhead) =
+      outside; apex: +sign(kHere) = inside; S-curves hand over automatically).
+      Narrow bridges collapse everything toward center via `usable` —
+      track-limit-safe by construction. Delete `MaxOffset`.
+- [x] `Params`/`ForDifficulty` new fields:
+      `lineGain` E .50 / M .75 / H .92; `weaveAmpFrac` .45/.28/.12;
+      `weaveBiasFrac` .30/.20/.08; `anticipationSec` .55/.80/1.05. Ctor
+      randomization becomes fractional (`_offBias = ±weaveBiasFrac`,
+      `_offAmp = 0.5–1 × weaveAmpFrac`); `_offFreq`/`_offPhase` unchanged.
+- [x] Do NOT disturb: blind early-return (:183-200), frozen (:170-177),
+      reverse/stuck branch (:244-259), `SpeedScale` (RaceDirector.cs:154).
+- [x] Sanity-check the sign convention once with a debug bot before tuning:
+      a flipped `SignedAngle` sign apexes on the outside.
+
+## Verification
+
+- [x] **V1 compile** (after A-milestones and after B2): Unity batch
+      `-batchmode -nographics -quit -logFile <scratchpad>\compile.log`.
+      PowerShell does NOT wait on Unity.exe — poll for exit / log tail in a
+      later call; 0 `error CS`. Delete `UnitySim/Temp/UnityLockfile` first if a
+      crashed run left one.
+- [x] **V2 Opus regression**: `-batchmode -executeMethod
+      AIHWSim.EditorTools.OpusMissionRunner.RunHeadless` — NO `-nographics`,
+      NO `-quit`; poll for the result JSON. Must be bit-identical to R4:
+      legA −13.615608215332032 mm, turn +0.1873779296875°,
+      legB +15.803813934326172 mm, brake +42.34135055541992 mm,
+      total +58.14552307128906 mm, drift −42.4041748046875 mm,
+      completed true, fault 0, phase 10.
+- [x] **V3 release standalone rebuild** (forced by v6):
+      `-batchmode -quit -executeMethod AIHWSim.EditorTools.BuildMenu.BuildRelease`
+      → `UnitySim/Builds/Release/AI Hardware Control Sim.exe`; verify timestamp.
+- [x] **V4** README edits done; archive entry from Milestone 0 in place.
+
+## Play-test checklist (user)
+
+LAN (editor host + rebuilt standalone):
+- [ ] Drift on A → B shows car-colored smoke at the ghost's rear, sparks at
+      commit, tier recolors land, all stops ≤ ~¼ s after release; no strobing.
+- [ ] CLIENT mini-turbo → flame lights on the host's screen (the formerly
+      impossible direction).
+- [ ] Item boost / host mini-turbo → flame on every machine; never in the car's
+      own CameraSensor feed.
+- [ ] Ghost skid audio: sliding ghost squeals positionally, wanders, dies
+      promptly; clean fast driving silent; spin-out squeals without smoke.
+- [ ] v5 standalone vs v6 host → "Version mismatch"; v5 beacons filtered.
+- [ ] Wreck mid-boost: flame extinguishes everywhere; shield+flame+smoke at
+      once doesn't visually explode.
+
+Bots (local; a spline circuit + classic oval + checkpoint tile map):
+- [ ] Hard bots run visible out-in-out through hairpins, use the full road on
+      wide sections; Easy bots wander and stay slower.
+- [ ] No bot farms track-limit penalties anywhere — watch narrow bridges/planks
+      (pack should single-file near center).
+- [ ] S-curves cross smoothly, no zig-zag (if oscillating: widen κ smoothing or
+      lower lineGain).
+- [ ] Menu attract loop sane (default-width fallback). Rubber-banding, stuck
+      reverse, blind behavior unchanged.
+
+## Known risks
+
+1. Host mirrors a client's mini-turbo into `driftBoostUntil`, which echoes back
+   as `Boost` and Hold-arms the owner's own `boostUntil` — harmless (owner is
+   already Boosting; flame lingers ≤ 0.25 s + RTT). Comment, not fix.
+2. `arcadeBoostAccel` is written before the `DrivesPhysics` gate (:1110 vs
+   :1124) — inert on kinematic ghost/follower bodies, but the boost mirror
+   widens when it's non-zero; note in a comment.
+3. Ghost drift start lags ≤ 66 ms + RTT (15 Hz tier stream) — accepted.
+4. Ghost skid proxy during extrapolation can transiently read slip — 8° floor +
+   0.09 s onset hold should silence it; gate on extrapolation if not.
+5. Width source: BotPath picks the longest spline; if it's narrower than the
+   visual road, bots run conservative — correct failure direction.
 
 ---
 # Arcade pass 3 — play-test pass + follow-ups 1-4 (2026-07-26/27)

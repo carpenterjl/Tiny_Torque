@@ -47,6 +47,9 @@ namespace AIHWSim.Vehicles
                 case BodyShape.Box: return 0.90f;
                 case BodyShape.Shell: return 0.45f;
                 case BodyShape.LowRacer: return 0.55f;
+                case BodyShape.Coupe: return 0.48f;
+                case BodyShape.Baja: return 0.85f;
+                case BodyShape.Patrol: return 0.55f;
                 default: return 0.80f;
             }
         }
@@ -59,6 +62,8 @@ namespace AIHWSim.Vehicles
                 case BodyShape.Wedge: return 0.002f;
                 case BodyShape.Shell: return 0.004f;
                 case BodyShape.LowRacer: return 0.006f;
+                case BodyShape.Coupe: return 0.004f;
+                case BodyShape.Patrol: return 0.003f;
                 default: return 0f;
             }
         }

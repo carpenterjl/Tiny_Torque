@@ -124,11 +124,33 @@ namespace AIHWSim.Garage
         public Vector3 localPos = new Vector3(0f, 0.09f, -0.14f);
         public float yawDeg = 0f;
         public float tiltDeg = 15f;           // lean back from vertical (deg)
+        public int antennaStyle = 0;          // 0 stub / 1 whip+tip / 2 flag / 3 twin
         public float sizeScale = 1f;          // 0.6..1.6
         public int mirrorGroup = -1;          // shared id links mirror twins; -1 = unlinked
         public float massKg = 0f;             // part mass; 0 = auto
 
         public AntennaSpec Clone() => (AntennaSpec)MemberwiseClone();
+    }
+
+    /// <summary>
+    /// One placeable light cluster — purely cosmetic like an antenna (no
+    /// physics, no sensor, on the viz layer so the on-car camera never sees
+    /// it). Style picks the authored mesh: 0 = police roof light bar (its
+    /// red/blue lenses strobe at runtime), 1 = off-road pod cluster (steady
+    /// glow). Old designs have an empty list. Mirrorable like aero.
+    /// </summary>
+    [Serializable]
+    public class LightSpec
+    {
+        public string name = "light";
+        public Vector3 localPos = new Vector3(0f, 0.08f, 0f);
+        public float yawDeg = 0f;
+        public int style = 0;                 // 0 bar / 1 pods
+        public float sizeScale = 1f;          // 0.6..1.6
+        public int mirrorGroup = -1;          // shared id links mirror twins; -1 = unlinked
+        public float massKg = 0f;             // part mass; 0 = auto
+
+        public LightSpec Clone() => (LightSpec)MemberwiseClone();
     }
 
     /// <summary>
@@ -189,6 +211,7 @@ namespace AIHWSim.Garage
         public List<AeroSpec> aero = new List<AeroSpec>();   // old JSON → stays empty
         public List<BatterySpec> batteries = new List<BatterySpec>(); // old JSON → empty = infinite rail
         public List<AntennaSpec> antennas = new List<AntennaSpec>();  // old JSON → empty (cosmetic)
+        public List<LightSpec> lights = new List<LightSpec>();        // old JSON → empty (cosmetic)
 
         /// <summary>
         /// The stock car: a 1/10-scale RC (F1TENTH-style) — four wheels (steered

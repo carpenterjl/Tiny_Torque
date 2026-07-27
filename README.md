@@ -48,7 +48,8 @@ quadcopter and hardware-in-the-loop over serial are planned follow-ons.
   **zoom** (Ctrl+scroll) all work mid-drag. A **Snap 5mm** toggle (N) quantizes
   placement to a 5 mm grid. **Mirror ✕2** (X) places symmetric twins that
   stay in sync. The **PAINT** tab paints pixels straight onto the moulded body
-  shells (Shell / LowRacer / Buggy): swatches + RGB brush colour, brush size,
+  shells (Shell / LowRacer / Buggy, and the TinyTorque cars' paint panels —
+  their chrome, glass and lights are immune): swatches + RGB brush colour, brush size,
   a **mirror brush**, Alt+click eyedropper, per-stroke undo, and Clear — the
   livery is stored in the vehicle JSON, so it saves, snapshots, and follows the
   car into LAN games automatically. Each **wheel** carries its position, heading, radius, an *allows
@@ -236,13 +237,26 @@ placeable **suspension sensor** part reads a chosen wheel's spring force (N),
 normalized compression (0–1), and strut angle over the sensor ABI
 (`SENSOR_SUSPENSION`, `[force, comp, angle]`) — graphed, CSV'd, and firmware-readable.
 
-The menu and garage pickers ship **built-in preset vehicles** (★-prefixed:
-**Rally Buggy** — soft long-travel 4WD; **F1 Racer** — stiff, low, winged, fast;
-**Crawler** — huge-travel, high-grip, low-geared; **Drift Car** — loose rear end)
-and **preset maps** matched to them (**Whoop Canyon** jumps course, **Monza Mini**
-smooth GP circuit, **Boulder Basin** crawler field, **Slide Yard** low-grip drift
-yard). Presets are read-only; loading one clones an editable copy that Save writes
-to your library.
+The menu and garage pickers ship **built-in preset vehicles** (★-prefixed). The
+line-up is the three **TinyTorque show cars** — Blender-modeled vehicles imported
+whole, with real chrome/gold/glass materials, emissive head and tail lights, and
+their tintable paint panels:
+
+- **TT Coupe** — RWD street sports coupe: gold rims, glass canopy, gold wing
+  logo, an amber-tipped whip on the rear deck.
+- **TT Baja** — 4WD tube-frame trophy buggy: balloon tyres on orange rims,
+  authored shocks and A-arms, roof light pods, an orange flag whip.
+- **TT Patrol** — RWD sedan: push bar, chrome steelies, grille strobes, twin
+  trunk whips, and a roof light bar that strobes red/blue.
+
+plus **Real Twin 1/10** (the calibration baseline) and **Opus Vector** (the
+autonomous mission platform). Their bodies, wheels, light clusters and antenna
+styles are also individual garage parts, usable on any design. The **preset
+maps** remain (**Whoop Canyon** jumps course, **Monza Mini** smooth GP circuit,
+**Boulder Basin** crawler field, **Slide Yard** low-grip drift yard). Presets are
+read-only; loading one clones an editable copy that Save writes to your library.
+(The old Rally Buggy / F1 Racer / Crawler / Drift Car presets are retired; saved
+copies of them still load and render exactly as before.)
 
 ## High-fidelity mode (real-world controller validation)
 
@@ -389,13 +403,13 @@ original code-built primitives whenever an asset is missing — so the game runs
 unchanged without the meshes, and every pre-existing design keeps working. The
 meshes are purely cosmetic (colliders stripped, physics untouched):
 
-- **Wheels** come in three selectable styles per wheel — *slick*, *knobby*,
-  *rally* (garage → wheel inspector → *Tyre style*). Each is a five-object
-  assembly: tyre (rounded shoulders, sidewall bulge, bead transition, tread
-  grooves or extruded lug blocks), rim (barrel, flange lip, tapered spokes with
-  real thickness), hub, lug studs and a brake disc visible through the spokes.
-  All three hold an outer radius of exactly 33 mm so the runtime's
-  `radius / WheelAuthorRadius` scaling is 1.0 at stock size.
+- **Wheels** come in six selectable styles per wheel — *slick*, *knobby*,
+  *rally*, plus the TinyTorque *coupe* (gold rim), *baja* (balloon tyre, orange
+  rim) and *steelie* (chrome police rim) (garage → wheel inspector → *Tyre
+  style*). Each is a multi-object assembly: tyre, rim, hub/barrel, studs or nut
+  and a brake disc visible through the spokes. All hold an outer radius of
+  exactly 33 mm so the runtime's `radius / WheelAuthorRadius` scaling is 1.0 at
+  stock size.
 - **Bodies** — the *Shell* (touring), *LowRacer* (F1TENTH) and *Buggy* shapes are
   single closed shells lofted from keyframed cross-sections and subdivided once.
   A separate roof-width parameter pulls the upper surface in so the fenders crown
@@ -411,7 +425,20 @@ meshes are purely cosmetic (colliders stripped, physics untouched):
 - **Antennas** are a placeable cosmetic part (palette → *Antenna*) — knurled SMA
   base, hex coupling nut and a tapered rubber-duck whip — with position /
   heading / tilt / size, mirror symmetry, and save/load like any other part. The
-  stock car ships with a pair on the rear deck.
+  stock car ships with a pair on the rear deck. Four styles cycle in the
+  inspector: the classic *Stub*, the coupe's amber-tipped *Whip*, the baja
+  *Flag* whip, and the patrol's *Twin* trunk pair.
+- **Lights** are a new cosmetic part category (palette → MISC → *Lights*): the
+  police roof **light bar**, whose red and blue lenses strobe alternately at
+  runtime, and the off-road **pod cluster**, which glows steadily. Position /
+  heading / size / style, mirrorable, massed, on the viz layer — so like every
+  part, a car's own camera sensor never sees them.
+- **TinyTorque show-car bodies** (*Coupe*, *Baja*, *Patrol*) are full Blender
+  models imported by `Blender/build_vehicles.py`, split per material so each
+  object carries a token in its name: the neutral *paint* panels bind to the
+  tintable body material (colour picker + livery painting work on exactly
+  those), while chrome, gold, glass, gunmetal, decals and the emissive head/tail
+  lights keep their authored look.
 
 Imported models are pinned to a deterministic scale/orientation by
 `Assets/Editor/PartModelPostprocessor.cs`, which also imports the authored
@@ -574,7 +601,7 @@ trail where the rear wheels were rather than a decal glued to the bumper.
 Every boost — item, pad or mini-turbo — now also lights a **rear thruster
 flame**: an orange plume with a near-white core that flickers in length while
 the push lasts. Like every cosmetic it lives on the viz layer, so a car's own
-camera sensor never sees its own exhaust. Over LAN (protocol v6) the whole
+camera sensor never sees its own exhaust. Over LAN (protocol v7) the whole
 drift show travels: smoke, tier-coloured sparks, the flame and the mini-turbo
 that lit it are visible on every machine, whichever machine earned them.
 
@@ -657,9 +684,16 @@ and the incoming warning be one implementation instead of two. The one thing a
 client genuinely cannot derive is whether a missile is locked onto it — it owns
 no missiles, only their poses — so that arrives as a flag.
 
-This is **protocol v6**. Every machine in a session must run the same build; the
+This is **protocol v7**. Every machine in a session must run the same build; the
 exact version check at connection approval rejects a mismatch cleanly rather than
 letting it half-work.
+
+v7 is the TinyTorque show cars. Not a byte of the wire format changed — but a
+car's appearance travels as its full design JSON, and v7 designs can carry the
+three new body shapes, three new wheel styles, antenna styles and the new light
+parts. A v6 peer would deserialize one into a plain box on slick wheels and the
+two machines would disagree about what the same car looks like, which is exactly
+the mixed-cosmetics session the version gate exists to refuse.
 
 v6 is drift visibility. Three spare `ArcEffect` bits carry drifting + tier down
 to every client, and four spare own-state flag bits carry drifting, tier and the

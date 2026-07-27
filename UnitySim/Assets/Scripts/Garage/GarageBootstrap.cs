@@ -27,6 +27,7 @@ namespace AIHWSim.Garage
         public GameObject[] PreviewAero { get; private set; } = System.Array.Empty<GameObject>();
         public GameObject[] PreviewBatteries { get; private set; } = System.Array.Empty<GameObject>();
         public GameObject[] PreviewAntennas { get; private set; } = System.Array.Empty<GameObject>();
+        public GameObject[] PreviewLights { get; private set; } = System.Array.Empty<GameObject>();
 
         /// <summary>Whether part heading/aim lines are drawn (toggled from the UI).</summary>
         public bool ShowAimVectors = true;
@@ -152,6 +153,7 @@ namespace AIHWSim.Garage
             PreviewAero = built.aeroVisuals ?? System.Array.Empty<GameObject>();
             PreviewBatteries = built.batteryVisuals ?? System.Array.Empty<GameObject>();
             PreviewAntennas = built.antennaVisuals ?? System.Array.Empty<GameObject>();
+            PreviewLights = built.lightVisuals ?? System.Array.Empty<GameObject>();
             built.rig.Initialize(built.car, built.root.transform); // build cameras + bind sensors
 
             BuildMarkers(built.sensors);
@@ -192,6 +194,12 @@ namespace AIHWSim.Garage
                 if (PreviewAntennas[i] != null)
                     MakeMarker(PreviewAntennas[i].transform, PartType.Antenna, i,
                         new Color(0.9f, 0.9f, 0.4f), 0.04f);
+
+            // Light markers.
+            for (int i = 0; i < PreviewLights.Length; i++)
+                if (PreviewLights[i] != null)
+                    MakeMarker(PreviewLights[i].transform, PartType.Light, i,
+                        new Color(1f, 0.45f, 0.45f), 0.04f);
         }
 
         private void MakeMarker(Transform parent, PartType type, int index, Color col, float size)
@@ -257,6 +265,9 @@ namespace AIHWSim.Garage
             else if (type == PartType.Antenna && PreviewAntennas != null &&
                      index >= 0 && index < PreviewAntennas.Length && PreviewAntennas[index] != null)
                 t = PreviewAntennas[index].transform;
+            else if (type == PartType.Light && PreviewLights != null &&
+                     index >= 0 && index < PreviewLights.Length && PreviewLights[index] != null)
+                t = PreviewLights[index].transform;
 
             if (t != null)
                 foreach (var r in t.GetComponentsInChildren<Renderer>(true)) r.enabled = visible;
