@@ -81,6 +81,10 @@ namespace AIHWSim.TrackEd
         public bool dynamic;             // pieces get Rigidbodies when built interactive
         public float dynamicMass = 0.08f; // per collidered piece (kg)
         public bool bottomHeavy;         // weighted base (cones): low center of mass
+        // Where ItemBehavior.Light hangs its point light. The default is the
+        // classic light_post head; taller lamp props override to their head.
+        public Vector3 lightPos = new Vector3(0f, 0.8f, 0.25f);
+        public bool animated;            // carries a cosmetic mover: never static-batched
         public Action<Transform> build;
     }
 
@@ -229,7 +233,7 @@ namespace AIHWSim.TrackEd
         /// unchanged before any prop ships. The mesh stays on the parent's layer
         /// (NOT the viz layer) so the on-car camera sensor can see the scenery.
         /// </summary>
-        private static void MeshProp(Transform p, string key, Material fallback,
+        private static GameObject MeshProp(Transform p, string key, Material fallback,
             (string token, Material mat)[] tokens,
             Action<Transform> hull, Action<Transform> primitives)
         {
@@ -239,10 +243,13 @@ namespace AIHWSim.TrackEd
                 // Primitives carry their own colliders (TrackBuilder default), so
                 // the authored hull is skipped on this path.
                 primitives(p);
-                return;
+                return null;
             }
             if (tokens != null && tokens.Length > 0) PartMeshLibrary.AssignByName(mesh, fallback, tokens);
             hull?.Invoke(p);
+            // Returned so cosmetic scripts (SignalCycle, GhostBob) can attach to
+            // the mesh instance; every existing caller ignores it.
+            return mesh;
         }
 
         /// <summary>
@@ -271,6 +278,16 @@ namespace AIHWSim.TrackEd
             if (tokens != null && tokens.Length > 0) PartMeshLibrary.AssignByName(mesh, fallback, tokens);
             addCollider(body);
         }
+
+        /// <summary>
+        /// Generic primitive fallback for the TinyTorque map props: a single
+        /// bounds box in the theme's dominant material. 63 bespoke primitive
+        /// stand-ins would dwarf the catalog for a path that only runs when an
+        /// FBX is missing; the never-black-screen guarantee is what matters.
+        /// </summary>
+        private static Action<Transform> BoxFallback(Material m, float w, float h, float d)
+            => f => LBox("Fallback", f, m, new Vector3(0f, h * 0.5f, 0f),
+                         Vector3.zero, new Vector3(w, h, d));
 
         // ---- themed prop materials -------------------------------------------
         // One shared material per key so a 60-prop map still batches. Keyed
@@ -674,6 +691,561 @@ namespace AIHWSim.TrackEd
                     h => HullCyl(h, new Vector3(0, 0.300f, 0), new Vector3(0.200f, 0.300f, 0.200f)),
                     f => LCyl("Crag", f, VfRock, new Vector3(0, 0.30f, 0), Vector3.zero,
                               new Vector3(0.200f, 0.300f, 0.200f))) },
+
+            // Scenery — TinyTorque map packs (build_map_props.py). Hull numbers
+            // come from the exporter's printed JSON (bounds + slope profiles),
+            // never eyeballed. The authored ramps slope along local X (the
+            // showcase axis) — place them with yaw 90 to face the racing line.
+            // Landmarks (volcano, peak, barrow, castle, towers, furniture) are
+            // full 1/10-world backdrop pieces; their hulls are the full bounds.
+
+            // Scenery — Downtown -------------------------------------------
+            new ItemDef { id = "dt_arch_gate", label = "City gate", category = ItemCategory.Scenery,
+                theme = Downtown,
+                build = p => MeshProp(p, "dt_arch_gate", DtConcrete, DtTokens,
+                    h =>
+                    {
+                        HullBox(h, new Vector3(-1.19f, 0.85f, 0), new Vector3(0.80f, 1.70f, 0.58f));
+                        HullBox(h, new Vector3(1.19f, 0.85f, 0), new Vector3(0.80f, 1.70f, 0.58f));
+                        HullBox(h, new Vector3(0, 1.26f, 0), new Vector3(3.18f, 0.71f, 0.58f));
+                    },
+                    BoxFallback(DtConcrete, 3.18f, 1.70f, 0.58f)) },
+
+            new ItemDef { id = "dt_arch_rock", label = "Rock arch", category = ItemCategory.Scenery,
+                theme = Downtown,
+                build = p => MeshProp(p, "dt_arch_rock", DtRock, DtTokens,
+                    h =>
+                    {
+                        HullBox(h, new Vector3(-1.56f, 1.15f, 0), new Vector3(1.56f, 2.30f, 1.08f));
+                        HullBox(h, new Vector3(1.56f, 1.15f, 0), new Vector3(1.56f, 2.30f, 1.08f));
+                        HullBox(h, new Vector3(0, 2.08f, 0), new Vector3(4.67f, 1.06f, 1.08f));
+                    },
+                    BoxFallback(DtRock, 4.67f, 2.61f, 1.08f)) },
+
+            new ItemDef { id = "dt_barrier", label = "Jersey barrier", category = ItemCategory.Scenery,
+                theme = Downtown, snap = SnapMode.TileEdge,
+                build = p => MeshProp(p, "dt_barrier", DtConcreteLt, DtTokens,
+                    h => HullBox(h, new Vector3(0, 0.04f, 0), new Vector3(0.302f, 0.08f, 0.068f)),
+                    BoxFallback(DtConcreteLt, 0.302f, 0.08f, 0.068f)) },
+
+            new ItemDef { id = "dt_bld_block", label = "City block", category = ItemCategory.Scenery,
+                theme = Downtown,
+                build = p => MeshProp(p, "dt_bld_block", DtConcrete, DtTokens,
+                    h => HullBox(h, new Vector3(0, 1.55f, 0), new Vector3(2.36f, 3.09f, 1.56f)),
+                    BoxFallback(DtConcrete, 2.36f, 3.09f, 1.56f)) },
+
+            new ItemDef { id = "dt_bld_hangar", label = "Hangar", category = ItemCategory.Scenery,
+                theme = Downtown,
+                build = p => MeshProp(p, "dt_bld_hangar", DtConcrete, DtTokens,
+                    h => HullBox(h, new Vector3(0, 0.62f, 0), new Vector3(1.98f, 1.25f, 2.93f)),
+                    BoxFallback(DtConcrete, 1.98f, 1.25f, 2.93f)) },
+
+            new ItemDef { id = "dt_bld_tower", label = "Neon tower", category = ItemCategory.Scenery,
+                theme = Downtown,
+                build = p => MeshProp(p, "dt_bld_tower", DtConcrete, DtTokens,
+                    h => HullBox(h, new Vector3(0, 4.41f, 0), new Vector3(1.65f, 8.82f, 1.65f)),
+                    BoxFallback(DtConcrete, 1.65f, 8.81f, 1.65f)) },
+
+            new ItemDef { id = "dt_cone", label = "Traffic cone", category = ItemCategory.Scenery,
+                theme = Downtown, dynamic = true, dynamicMass = 0.03f, bottomHeavy = true,
+                build = p => MeshPropDynamic(p, "dt_cone", DtOrange, DtTokens,
+                    b =>
+                    {
+                        var c = b.AddComponent<BoxCollider>();
+                        c.center = new Vector3(0f, 0.037f, 0f);
+                        c.size = new Vector3(0.052f, 0.074f, 0.052f);
+                    },
+                    f => TrackBuilder.Cone("Cone", Vector3.zero, 0.075f, 0.026f, DtOrange, f)) },
+
+            new ItemDef { id = "dt_ramp_jump", label = "Jump ramp", category = ItemCategory.Scenery,
+                theme = Downtown,
+                build = p => MeshProp(p, "dt_ramp_jump", DtConcrete, DtTokens,
+                    h =>
+                    {
+                        // Up-over-down along X: 20° faces either side, flat deck on top.
+                        HullBox(h, new Vector3(-0.74f, 0.20f, 0), new Vector3(0.80f, 0.03f, 1.06f), new Vector3(0, 0, 20f));
+                        HullBox(h, new Vector3(0.74f, 0.20f, 0), new Vector3(0.80f, 0.03f, 1.06f), new Vector3(0, 0, -20f));
+                        HullBox(h, new Vector3(0, 0.33f, 0), new Vector3(0.85f, 0.03f, 1.06f));
+                    },
+                    f => TrackBuilder.Ramp("Ramp", Vector3.zero, 0f, 1.0f, 1.06f, 0.03f, 20f, DtConcrete, f)) },
+
+            new ItemDef { id = "dt_ramp_kicker", label = "Kicker", category = ItemCategory.Scenery,
+                theme = Downtown,
+                build = p => MeshProp(p, "dt_ramp_kicker", DtConcrete, DtTokens,
+                    h => HullBox(h, new Vector3(0, 0.20f, 0), new Vector3(1.46f, 0.03f, 0.96f), new Vector3(0, 0, 14f)),
+                    f => TrackBuilder.Ramp("Ramp", Vector3.zero, 0f, 1.4f, 0.96f, 0.03f, 14f, DtConcrete, f)) },
+
+            new ItemDef { id = "dt_rock_large", label = "Boulder", category = ItemCategory.Scenery,
+                theme = Downtown,
+                build = p => MeshProp(p, "dt_rock_large", DtRock, DtTokens,
+                    h => HullBox(h, new Vector3(0, 0.27f, 0), new Vector3(0.72f, 0.54f, 0.87f)),
+                    BoxFallback(DtRock, 0.72f, 0.54f, 0.87f)) },
+
+            new ItemDef { id = "dt_rock_small", label = "Rock", category = ItemCategory.Scenery,
+                theme = Downtown,
+                build = p => MeshProp(p, "dt_rock_small", DtRock, DtTokens,
+                    h => HullBox(h, new Vector3(0, 0.06f, 0), new Vector3(0.19f, 0.12f, 0.19f)),
+                    BoxFallback(DtRock, 0.19f, 0.12f, 0.19f)) },
+
+            new ItemDef { id = "dt_street_lamp", label = "Street lamp", category = ItemCategory.Scenery,
+                theme = Downtown, behavior = ItemBehavior.Light,
+                lightPos = new Vector3(0f, 0.75f, 0f),
+                build = p => MeshProp(p, "dt_street_lamp", DtSteel, DtTokens,
+                    h => HullCyl(h, new Vector3(0, 0.40f, 0), new Vector3(0.06f, 0.40f, 0.06f)),
+                    f => LCyl("Pole", f, DtSteel, new Vector3(0, 0.40f, 0), Vector3.zero,
+                              new Vector3(0.06f, 0.40f, 0.06f))) },
+
+            new ItemDef { id = "dt_traffic_light", label = "Traffic light", category = ItemCategory.Scenery,
+                theme = Downtown, animated = true,
+                build = p =>
+                {
+                    var m = MeshProp(p, "dt_traffic_light", DtSteel, DtTokens,
+                        h =>
+                        {
+                            HullBox(h, new Vector3(0, 0.29f, 0), new Vector3(0.10f, 0.58f, 0.08f));
+                            HullBox(h, new Vector3(0, 0.47f, 0), new Vector3(0.384f, 0.20f, 0.08f));
+                        },
+                        BoxFallback(DtSteel, 0.384f, 0.57f, 0.08f));
+                    if (m != null) m.AddComponent<SignalCycle>();
+                } },
+
+            new ItemDef { id = "dt_volcano", label = "Volcano", category = ItemCategory.Scenery,
+                theme = Downtown,
+                build = p => MeshProp(p, "dt_volcano", DtBasalt, DtTokens,
+                    h => HullCyl(h, new Vector3(0, 2.30f, 0), new Vector3(5.0f, 2.30f, 5.0f)),
+                    BoxFallback(DtBasalt, 12.6f, 4.6f, 12.6f)) },
+
+            // Scenery — Toy Room -------------------------------------------
+            new ItemDef { id = "toy_ball", label = "Toy ball", category = ItemCategory.Scenery,
+                theme = ToyRoom, dynamic = true, dynamicMass = 0.06f,
+                build = p => MeshPropDynamic(p, "toy_ball", ToyRed, ToyTokens,
+                    b =>
+                    {
+                        var c = b.AddComponent<SphereCollider>();
+                        c.center = new Vector3(0f, 0.42f, 0f);
+                        c.radius = 0.42f;
+                    },
+                    f => LCyl("Ball", f, ToyRed, new Vector3(0, 0.42f, 0), Vector3.zero,
+                              new Vector3(0.86f, 0.42f, 0.86f))) },
+
+            new ItemDef { id = "toy_bed", label = "Bed", category = ItemCategory.Scenery,
+                theme = ToyRoom,
+                build = p => MeshProp(p, "toy_bed", ToyWalnut, ToyTokens,
+                    h => HullBox(h, new Vector3(0, 1.34f, 0), new Vector3(3.62f, 2.68f, 5.03f)),
+                    BoxFallback(ToyWalnut, 3.62f, 2.67f, 5.03f)) },
+
+            new ItemDef { id = "toy_block_tower", label = "Block tower", category = ItemCategory.Scenery,
+                theme = ToyRoom,
+                build = p => MeshProp(p, "toy_block_tower", ToyRed, ToyTokens,
+                    h => HullBox(h, new Vector3(0, 0.67f, 0), new Vector3(0.23f, 1.34f, 0.23f)),
+                    BoxFallback(ToyRed, 0.22f, 1.34f, 0.23f)) },
+
+            new ItemDef { id = "toy_bookcase", label = "Bookcase", category = ItemCategory.Scenery,
+                theme = ToyRoom, snap = SnapMode.TileEdge,
+                build = p => MeshProp(p, "toy_bookcase", ToyWalnut, ToyTokens,
+                    h => HullBox(h, new Vector3(0, 2.28f, 0), new Vector3(1.99f, 4.56f, 0.77f)),
+                    BoxFallback(ToyWalnut, 1.99f, 4.56f, 0.77f)) },
+
+            new ItemDef { id = "toy_box", label = "Toy box", category = ItemCategory.Scenery,
+                theme = ToyRoom,
+                build = p => MeshProp(p, "toy_box", ToyCard, ToyTokens,
+                    h => HullBox(h, new Vector3(0, 0.76f, 0), new Vector3(1.08f, 1.52f, 1.60f)),
+                    BoxFallback(ToyCard, 1.08f, 1.52f, 1.60f)) },
+
+            new ItemDef { id = "toy_brick", label = "Toy brick", category = ItemCategory.Scenery,
+                theme = ToyRoom, dynamic = true, dynamicMass = 0.04f,
+                build = p => MeshPropDynamic(p, "toy_brick", ToyBlue, ToyTokens,
+                    b =>
+                    {
+                        var c = b.AddComponent<BoxCollider>();
+                        c.center = new Vector3(0f, 0.085f, 0f);
+                        c.size = new Vector3(0.48f, 0.17f, 0.24f);
+                    },
+                    f => LBox("Brick", f, ToyBlue, new Vector3(0, 0.085f, 0), Vector3.zero,
+                             new Vector3(0.48f, 0.17f, 0.24f))) },
+
+            new ItemDef { id = "toy_chair", label = "Chair", category = ItemCategory.Scenery,
+                theme = ToyRoom,
+                build = p => MeshProp(p, "toy_chair", ToyWalnut, ToyTokens,
+                    h =>
+                    {
+                        // Legs only below seat height — the lap threads between them.
+                        HullBox(h, new Vector3(-0.44f, 0.50f, -0.46f), new Vector3(0.12f, 1.00f, 0.12f));
+                        HullBox(h, new Vector3(0.44f, 0.50f, -0.46f), new Vector3(0.12f, 1.00f, 0.12f));
+                        HullBox(h, new Vector3(-0.44f, 0.50f, 0.46f), new Vector3(0.12f, 1.00f, 0.12f));
+                        HullBox(h, new Vector3(0.44f, 0.50f, 0.46f), new Vector3(0.12f, 1.00f, 0.12f));
+                        HullBox(h, new Vector3(0, 1.60f, 0), new Vector3(1.01f, 1.12f, 1.06f));
+                    },
+                    BoxFallback(ToyWalnut, 1.01f, 2.16f, 1.06f)) },
+
+            new ItemDef { id = "toy_crayon", label = "Crayon", category = ItemCategory.Scenery,
+                theme = ToyRoom, dynamic = true, dynamicMass = 0.03f,
+                build = p => MeshPropDynamic(p, "toy_crayon", ToyWax, ToyTokens,
+                    b =>
+                    {
+                        // Standing crayon: a box so it topples and stays put.
+                        var c = b.AddComponent<BoxCollider>();
+                        c.center = new Vector3(0f, 0.12f, 0f);
+                        c.size = new Vector3(0.058f, 0.24f, 0.058f);
+                    },
+                    f => LCyl("Crayon", f, ToyWax, new Vector3(0, 0.12f, 0), Vector3.zero,
+                              new Vector3(0.058f, 0.12f, 0.058f))) },
+
+            new ItemDef { id = "toy_domino", label = "Domino", category = ItemCategory.Scenery,
+                theme = ToyRoom, dynamic = true, dynamicMass = 0.02f,
+                build = p => MeshPropDynamic(p, "toy_domino", ToyCream, ToyTokens,
+                    b =>
+                    {
+                        var c = b.AddComponent<BoxCollider>();
+                        c.center = new Vector3(0f, 0.06f, 0f);
+                        c.size = new Vector3(0.24f, 0.12f, 0.031f);
+                    },
+                    f => LBox("Domino", f, ToyCream, new Vector3(0, 0.06f, 0), Vector3.zero,
+                             new Vector3(0.24f, 0.12f, 0.031f))) },
+
+            new ItemDef { id = "toy_dresser", label = "Dresser", category = ItemCategory.Scenery,
+                theme = ToyRoom,
+                build = p => MeshProp(p, "toy_dresser", ToyPine, ToyTokens,
+                    h => HullBox(h, new Vector3(0, 1.53f, 0), new Vector3(2.76f, 3.07f, 1.56f)),
+                    BoxFallback(ToyPine, 2.76f, 3.07f, 1.56f)) },
+
+            new ItemDef { id = "toy_floor_lamp", label = "Floor lamp", category = ItemCategory.Scenery,
+                theme = ToyRoom, behavior = ItemBehavior.Light,
+                lightPos = new Vector3(0f, 3.36f, 0f),
+                build = p => MeshProp(p, "toy_floor_lamp", ToyBrass, ToyTokens,
+                    h => HullCyl(h, new Vector3(0, 1.70f, 0), new Vector3(0.09f, 1.70f, 0.09f)),
+                    f => LCyl("Pole", f, ToyBrass, new Vector3(0, 1.70f, 0), Vector3.zero,
+                              new Vector3(0.09f, 1.70f, 0.09f))) },
+
+            new ItemDef { id = "toy_gate", label = "Toy gate", category = ItemCategory.Scenery,
+                theme = ToyRoom,
+                build = p => MeshProp(p, "toy_gate", ToyPly, ToyTokens,
+                    h =>
+                    {
+                        HullBox(h, new Vector3(-1.32f, 0.82f, 0), new Vector3(0.30f, 1.64f, 0.22f));
+                        HullBox(h, new Vector3(1.32f, 0.82f, 0), new Vector3(0.30f, 1.64f, 0.22f));
+                        HullBox(h, new Vector3(0, 1.46f, 0), new Vector3(2.88f, 0.37f, 0.22f));
+                    },
+                    BoxFallback(ToyPly, 2.88f, 1.64f, 0.22f)) },
+
+            new ItemDef { id = "toy_hoop", label = "Hoop", category = ItemCategory.Scenery,
+                theme = ToyRoom,
+                build = p => MeshProp(p, "toy_hoop", ToyYellow, ToyTokens,
+                    h =>
+                    {
+                        // Four segments around the ring; the bore is the gate.
+                        HullBox(h, new Vector3(0, 0.11f, 0), new Vector3(1.60f, 0.22f, 0.38f));
+                        HullBox(h, new Vector3(0, 2.11f, 0), new Vector3(1.60f, 0.23f, 0.38f));
+                        HullBox(h, new Vector3(-0.95f, 1.11f, 0), new Vector3(0.35f, 1.60f, 0.38f));
+                        HullBox(h, new Vector3(0.95f, 1.11f, 0), new Vector3(0.35f, 1.60f, 0.38f));
+                    },
+                    BoxFallback(ToyYellow, 2.23f, 2.23f, 0.38f)) },
+
+            new ItemDef { id = "toy_lamp", label = "Desk lamp", category = ItemCategory.Scenery,
+                theme = ToyRoom, behavior = ItemBehavior.Light,
+                lightPos = new Vector3(0.26f, 0.89f, 0f),
+                build = p => MeshProp(p, "toy_lamp", ToyRed, ToyTokens,
+                    h => HullBox(h, new Vector3(0, 0.58f, 0), new Vector3(0.65f, 1.17f, 0.44f)),
+                    BoxFallback(ToyRed, 0.65f, 1.17f, 0.44f)) },
+
+            new ItemDef { id = "toy_ramp_bridge", label = "Card bridge", category = ItemCategory.Scenery,
+                theme = ToyRoom,
+                build = p => MeshProp(p, "toy_ramp_bridge", ToyPly, ToyTokens,
+                    h =>
+                    {
+                        HullBox(h, new Vector3(0, 0.59f, 0), new Vector3(2.70f, 0.06f, 0.77f));
+                        HullBox(h, new Vector3(-1.35f, 0.28f, 0), new Vector3(0.12f, 0.56f, 0.77f));
+                        HullBox(h, new Vector3(1.35f, 0.28f, 0), new Vector3(0.12f, 0.56f, 0.77f));
+                        HullBox(h, new Vector3(-1.87f, 0.07f, 0), new Vector3(0.60f, 0.03f, 0.77f), new Vector3(0, 0, 16f));
+                        HullBox(h, new Vector3(1.87f, 0.07f, 0), new Vector3(0.60f, 0.03f, 0.77f), new Vector3(0, 0, -16f));
+                    },
+                    BoxFallback(ToyPly, 4.29f, 0.62f, 0.77f)) },
+
+            new ItemDef { id = "toy_ramp_plank", label = "Plank ramp", category = ItemCategory.Scenery,
+                theme = ToyRoom,
+                build = p => MeshProp(p, "toy_ramp_plank", ToyPly, ToyTokens,
+                    h => HullBox(h, new Vector3(0, 0.40f, 0), new Vector3(1.97f, 0.04f, 0.73f), new Vector3(0, 0, 18f)),
+                    f => TrackBuilder.Ramp("Ramp", Vector3.zero, 0f, 1.9f, 0.73f, 0.03f, 18f, ToyPly, f)) },
+
+            new ItemDef { id = "toy_table", label = "Table", category = ItemCategory.Scenery,
+                theme = ToyRoom,
+                build = p => MeshProp(p, "toy_table", ToyPine, ToyTokens,
+                    h =>
+                    {
+                        HullBox(h, new Vector3(-1.30f, 0.90f, -0.75f), new Vector3(0.15f, 1.80f, 0.15f));
+                        HullBox(h, new Vector3(1.30f, 0.90f, -0.75f), new Vector3(0.15f, 1.80f, 0.15f));
+                        HullBox(h, new Vector3(-1.30f, 0.90f, 0.75f), new Vector3(0.15f, 1.80f, 0.15f));
+                        HullBox(h, new Vector3(1.30f, 0.90f, 0.75f), new Vector3(0.15f, 1.80f, 0.15f));
+                        HullBox(h, new Vector3(0, 1.90f, 0), new Vector3(2.88f, 0.21f, 1.80f));
+                    },
+                    BoxFallback(ToyPine, 2.88f, 2.01f, 1.80f)) },
+
+            // Scenery — Enchanted Kingdom ----------------------------------
+            new ItemDef { id = "ench_arch_vine", label = "Vine arch", category = ItemCategory.Scenery,
+                theme = EnchantedKingdom,
+                build = p => MeshProp(p, "ench_arch_vine", EnIron, EnchTokens,
+                    h =>
+                    {
+                        HullBox(h, new Vector3(-0.73f, 0.50f, 0), new Vector3(0.28f, 1.00f, 0.49f));
+                        HullBox(h, new Vector3(0.73f, 0.50f, 0), new Vector3(0.28f, 1.00f, 0.49f));
+                        HullBox(h, new Vector3(0, 0.90f, 0), new Vector3(1.60f, 0.30f, 0.49f));
+                    },
+                    BoxFallback(EnIron, 1.60f, 1.05f, 0.49f)) },
+
+            new ItemDef { id = "ench_boulder", label = "Mossy boulder", category = ItemCategory.Scenery,
+                theme = EnchantedKingdom,
+                build = p => MeshProp(p, "ench_boulder", EnRock, EnchTokens,
+                    h => HullBox(h, new Vector3(0, 0.18f, 0), new Vector3(0.52f, 0.35f, 0.45f)),
+                    BoxFallback(EnRock, 0.52f, 0.35f, 0.45f)) },
+
+            new ItemDef { id = "ench_castle", label = "Castle", category = ItemCategory.Scenery,
+                theme = EnchantedKingdom,
+                build = p => MeshProp(p, "ench_castle", EnStonePale, EnchTokens,
+                    h => HullBox(h, new Vector3(0, 4.37f, 0), new Vector3(6.58f, 8.73f, 7.20f)),
+                    BoxFallback(EnStonePale, 6.58f, 8.73f, 7.20f)) },
+
+            new ItemDef { id = "ench_cottage", label = "Cottage", category = ItemCategory.Scenery,
+                theme = EnchantedKingdom,
+                build = p => MeshProp(p, "ench_cottage", EnPlaster, EnchTokens,
+                    h => HullBox(h, new Vector3(0, 0.81f, 0), new Vector3(1.25f, 1.62f, 1.03f)),
+                    BoxFallback(EnPlaster, 1.25f, 1.62f, 1.03f)) },
+
+            new ItemDef { id = "ench_crystal", label = "Crystal", category = ItemCategory.Scenery,
+                theme = EnchantedKingdom,
+                build = p => MeshProp(p, "ench_crystal", EnCrystal, EnchTokens,
+                    h => HullBox(h, new Vector3(0, 0.46f, 0), new Vector3(0.56f, 0.92f, 0.61f)),
+                    BoxFallback(EnCrystal, 0.56f, 0.92f, 0.61f)) },
+
+            new ItemDef { id = "ench_fountain", label = "Fountain", category = ItemCategory.Scenery,
+                theme = EnchantedKingdom,
+                build = p => MeshProp(p, "ench_fountain", EnStonePale, EnchTokens,
+                    h => HullCyl(h, new Vector3(0, 0.48f, 0), new Vector3(0.60f, 0.48f, 0.60f)),
+                    f => LCyl("Fountain", f, EnStonePale, new Vector3(0, 0.48f, 0), Vector3.zero,
+                              new Vector3(0.60f, 0.48f, 0.60f))) },
+
+            new ItemDef { id = "ench_gate", label = "Castle gate", category = ItemCategory.Scenery,
+                theme = EnchantedKingdom,
+                build = p => MeshProp(p, "ench_gate", EnStonePale, EnchTokens,
+                    h =>
+                    {
+                        HullBox(h, new Vector3(-1.20f, 1.19f, 0), new Vector3(0.82f, 2.38f, 0.62f));
+                        HullBox(h, new Vector3(1.20f, 1.19f, 0), new Vector3(0.82f, 2.38f, 0.62f));
+                        HullBox(h, new Vector3(0, 1.38f, 0), new Vector3(3.22f, 1.05f, 0.62f));
+                    },
+                    BoxFallback(EnStonePale, 3.22f, 2.38f, 0.62f)) },
+
+            new ItemDef { id = "ench_gatehouse", label = "Gatehouse", category = ItemCategory.Scenery,
+                theme = EnchantedKingdom,
+                // Solid: the authored portcullis reaches the ground (profile
+                // zmin is 0 across the span), so there is no drive-through.
+                build = p => MeshProp(p, "ench_gatehouse", EnStonePale, EnchTokens,
+                    h => HullBox(h, new Vector3(0, 1.51f, 0), new Vector3(2.29f, 3.02f, 0.84f)),
+                    BoxFallback(EnStonePale, 2.29f, 3.02f, 0.84f)) },
+
+            new ItemDef { id = "ench_hedge", label = "Hedge", category = ItemCategory.Scenery,
+                theme = EnchantedKingdom, snap = SnapMode.TileEdge,
+                build = p => MeshProp(p, "ench_hedge", EnHedge, EnchTokens,
+                    h => HullBox(h, new Vector3(0, 0.135f, 0), new Vector3(0.50f, 0.27f, 0.15f)),
+                    BoxFallback(EnHedge, 0.50f, 0.27f, 0.15f)) },
+
+            new ItemDef { id = "ench_lamp", label = "Fairy lamp", category = ItemCategory.Scenery,
+                theme = EnchantedKingdom, behavior = ItemBehavior.Light,
+                lightPos = new Vector3(0f, 0.60f, 0f),
+                build = p => MeshProp(p, "ench_lamp", EnIron, EnchTokens,
+                    h => HullCyl(h, new Vector3(0, 0.40f, 0), new Vector3(0.05f, 0.40f, 0.05f)),
+                    f => LCyl("Pole", f, EnIron, new Vector3(0, 0.40f, 0), Vector3.zero,
+                              new Vector3(0.05f, 0.40f, 0.05f))) },
+
+            new ItemDef { id = "ench_peak", label = "Mountain peak", category = ItemCategory.Scenery,
+                theme = EnchantedKingdom,
+                build = p => MeshProp(p, "ench_peak", EnRock, EnchTokens,
+                    h => HullCyl(h, new Vector3(0, 5.90f, 0), new Vector3(6.5f, 5.90f, 6.5f)),
+                    BoxFallback(EnRock, 15.0f, 11.8f, 15.2f)) },
+
+            new ItemDef { id = "ench_ramp_bridge", label = "Stone bridge", category = ItemCategory.Scenery,
+                theme = EnchantedKingdom,
+                build = p => MeshProp(p, "ench_ramp_bridge", EnStonePale, EnchTokens,
+                    h =>
+                    {
+                        HullBox(h, new Vector3(0, 0.37f, 0), new Vector3(1.86f, 0.04f, 1.08f), new Vector3(0, 0, 12.5f));
+                        // Understructure reaches the ground along the span.
+                        HullBox(h, new Vector3(0, 0.15f, 0), new Vector3(1.70f, 0.30f, 1.00f));
+                    },
+                    f => TrackBuilder.Ramp("Ramp", Vector3.zero, 0f, 1.8f, 1.08f, 0.03f, 12.5f, EnStonePale, f)) },
+
+            new ItemDef { id = "ench_ramp_terrace", label = "Terrace ramp", category = ItemCategory.Scenery,
+                theme = EnchantedKingdom,
+                // Unlike its siblings this one climbs along local Z (its X
+                // profile is a symmetric plateau) — rising toward the back.
+                build = p => MeshProp(p, "ench_ramp_terrace", EnStonePale, EnchTokens,
+                    h => HullBox(h, new Vector3(0, 0.23f, 0), new Vector3(2.50f, 0.04f, 1.33f), new Vector3(16.5f, 0, 0)),
+                    f => TrackBuilder.Ramp("Ramp", Vector3.zero, 0f, 1.3f, 2.5f, 0.03f, 16.5f, EnStonePale, f)) },
+
+            new ItemDef { id = "ench_topiary", label = "Topiary", category = ItemCategory.Scenery,
+                theme = EnchantedKingdom,
+                build = p => MeshProp(p, "ench_topiary", EnHedge, EnchTokens,
+                    h => HullBox(h, new Vector3(0, 0.22f, 0), new Vector3(0.19f, 0.44f, 0.20f)),
+                    BoxFallback(EnHedge, 0.19f, 0.44f, 0.20f)) },
+
+            new ItemDef { id = "ench_tower", label = "Wizard tower", category = ItemCategory.Scenery,
+                theme = EnchantedKingdom,
+                build = p => MeshProp(p, "ench_tower", EnStone, EnchTokens,
+                    h => HullCyl(h, new Vector3(0, 2.79f, 0), new Vector3(0.75f, 2.79f, 0.75f)),
+                    BoxFallback(EnStone, 1.46f, 5.57f, 1.46f)) },
+
+            new ItemDef { id = "ench_tree", label = "Blossom tree", category = ItemCategory.Scenery,
+                theme = EnchantedKingdom,
+                build = p => MeshProp(p, "ench_tree", EnBark, EnchTokens,
+                    // Trunk only — the canopy is 1 m up and nothing reaches it.
+                    h => HullCyl(h, new Vector3(0, 0.50f, 0), new Vector3(0.20f, 0.50f, 0.20f)),
+                    f => LCyl("Trunk", f, EnBark, new Vector3(0, 0.50f, 0), Vector3.zero,
+                              new Vector3(0.20f, 0.50f, 0.20f))) },
+
+            // Scenery — Haunted Hollow -------------------------------------
+            new ItemDef { id = "haunt_arch_ruin", label = "Ruined arch", category = ItemCategory.Scenery,
+                theme = HauntedHollow,
+                build = p => MeshProp(p, "haunt_arch_ruin", HaGrime, HauntTokens,
+                    h =>
+                    {
+                        HullBox(h, new Vector3(-1.00f, 0.53f, 0), new Vector3(0.36f, 1.06f, 0.56f));
+                        HullBox(h, new Vector3(1.00f, 0.53f, 0), new Vector3(0.36f, 1.06f, 0.56f));
+                        HullBox(h, new Vector3(0, 1.05f, 0), new Vector3(2.30f, 0.26f, 0.56f));
+                        // Rubble strewn through the opening — an honest bump.
+                        HullBox(h, new Vector3(0, 0.05f, 0), new Vector3(1.30f, 0.10f, 0.56f));
+                    },
+                    BoxFallback(HaGrime, 2.30f, 1.18f, 0.56f)) },
+
+            new ItemDef { id = "haunt_barrow", label = "Barrow", category = ItemCategory.Scenery,
+                theme = HauntedHollow,
+                build = p => MeshProp(p, "haunt_barrow", HaEarth, HauntTokens,
+                    h => HullCyl(h, new Vector3(0, 1.64f, 0), new Vector3(5.0f, 1.64f, 5.0f)),
+                    BoxFallback(HaEarth, 11.3f, 3.28f, 11.2f)) },
+
+            new ItemDef { id = "haunt_chapel", label = "Chapel", category = ItemCategory.Scenery,
+                theme = HauntedHollow,
+                build = p => MeshProp(p, "haunt_chapel", HaGrime, HauntTokens,
+                    h => HullBox(h, new Vector3(0, 1.24f, 0), new Vector3(2.21f, 2.48f, 1.95f)),
+                    BoxFallback(HaGrime, 2.21f, 2.48f, 1.95f)) },
+
+            new ItemDef { id = "haunt_crypt", label = "Crypt", category = ItemCategory.Scenery,
+                theme = HauntedHollow,
+                build = p => MeshProp(p, "haunt_crypt", HaGrime, HauntTokens,
+                    h => HullBox(h, new Vector3(0, 0.46f, 0), new Vector3(0.78f, 0.91f, 0.90f)),
+                    BoxFallback(HaGrime, 0.78f, 0.91f, 0.90f)) },
+
+            new ItemDef { id = "haunt_fence", label = "Iron fence", category = ItemCategory.Scenery,
+                theme = HauntedHollow, snap = SnapMode.TileEdge,
+                build = p => MeshProp(p, "haunt_fence", HaIron, HauntTokens,
+                    h => HullBox(h, new Vector3(0, 0.13f, 0), new Vector3(0.57f, 0.27f, 0.10f)),
+                    BoxFallback(HaIron, 0.57f, 0.27f, 0.10f)) },
+
+            new ItemDef { id = "haunt_gaslamp", label = "Gas lamp", category = ItemCategory.Scenery,
+                theme = HauntedHollow, behavior = ItemBehavior.Light,
+                lightPos = new Vector3(0f, 0.60f, 0f),
+                build = p => MeshProp(p, "haunt_gaslamp", HaIron, HauntTokens,
+                    h => HullCyl(h, new Vector3(0, 0.40f, 0), new Vector3(0.05f, 0.40f, 0.05f)),
+                    f => LCyl("Pole", f, HaIron, new Vector3(0, 0.40f, 0), Vector3.zero,
+                              new Vector3(0.05f, 0.40f, 0.05f))) },
+
+            new ItemDef { id = "haunt_gate", label = "Cemetery gate", category = ItemCategory.Scenery,
+                theme = HauntedHollow,
+                build = p => MeshProp(p, "haunt_gate", HaGrime, HauntTokens,
+                    h =>
+                    {
+                        HullBox(h, new Vector3(-1.20f, 0.79f, 0), new Vector3(0.80f, 1.58f, 0.84f));
+                        HullBox(h, new Vector3(1.20f, 0.79f, 0), new Vector3(0.80f, 1.58f, 0.84f));
+                        HullBox(h, new Vector3(0, 1.43f, 0), new Vector3(3.20f, 0.31f, 0.84f));
+                    },
+                    BoxFallback(HaGrime, 3.20f, 1.58f, 0.84f)) },
+
+            new ItemDef { id = "haunt_ghost", label = "Ghost", category = ItemCategory.Scenery,
+                theme = HauntedHollow, animated = true,
+                build = p =>
+                {
+                    var m = MeshProp(p, "haunt_ghost", HaGhost, HauntTokens,
+                        h => HullBox(h, new Vector3(0, 0.55f, 0), new Vector3(0.90f, 1.00f, 0.55f))
+                                 .GetComponent<Collider>().isTrigger = true,
+                        BoxFallback(HaGhost, 0.90f, 1.00f, 0.55f));
+                    if (m != null) m.AddComponent<GhostBob>();
+                } },
+
+            new ItemDef { id = "haunt_gravestone", label = "Gravestone", category = ItemCategory.Scenery,
+                theme = HauntedHollow,
+                build = p => MeshProp(p, "haunt_gravestone", HaGrime, HauntTokens,
+                    h => HullBox(h, new Vector3(0, 0.155f, 0), new Vector3(0.195f, 0.31f, 0.14f)),
+                    BoxFallback(HaGrime, 0.195f, 0.31f, 0.14f)) },
+
+            new ItemDef { id = "haunt_hearse", label = "Hearse", category = ItemCategory.Scenery,
+                theme = HauntedHollow,
+                build = p => MeshProp(p, "haunt_hearse", HaTar, HauntTokens,
+                    h => HullBox(h, new Vector3(0, 0.27f, 0), new Vector3(0.47f, 0.53f, 0.94f)),
+                    BoxFallback(HaTar, 0.47f, 0.53f, 0.94f)) },
+
+            new ItemDef { id = "haunt_mansion", label = "Mansion", category = ItemCategory.Scenery,
+                theme = HauntedHollow,
+                build = p => MeshProp(p, "haunt_mansion", HaClapboard, HauntTokens,
+                    h => HullBox(h, new Vector3(0, 1.83f, 0), new Vector3(2.74f, 3.65f, 2.72f)),
+                    BoxFallback(HaClapboard, 2.74f, 3.65f, 2.72f)) },
+
+            new ItemDef { id = "haunt_pumpkin", label = "Pumpkin", category = ItemCategory.Scenery,
+                theme = HauntedHollow, dynamic = true, dynamicMass = 0.06f,
+                build = p => MeshPropDynamic(p, "haunt_pumpkin", HaPumpkin, HauntTokens,
+                    b =>
+                    {
+                        var c = b.AddComponent<SphereCollider>();
+                        c.center = new Vector3(0f, 0.133f, 0f);
+                        c.radius = 0.133f;
+                    },
+                    f => LCyl("Pumpkin", f, HaPumpkin, new Vector3(0, 0.13f, 0), Vector3.zero,
+                              new Vector3(0.28f, 0.13f, 0.28f))) },
+
+            new ItemDef { id = "haunt_ramp_slab", label = "Slab ramp", category = ItemCategory.Scenery,
+                theme = HauntedHollow,
+                build = p => MeshProp(p, "haunt_ramp_slab", HaGrime, HauntTokens,
+                    h =>
+                    {
+                        HullBox(h, new Vector3(0, 0.32f, 0), new Vector3(1.70f, 0.04f, 1.10f), new Vector3(0, 0, 10f));
+                        HullBox(h, new Vector3(0, 0.12f, 0), new Vector3(1.50f, 0.24f, 1.00f));
+                    },
+                    f => TrackBuilder.Ramp("Ramp", Vector3.zero, 0f, 1.7f, 1.10f, 0.03f, 10f, HaGrime, f)) },
+
+            new ItemDef { id = "haunt_ramp_tomb", label = "Tomb ramp", category = ItemCategory.Scenery,
+                theme = HauntedHollow,
+                build = p => MeshProp(p, "haunt_ramp_tomb", HaStoneDark, HauntTokens,
+                    h =>
+                    {
+                        HullBox(h, new Vector3(-0.65f, 0.22f, 0), new Vector3(0.95f, 0.03f, 1.14f), new Vector3(0, 0, 24f));
+                        HullBox(h, new Vector3(0.65f, 0.22f, 0), new Vector3(0.95f, 0.03f, 1.14f), new Vector3(0, 0, -24f));
+                        HullBox(h, new Vector3(0, 0.42f, 0), new Vector3(0.90f, 0.04f, 1.14f));
+                    },
+                    f => TrackBuilder.Ramp("Ramp", Vector3.zero, 0f, 1.2f, 1.14f, 0.03f, 24f, HaStoneDark, f)) },
+
+            new ItemDef { id = "haunt_tree", label = "Dead tree", category = ItemCategory.Scenery,
+                theme = HauntedHollow,
+                build = p => MeshProp(p, "haunt_tree", HaBark, HauntTokens,
+                    h => HullCyl(h, new Vector3(0, 0.50f, 0), new Vector3(0.15f, 0.50f, 0.15f)),
+                    f => LCyl("Trunk", f, HaBark, new Vector3(0, 0.50f, 0), Vector3.zero,
+                              new Vector3(0.15f, 0.50f, 0.15f))) },
+
+            // The one prop in the project that does not stand on the ground.
+            // Its source mesh floats 1.6 authored metres up, but the exporter
+            // re-origins every prop at its base contact point (which is what
+            // makes ItemPose's drop-to-surface work for the other 62), so the
+            // hover has to be put back here or the wisp sits in the mud.
+            new ItemDef { id = "haunt_wisp", label = "Wisp", category = ItemCategory.Scenery,
+                theme = HauntedHollow, animated = true,
+                build = p =>
+                {
+                    var m = MeshProp(p, "haunt_wisp", HaGhost, HauntTokens,
+                        h => HullBox(h, new Vector3(0, 0.38f, 0), new Vector3(0.25f, 0.44f, 0.15f))
+                                 .GetComponent<Collider>().isTrigger = true,
+                        BoxFallback(HaGhost, 0.25f, 0.44f, 0.15f));
+                    if (m == null) return;
+                    m.transform.localPosition = new Vector3(0f, 0.16f, 0f);
+                    // GhostBob caches its base pose in Start, so the lift is
+                    // the centre it bobs about rather than something it fights.
+                    m.AddComponent<GhostBob>();
+                } },
         };
 
         // ---- theme names (palette group headers; also ItemDef.theme values) ----
@@ -681,10 +1253,16 @@ namespace AIHWSim.TrackEd
         public const string NeonGrid       = "Neon Grid";
         public const string BeachBoardwalk = "Beach Boardwalk";
         public const string VolcanoFoundry = "Volcano Foundry";
+        // TinyTorque map packs (build_map_props.py).
+        public const string Downtown         = "Downtown";
+        public const string ToyRoom          = "Toy Room";
+        public const string EnchantedKingdom = "Enchanted Kingdom";
+        public const string HauntedHollow    = "Haunted Hollow";
 
         /// <summary>Theme headers in palette order.</summary>
         public static readonly string[] Themes =
-            { ToyWorkshop, NeonGrid, BeachBoardwalk, VolcanoFoundry };
+            { ToyWorkshop, NeonGrid, BeachBoardwalk, VolcanoFoundry,
+              Downtown, ToyRoom, EnchantedKingdom, HauntedHollow };
 
         // ---- theme prop materials ----
         private static Material TwCover    => T("tw_cover", 0.58f, 0.16f, 0.14f);
@@ -721,6 +1299,183 @@ namespace AIHWSim.TrackEd
         private static Material VfLava     => T("vf_lava", 1.00f, 0.34f, 0.06f, 0.50f, 2.0f);
         private static Material VfSteel    => T("vf_steel", 0.44f, 0.45f, 0.48f, 0.70f);
         private static Material VfBarrel   => T("vf_barrel", 0.72f, 0.46f, 0.12f, 0.55f);
+
+        // ---- TinyTorque map-pack materials (build_map_props.py) --------------
+        // Colors are the blends' principled values gamma-lifted to sRGB; the
+        // authored 0.8-grey procedural placeholders (walnut, ply, stone family,
+        // thatch, grime…) get hand-picked flat colors in-theme. Smoothness is
+        // 1 − authored roughness.
+
+        // Downtown
+        private static Material DtConcrete   => T("dt_concrete", 0.25f, 0.26f, 0.28f, 0.30f);
+        private static Material DtConcreteLt => T("dt_concretelt", 0.39f, 0.39f, 0.41f, 0.38f);
+        private static Material DtGold       => T("dt_gold", 1.00f, 0.84f, 0.45f, 0.84f);
+        private static Material DtNeonCyan   => T("dt_neoncyan", 0.25f, 0.80f, 1.00f, 0.80f, 1.8f);
+        private static Material DtNeonGold   => T("dt_neongold", 1.00f, 0.75f, 0.28f, 0.80f, 1.7f);
+        private static Material DtNeonCrim   => T("dt_neoncrimson", 1.00f, 0.15f, 0.10f, 0.80f, 1.7f);
+        private static Material DtNeonOrange => T("dt_neonorange", 1.00f, 0.42f, 0.08f, 0.80f, 1.6f);
+        private static Material DtPanel      => T("dt_panel", 0.15f, 0.16f, 0.18f, 0.67f);
+        private static Material DtSteel      => T("dt_steel", 0.51f, 0.52f, 0.55f, 0.69f);
+        private static Material DtLampHead   => T("dt_lamp", 0.98f, 0.93f, 0.78f, 0.90f, 1.8f);
+        private static Material DtRock       => T("dt_rock", 0.30f, 0.29f, 0.30f, 0.20f);
+        private static Material DtRockTop    => T("dt_rocktop", 0.42f, 0.40f, 0.38f, 0.14f);
+        private static Material DtCrimson    => T("dt_crimson", 0.75f, 0.23f, 0.20f, 0.72f);
+        private static Material DtFacade     => T("dt_facade", 0.62f, 0.60f, 0.57f, 0.50f);
+        private static Material DtGlass      => T("dt_glass", 0.16f, 0.20f, 0.25f, 0.93f);
+        private static Material DtOrange     => T("dt_orange", 0.88f, 0.41f, 0.12f, 0.66f);
+        private static Material DtWhite      => T("dt_white", 0.82f, 0.82f, 0.83f, 0.70f);
+        private static Material DtRubber     => T("dt_rubber", 0.14f, 0.14f, 0.16f, 0.32f);
+        // The three signal lenses carry emission (glow > 0 enables the keyword)
+        // so SignalCycle can drive them through MaterialPropertyBlocks.
+        private static Material DtSigRed     => T("dt_sigred", 0.90f, 0.12f, 0.06f, 0.85f, 0.3f);
+        private static Material DtSigAmber   => T("dt_sigamber", 0.95f, 0.55f, 0.10f, 0.85f, 0.3f);
+        private static Material DtSigGreen   => T("dt_siggreen", 0.25f, 0.95f, 0.45f, 0.85f, 1.8f);
+        private static Material DtBasalt     => T("dt_basalt", 0.23f, 0.21f, 0.21f, 0.22f);
+        private static Material DtLava       => T("dt_lava", 0.97f, 0.45f, 0.12f, 0.50f, 2.0f);
+
+        // Toy Room
+        private static Material ToyRed    => T("toy_red", 0.80f, 0.27f, 0.23f, 0.80f);
+        private static Material ToyCream  => T("toy_cream", 0.78f, 0.74f, 0.67f, 0.70f);
+        private static Material ToyYellow => T("toy_yellow", 0.94f, 0.77f, 0.20f, 0.80f);
+        private static Material ToyBlue   => T("toy_blue", 0.24f, 0.42f, 0.74f, 0.80f);
+        private static Material ToyGreen  => T("toy_green", 0.28f, 0.60f, 0.37f, 0.80f);
+        private static Material ToyOrangeM => T("toy_orange", 0.91f, 0.51f, 0.17f, 0.80f);
+        private static Material ToyPurple => T("toy_purple", 0.51f, 0.30f, 0.60f, 0.80f);
+        private static Material ToyWalnut => T("toy_walnut", 0.36f, 0.24f, 0.15f, 0.50f);
+        private static Material ToyPine   => T("toy_pine", 0.75f, 0.58f, 0.36f, 0.50f);
+        private static Material ToyPly    => T("toy_ply", 0.80f, 0.66f, 0.44f, 0.50f);
+        private static Material ToyCard   => T("toy_card", 0.76f, 0.63f, 0.45f, 0.45f);
+        private static Material ToyPaper  => T("toy_paper", 0.80f, 0.79f, 0.77f, 0.38f);
+        private static Material ToyInk    => T("toy_ink", 0.13f, 0.13f, 0.15f, 0.58f);
+        private static Material ToyWax    => T("toy_wax", 0.85f, 0.33f, 0.28f, 0.54f);
+        private static Material ToyFelt   => T("toy_feltblue", 0.22f, 0.27f, 0.38f, 0.12f);
+        private static Material ToyCotton => T("toy_cotton", 0.73f, 0.74f, 0.76f, 0.16f);
+        private static Material ToyBrass  => T("toy_brass", 0.90f, 0.77f, 0.50f, 0.78f);
+        private static Material ToyShade  => T("toy_shade", 0.76f, 0.69f, 0.58f, 0.30f);
+        private static Material ToyBulb   => T("toy_bulb", 0.98f, 0.95f, 0.85f, 0.88f, 1.7f);
+        private static Material ToyBook0  => T("toy_book0", 0.57f, 0.23f, 0.20f, 0.42f);
+        private static Material ToyBook1  => T("toy_book1", 0.20f, 0.34f, 0.51f, 0.42f);
+        private static Material ToyBook2  => T("toy_book2", 0.60f, 0.46f, 0.20f, 0.42f);
+        private static Material ToyBook3  => T("toy_book3", 0.20f, 0.44f, 0.32f, 0.42f);
+        private static Material ToyBook4  => T("toy_book4", 0.46f, 0.20f, 0.42f, 0.42f);
+        private static Material ToyBook5  => T("toy_book5", 0.31f, 0.31f, 0.33f, 0.42f);
+        private static Material ToyBook6  => T("toy_book6", 0.63f, 0.57f, 0.41f, 0.42f);
+
+        // Enchanted Kingdom
+        private static Material EnIron      => T("ench_iron", 0.21f, 0.21f, 0.23f, 0.58f);
+        private static Material EnLeaf      => T("ench_leaf", 0.34f, 0.60f, 0.28f, 0.28f);
+        private static Material EnLeafDark  => T("ench_leafdark", 0.22f, 0.42f, 0.20f, 0.28f);
+        private static Material EnRose      => T("ench_rose", 0.66f, 0.21f, 0.28f, 0.60f);
+        private static Material EnRock      => T("ench_rock", 0.34f, 0.33f, 0.34f, 0.22f);
+        private static Material EnRockMoss  => T("ench_rockmoss", 0.25f, 0.34f, 0.22f, 0.16f);
+        private static Material EnStone     => T("ench_stone", 0.55f, 0.53f, 0.50f, 0.50f);
+        private static Material EnStonePale => T("ench_stonepale", 0.72f, 0.69f, 0.63f, 0.50f);
+        private static Material EnStoneMoss => T("ench_stonemoss", 0.48f, 0.55f, 0.42f, 0.50f);
+        private static Material EnSlate     => T("ench_slate", 0.36f, 0.38f, 0.44f, 0.50f);
+        private static Material EnSlateTeal => T("ench_slateteal", 0.25f, 0.44f, 0.46f, 0.50f);
+        private static Material EnSlatePlum => T("ench_slateplum", 0.40f, 0.28f, 0.44f, 0.50f);
+        private static Material EnGold      => T("ench_gold", 1.00f, 0.84f, 0.45f, 0.84f);
+        private static Material EnWindow    => T("ench_window", 0.71f, 0.55f, 0.29f, 0.80f, 1.5f);
+        private static Material EnCrimson   => T("ench_crimson", 0.63f, 0.21f, 0.23f, 0.54f);
+        private static Material EnPlaster   => T("ench_plaster", 0.68f, 0.66f, 0.60f, 0.26f);
+        private static Material EnTimber    => T("ench_timber", 0.24f, 0.19f, 0.15f, 0.34f);
+        private static Material EnThatch    => T("ench_thatch", 0.71f, 0.58f, 0.36f, 0.14f);
+        private static Material EnCrystal   => T("ench_crystalrose", 0.46f, 0.34f, 0.55f, 0.91f, 0.8f);
+        private static Material EnWater     => T("ench_water", 0.20f, 0.40f, 0.53f, 0.94f, 1.2f);
+        private static Material EnSpray     => T("ench_spray", 0.60f, 0.75f, 0.85f, 0.88f, 1.3f);
+        private static Material EnFlame     => T("ench_flame", 0.80f, 0.66f, 0.42f, 0.70f, 1.9f);
+        private static Material EnHedge     => T("ench_hedge", 0.30f, 0.52f, 0.26f, 0.28f);
+        private static Material EnSnow      => T("ench_snow", 0.82f, 0.85f, 0.90f, 0.58f);
+        private static Material EnAzure     => T("ench_azure", 0.20f, 0.34f, 0.58f, 0.54f);
+        private static Material EnBark      => T("ench_bark", 0.28f, 0.21f, 0.17f, 0.18f);
+        private static Material EnBlossom   => T("ench_blossom", 0.81f, 0.68f, 0.78f, 0.56f, 1.2f);
+
+        // Haunted Hollow
+        private static Material HaGrime     => T("haunt_grime", 0.52f, 0.51f, 0.48f, 0.26f);
+        private static Material HaRubble    => T("haunt_rubble", 0.35f, 0.34f, 0.32f, 0.16f);
+        private static Material HaEarth     => T("haunt_earth", 0.25f, 0.22f, 0.18f, 0.12f);
+        private static Material HaMoss      => T("haunt_moss", 0.20f, 0.28f, 0.18f, 0.14f);
+        private static Material HaFlame     => T("haunt_flame", 0.44f, 0.68f, 0.50f, 0.72f, 1.9f);
+        private static Material HaIron      => T("haunt_iron", 0.19f, 0.19f, 0.21f, 0.48f);
+        private static Material HaShingle   => T("haunt_shingle", 0.30f, 0.29f, 0.31f, 0.50f);
+        private static Material HaVerdigris => T("haunt_verdigris", 0.31f, 0.47f, 0.42f, 0.42f);
+        private static Material HaWindow    => T("haunt_window", 0.34f, 0.56f, 0.42f, 0.78f, 1.5f);
+        private static Material HaMarble    => T("haunt_marble", 0.72f, 0.71f, 0.68f, 0.48f);
+        private static Material HaStoneDark => T("haunt_stonedark", 0.33f, 0.32f, 0.34f, 0.26f);
+        private static Material HaGhost     => T("haunt_ghost", 0.45f, 0.63f, 0.56f, 0.66f, 0.7f);
+        private static Material HaGhostDim  => T("haunt_ghostdim", 0.49f, 0.61f, 0.55f, 0.66f, 0.4f);
+        private static Material HaTar       => T("haunt_tar", 0.15f, 0.15f, 0.16f, 0.56f);
+        private static Material HaGlass     => T("haunt_glass", 0.13f, 0.16f, 0.15f, 0.84f);
+        private static Material HaCandle    => T("haunt_candle", 0.74f, 0.60f, 0.38f, 0.70f, 1.6f);
+        private static Material HaDeadWood  => T("haunt_deadwood", 0.42f, 0.38f, 0.33f, 0.20f);
+        private static Material HaClapboard => T("haunt_clapboard", 0.36f, 0.35f, 0.34f, 0.32f);
+        private static Material HaPumpkin   => T("haunt_pumpkin", 0.75f, 0.40f, 0.13f, 0.66f);
+        private static Material HaJack      => T("haunt_jack", 0.80f, 0.52f, 0.19f, 0.70f, 1.7f);
+        private static Material HaStalk     => T("haunt_stalk", 0.31f, 0.32f, 0.19f, 0.28f);
+        private static Material HaBark      => T("haunt_bark", 0.24f, 0.20f, 0.17f, 0.14f);
+
+        // ---- per-theme token tables ------------------------------------------
+        // One table per pack, passed whole to every MeshProp of that theme — an
+        // object only ever contains its own tokens, so extra entries are inert.
+        // ORDER IS LOAD-BEARING: AssignByName is first-match substring, so each
+        // table is sorted longest-token-first (ghostdim before ghost, neongold
+        // before gold, stonepale before stone). Rebuilt per call so a play-mode
+        // change that kills the materials cannot leave stale references cached.
+
+        private static (string, Material)[] DtTokens => new (string, Material)[]
+        {
+            ("neoncrimson", DtNeonCrim), ("concretelt", DtConcreteLt),
+            ("neonorange", DtNeonOrange), ("neoncyan", DtNeonCyan),
+            ("neongold", DtNeonGold), ("siggreen", DtSigGreen),
+            ("sigamber", DtSigAmber), ("concrete", DtConcrete),
+            ("crimson", DtCrimson), ("rocktop", DtRockTop),
+            ("facade", DtFacade), ("basalt", DtBasalt), ("orange", DtOrange),
+            ("rubber", DtRubber), ("sigred", DtSigRed), ("panel", DtPanel),
+            ("steel", DtSteel), ("glass", DtGlass), ("white", DtWhite),
+            ("gold", DtGold), ("lamp", DtLampHead), ("lava", DtLava),
+            ("rock", DtRock),
+        };
+
+        private static (string, Material)[] ToyTokens => new (string, Material)[]
+        {
+            ("shadedesk", ToyShade), ("feltblue", ToyFelt),
+            ("walnut", ToyWalnut), ("cotton", ToyCotton), ("purple", ToyPurple),
+            ("orange", ToyOrangeM), ("yellow", ToyYellow), ("cream", ToyCream),
+            ("green", ToyGreen), ("brass", ToyBrass), ("shade", ToyShade),
+            ("paper", ToyPaper), ("book0", ToyBook0), ("book1", ToyBook1),
+            ("book2", ToyBook2), ("book3", ToyBook3), ("book4", ToyBook4),
+            ("book5", ToyBook5), ("book6", ToyBook6), ("bulb", ToyBulb),
+            ("card", ToyCard), ("pine", ToyPine), ("blue", ToyBlue),
+            ("red", ToyRed), ("ink", ToyInk), ("wax", ToyWax), ("ply", ToyPly),
+        };
+
+        private static (string, Material)[] EnchTokens => new (string, Material)[]
+        {
+            ("crystalrose", EnCrystal), ("stonemoss", EnStoneMoss),
+            ("stonepale", EnStonePale), ("slateplum", EnSlatePlum),
+            ("slateteal", EnSlateTeal), ("rockmoss", EnRockMoss),
+            ("leafdark", EnLeafDark), ("blossom", EnBlossom),
+            ("crimson", EnCrimson), ("plaster", EnPlaster),
+            ("thatch", EnThatch), ("timber", EnTimber), ("window", EnWindow),
+            ("azure", EnAzure), ("flame", EnFlame), ("hedge", EnHedge),
+            ("slate", EnSlate), ("spray", EnSpray), ("stone", EnStone),
+            ("water", EnWater), ("snow", EnSnow), ("rock", EnRock),
+            ("gold", EnGold), ("iron", EnIron), ("leaf", EnLeaf),
+            ("rose", EnRose), ("bark", EnBark),
+        };
+
+        private static (string, Material)[] HauntTokens => new (string, Material)[]
+        {
+            ("clapboard", HaClapboard), ("stonedark", HaStoneDark),
+            ("verdigris", HaVerdigris), ("ghostdim", HaGhostDim),
+            ("deadwood", HaDeadWood), ("pumpkin", HaPumpkin),
+            ("shingle", HaShingle), ("rubble", HaRubble),
+            ("candle", HaCandle), ("window", HaWindow), ("marble", HaMarble),
+            ("flame", HaFlame), ("ghost", HaGhost), ("grime", HaGrime),
+            ("stalk", HaStalk), ("earth", HaEarth), ("glass", HaGlass),
+            ("moss", HaMoss), ("iron", HaIron), ("jack", HaJack),
+            ("bark", HaBark), ("tar", HaTar),
+        };
 
         /// <summary>Find an item definition by id (null when unknown/legacy).</summary>
         public static ItemDef Item(string id)

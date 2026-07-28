@@ -422,9 +422,10 @@ namespace AIHWSim.Core
                 cam = go.AddComponent<Camera>();
                 go.AddComponent<AudioListener>();
             }
-            cam.backgroundColor = new Color(0.53f, 0.70f, 0.92f);
-            cam.clearFlags = CameraClearFlags.SolidColor;
             cam.farClipPlane = 800f;
+            // Background, far plane and (on a themed map) the sky dome's own
+            // horizon colour come from the map's ambience.
+            TrackEd.MapAmbience.ApplyCamera(cam, AmbienceKey(), SkyBlue);
             cam.rect = new Rect(0f, 0f, 1f, 1f);
             var follow = cam.gameObject.GetComponent<ChaseCamera>() ?? cam.gameObject.AddComponent<ChaseCamera>();
             follow.target = target;
@@ -908,9 +909,8 @@ namespace AIHWSim.Core
                 cam = go.AddComponent<Camera>(); // deliberately NO AudioListener (Unity allows one)
             }
 
-            cam.backgroundColor = new Color(0.53f, 0.70f, 0.92f);
-            cam.clearFlags = CameraClearFlags.SolidColor;
             cam.farClipPlane = 800f;
+            TrackEd.MapAmbience.ApplyCamera(cam, AmbienceKey(), SkyBlue);
             cam.rect = index == 0 ? new Rect(0f, 0.5f, 1f, 0.5f) : new Rect(0f, 0f, 1f, 0.5f);
 
             var follow = cam.gameObject.GetComponent<ChaseCamera>() ?? cam.gameObject.AddComponent<ChaseCamera>();
@@ -1003,6 +1003,19 @@ namespace AIHWSim.Core
             _checker.mainTextureScale = new Vector2(roadWidth / 0.3f, 1.5f);
         }
 
+        /// <summary>The outdoor background every non-themed map has always had.</summary>
+        private static readonly Color SkyBlue = new Color(0.53f, 0.70f, 0.92f);
+
+        /// <summary>This map's <see cref="TrackEd.MapAmbience"/> key ("" for the
+        /// classic oval and every map authored before the TinyTorque ports).</summary>
+        private static string AmbienceKey() =>
+            GameFlow.ActiveTrack != null ? GameFlow.ActiveTrack.ambience : "";
+
+        /// <summary>
+        /// One directional key light. Colour, angle and intensity are retuned
+        /// afterwards by MapAmbience when the map is themed — this only
+        /// guarantees a light exists for it to retune.
+        /// </summary>
         private void BuildLighting()
         {
             if (FindFirstObjectByType<Light>() != null) return;
@@ -1152,9 +1165,8 @@ namespace AIHWSim.Core
                 cam = go.AddComponent<Camera>();
                 go.AddComponent<AudioListener>();
             }
-            cam.backgroundColor = new Color(0.53f, 0.70f, 0.92f); // sky-ish
-            cam.clearFlags = CameraClearFlags.SolidColor;
             cam.farClipPlane = 800f;
+            TrackEd.MapAmbience.ApplyCamera(cam, AmbienceKey(), SkyBlue);
 
             var follow = cam.gameObject.GetComponent<ChaseCamera>() ?? cam.gameObject.AddComponent<ChaseCamera>();
             follow.target = target;

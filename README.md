@@ -80,8 +80,13 @@ quadcopter and hardware-in-the-loop over serial are planned follow-ons.
   stripes**, and be repainted per segment with any floor surface using the normal
   paint tool. Items place **onto** the ribbon too — even raised, banked sections
   — aligned to the surface, and re-seat themselves whenever the spline is
-  redrawn. The map is **resizable
-  per edge** while editing (tiles preserved), supports undo/redo (Ctrl+Z/Y),
+  redrawn. Selecting a placed item gives **rotate**, a **scale** slider
+  (0.2–5×) and — on anything knock-aroundable — a **Pinned** toggle that makes
+  it inert scenery; Shift+scroll resizes an item while you place it. The map is
+  **resizable per edge** while editing (tiles preserved, ±1 and ±5, up to 80
+  tiles a side) with a **tile size** control beside it (0.5–3 m per tile, which
+  is how a 112 m map fits in 56 tiles); item placement always snaps at about a
+  metre regardless. It supports undo/redo (Ctrl+Z/Y),
   **T** toggles a straight-down map view, and maps save as JSON under
   `UnitySim/Tracks/`. **Drive ▶** loads your map into the track scene — laps
   count only after all checkpoints are crossed **in order** (`CP: n/N` on the
@@ -251,12 +256,18 @@ their tintable paint panels:
 
 plus **Real Twin 1/10** (the calibration baseline) and **Opus Vector** (the
 autonomous mission platform). Their bodies, wheels, light clusters and antenna
-styles are also individual garage parts, usable on any design. The **preset
-maps** remain (**Whoop Canyon** jumps course, **Monza Mini** smooth GP circuit,
-**Boulder Basin** crawler field, **Slide Yard** low-grip drift yard). Presets are
-read-only; loading one clones an editable copy that Save writes to your library.
-(The old Rally Buggy / F1 Racer / Crawler / Drift Car presets are retired; saved
-copies of them still load and render exactly as before.)
+styles are also individual garage parts, usable on any design.
+
+The **preset maps** are three race circuits (**Boost Speedway**, **Dust Devil
+Rally**, **Neon Vortex**), the four TinyTorque themed circuits (**Downtown
+Dash**, **Playroom Raceway**, **Enchanted Ascent**, **Graveyard Shift** — see
+the map-pack section below), and the **Opus Proving Ground** measurement range.
+Presets are read-only; loading one clones an editable copy that Save writes to
+your library. (The retired vehicle presets — Rally Buggy / F1 Racer / Crawler /
+Drift Car — and the retired maps — Whoop Canyon, Monza Mini, Boulder Basin,
+Slide Yard, Workshop Grand Prix, Neon Vortex II, Boardwalk Cove, Foundry
+Descent — still load from saved copies and render exactly as before; only the
+preset rows are gone.)
 
 ## High-fidelity mode (real-world controller validation)
 
@@ -601,7 +612,7 @@ trail where the rear wheels were rather than a decal glued to the bumper.
 Every boost — item, pad or mini-turbo — now also lights a **rear thruster
 flame**: an orange plume with a near-white core that flickers in length while
 the push lasts. Like every cosmetic it lives on the viz layer, so a car's own
-camera sensor never sees its own exhaust. Over LAN (protocol v7) the whole
+camera sensor never sees its own exhaust. Over LAN (protocol v9) the whole
 drift show travels: smoke, tier-coloured sparks, the flame and the mini-turbo
 that lit it are visible on every machine, whichever machine earned them.
 
@@ -684,9 +695,23 @@ and the incoming warning be one implementation instead of two. The one thing a
 client genuinely cannot derive is whether a missile is locked onto it — it owns
 no missiles, only their poses — so that arrives as a flag.
 
-This is **protocol v7**. Every machine in a session must run the same build; the
+This is **protocol v9**. Every machine in a session must run the same build; the
 exact version check at connection approval rejects a mismatch cleanly rather than
 letting it half-work.
+
+v8 was the TinyTorque map packs: a map travels as its full track JSON, and v8
+maps name 63 new scenery item ids (dt_/toy_/ench_/haunt_). The factory
+deliberately skips unknown ids — that is what keeps old saves loading in new
+builds — so a v7 peer receiving a v8 map would build it with every gate,
+landmark and ghost silently missing rather than failing.
+
+v9 is the four maps rebuilt as 1:10 ports of the Blender preview maps. That
+adds three fields to the same JSON — `PlacedItem.scale`, `PlacedItem.pinned`
+and `TrackDesign.ambience` — and the maps lean on all three: a v8 peer would
+build 600 props at 1× (the layouts vary nearly every placement between 0.55×
+and 1.9×), turn ~250 pinned decorative props into live Rigidbodies, and render
+the whole map under flat daylight with no sky, fog or glow. Same disagreement,
+no error message, which is exactly what the gate refuses.
 
 v7 is the TinyTorque show cars. Not a byte of the wire format changed — but a
 car's appearance travels as its full design JSON, and v7 designs can carry the
@@ -866,39 +891,158 @@ exceptions are documented in the build script: the tape arch and the light hoop
 are deliberately part-buried, because a ring standing on its rim holds its bore
 70–110 mm off the deck and a 100 mm car noses straight into it.
 
-Four themed circuits ship built from these families, each a different *shape*
-rather than one oval in four colours — the spline carries elevation in its points'
-y, banking in `rollDeg` and width per control point, so the circuit itself is the
-content and the props only dress it:
+## TinyTorque map packs (63 props, four themed circuits)
 
-| Circuit | Length | Rise | Max grade | Narrowest | Max bank | Signature |
-|---|---|---|---|---|---|---|
-| ★ Workshop Grand Prix | 94 m | 1.35 m | 9.7 % | 2.2 m | 10° | climbs off the bench onto a plank run with pencils rolling loose across it |
-| ★ Neon Vortex II | 141 m | 1.20 m | 5.5 % | 2.4 m | 18° | a true figure-8 — the lap crosses over itself, 1.16 m of clearance, banking inverting through the bridge |
-| ★ Boardwalk Cove | 111 m | 0.74 m | 10.4 % | 2.0 m | 22° | four whoops on a 6 m wavelength into a 22° bowl, out onto a pier |
-| ★ Foundry Descent | 102 m | 1.96 m | 12.0 % | 2.2 m | 16° | a boosted climb to a 1.9 m gantry, a grate bridge, then the plunge |
+The second prop generation came the other way around: four finished Blender
+showcase files in the TinyTorque_RC modelling project, re-exported for the game
+by `Blender/build_map_props.py` (re-runnable, never saves the sources). The
+script splits every showcase prop by material, renames the pieces to the token
+names `AssignByName` binds materials to, re-origins each prop at its base
+contact point, scales by exactly 0.1 (1 authored metre = 0.1 game metre — the
+1/10 fiction, precisely), and prints per-prop JSON — bounds, token lists, tri
+counts, slope profiles — that the C# hulls and validator rows are pasted from.
 
-Gradients stay under ~12 %: at RC scale that is dramatic to look at (the car is
-0.10 m tall) while costing almost nothing in speed, since the rear pair make
-~50 N of thrust against ~3 N of grade resistance.
+| Theme | Props (14–17 each) |
+|---|---|
+| **Downtown** | neon tower, city block, hangar, city gate, rock arch, volcano, jump ramp, kicker, boulder, rock, jersey barrier, traffic cone, street lamp, cycling traffic light |
+| **Toy Room** | table, chair, bed, dresser, bookcase, toy box, toy gate, hoop, card bridge, plank ramp, block tower, brick, domino, crayon, ball, desk lamp, floor lamp |
+| **Enchanted Kingdom** | castle, mountain peak, wizard tower, gatehouse, cottage, castle gate, vine arch, stone bridge, terrace ramp, fountain, hedge, topiary, blossom tree, boulder, crystal, fairy lamp |
+| **Haunted Hollow** | mansion, chapel, barrow, crypt, cemetery gate, ruined arch, tomb ramp, slab ramp, gravestone, iron fence, dead tree, hearse, pumpkin, gas lamp, ghost, wisp |
 
-Each has three checkpoints and twelve authored item boxes — some of them on the
-elevated sections, which is why `BoxRow` takes a deck height. Authoring boxes on
-a map suppresses `ArcadeDirector`'s automatic placement entirely, so a hand-placed
-set is authoritative. Eight themed floor surfaces come with them (workbench,
-carpet, neon grid, boardwalk, wet sand, lava rock, obsidian, grate); their
-friction values double as the arcade track-limit classification, so carpet, wet
-sand and lava scree read as off-track without any extra authoring.
+The hero landmarks are imported at full scale on purpose — the castle is 8.7 m
+tall, the volcano 12.6 m across, the peak fills a map corner — backdrop pieces
+the same way the toy-room furniture towers over the car. Three props move:
+the **traffic light** cycles green→amber→red (`SignalCycle`, driving the three
+lens renderers through MaterialPropertyBlocks), and the **ghost** and **wisp**
+hover-bob and sway (`GhostBob`). The spirits' hulls are *triggers*: the builder
+can still select them, but the car drives straight through the apparition.
+Animated props are excluded from static batching — a batched ghost cannot bob.
+The five lamp props carry the light-post behavior, each with its point light
+at the authored head height.
+
+The four maps these packs dress are ports of the Blender project's own
+**preview maps** — `TinyTorque_map.blend` and the three themed ones, built by
+`tt_11_map.py`, `tt_16_toy_map.py`, `tt_17_ench_map.py` and
+`tt_18_haunt_map.py` and rendered to `renders/map*/…_{plan,aerial,street}.png`.
+They are laid out at the same 1:10 the props were exported at, so the districts
+sit exactly where the renders put them:
+
+| Circuit | Source | Grid | World | Lap | Districts |
+|---|---|---|---|---|---|
+| ★ Downtown Dash | `tt_11_map` | 38×47 @ 2 m | 76×94 m | 187 m | downtown's 90 m block grid, industrial strip west, stunt park east, badlands + volcano south |
+| ★ Playroom Raceway | `tt_16_toy_map` | 48×44 @ 2 m | 96×88 m | 98 m | furniture skyline against the north wall, the bed, the dining table's forest of legs, the toybox yard, the rug circuit |
+| ★ Enchanted Ascent | `tt_17_ench_map` | 56×56 @ 2 m | 112×112 m | 169 m | castle closing the axis, village ring, formal gardens, enchanted wood, tournament ground, two peaks for the horizon |
+| ★ Graveyard Shift | `tt_18_haunt_map` | 54×52 @ 2 m | 108×104 m | 160 m | mansion at the head of the drive, four fenced grave blocks, chapel ruin, barrow field, pumpkin patch, dead wood, spirits |
+
+That is 365–710 placed items per map against the ~30 the first pass shipped,
+which is why ground tiles are **2 m** here: 112 m of enchanted vale is 56 tiles
+that way and 112 at 1 m, past the 80-tile ceiling and four times the floor
+geometry. Item placement still snaps at 1 m — the builder subdivides each tile
+— and the map panel exposes tile size alongside the resize buttons.
+
+`MapLayout` does the porting arithmetic once instead of at several hundred call
+sites, so a line in `TrackPresets` reads straight across from the Python it came
+from:
+
+```
+spawn(src["volcano"], c, (100, -305, 0), rot_z=24)   # tt_11_map.badlands
+L.Prop("dt_volcano", 100, -305, 24);                 // TrackPresets.Badlands
+```
+
+It absorbs three conversions. The **scale** (1 authored metre = 0.1 game
+metres — any other ratio puts the buildings at the wrong spacing for their own
+size); the **axes**, since Blender X/Y is game X/Z and the two systems have
+opposite handedness about up, so a Blender `rot_z` of +θ is a game yaw of −θ
+(get this backwards and the whole map mirrors, near-invisibly in a top-down
+screenshot); and the **centring**, because the source maps are not centred on
+their origin but a `TrackDesign` always is.
+
+Each map ships **exactly one spline**. Every other road in the source becomes
+painted floor tiles, which is what they are over there too — flat preview
+ribbons in a deletable `ROADS` collection — and a second spline would silently
+steal the bot racing line, because `BotPath` follows the spline with the *most*
+control points. `TrackPresetValidator` fails a preset that grows one.
+
+Three things in the sources are deliberately not ported. **Sculpted terrain**:
+the castle's plateau and the mansion's rise are displaced ground meshes and
+there is no terrain system, so both landmarks stand on flat ground at the head
+of their axis. **The tightest linear runs**: a 5-unit fence spacing is a picket
+every 0.5 m and 328 items for four cemetery blocks, so long railings and garden
+hedges run at 10–12 and read the same from anywhere a car ever is. And the
+**per-seed prop variants** — three gravestone shapes, four crayon colours — are
+one mesh each here, varied by scale and yaw instead.
+
+### Atmosphere
+
+Most of what makes those renders look like themselves is not the props: it is
+the sky gradient, the haze density and the colour of the one key light. Each
+theme module carries its own, and `MapAmbience` ports them:
+
+| Map | Sky | Fog | Key light | Glows |
+|---|---|---|---|---|
+| Downtown Dash | dusk, warm wedge low in the south behind the volcano | 0.0030 | raking sun 1.15, `(1.00, 0.80, 0.60)` | the crater |
+| Playroom Raceway | dim warm ceiling, not a sky | 0.0022 | dormer window 1.35, `(1.00, 0.86, 0.66)` | the standard lamp |
+| Enchanted Ascent | deep twilight, aurora wedge north over the castle | 0.0042 | moon 0.95, `(0.62, 0.76, 1.00)` | keep, village green |
+| Graveyard Shift | near-black | 0.0068 | moon 0.85, `(0.58, 0.74, 1.00)` | hall, crypt mouth, chapel |
+
+Fog densities are the Blender haze densities **×10**, because 1 game metre is 10
+authored metres. Graveyard Shift running about twice everyone else is the source
+being deliberate: on that map the fog is the subject, not depth cueing. Sky and
+ambient colours are lifted well above the authored linear values — those are
+photographed through AgX with a compositor bloom, and Unity has neither.
+
+The sky is a 400 m inverted sphere on `Resources/SkyGradient.shader` (unlit,
+fog off, three-stop vertical gradient plus a horizon wedge), riding with the
+camera so its gradient does not slide as the car crosses 112 m of map. It lives
+under `Resources/` because assets there are never stripped from a player build,
+and it degrades to the flat camera background if it is ever missing. The toy
+map additionally builds its **room**: two 13 m wallpapered walls with skirting
+and dado rail, solid, because a floor running to a horizon reads as tarmac and
+the whole scale gag collapses with it.
+
+`MapAmbience.Apply` runs inside `TrackFactory.Build`, so the builder preview and
+the drive scene get identical atmosphere — the same "what you build is what you
+drive" contract the factory already keeps for geometry. Maps with no ambience
+key restore whatever the scene's own bootstrap set, so loading a plain circuit
+after a themed one does not leave the fog behind.
+
+### Per-item scale and pinning
+
+`PlacedItem` carries a uniform `scale` and a `pinned` flag. Scale is not a
+convenience — the source layouts vary nearly every placement between 0.55× and
+1.9×, so a faithful port needs it — and it applies to the whole item root, so
+the authored visual, the invisible collision hull and a lamp's light offset all
+move together. Dynamic props scale their mass by the cube, or a double-size
+brick would fly off like foam; a lamp cancels the scale on its own light so a
+taller post lights the same pool of floor.
+
+`pinned` means "scenery, whatever the catalog says": no Rigidbody, and eligible
+for static batching. The ports place roughly 250 dominoes, bricks and pumpkins
+as decorative fill, and that many live bodies buys nothing — so the fills are
+pinned and a handful near each racing line stay live, to still scatter when hit.
+
+In the Track Builder, selecting an item gives a scale slider (0.2–5×), ± steps
+and a 1× reset, plus a **Pinned** toggle on anything dynamic; Shift+scroll
+resizes an item while you are placing it. Rotate and scale re-pose the existing
+object rather than rebuilding — on a 700-item map a full rebuild per slider tick
+would make the control unusable.
+
+Every map has three or four checkpoints and twelve authored item boxes.
+Authoring boxes suppresses `ArcadeDirector`'s automatic placement entirely, so a
+hand-placed set is authoritative. The themed floor surfaces from the first prop
+generation (workbench, carpet, neon grid, boardwalk, wet sand, lava rock,
+obsidian, grate) carry these maps too; friction values double as the arcade
+track-limit classification, so carpet, mud and sand run-offs read as off-track
+without any extra authoring.
 
 Two placement rules are invisible until they bite. `TrackFactory` drops each item
-from `y + 3` and takes the *highest* hit, so an item under an overpass snaps onto
-the overpass — nothing is placed beneath the Vortex crossover. And the
-narrow-bore props (tape arch 0.34 m, light hoop 0.40 m, rock arch 0.46 m) stay
-*off* the racing line against a 0.20 m car; the hazards that are on the line —
-pencils, barrels, beach balls, blocks — are things you can hit and survive.
+from `y + 3` and takes the *highest* hit, so an item under a raised deck snaps
+onto the deck. And a landmark's hull must stay well clear of the ribbon edge —
+an overlapping landmark is an invisible wall, and the validator cannot see that.
 
-In the Track Builder the props live under two new palette tabs — **ARCADE** (the
-item box) and **SCENERY** (all 24, grouped under a header per theme).
+In the Track Builder the props live under the **ARCADE** tab (the item box) and
+the **SCENERY** tab — all 87 mesh props, grouped under one header per theme,
+eight themes in palette order.
 
 Validate the props and the maps with:
 
@@ -909,23 +1053,22 @@ Validate the props and the maps with:
 `TrackPresetValidator` checks the things that otherwise fail *silently*: an item
 id that no longer resolves is skipped without a word by design (that is what lets
 old saves load in new builds), a floor index past the end of the catalog throws
-deep inside the mesh build, and a checkpoint sequence with a gap in it simply
-never completes a lap.
+deep inside the mesh build, a checkpoint sequence with a gap in it simply never
+completes a lap, an item at scale 0 builds invisible, and a second spline hands
+the bots the wrong road.
 
 It also reports the geometry of every ribbon (`[TPV] GEOM`) and builds each map
-for real (`[TPV] BUILD`), which covers the two ways a 3D circuit goes wrong. A
+for real (`[TPV] BUILD`, with item and renderer counts — the number to watch if a
+map ever hitches on load), which covers the two ways a 3D circuit goes wrong. A
 gradient the car cannot climb just looks like a car that stops, so anything over
 40 % fails and over 25 % warns. And a track that crosses itself is only a bridge
 if the decks clear each other: the check compares every pair of points that are
 far apart *along* the curve but within 1.5 m in plan view, and fails if the gap
 is under 0.35 m — enough for the 0.10 m car plus the ribbon's 0.04 m skirt. A
-0.2 m step would be an invisible wall at speed. Neon Vortex II is the only
-preset that trips the overpass detector, which is how you know the figure-8 is
-really crossing over itself:
-
-```
-[TPV] GEOM Neon Vortex II[0]: len=140.8m rise=1.20m grade=5.5% width=2.4m bank=18deg overpass(clear=1.16m)
-```
+0.2 m step would be an invisible wall at speed. (The retired Neon Vortex II
+figure-8 was the map that motivated the overpass detector; none of the current
+presets cross over themselves, so a `[TPV] GEOM … overpass(...)` line on a new
+map is worth a second look.)
 
 ## Layout
 

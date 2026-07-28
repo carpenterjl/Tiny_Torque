@@ -21,17 +21,24 @@ namespace AIHWSim.Menu
     /// </summary>
     public sealed class MenuAttract : MonoBehaviour
     {
-        // Curated closed-loop spline circuits (clean, closed bot paths). Skips
-        // Boulder Basin (no spline) and Slide Yard (open horseshoe).
+        // Curated closed-loop spline circuits (clean, closed bot paths). Every
+        // name here must exist in TrackPresets.All — a retired name resolves
+        // null and silently costs the attract loop for that boot.
         private static readonly string[] Circuits =
-            { "Whoop Canyon", "Monza Mini", "Boost Speedway", "Neon Vortex" };
+            { "Boost Speedway", "Neon Vortex", "Downtown Dash",
+              "Playroom Raceway", "Enchanted Ascent", "Graveyard Shift" };
 
         private const int CarCount = 4;
         private const int PhysicsRateHz = 400;
         private const int ControlRateHz = 100;
         private const float OrbitDegPerSec = 8f;
 
+        /// <summary>The menu's own backdrop, kept for circuits with no themed
+        /// ambience of their own.</summary>
+        private static readonly Color MenuBackdrop = new Color(0.09f, 0.10f, 0.14f);
+
         private Camera _cam;
+        private string _ambience = "";
         private Vector3 _center;
         private float _orbitRadius;
         private float _orbitHeight;
@@ -44,6 +51,7 @@ namespace AIHWSim.Menu
             {
                 var design = TrackPresets.Resolve(Circuits[Random.Range(0, Circuits.Length)]);
                 if (design == null) return false;
+                _ambience = design.ambience;   // the attract loop gets the map's sky too
 
                 var track = TrackFactory.Build(design, interactive: false);
                 if (track == null || track.root == null) return false;
@@ -134,9 +142,8 @@ namespace AIHWSim.Menu
                 _cam = go.AddComponent<Camera>();
                 go.AddComponent<AudioListener>();
             }
-            _cam.clearFlags = CameraClearFlags.SolidColor;
-            _cam.backgroundColor = new Color(0.09f, 0.10f, 0.14f);
             _cam.farClipPlane = Mathf.Max(500f, _orbitRadius * 4f);
+            MapAmbience.ApplyCamera(_cam, _ambience, MenuBackdrop);
             PositionCamera();
         }
 

@@ -56,7 +56,23 @@ namespace AIHWSim.Net
         // design would render a fallback box with slick wheels and no lights,
         // and the two machines would disagree about what a car looks like.
         // Same reasoning as v6: mixed-cosmetics sessions are refused.
-        public const int ProtocolVersion = 7;
+        //
+        // v8: TinyTorque map packs. Maps travel as the full track JSON, and
+        // this build adds 63 scenery item ids (dt_/toy_/ench_/haunt_) plus
+        // four themed circuit presets built from them. Wire format unchanged —
+        // but TrackFactory deliberately skips unknown item ids, so a v7 peer
+        // receiving a v8 map would build it with every new prop silently
+        // missing: no gates, no landmarks, no ghost. Refused like v6/v7.
+        //
+        // v9: the four themed maps rebuilt as 1:10 ports of the Blender preview
+        // maps. Three new fields ride in the track JSON — PlacedItem.scale,
+        // PlacedItem.pinned and TrackDesign.ambience — and the maps depend on
+        // all three: a v8 peer would build 600 props at scale 1 (the layouts
+        // vary nearly every placement between 0.55x and 1.9x), turn ~250 pinned
+        // decorative props into live Rigidbodies, and render the map under flat
+        // daylight with no sky, fog or glow. Wire format unchanged again;
+        // refused for the same reason as v7 and v8.
+        public const int ProtocolVersion = 9;
         public const int MaxPlayers = 4;
         public const ushort DefaultPort = 7777;
 

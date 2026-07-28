@@ -47,6 +47,10 @@ namespace AIHWSim.TrackEd
                 {
                     if (string.IsNullOrEmpty(d.name)) d.name = name;
                     d.EnsureFloor();
+                    // Maps saved before per-item scale existed have no `scale`
+                    // in their JSON, which deserialises to 0 — repair before
+                    // anything can build them at nothing.
+                    d.EnsureItems();
                 }
                 return d;
             }

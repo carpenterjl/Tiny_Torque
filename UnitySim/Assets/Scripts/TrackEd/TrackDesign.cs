@@ -16,6 +16,18 @@ namespace AIHWSim.TrackEd
         public float y;              // height hint — items drop onto the surface below (0 = floor)
         public float yawDeg;         // heading, 15-degree steps from the editor
         public int order = -1;       // checkpoint sequence; -1 for everything else
+        // Uniform size multiplier on the whole item root — visual, collision
+        // hull and lamp offset alike. The map ports lean on this heavily (the
+        // Blender layouts vary nearly every placement between 0.55x and 1.9x).
+        // JsonUtility gives a missing field 0, so TrackDesign.EnsureItems has
+        // to repair it or every pre-scale save would build items at zero size.
+        public float scale = 1f;
+        // "Scenery, whatever the catalog says." A dynamic ItemDef normally gets
+        // a Rigidbody per collidered piece; the ported maps place hundreds of
+        // dominoes, bricks and pumpkins as decorative fill, and that many live
+        // bodies is a physics bill for nothing. Pinned ones stay put and stay
+        // eligible for static batching.
+        public bool pinned;
 
         public PlacedItem Clone() => (PlacedItem)MemberwiseClone();
     }
@@ -36,6 +48,15 @@ namespace AIHWSim.TrackEd
         public int[] floor;           // width*length floor-type ids
         public List<PlacedItem> items = new List<PlacedItem>();
         public List<SplineSpec> splines = new List<SplineSpec>();
+        /// <summary>
+        /// <see cref="MapAmbience"/> key: sky, fog, key light and glow points
+        /// for this map. "" is the neutral daylight every map had before the
+        /// TinyTorque map ports, so old saves are unaffected.
+        /// </summary>
+        public string ambience = "";
+
+        /// <summary>Tile-count ceiling per side, enforced by <see cref="Resize"/>.</summary>
+        public const int MaxTiles = 80;
 
         /// <summary>Deep copy via JSON round-trip (same idiom as VehicleDesign).</summary>
         public TrackDesign Clone() => JsonUtility.FromJson<TrackDesign>(JsonUtility.ToJson(this));
@@ -69,6 +90,20 @@ namespace AIHWSim.TrackEd
             splines ??= new List<SplineSpec>();
             foreach (var s in splines) s?.EnsureArrays();
             splines.RemoveAll(s => s == null);
+        }
+
+        /// <summary>
+        /// Repair item defaults (old or hand-edited JSON). JsonUtility fills a
+        /// field the document does not mention with the type's zero, not the
+        /// C# initialiser — so every map saved before per-item scale existed
+        /// deserialises with scale 0, which would build every prop at nothing.
+        /// </summary>
+        public void EnsureItems()
+        {
+            items ??= new List<PlacedItem>();
+            items.RemoveAll(it => it == null);
+            foreach (var it in items)
+                if (!(it.scale > 0f)) it.scale = 1f;   // also catches NaN
         }
 
         /// <summary>Repair a missing/mis-sized floor array (old or hand-edited JSON).</summary>
@@ -114,8 +149,11 @@ namespace AIHWSim.TrackEd
         public void Resize(int addWest, int addEast, int addSouth, int addNorth, int fillType = 0)
         {
             EnsureFloor();
-            int newW = Mathf.Clamp(width + addWest + addEast, 4, 60);
-            int newL = Mathf.Clamp(length + addSouth + addNorth, 4, 60);
+            // The ceiling moved 60 → 80 for the TinyTorque map ports: the
+            // enchanted vale is 112 m across, which is 56 tiles at the 2 m
+            // tileSize those maps use.
+            int newW = Mathf.Clamp(width + addWest + addEast, 4, MaxTiles);
+            int newL = Mathf.Clamp(length + addSouth + addNorth, 4, MaxTiles);
             // Re-derive the actually applied deltas after clamping (east/north absorb overflow).
             addEast = newW - width - addWest;
             addNorth = newL - length - addSouth;

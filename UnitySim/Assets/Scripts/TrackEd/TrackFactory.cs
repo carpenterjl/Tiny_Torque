@@ -36,10 +36,13 @@ namespace AIHWSim.TrackEd
         {
             d.EnsureFloor();
             d.EnsureSplines();
+            d.EnsureItems();
             var built = new BuiltTrack { root = new GameObject("CustomTrack") };
             var rootT = built.root.transform;
 
-            BuildSurround(rootT);
+            var amb = MapAmbience.Resolve(d.ambience);
+            MapAmbience.Apply(amb, rootT);
+            BuildSurround(rootT, amb);
             BuildFloor(d, rootT, interactive, built);
             BuildSplines(d, rootT, built);
             // New colliders must be queryable for the item/spawn drop raycasts.
@@ -103,15 +106,26 @@ namespace AIHWSim.TrackEd
 
         // ---- floor --------------------------------------------------------
 
-        private static void BuildSurround(Transform parent)
+        /// <summary>
+        /// The outfield the map floats on. Themed maps tint it to their own
+        /// ground colour and need it big — the enchanted vale is 112 m across
+        /// and its sky dome is 400 m out, so a 300 m plane would end inside
+        /// the view as a hard edge with sky underneath it (the same horizon
+        /// trap the Blender maps document).
+        /// </summary>
+        private static void BuildSurround(Transform parent, AmbienceDef amb)
         {
-            if (_surroundMat == null)
-                _surroundMat = TrackBuilder.StandardMat(new Color(0.38f, 0.27f, 0.16f));
+            var col = amb != null ? amb.groundColor : new Color(0.38f, 0.27f, 0.16f);
+            if (_surroundMat == null || _surroundMat.color != col)
+            {
+                _surroundMat = TrackBuilder.StandardMat(col);
+                _surroundMat.name = "SurroundGround";
+            }
             var ground = GameObject.CreatePrimitive(PrimitiveType.Plane);
             ground.name = "SurroundGround";
             ground.transform.SetParent(parent, false);
             ground.transform.position = new Vector3(0f, -0.06f, 0f);
-            ground.transform.localScale = new Vector3(30f, 1f, 30f); // 300 m
+            ground.transform.localScale = new Vector3(70f, 1f, 70f); // 700 m
             ground.GetComponent<Renderer>().sharedMaterial = _surroundMat;
         }
 
@@ -139,26 +153,87 @@ namespace AIHWSim.TrackEd
                 map.Bind(d, box);
             }
 
-            // Collider-less visual boxes per tile, flush with the slab top.
             var floorRoot = new GameObject("Floor");
             floorRoot.transform.SetParent(parent, false);
+
+            // Two floors, because the two callers want opposite things. The
+            // builder repaints single tiles as you drag the brush, so it needs
+            // one renderer per tile; the drive scene never repaints and only
+            // wants the geometry cheap, and on a 56x56 ported map that is 3136
+            // GameObjects it can do without.
+            if (interactive) BuildFloorMerged(d, floorRoot.transform);
+            else BuildFloorTiles(d, floorRoot.transform, built);
+        }
+
+        /// <summary>Per-tile renderers, so <c>RepaintTile</c> can swap one.</summary>
+        private static void BuildFloorTiles(TrackDesign d, Transform parent, BuiltTrack built)
+        {
             built.tileRenderers = new Renderer[d.width, d.length];
             for (int tz = 0; tz < d.length; tz++)
                 for (int tx = 0; tx < d.width; tx++)
                 {
                     var c = d.TileCenter(tx, tz);
-                    var tile = TrackBuilder.Box($"Tile_{tx}_{tz}",
-                        new Vector3(c.x, -0.025f, c.z),
-                        new Vector3(d.tileSize, 0.05f, d.tileSize),
-                        Quaternion.identity,
-                        TrackCatalog.Floors[d.FloorAt(tx, tz)].Mat,
-                        floorRoot.transform, collider: false);
+                    var tile = TrackBuilder.Tile($"Tile_{tx}_{tz}", new Vector3(c.x, 0f, c.z),
+                        d.tileSize, TrackCatalog.Floors[d.FloorAt(tx, tz)].Mat, parent);
                     built.tileRenderers[tx, tz] = tile.GetComponent<Renderer>();
                 }
+        }
 
-            // The drive-scene floor never changes; combine it into static batches.
-            if (interactive)
-                StaticBatchingUtility.Combine(floorRoot);
+        /// <summary>
+        /// One merged mesh per floor type actually used. A quad per tile, welded
+        /// into a single mesh — same pixels as the per-tile floor (the tiles were
+        /// only ever seen from above), at one draw call per surface instead of a
+        /// static-batching pass over thousands of objects.
+        /// </summary>
+        private static void BuildFloorMerged(TrackDesign d, Transform parent)
+        {
+            var byType = new Dictionary<int, List<Vector2Int>>();
+            for (int tz = 0; tz < d.length; tz++)
+                for (int tx = 0; tx < d.width; tx++)
+                {
+                    int t = d.FloorAt(tx, tz);
+                    if (!byType.TryGetValue(t, out var list))
+                        byType[t] = list = new List<Vector2Int>();
+                    list.Add(new Vector2Int(tx, tz));
+                }
+
+            float h = d.tileSize * 0.5f;
+            foreach (var kv in byType)
+            {
+                var tiles = kv.Value;
+                var verts = new Vector3[tiles.Count * 4];
+                var uvs = new Vector2[tiles.Count * 4];
+                var norms = new Vector3[tiles.Count * 4];
+                var tris = new int[tiles.Count * 6];
+                for (int i = 0; i < tiles.Count; i++)
+                {
+                    var c = d.TileCenter(tiles[i].x, tiles[i].y);
+                    int v = i * 4, t6 = i * 6;
+                    verts[v + 0] = new Vector3(c.x - h, 0f, c.z - h);
+                    verts[v + 1] = new Vector3(c.x - h, 0f, c.z + h);
+                    verts[v + 2] = new Vector3(c.x + h, 0f, c.z + h);
+                    verts[v + 3] = new Vector3(c.x + h, 0f, c.z - h);
+                    uvs[v + 0] = Vector2.zero; uvs[v + 1] = Vector2.up;
+                    uvs[v + 2] = Vector2.one; uvs[v + 3] = Vector2.right;
+                    norms[v + 0] = norms[v + 1] = norms[v + 2] = norms[v + 3] = Vector3.up;
+                    tris[t6 + 0] = v; tris[t6 + 1] = v + 1; tris[t6 + 2] = v + 2;
+                    tris[t6 + 3] = v; tris[t6 + 4] = v + 2; tris[t6 + 5] = v + 3;
+                }
+                var mesh = new Mesh { name = $"Floor_{TrackCatalog.Floors[kv.Key].id}" };
+                // 80x80 tiles is 25 600 vertices, comfortably past the 16-bit
+                // index limit once a map uses only one or two surfaces.
+                mesh.indexFormat = UnityEngine.Rendering.IndexFormat.UInt32;
+                mesh.vertices = verts;
+                mesh.uv = uvs;
+                mesh.normals = norms;
+                mesh.triangles = tris;
+                mesh.RecalculateBounds();
+
+                var go = new GameObject($"Floor_{TrackCatalog.Floors[kv.Key].id}");
+                go.transform.SetParent(parent, false);
+                go.AddComponent<MeshFilter>().sharedMesh = mesh;
+                go.AddComponent<MeshRenderer>().sharedMaterial = TrackCatalog.Floors[kv.Key].Mat;
+            }
         }
 
         // ---- items ----------------------------------------------------------
@@ -198,16 +273,25 @@ namespace AIHWSim.TrackEd
                 def.build(go.transform); // parent is at origin here
                 var (pos, rot) = ItemPose(built, it);
                 go.transform.SetPositionAndRotation(pos, rot);
+                // Uniform scale on the root, so the authored visual, the
+                // invisible hull and the lamp offset all move together. Set
+                // AFTER build() because the hull helpers write localScale on
+                // their own children.
+                float s = it.scale > 0f ? it.scale : 1f;
+                if (!Mathf.Approximately(s, 1f)) go.transform.localScale = Vector3.one * s;
                 go.AddComponent<PlacedItemMarker>().index = i;
 
                 if (!interactive) continue;
 
                 // Anything with a Rigidbody or a behaviour component can move or
-                // be toggled, so only inert scenery is eligible for batching.
-                if (!def.dynamic && def.behavior == ItemBehavior.None)
+                // be toggled, so only inert scenery is eligible for batching —
+                // and so is anything animated (a batched ghost cannot bob).
+                // A pinned dynamic prop is inert by definition, so it batches too.
+                bool live = def.dynamic && !it.pinned;
+                if (!live && def.behavior == ItemBehavior.None && !def.animated)
                     batchable.Add(go);
 
-                if (def.dynamic)
+                if (live)
                 {
                     // Knock-aroundable pieces: every collidered child gets a body.
                     // Rubbery friction + damping so hit props tumble, slow, and
@@ -224,12 +308,15 @@ namespace AIHWSim.TrackEd
                     {
                         col.sharedMaterial = _propPhys;
                         var rb = col.gameObject.AddComponent<Rigidbody>();
-                        rb.mass = def.dynamicMass; // RC-scale: shoveable by a 1.8 kg car
+                        // RC-scale: shoveable by a 1.8 kg car. Mass follows the
+                        // cube of the item's scale, or a double-size brick would
+                        // weigh the same as the small one and fly off like foam.
+                        rb.mass = def.dynamicMass * s * s * s;
                         rb.linearDamping = 0.3f;
                         rb.angularDamping = 1.5f;  // bleeds off rolling/tumbling
                         rb.interpolation = RigidbodyInterpolation.Interpolate;
                         if (def.bottomHeavy)       // weighted base (traffic cones)
-                            rb.centerOfMass = new Vector3(0f, 0.025f, 0f);
+                            rb.centerOfMass = new Vector3(0f, 0.025f * s, 0f);
                     }
                 }
 
@@ -268,7 +355,14 @@ namespace AIHWSim.TrackEd
                     {
                         var lightGo = new GameObject("Lamp");
                         lightGo.transform.SetParent(go.transform, false);
-                        lightGo.transform.localPosition = new Vector3(0f, 0.8f, 0.25f);
+                        lightGo.transform.localPosition = def.lightPos;
+                        // Cancel the item's scale on the lamp itself: the head
+                        // still rides up with a taller post (localPosition is
+                        // scaled by the parent) but the pool of light stays 5 m
+                        // whatever the prop's size. Doing it on the transform
+                        // rather than on `range` keeps it correct regardless of
+                        // how the pipeline folds scale into light range.
+                        lightGo.transform.localScale = Vector3.one / Mathf.Max(0.05f, s);
                         var l = lightGo.AddComponent<Light>();
                         l.type = LightType.Point;
                         l.range = 5f;

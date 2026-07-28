@@ -8,8 +8,566 @@ describe is documented in [README.md](../README.md).
 Active work lives in the session plan file, not here; a plan moves into this archive
 once its milestones are done.
 
-Covering the project bootstrap through the LAN visual parity pass (434179 chars, 31 plans).
-Last updated 2026-07-27.
+Covering the project bootstrap through the TinyTorque map-pack import (466459 chars, 34 plans).
+Last updated 2026-07-28.
+
+---
+
+# Import TinyTorque map prop packs + four themed circuits (2026-07-27)
+
+**Archived with the play-test checklist still UNDRIVEN.**
+
+## Context
+
+Four themed Blender prop packs exist at
+`E:\EE Projects\AI_3D_Modeling\TinyTorque_RC\models` (`TinyTorque_props.blend`
+= neon downtown + desert rocks + volcano, `TinyTorque_toy_props.blend`,
+`TinyTorque_ench_props.blend`, `TinyTorque_haunt_props.blend`; ignore
+`.blend1` backups and the pre-exported `*_props_fbx` folders — those FBXs are
+single multi-material objects, still offset on the showcase line, and unusable
+by the game's token pipeline). Each blend is a showcase (props lined up along
+X under a `PROPS` collection with `PL_*` preview lights), NOT a laid-out map:
+63 `P_*` props total (14 downtown, 17 toy, 16 enchanted, 16 haunted), authored
+at full-scale metres, each ONE mesh with 2–9 material slots.
+
+The request: bring all 63 props into the Track Builder palette, and ship four
+new themed circuit presets built from them. The rail already exists end to
+end: Blender → `Resources/TrackProps/*.fbx` → `PartModelPostprocessor`
+(materialImportMode=None; already covers TrackProps/ — PartModelPostprocessor.cs:23)
+→ `PartMeshLibrary.TryInstantiate` + `AssignByName` → `TrackCatalog.MeshProp`
+(authored visual + invisible primitive hull + primitive fallback) →
+`TrackBuilderUI` theme-header palette (auto-generalises: TrackBuilderUI.cs:981
+loops `TrackCatalog.Themes`) → `TrackPresets` (`(name, Func<TrackDesign>)[]`).
+Maps ship over LAN as full trackJson (NetSession.cs:518); unknown item ids are
+skipped silently → exact-equality ProtocolVersion gate must bump 7 → 8.
+
+**User decisions**: 4th theme named **"Downtown"**, map **"★ Downtown Dash"**;
+retire the 4 oldest presets (Whoop Canyon, Monza Mini, Boulder Basin, Slide
+Yard — their matching cars were removed last pass) AND the 4 old arcade
+circuits (Workshop Grand Prix, Neon Vortex II, Boardwalk Cove, Foundry
+Descent); ANIMATE ghost/wisp (hover-bob) and traffic light (green→amber→red
+cycle); hero landmarks at FULL 1/10-world scale (castle 8.7 m, volcano 12.6 m
+footprint — backdrop pieces, like the toy-room desk objects already are).
+
+Non-negotiables: no physics/vehicle changes; Opus regression bit-identical to
+R4 (Opus Proving Ground preset untouched); floor indices append-only; existing
+ItemDefs (tw_/ng_/bb_/vf_ and all primitives) STAY — only map presets are
+retired, so old saved user maps keep loading; retired preset names must fall
+back gracefully wherever a lastTrack setting references them.
+
+## Naming / catalog map
+
+- Mesh keys = item ids (`Assets\Resources\TrackProps\`): downtown pack gets a
+  `dt_` prefix (its files are unprefixed and `cone` would collide with the
+  primitive cone item): `dt_arch_gate, dt_arch_rock, dt_barrier, dt_bld_block,
+  dt_bld_hangar, dt_bld_tower, dt_cone, dt_ramp_jump, dt_ramp_kicker,
+  dt_rock_large, dt_rock_small, dt_street_lamp, dt_traffic_light, dt_volcano`.
+  The other packs keep their file names verbatim (`toy_*`, `ench_*`,
+  `haunt_*` — 17 + 16 + 16, all unique).
+- Theme headers (append to `TrackCatalog.Themes`): "Downtown", "Toy Room",
+  "Enchanted Kingdom", "Haunted Hollow".
+- Map presets: "★ Downtown Dash", "★ Playroom Raceway", "★ Enchanted Ascent",
+  "★ Graveyard Shift".
+- Post-removal preset list (8): Boost Speedway, Dust Devil Rally, Neon Vortex,
+  the four new circuits, Opus Proving Ground.
+- Tokens: material name minus theme prefix, lowercased (`M_Prop_NeonCyan` →
+  `neoncyan`, `M_Toy_Book0` → `book0`, `M_Haunt_GhostDim` → `ghostdim`).
+  AssignByName is first-match substring → **every token array is sorted
+  longest-first** (ghostdim before ghost, stonepale/stonemoss/stonedark before
+  stone, neongold before gold, rocktop/rockmoss before rock).
+
+## Scale + hulls (single source of truth = the exporter's printed JSON)
+
+Uniform `s = 0.1` (1 blend metre = 0.1 game metre — the exact 1/10 fiction;
+the vehicles came out at 0.087–0.092 via their own length pins, close enough
+that props read correctly beside them). Axis map as ever: Blender X/Y/Z →
+Unity X/Z/Y. Origin per prop = bbox bottom-centre (TrackFactory.ItemPose snaps
+roots onto the drop surface — same rule as build_props.py documents), so the
+export applies `T(-cx,-cy,-minz)` then `S(0.1)`.
+
+Representative scaled sizes: dt_cone 0.075 tall, gravestone 0.31, hedge 0.50,
+pumpkin 0.28, toy_brick 0.48, street lamp 0.81 tall, toy_table 2.9×1.8×2.0
+(drive under it), castle 8.7 tall, barrow 11.3 wide, volcano 12.6 wide,
+ench_peak 15.2 wide — landmarks are backdrop, placed off-track inside the
+44-tile maps.
+
+The exporter prints per prop: scaled bounds (→ PMV rows + hull sizes), token
+list, tri count, and for every `ramp`/`bridge`/`terrace` prop an 8-station
+top-surface height profile along the long axis (→ slope direction + rotated
+slab hulls; toy_ramp_bridge and dt_ramp_jump are up-over-down, kicker/plank/
+slab/tomb/terrace are single slopes). Hulls are hand-authored in C# from that
+JSON — box/cylinder per `TrackCatalog.HullBox/HullCyl`, multi-hull (two legs +
+lintel) for the drive-through gates/arches: dt_arch_gate, dt_arch_rock,
+toy_gate, toy_hoop, ench_gate, ench_arch_vine, ench_gatehouse, haunt_gate,
+haunt_arch_ruin.
+
+## Milestone 0 — plan-file housekeeping
+
+- [x] Append everything below the `MATERIAL TO ARCHIVE` marker (end of this
+      file) as ONE new entry at the TOP of `Docs/plan-archive.md` (newest-
+      first, after header + first `---`). Title:
+      `# Import TinyTorque Blender vehicles + preset overhaul (2026-07-27)`.
+      Bold note at entry top: **play-test checklist still undriven when
+      archived**. Update the archive header char-count/plan-count line.
+      Splice via script — the file is ~440 KB, do not re-emit it.
+- [x] Delete the archived material from this file.
+
+## Milestone 1 — Blender exporter + 63 FBXs + validator rows
+
+**New file** `E:\EE Projects\Tiny_Torque\Blender\build_map_props.py` —
+re-runnable, never saves the source blends, modelled on `build_vehicles.py`
+(same Blender 5.2 binary, same FBX args as `mcp_helpers.py:597-602`). Loops
+all four blends in one `--background` run.
+
+Per prop (`P_*` in the `PROPS` collection):
+- [x] Duplicate, apply transform `S(0.1) @ T(-cx, -cy, -minz)` (origin at
+      base-contact centre), `separate(type='MATERIAL')` (guard the poll like
+      build_vehicles.py), `material_slot_remove_unused`, rename pieces
+      `<token>_<n>` from the material→token rule above — **fail loudly on any
+      material not in the theme's known list**; export
+      `Resources/TrackProps/<key>.fbx`.
+- [x] Special case dt_traffic_light: the `sigoff` piece holds BOTH dark lenses
+      — `separate(type='LOOSE')`, classify by height (top → `sigred`, middle →
+      `sigamber`; the green lens is already its own `siggreen` material), so
+      the cycle script can drive each lamp.
+- [x] Print one JSON block per prop: key, scaled size, token list, tris, ramp
+      height profile where applicable. Everything downstream (hulls, PMV rows,
+      budgets) is pasted from this output, never hand-derived.
+- [x] `Assets\Editor\PartModelValidator.cs`: 63 new track-prop Spec rows
+      (maxExtent = scaled max dimension + ~10 %, budgets from measured tris:
+      castle 18172 → 19000, toy_bookcase 8124 → 9000, ench_gate 6416 → 7000,
+      haunt_mansion 5416 → 6000, most others ≤ 3000). Landmark extents up to
+      15.5 are fine — MaxExtent is per-row.
+
+Checkpoint: FBXs import, `PartModelValidator.Report` ALL PASS, compile clean.
+
+## Milestone 2 — Catalog: materials, 63 ItemDefs, animations
+
+All in `TrackCatalog.cs` unless noted; the `T(key, r, g, b, smooth, glow)`
+keyed material factory (:283) and `MeshProp`/`MeshPropDynamic` idioms already
+exist — this milestone is data, not new machinery.
+
+- [x] Theme materials via `T()`: colors from the inventory dump's principled
+      values; emissives get `glow` scaled to taste (house style caps ~2.0, cf.
+      VfLava). ~20 materials per theme are real colors; the placeholder
+      0.8-grey procedural ones (walnut, pine, ply, card, facade, basalt, the
+      stone/slate family, thatch, hedge/leaf, grime, marble, shingle,
+      deadwood, snow…) get hand-picked flat colors in-theme.
+- [x] `ItemDef` gains `public Vector3 lightPos = new Vector3(0f, 0.8f, 0.25f);`
+      and TrackFactory's `ItemBehavior.Light` case (:267-273) uses it instead
+      of the hardcoded offset — default preserves every existing lamp.
+- [x] 63 new ItemDefs, `category = Scenery`, `theme` = the four new headers,
+      labels human ("Rock arch", "Book tower", "Gas lamp"…). Hulls from the M1
+      JSON. Notable behaviors:
+      - **Dynamic** (MeshPropDynamic): dt_cone (bottomHeavy, 0.03 kg),
+        toy_ball (sphere, 0.05), toy_crayon (capsule along X, 0.03),
+        toy_domino (box, 0.02), toy_brick (box, 0.04), haunt_pumpkin (0.06).
+      - **Light behavior** (+ lightPos at the authored head height):
+        dt_street_lamp, toy_lamp, toy_floor_lamp, ench_lamp, haunt_gaslamp.
+      - **Drive-through spirits**: haunt_ghost, haunt_wisp — hull collider
+        `isTrigger = true` (selectable in the builder like item_box, but the
+        car passes through).
+      - Gates/arches: multi-hull legs + lintel (list in the scale section).
+      - Ramps: rotated slab hulls from the printed profiles; the deck face is
+        the only surface that must be right (tw_ruler_ramp precedent, :430).
+- [x] `Themes` array += the four new headers (palette generalises itself).
+- [x] **New** `Assets\Scripts\Track\GhostBob.cs` — cosmetic transform bob
+      (~±0.04 m) + slow yaw sway, phase from GetInstanceID like
+      LightBarStrobe; attached inside the ghost/wisp build lambdas (the
+      LightBarStrobe precedent — icons snapshot one frame, harmless).
+- [x] **New** `Assets\Scripts\Track\SignalCycle.cs` — finds its sigred/
+      sigamber/siggreen renderers by bound material, cycles green 4 s → amber
+      1 s → red 3 s via per-renderer MaterialPropertyBlock `_EmissionColor`
+      (never the shared materials); attached in dt_traffic_light's lambda.
+
+Checkpoint: compile; every prop places in the builder with authored look,
+palette shows four new theme headers with icons.
+
+## Milestone 3 — Four circuit presets + removals + protocol v8 + README
+
+`TrackPresets.cs` — follow the WorkshopGrandPrix idiom (:398): closed spline
+with per-point widths/roll/surfaces, floors painted for run-off (below 0.90
+friction = arcade off-track for free), authored BoxRows, dense checkpoint
+order, finish + spawn. All ~44×44 tiles.
+
+- [x] **★ Downtown Dash** (Downtown) — asphalt street circuit under the neon
+      towers; buildings + arch_gate gantry ring the lap, dt_ramp_jump
+      crossover, cone/barrier chicanes, street lamps + cycling traffic lights
+      down the straights, volcano + rock arch in the desert corner (sand
+      run-off).
+- [x] **★ Playroom Raceway** (Toy Room) — wood floor, carpet run-off; lap
+      threads UNDER the table and chair (2 m legs), climbs a ramp_plank onto
+      an elevated run past the bookcase, toy_gate start arch, hoop gate,
+      dominos/bricks/crayons loose on the line, bed + dresser + block tower
+      as landmarks, floor lamp lighting.
+- [x] **★ Enchanted Ascent** (Enchanted Kingdom) — grass/dirt park circuit
+      climbing terrace + bridge ramps to a gatehouse pass; castle on the far
+      hill, peak in the corner, cottage/fountain/hedges/topiary/trees lining,
+      crystal + lamp glow, ench_gate start.
+- [x] **★ Graveyard Shift** (Haunted Hollow) — dirt/mud night circuit;
+      haunt_gate start, gravestone + fence rows through the cemetery esses,
+      ramp_tomb jump, mansion/chapel/barrow/crypt as landmarks, hearse parked
+      trackside, bobbing ghost over a crossing (drive-through), wisps +
+      gaslamps + pumpkins (dynamic) along the lap.
+- [x] Retire 8 presets: delete WhoopCanyon, MonzaMini, BoulderBasin,
+      SlideYard, WorkshopGrandPrix, NeonVortexII, BoardwalkCove,
+      FoundryDescent methods + `All` rows. Grep menu/settings paths for a
+      lastTrack fallback (vehicle-side had a latent bug here — MenuBootstrap
+      pattern); verify `TrackPresets.Resolve` returning null degrades
+      gracefully everywhere it's called.
+- [x] `NetSession.cs`: `ProtocolVersion = 8` + history comment (v7 peers
+      would silently drop all 63 item ids from a received trackJson).
+- [x] `README.md`: maps section rewrite (8 presets), builder palette section
+      (four new themes, 63 props, animated ghost/traffic light), protocol v8.
+
+## Milestone 4 — Verification
+
+- [x] **V1 compile**: batch `-batchmode -nographics -quit`, 0 `error CS`
+      (PowerShell doesn't wait — `Start-Process -Wait` or poll).
+- [x] **V2 PartModelValidator.Report**: `[PMV] RESULT ALL PASS` (110 assets);
+      tighten provisional budgets to printed counts.
+- [x] **V3 TrackPresetValidator.Report**: `[TPV] RESULT ALL PASS` for the new
+      8-preset list (catches unknown item ids, floor overruns, checkpoint
+      gaps, out-of-bounds items — exactly the silent failures new presets
+      risk).
+- [x] **V4 Opus regression**: `-batchmode`, NO `-nographics`, NO `-quit`,
+      poll JSON — bit-identical R4 (legA −13.615608215332032 mm, turn
+      +0.1873779296875°, legB +15.803813934326172 mm, brake
+      +42.34135055541992 mm, total +58.14552307128906 mm, drift
+      −42.4041748046875 mm, completed true, fault 0, phase 10).
+- [x] **V5 release build** via BuildMenu.BuildRelease (forced by v8); verify
+      Assembly-CSharp.dll timestamp.
+
+## Play-test checklist (user)
+
+- [ ] Each new map drives a clean lap: checkpoints ring in order, ramps
+      launch, gates clear the roofline, landmarks sit off-track.
+- [ ] Builder: all four theme headers show with icons; each prop places,
+      rotates, deletes; dynamic props (cone/ball/domino/brick/crayon/pumpkin)
+      knock around; ghost/wisp are drive-through but selectable.
+- [ ] Traffic light cycles green→amber→red; ghost + wisp bob; street/gas/
+      floor lamps cast light at night-ish maps.
+- [ ] Retired maps gone from pickers; a lastTrack pointing at one falls back
+      gracefully; old saved user maps (with tw_/ng_/bb_/vf_ props) still load.
+- [ ] LAN: v7 vs v8 → "Version mismatch"; two v8 machines both render a new
+      map's scenery fully.
+- [ ] On-car camera sees scenery (props stay on the parent layer, not
+      VizLayer — MeshProp already does this).
+- [ ] Emissives (neon, lava, windows, jack-o-lantern) glow in the release
+      player (same shader-variant-stripping risk as the vehicle pass).
+
+## Known risks
+
+1. Multi-material showcase objects: solved structurally by
+   separate-by-material in the exporter + fail-loud on unknown materials.
+2. First-match substring tokens: longest-first ordering rule; the exporter
+   prints each prop's token list so the C# arrays are pasted, not remembered.
+3. Landmark palette icons (15 m peak) may frame oddly in TrackIconFactory
+   snapshots — cosmetic only; accept or nudge icon framing if ugly.
+4. Trigger hulls for ghost/wisp rely on the builder's selection raycast
+   hitting triggers (Physics.queriesHitTriggers default true; item_box
+   precedent says it works).
+5. Procedural-shaded materials export as 0.8 grey — flat colors are
+   hand-picked in C#; authored look is approximated, not sampled.
+6. Old themed props + retired-map ids stay in the catalog forever (saved user
+   maps depend on them) — only preset list rows are deleted.
+7. TrackFactory drops items from y+3 onto the surface below; landmarks with
+   big hulls must not be placed overlapping the ribbon or they become walls —
+   preset authoring discipline, TPV catches out-of-bounds but not overlap.
+
+
+---
+# Import TinyTorque Blender vehicles + preset overhaul (2026-07-27)
+
+**Archived with the play-test checklist still UNDRIVEN.**
+
+## Context
+
+Three finished Blender car models exist at
+`E:\EE Projects\AI_3D_Modeling\TinyTorque_RC\models` (`TinyTorque_car.blend`,
+`TinyTorque_buggy.blend`, `TinyTorque_police.blend`; ignore `.blend1` backups).
+They are to enter the game two ways: (a) split into garage components — body,
+wheels, lights, antenna — usable on any car, and (b) as three complete drivable
+base-car presets, geometry exactly as authored, scaled to game size. Four old
+presets are removed. Authored materials (chrome, gold, glass, emissive lights)
+are preserved; the neutral 0.8-grey paint channel stays tintable.
+
+The game already has the rail: Blender scripts → FBX → `Resources/PartModels`
+→ `PartModelPostprocessor` (materialImportMode=None, isReadable for `body_*`)
+→ `PartMeshLibrary` (Resources.Load, Sanitise, `AssignByName` token→material
+binding) → `PartVisualFactory`/`CarVehicle`. Bodies are an append-only enum,
+wheel styles an append-only int, presets a `(name, Func<VehicleDesign>)[]`.
+Appearance ships over LAN as full vehicleJson, gated by exact ProtocolVersion
+equality → bump 6 → 7.
+
+All three blends share one rig: `<NAME>_ROOT` → `<NAME>_BODY` (body meshes) +
+`W_xx_STEER → SPIN → SIDE` wheel empties (tire/rim/disc under SIDE, calipers
+under STEER), +X forward, +Z up, ~4.4–4.84 units long. Every paint material
+(`M_Paint`/`M_Buggy_Paint`/`M_Police_Paint`) is authored 0.8 grey = the tint
+channel.
+
+**User decisions**: remove Rally Buggy, F1 Racer, Crawler, Drift Car (keep
+Real Twin 1/10 + Opus Vector — mission harness requires "Opus Vector" to
+resolve); tintable paint channel (accents locked as authored); Light parts =
+police bar + buggy pods only (contoured head/tail lights stay baked into their
+bodies, emissive); police strobes ANIMATED (alternating red/blue pulse).
+
+Non-negotiables: no physics changes (CarVehicle edits are enum/visual/catalog
+only); Opus regression must stay bit-identical to R4; enum ordinals and
+wheelStyle ints append-only; new JSON fields must default to legacy behavior.
+
+## Naming / catalog map
+
+- `BodyShape { Box, Wedge, Buggy, Shell, LowRacer, Coupe, Baja, Patrol }`
+  (CarVehicle.cs:12; ordinals 5/6/7).
+- Mesh keys (`Assets\Resources\PartModels\`): `body_coupe`, `body_baja`,
+  `body_patrol` (must start `body_` — isReadable rule,
+  PartModelPostprocessor.cs:56), `wheel_coupe`, `wheel_baja`, `wheel_patrol`,
+  `light_bar`, `light_pods`, `antenna_whip`, `antenna_flag`, `antenna_twin`.
+- Wheel styles: 3=coupe, 4=baja, 5=patrol (PartVisualFactory.WheelStyleKey:70
+  + GarageUI styleNames:1129).
+- `AntennaSpec.antennaStyle` int (new, defaults 0): 0 stub, 1 whip+amber tip,
+  2 flag whip, 3 twin.
+- New `LightSpec.style`: 0 bar, 1 pods. New `PartType.Light`.
+- Presets: add "TT Coupe", "TT Baja", "TT Patrol".
+
+## Scale math (single source of truth = the Blender script's printed JSON)
+
+Uniform `s = 0.42 / bodyLengthX`; nominal coupe 0.0955, baja 0.0917, patrol
+0.0868. Axis map: Blender +X (nose) → Unity +Z, Blender Y → Unity X, Blender Z
+→ Unity Y. Export origin: wheel-set centre laterally/fore-aft, height so
+wheel centres land at Unity y = −0.045 (stock authoring contract).
+
+| | s | wheel z ± | wheel x ± | wheel r |
+|---|---|---|---|---|
+| Coupe | 0.0955 | 0.1375 | 0.0998 | 0.0453 |
+| Baja | 0.0917 | 0.1449 | 0.1192 | 0.0551 |
+| Patrol | 0.0868 | 0.1319 | 0.0855 | 0.0412 |
+
+Wheel FBXs export at author radius exactly 0.033 (scale 0.033/tireR: 0.06950
+car/police, 0.05487 buggy); runtime rescales by radius/0.033. Presets set
+`bodySize = (0.20, 0.10, 0.42)` exactly → `bodySize / BodyMeshAuthorSize` =
+identity → mesh renders as-authored, undistorted (collider/aero stay nominal).
+
+## Milestone 0 — plan-file housekeeping
+
+- [x] Append everything below the `MATERIAL TO ARCHIVE` marker (end of this
+      file) as ONE new entry at the TOP of `Docs/plan-archive.md` (newest-first,
+      after header + first `---`). Title:
+      `# LAN visual parity (protocol v6) + arcade bot racing line (2026-07-27)`.
+      Bold note at entry top: **play-test checklist still undriven when
+      archived**. Update the archive header char-count/date line. Splice via
+      script — the file is ~420 KB, do not re-emit it.
+- [x] Delete the archived material from this file.
+
+## Milestone 1 — Blender build script + 11 FBX exports + validator rows
+
+**New file** `E:\EE Projects\Tiny_Torque\Blender\build_vehicles.py` —
+re-runnable, never saves the source blends. Run with Blender 5.2
+(`C:\Program Files\Blender Foundation\Blender 5.2\blender.exe --background
+--python build_vehicles.py`); the blends are 5.x-era, the 3.1 install may not
+open them. Mirror the FBX args of `mcp_helpers.py:597-602` exactly
+(use_selection, apply_unit_scale=False, global_scale=0.01, axis_forward='-Z',
+axis_up='Y', bake_space_transform=True, MESH only, mesh_smooth_type='EDGE',
+use_tspace=True).
+
+Per car:
+- [x] **Body FBX**: duplicate every MESH under `<NAME>_BODY` EXCLUDING the
+      light group (baja: Buggy_LightCans+Lenses; patrol: Police_Bar*/strobes)
+      and antenna group (coupe: Car_Antenna/Tip/AntMount; baja:
+      Buggy_Whip+Flag; patrol: Police_Antennas). STEER/SPIN/SIDE subtrees are
+      not under `_BODY`, so uprights/calipers stay out; buggy shocks/arms
+      parented to `_BODY` come along as static geometry (accepted — presets use
+      suspLength 0 so no procedural strut doubles the authored one). Apply
+      transforms, `separate(type='MATERIAL')` (guarantees 1 material/object —
+      Car_Body has 2 slots and AssignByName only sets slot 0), rename objects
+      `<token>_<n>` from a material→token table (paint/dark/chrome/gold/glass/
+      em_head/em_tail/tube/orange/em_amber/em_red/em_blue/barwhite…),
+      **fail loudly on unmapped materials**; assert UVs exist on every paint
+      object; scale by s, origin per the table; export nose → Unity +Z.
+- [x] **Wheel FBX**: front-left `W_xx_SIDE` subtree only (tire, rim, barrel,
+      disc, nut — NO calipers/uprights: the whole viz holder takes the spin
+      quaternion (CarVehicle.cs:1594) and a baked caliper would orbit).
+      Centre at wheel centre, scale to author r 0.033, axle +X, rim face +X
+      (PartVisualFactory flips 180° per side). Tokens: tire, rim→gold/orange/
+      chrome per car, disc→brake, nut→chrome.
+- [x] **Light FBX** (baja pods, patrol bar): centred on own bounds, scaled by
+      s (authored at game size — rendered unscaled like antenna_stub). Tokens:
+      dark/chrome/em_red/em_blue/barwhite/em_head.
+- [x] **Antenna FBX**: coupe whip+amber tip (origin at ANT_BASE), baja
+      whip+flag, patrol both whips baked as one part (origin at midpoint).
+      Tokens: whip/base/em_amber/flag.
+- [x] **Print a JSON block** per car: s, Unity-space wheel positions/radius,
+      light + antenna mount points → pasted into the M6 presets, never
+      hand-derived.
+- [x] `Assets\Editor\PartModelValidator.cs` Specs (:50): rows for all 11 new
+      keys — bodies pin Z=0.420 (X free, real widths 0.19–0.20), wheels pin
+      Y=Z=0.066; tri budgets provisional, tightened after the first `[PMV]`
+      report prints real counts.
+
+Checkpoint: FBXs import, `PartModelValidator.Report` ALL PASS, compile clean.
+
+## Milestone 2 — Bodies: enum, accent materials, painter filter
+
+- [x] `CarVehicle.cs`: append enum values (:12); `BodyMeshKey` (:699) 3 new
+      cases. `BuildBodyVisual` (:645): for the three new shapes, replace the
+      flatten-to-_bodyMat loop (:676-680) with `AssignBodyAccents(inst)` —
+      walk renderers by name token; `paint` → `_bodyMat` (and only those into
+      `_bodyRenderers`, so livery/SetBodyMaterial keep working); other tokens →
+      shared accent materials; unmatched → `_bodyMat`. Old shapes bit-identical.
+      Expose `public IReadOnlyList<MeshRenderer> PaintRenderers`.
+- [x] `PartVisualFactory.cs`: new lazy shared accent materials (pattern
+      :26-45): Chrome, Gold, DarkTrim, Glass (transparent fade like
+      MakeGhostMat), Tube, OrangeAccent; emissive (EnableKeyword "_EMISSION"):
+      HeadLight (white), TailLight (red), Amber, RedStrobe, BlueStrobe,
+      BarWhite. Colors from the blend values.
+- [x] `AeroDynamics.cs`: `BodyCd` (:41) Coupe 0.48 / Baja 0.85 / Patrol 0.55;
+      `BodyClA` (:55) Coupe 0.004 / Patrol 0.003 / Baja 0.
+- [x] `GarageUI.cs` DrawBodyTab (:915-929): 8 shape buttons — wrap into rows
+      of 4.
+- [x] `BodyPainter.cs` Attach (:101-109): cook MeshColliders only for
+      renderers in `car.PaintRenderers` (all body_* meshes are readable —
+      today's unfiltered loop would let a stroke on the canopy stamp garbage
+      into the shared livery texture via the glass mesh's UVs).
+
+Checkpoint: compile; three new shapes in garage with chrome/gold/glass/
+emissive look; color slider + PAINT tab touch only paint panels.
+
+## Milestone 3 — Wheel styles
+
+- [x] `PartVisualFactory.WheelStyleKey` (:70): 3/4/5 → coupe/baja/patrol.
+      Extend the AssignByName call (:105-107) with ("gold", Gold),
+      ("orange", OrangeAccent), ("chrome", Chrome) ahead of existing tokens.
+- [x] `GarageUI.cs:1129`: styleNames += "Coupe", "Baja", "Steelie".
+
+## Milestone 4 — Antenna styles
+
+- [x] `VehicleDesign.cs` AntennaSpec (:121): `public int antennaStyle = 0;`
+      (old JSON → 0 = stub).
+- [x] `PartVisualFactory.BuildAntennaViz` (:320): style param → key switch
+      (1 whip / 2 flag / 3 twin / else stub); tokens += ("em_amber", Amber),
+      ("flag", OrangeAccent). Primitive fallback unchanged.
+- [x] `VehicleFactory.CreateAntennaVisual` (:201) passes style;
+      `PartGhost.ForAntenna` (:46) + its GarageUI callers (:342, :348, :401).
+- [x] `GarageUI.DrawAntennaInspector` (:1281): style cycle button
+      (Stub/Whip/Flag/Twin) + RebuildPreview.
+- [x] `SymmetryUtil.MirrorInto(AntennaSpec)` (:121): **explicit
+      `dst.antennaStyle = src.antennaStyle;` — MirrorInto copies fields by
+      hand, not MemberwiseClone; without it a mirrored twin resets to stub.**
+
+## Milestone 5 — Light part category (+ animated strobe)
+
+Template: every AntennaSpec touch point (newest category, hits them all).
+
+- [x] `VehicleDesign.cs`: `LightSpec { name, localPos, yawDeg, style, sizeScale
+      =1, mirrorGroup=-1, massKg=0, Clone() }` + `List<LightSpec> lights`
+      (old JSON → empty).
+- [x] `PartMarker.cs:6`: append `Light`.
+- [x] `PartVisualFactory.BuildLightViz(parent, style, sizeScale)`:
+      TryInstantiate light_bar/light_pods (default VizLayer — invisible to the
+      on-car camera like every part), AssignByName (dark/chrome/em_red/em_blue/
+      barwhite/em_head), primitive fallback (box + two emissive cubes). For
+      style 0 attach new `LightBarStrobe` MonoBehaviour: alternates red/blue
+      emission ~3 Hz via **MaterialPropertyBlock on its own renderers** (never
+      the shared RedStrobe/BlueStrobe materials — those are shared by every
+      bar and the palette icon). Cosmetic only; no network state.
+- [x] `VehicleFactory`: build loop + `CreateLightVisual` + `Built.lightVisuals`
+      (antenna pattern :163-167, :201).
+- [x] `GarageBootstrap`: PreviewLights, markers, SetPartVisible (antenna
+      pattern :29/:154/:190/:257).
+- [x] `GarageUI`: palette entry in MISC ("light", "Lights", "Roof light bar /
+      pod cluster — cosmetic, emissive."), StartDrag/StartPlacing/drop/twin/
+      pending/marker/parts-list/inspector (style cycle Bar/Pods, size, mass)/
+      move/delete/name-pool — clone each antenna site (:339-348, :397-402,
+      :451, :544-563, :617, :630/:644, :728, :1093-1099, :1109, :1374, :1536,
+      :1555).
+- [x] `PartGhost.ForLight(style, sizeScale, yaw)`.
+- [x] `SymmetryUtil`: FindTwin/MirrorInto/SyncTwin for LightSpec — **explicit
+      `dst.style = src.style;`**.
+- [x] `MassProperties`: `LightMass = 0.012f` + lights loop (:37/:81 pattern).
+- [x] `PartIconFactory.BuildFor` (:30): `"light" => BuildLightViz(p, 0, 1f)`
+      (snapshot cullingMask is VizLayer-only and TryInstantiate defaults to
+      VizLayer, so the icon renders — no fix needed).
+
+## Milestone 6 — Presets, removals, menu fix, protocol v7, README
+
+- [x] `VehiclePresets.All` becomes: Real Twin 1/10, TT Coupe, TT Baja,
+      TT Patrol, Opus Vector. Delete RallyBuggy/F1Racer/Crawler/DriftCar
+      builder methods. New builders (wheel/mount numbers pasted from the M1
+      JSON; sensors = camera + front ToF + AddEncoders; bodyColor default
+      (0.8, 0.8, 0.8) = authored silver):
+      - **TT Coupe**: Coupe body, mass 1.7, wheels ±0.0998 x / ±0.1375 z,
+        r 0.0453, style 3, fronts steer, rears powered, stiff susp
+        (400 N/m, ζ 0.7, travel 0.025), antennaStyle 1 at scaled ANT_BASE.
+      - **TT Baja**: Baja body, mass 1.95, wheels ±0.1192 / ±0.1449, r 0.0551,
+        style 4, 4WD, fronts steer, soft susp (200, ζ 0.55, travel 0.05),
+        light pods (style 1) on roof, antennaStyle 2.
+      - **TT Patrol**: Patrol body, mass 1.8, wheels ±0.0855 / ±0.1319,
+        r 0.0412, style 5, fronts steer, rears powered, susp 350/ζ 0.65/0.03,
+        light bar (style 0) on roof, antennaStyle 3.
+- [x] Latent-bug fix folded in: `MenuBootstrap.ResolveShowDesign` (:72-81)
+      tries `VehiclePresets.Resolve` before defaulting (MenuUI.ResolveVehicle
+      :96-101 pattern) — a ★ preset as last vehicle now shows on the menu.
+- [x] `NetSession.cs:51`: `ProtocolVersion = 7` + house-style history comment
+      (v6 peers lack the new shapes/styles/light parts and would render a
+      received vehicleJson wrong).
+- [x] `README.md`: preset section rewrite (:239-245), grep for removed preset
+      names, note the three new cars + light/antenna parts + v7.
+
+## Milestone 7 — Verification
+
+- [x] **V1 compile**: batch `-batchmode -nographics -quit`, 0 `error CS`
+      (delete UnityLockfile if stale; PowerShell doesn't wait — poll).
+- [x] **V2 PartModelValidator.Report** batch: `[PMV] RESULT ALL PASS`; tighten
+      M1 tri budgets to real counts.
+- [x] **V3 Opus regression**: `-batchmode -executeMethod
+      AIHWSim.EditorTools.OpusMissionRunner.RunHeadless` — NO `-nographics`,
+      NO `-quit`, poll JSON. Bit-identical R4: legA −13.615608215332032 mm,
+      turn +0.1873779296875°, legB +15.803813934326172 mm, brake
+      +42.34135055541992 mm, total +58.14552307128906 mm, drift
+      −42.4041748046875 mm, completed true, fault 0, phase 10. (Opus Vector
+      untouched; enum append preserves ordinals; body-build changes are
+      branch-gated to the new shapes.)
+- [x] **V4 release build** via BuildMenu.BuildRelease (forced by v7); verify
+      Assembly-CSharp.dll timestamp. In the built player check emissives +
+      transparent glass render (runtime Standard-shader variants can be
+      stripped from builds; fallback = a Resources-referenced material
+      carrying the keywords).
+
+## Play-test checklist (user)
+
+- [ ] Each new preset drives: wheel arches align, wheels sized right, body
+      undistorted, no floating/sunken stance.
+- [ ] Garage: color picker + PAINT strokes hit only paint panels on all three
+      bodies (glass/chrome/gold/lights immune); undo/redo; save/load
+      round-trip; old saved designs still load.
+- [ ] Light bar strobes alternate red/blue; pods glow; parts place/mirror/
+      delete cleanly on any body; palette icons render.
+- [ ] Antenna styles cycle; mirrored antenna keeps its style.
+- [ ] Removed presets gone from menu + garage; last-vehicle set to a removed
+      name falls back gracefully; menu showcar now displays ★ presets.
+- [ ] LAN: v6 vs v7 → "Version mismatch"; two v7 machines see each other's
+      new cars correctly (light parts, wheel styles, paint).
+- [ ] On-car camera feed: new bodies visible to own camera as intended (body
+      stays on car layer); light parts NOT in the feed (VizLayer).
+
+## Known risks
+
+1. Multi-material objects: solved structurally by separate-by-material in the
+   exporter + a 1-slot assert; AssignByName only sets slot 0.
+2. Buggy shocks/arms baked into the body won't articulate with steering/
+   suspension travel — accepted (small visual disconnect at full lock).
+3. Camera sensor sees the taller buggy cage / patrol roof at frame top —
+   by design (body on car layer); Opus mission unaffected (LowRacer).
+4. Runtime emission/fade shader variants may be stripped from release builds —
+   explicit V4 check + known fallback.
+5. AssignByName is first-match substring — tokens chosen unambiguous
+   (em_head/em_tail, never bare "light"); exporter fails loudly on unmapped
+   materials.
+6. Police twin antenna is one centred part (mirroring a per-side whip would
+   yield four) — quirky off-centre placement accepted.
+7. Old body_buggy etc. FBXs and enum values stay shipped — saved designs from
+   removed presets must keep rendering.
 
 ---
 # LAN visual parity (protocol v6) + arcade bot racing line (2026-07-27)

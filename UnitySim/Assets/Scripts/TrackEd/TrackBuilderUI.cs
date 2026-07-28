@@ -530,6 +530,7 @@ namespace AIHWSim.TrackEd
             _placingDef = def;
             _ghost = TrackGhost.For(def);
             _ghost.Yaw = it.yawDeg;
+            _ghost.Scale = it.scale > 0f ? it.scale : 1f;   // move keeps its size
             SetItemVisible(_dragItem, false);
         }
 
@@ -537,10 +538,18 @@ namespace AIHWSim.TrackEd
         {
             if (InputReader.CancelPressed()) { CancelPlacement(); return; }
 
-            // Scroll rotates the ghost in 15° steps (orbit zoom is blocked).
+            // Scroll rotates the ghost in 15° steps (orbit zoom is blocked);
+            // hold Shift and it resizes instead, so a prop can be sized before
+            // it is ever placed rather than only from the selection panel.
             float scroll = InputReader.ScrollDelta();
             if (Mathf.Abs(scroll) > 0.0001f)
-                _ghost.Yaw = Mathf.Repeat(_ghost.Yaw + (scroll > 0 ? 15f : -15f), 360f);
+            {
+                if (InputReader.ShiftHeld())
+                    _ghost.Scale = Mathf.Clamp(_ghost.Scale * (scroll > 0 ? 1.15f : 1f / 1.15f),
+                                               MinItemScale, MaxItemScale);
+                else
+                    _ghost.Yaw = Mathf.Repeat(_ghost.Yaw + (scroll > 0 ? 15f : -15f), 360f);
+            }
 
             Vector3 pos = default;
             float yaw = _ghost.Yaw;
@@ -582,17 +591,26 @@ namespace AIHWSim.TrackEd
             CommitPlacement(_ghost.Root.transform.position, onRibbon ? _ghost.Yaw : yaw);
         }
 
+        /// <summary>
+        /// Ground tiles on a ported map are 2 m, which would be a very coarse
+        /// grid to place a 0.075 m traffic cone on. Placement therefore snaps
+        /// to a sub-tile cell of roughly 1 m instead. A 1 m tileSize gives one
+        /// cell per tile, i.e. exactly the tile-centre snapping this has always
+        /// done.
+        /// </summary>
+        private int SnapCells => Mathf.Max(1, Mathf.RoundToInt(D.tileSize));
+
         private bool SnapPose(Vector3 hit, out Vector3 pos, out float yaw)
         {
             pos = default; yaw = _ghost.Yaw;
             if (!D.WorldToTile(hit, out int tx, out int tz)) return false;
-            Vector3 c = D.TileCenter(tx, tz);
+            Vector3 c = SnapCenter(hit, tx, tz);
 
             if (_placingDef.snap == SnapMode.TileEdge)
             {
-                // Snap to the nearest of the tile's 4 edge midpoints; the edge
+                // Snap to the nearest of the cell's 4 edge midpoints; the edge
                 // seeds the heading (scroll still rotates from there).
-                float half = D.tileSize * 0.5f;
+                float half = D.tileSize / SnapCells * 0.5f;
                 Vector3[] edges =
                 {
                     c + new Vector3(0, 0,  half), c + new Vector3(0, 0, -half),
@@ -612,6 +630,19 @@ namespace AIHWSim.TrackEd
 
             pos = c;
             return true;
+        }
+
+        /// <summary>Centre of the sub-tile cell under <paramref name="hit"/>.</summary>
+        private Vector3 SnapCenter(Vector3 hit, int tx, int tz)
+        {
+            Vector3 c = D.TileCenter(tx, tz);
+            int k = SnapCells;
+            if (k <= 1) return c;
+            float cell = D.tileSize / k;
+            float corner = -D.tileSize * 0.5f + cell * 0.5f;   // first cell centre
+            int ix = Mathf.Clamp(Mathf.FloorToInt((hit.x - (c.x - D.tileSize * 0.5f)) / cell), 0, k - 1);
+            int iz = Mathf.Clamp(Mathf.FloorToInt((hit.z - (c.z - D.tileSize * 0.5f)) / cell), 0, k - 1);
+            return new Vector3(c.x + corner + ix * cell, c.y, c.z + corner + iz * cell);
         }
 
         /// <summary>Single-instance rules: one finish line, one spawn point.</summary>
@@ -634,7 +665,8 @@ namespace AIHWSim.TrackEd
             {
                 bootstrap.BreakUndoCoalescing();
                 bootstrap.PushUndo("place");
-                var it = new PlacedItem { itemId = _placingDef.id, x = pos.x, y = pos.y, z = pos.z, yawDeg = yaw };
+                var it = new PlacedItem { itemId = _placingDef.id, x = pos.x, y = pos.y, z = pos.z,
+                                          yawDeg = yaw, scale = _ghost.Scale };
                 if (_placingDef.behavior == ItemBehavior.Checkpoint)
                 {
                     int max = -1;
@@ -650,6 +682,7 @@ namespace AIHWSim.TrackEd
                 bootstrap.PushUndo("move");
                 var it = D.items[_dragItem];
                 it.x = pos.x; it.y = pos.y; it.z = pos.z; it.yawDeg = yaw;
+                it.scale = _ghost.Scale;   // shift+scroll during the drag sticks
                 _selItem = _dragItem;
             }
             ClearGhost();
@@ -1022,6 +1055,7 @@ namespace AIHWSim.TrackEd
             _rightScroll = GUILayout.BeginScrollView(_rightScroll);
             GUILayout.Label("MAP", GarageSkin.Header);
             GUILayout.Label($"{D.width} × {D.length} tiles ({D.WorldWidth:0}×{D.WorldLength:0} m)");
+            DrawTileSizeRow();
             DrawResizeRow("West");
             DrawResizeRow("East");
             DrawResizeRow("South");
@@ -1038,12 +1072,59 @@ namespace AIHWSim.TrackEd
             GUILayout.EndArea();
         }
 
+        /// <summary>
+        /// Metres per ground tile. A map only reaches the size of the ported
+        /// TinyTorque worlds (up to 112 m) by growing its tiles rather than its
+        /// tile count — 80 tiles is the ceiling and 80 × 1 m is not enough.
+        /// </summary>
+        private static readonly float[] TileSizes = { 0.5f, 1f, 1.5f, 2f, 3f };
+
+        private void DrawTileSizeRow()
+        {
+            GUILayout.BeginHorizontal();
+            GUILayout.Label("Tile", GUILayout.Width(50));
+            if (GUILayout.Button("◀", GUILayout.Width(24))) StepTileSize(-1);
+            GUILayout.Label($"{D.tileSize:0.0} m", GarageSkin.Header);
+            if (GUILayout.Button("▶", GUILayout.Width(24))) StepTileSize(+1);
+            GUILayout.EndHorizontal();
+        }
+
+        private void StepTileSize(int delta)
+        {
+            int cur = 0;
+            for (int i = 0; i < TileSizes.Length; i++)
+                if (Mathf.Abs(TileSizes[i] - D.tileSize) < Mathf.Abs(TileSizes[cur] - D.tileSize))
+                    cur = i;
+            int next = Mathf.Clamp(cur + delta, 0, TileSizes.Length - 1);
+            if (next == cur) return;
+
+            bootstrap.BreakUndoCoalescing();
+            bootstrap.PushUndo("tilesize");
+            D.tileSize = TileSizes[next];
+            _selItem = -1;
+            bootstrap.RebuildAll();
+            bootstrap.FrameMap();
+
+            // Items keep their world positions, so shrinking the tile moves the
+            // map edge inward past some of them. Nothing is deleted (only
+            // Resize culls) but they stop sitting on painted ground, so say so.
+            float halfW = D.WorldWidth * 0.5f, halfL = D.WorldLength * 0.5f;
+            int outside = 0;
+            foreach (var it in D.items)
+                if (Mathf.Abs(it.x) > halfW || Mathf.Abs(it.z) > halfL) outside++;
+            _status = outside > 0
+                ? $"Tile {D.tileSize:0.0} m — {outside} item(s) now outside the map"
+                : $"Tile {D.tileSize:0.0} m ({D.WorldWidth:0}×{D.WorldLength:0} m)";
+        }
+
         private void DrawResizeRow(string label)
         {
             GUILayout.BeginHorizontal();
             GUILayout.Label(label, GUILayout.Width(50));
-            if (GUILayout.Button("−", GUILayout.Width(34))) ApplyResize(label, -1);
-            if (GUILayout.Button("+", GUILayout.Width(34))) ApplyResize(label, +1);
+            if (GUILayout.Button("−", GUILayout.Width(26))) ApplyResize(label, -1);
+            if (GUILayout.Button("+", GUILayout.Width(26))) ApplyResize(label, +1);
+            if (GUILayout.Button("−5", GUILayout.Width(30))) ApplyResize(label, -5);
+            if (GUILayout.Button("+5", GUILayout.Width(30))) ApplyResize(label, +5);
             GUILayout.EndHorizontal();
         }
 
@@ -1198,10 +1279,53 @@ namespace AIHWSim.TrackEd
             {
                 bootstrap.PushUndo("rotate");
                 it.yawDeg = Mathf.Repeat(it.yawDeg + 15f, 360f);
-                bootstrap.RequestRebuild();
+                // Yaw is a transform change: re-pose in place rather than
+                // rebuilding the whole map behind a 600-prop preset.
+                bootstrap.RepositionItem(_selItem);
             }
             if (GUILayout.Button("Delete")) DeleteSelected();
             GUILayout.EndHorizontal();
+
+            // ---- size ----------------------------------------------------
+            GUILayout.BeginHorizontal();
+            GUILayout.Label($"Scale ×{it.scale:0.00}", GUILayout.Width(80));
+            if (GUILayout.Button("−", GUILayout.Width(30))) SetItemScale(it, it.scale / 1.15f);
+            if (GUILayout.Button("+", GUILayout.Width(30))) SetItemScale(it, it.scale * 1.15f);
+            if (GUILayout.Button("1×", GUILayout.Width(34))) SetItemScale(it, 1f);
+            GUILayout.EndHorizontal();
+            float ns = GUILayout.HorizontalSlider(it.scale, MinItemScale, MaxItemScale);
+            if (!Mathf.Approximately(ns, it.scale)) SetItemScale(it, ns);
+
+            // Pinning only means anything for props that would otherwise get a
+            // Rigidbody, so it only shows for those.
+            if (def != null && def.dynamic)
+            {
+                bool pin = GUILayout.Toggle(it.pinned, " Pinned (no physics)");
+                if (pin != it.pinned)
+                {
+                    bootstrap.BreakUndoCoalescing();
+                    bootstrap.PushUndo("pin");
+                    it.pinned = pin;
+                    // Unlike yaw/scale this changes what gets BUILT, so it does
+                    // need a rebuild — but only in the drive scene does it show.
+                    bootstrap.RequestRebuild();
+                }
+            }
+        }
+
+        /// <summary>Item size limits. Wide enough to turn a boulder into a
+        /// pebble or a fence post into a monolith, tight enough that a stray
+        /// drag cannot swallow the map.</summary>
+        private const float MinItemScale = 0.2f, MaxItemScale = 5f;
+
+        private void SetItemScale(PlacedItem it, float scale)
+        {
+            scale = Mathf.Clamp(scale, MinItemScale, MaxItemScale);
+            if (Mathf.Approximately(scale, it.scale)) return;
+            // Coalesced: dragging the slider is one undo step, not fifty.
+            bootstrap.PushUndo("scale");
+            it.scale = scale;
+            bootstrap.RepositionItem(_selItem);
         }
 
         private void DrawLoadList()

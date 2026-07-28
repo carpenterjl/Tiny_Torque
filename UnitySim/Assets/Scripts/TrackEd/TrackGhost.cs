@@ -16,6 +16,7 @@ namespace AIHWSim.TrackEd
 
         public GameObject Root { get; private set; }
         public float Yaw;
+        public float Scale = 1f;
 
         private Material _mat;
         private bool _valid = true;
@@ -35,8 +36,11 @@ namespace AIHWSim.TrackEd
             return g;
         }
 
-        public void SetPose(Vector3 pos, Quaternion rot) =>
+        public void SetPose(Vector3 pos, Quaternion rot)
+        {
             Root.transform.SetPositionAndRotation(pos, rot);
+            Root.transform.localScale = Vector3.one * Scale;
+        }
 
         public void SetValid(bool ok)
         {

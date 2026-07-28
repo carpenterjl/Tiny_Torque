@@ -91,6 +91,48 @@ namespace AIHWSim.Track
             return go;
         }
 
+        // ---- ground tiles ---------------------------------------------------
+        // A ported TinyTorque map is up to 56x56 tiles. Going through
+        // CreatePrimitive(Cube) and then destroying the BoxCollider and five
+        // unwanted faces costs ~60 us each, which is a fifth of a second of map
+        // load spent on geometry nobody sees the underside of.
+
+        private static Mesh _quad;
+
+        /// <summary>A 1x1 quad in the XZ plane, facing +Y, centred on the
+        /// origin. Shared — never scale it, scale the transform.</summary>
+        public static Mesh QuadMesh()
+        {
+            if (_quad != null) return _quad;
+            _quad = new Mesh
+            {
+                name = "GroundTile",
+                vertices = new[]
+                {
+                    new Vector3(-0.5f, 0f, -0.5f), new Vector3(-0.5f, 0f, 0.5f),
+                    new Vector3(0.5f, 0f, 0.5f), new Vector3(0.5f, 0f, -0.5f),
+                },
+                uv = new[] { Vector2.zero, Vector2.up, Vector2.one, Vector2.right },
+                triangles = new[] { 0, 1, 2, 0, 2, 3 },
+                normals = new[] { Vector3.up, Vector3.up, Vector3.up, Vector3.up },
+            };
+            _quad.RecalculateBounds();
+            return _quad;
+        }
+
+        /// <summary>One collider-less ground tile on the shared quad.</summary>
+        public static GameObject Tile(string name, Vector3 center, float size,
+            Material mat, Transform parent)
+        {
+            var go = new GameObject(name);
+            go.transform.SetParent(parent, false);
+            go.transform.localPosition = center;
+            go.transform.localScale = new Vector3(size, 1f, size);
+            go.AddComponent<MeshFilter>().sharedMesh = QuadMesh();
+            go.AddComponent<MeshRenderer>().sharedMaterial = mat;
+            return go;
+        }
+
         public static GameObject Cylinder(string name, Vector3 pos, Vector3 scale, Quaternion rot,
             Material mat, Transform parent, bool collider = true)
         {

@@ -77,14 +77,37 @@ namespace AIHWSim.EditorTools
                 if (spawn > 1) problems.Add($"spawn count {spawn} (want 0 or 1)");
                 if (outside > 0) problems.Add($"{outside} item(s) outside the map");
 
+                // A scale of 0 builds an invisible item and is what a map saved
+                // before per-item scale deserialises to — TrackDesign.EnsureItems
+                // repairs it, so seeing one here means a preset authored it.
+                int badScale = 0;
+                foreach (var it in d.items) if (!(it.scale > 0f)) badScale++;
+                if (badScale > 0) problems.Add($"{badScale} item(s) with scale <= 0");
+
+                // BotPath.Build follows the spline with the MOST control points,
+                // not the longest or the first. A themed map that grew a second
+                // decorative spline would hand the bots a side lane and nothing
+                // would say so — hence: one spline, and it must be the closed
+                // racing loop.
+                if (d.splines.Count > 1)
+                {
+                    SplineSpec most = null;
+                    foreach (var s in d.splines)
+                        if (most == null || s.Count > most.Count) most = s;
+                    problems.Add($"{d.splines.Count} splines — BotPath would follow the " +
+                                 $"{most.Count}-point one" + (most.closed ? "" : ", which is not closed"));
+                }
+
                 // Checkpoint orders drive LapTimer's in-order gate: they must be a
                 // dense 0..n-1 run or a lap can never be validated.
                 cps.Sort();
                 for (int i = 0; i < cps.Count; i++)
                     if (cps[i] != i) { problems.Add($"checkpoint orders not dense 0..{cps.Count - 1}"); break; }
 
-                string line = $"{name}: {d.width}x{d.length} items={d.items.Count} " +
-                              $"splines={d.splines.Count} cp={cps.Count} boxes={boxes}";
+                string line = $"{name}: {d.width}x{d.length}@{d.tileSize:0.#}m " +
+                              $"({d.WorldWidth:0}x{d.WorldLength:0}m) items={d.items.Count} " +
+                              $"splines={d.splines.Count} cp={cps.Count} boxes={boxes} " +
+                              $"amb='{d.ambience}'";
                 if (problems.Count == 0) Debug.Log($"[TPV] PASS {line}");
                 else { Debug.LogError($"[TPV] FAIL {line} - {string.Join("; ", problems)}"); fail++; }
             }
@@ -209,6 +232,10 @@ namespace AIHWSim.EditorTools
                             ribbonColliders += root.GetComponentsInChildren<MeshCollider>(true).Length;
                         }
                     int items = built.root.transform.childCount;
+                    // What the map actually costs to draw. The ported maps run
+                    // 350-750 items of two to nine pieces each, and this is the
+                    // number to watch if one of them ever hitches on load.
+                    int renderers = built.root.GetComponentsInChildren<Renderer>(true).Length;
 
                     if (d.splines.Count > 0 && ribbonColliders == 0)
                     {
@@ -216,8 +243,8 @@ namespace AIHWSim.EditorTools
                         fail++;
                     }
                     else
-                        Debug.Log($"[TPV] BUILD {name}: roots={items} ribbonMesh={ribbonMeshes} " +
-                                  $"ribbonCollider={ribbonColliders}");
+                        Debug.Log($"[TPV] BUILD {name}: roots={items} renderers={renderers} " +
+                                  $"ribbonMesh={ribbonMeshes} ribbonCollider={ribbonColliders}");
                 }
                 catch (System.Exception e)
                 {

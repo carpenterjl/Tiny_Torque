@@ -411,6 +411,20 @@ namespace AIHWSim.Core
             return false;
         }
 
+        /// <summary>Either Shift key held (track builder: scroll resizes the
+        /// item being placed instead of rotating it).</summary>
+        public static bool ShiftHeld()
+        {
+#if ENABLE_INPUT_SYSTEM
+            var kb = Keyboard.current;
+            if (kb != null && (kb.leftShiftKey.isPressed || kb.rightShiftKey.isPressed)) return true;
+#endif
+#if ENABLE_LEGACY_INPUT_MANAGER
+            if (SafeKey(KeyCode.LeftShift) || SafeKey(KeyCode.RightShift)) return true;
+#endif
+            return false;
+        }
+
         /// <summary>Either Alt key held (garage paint eyedropper).</summary>
         public static bool AltHeld()
         {
