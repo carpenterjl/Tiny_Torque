@@ -4,6 +4,7 @@ using AIHWSim.Garage;
 using AIHWSim.Net;
 using AIHWSim.Persistence;
 using AIHWSim.TrackEd;
+using AIHWSim.UI;
 using UnityEngine;
 
 namespace AIHWSim.Menu
@@ -16,9 +17,14 @@ namespace AIHWSim.Menu
     /// </summary>
     public sealed class MenuUI : MonoBehaviour
     {
-        private enum Page { Root, SinglePlayer, Multiplayer, Options, Resume, LanHost, LanJoin }
+        private enum Page { Root, SinglePlayer, Multiplayer, Championship, Options, Resume, LanHost, LanJoin, Showroom, Crates, Shop, Cheats }
 
         private Page _page = Page.Root;
+        // What this frame DRAWS. Snapshotted from _page on Layout passes only,
+        // so a handler that switches pages mid-pass (pad activation happens on
+        // a Layout pass — see MenuNav) never desyncs the paired Repaint: the
+        // old page draws once more, the new page owns the next frame.
+        private Page _pageDraw = Page.Root;
         private string _status = "";
 
         // Picker state (indices into the option lists; 0 = stock/oval).
@@ -55,9 +61,34 @@ namespace AIHWSim.Menu
             new List<LanDiscovery.DiscoveredGame>();
         private Vector2 _lanScroll;
 
+        // Title art (Resources/UI) — the Root page's backdrop. After IdleSeconds
+        // without input on Root the panel and backdrop hide so the live attract
+        // loop plays full-screen, arcade style; any input brings the menu back.
+        private Texture2D _titleTex;
+        private const float IdleSeconds = 20f;
+        private float _lastInputTime;
+        private bool _attractHidden;
+
+        // Showroom state: the 3D turntable + its panels, plus where Select/Back
+        // should land (SP page vs the LAN pages).
+        private ShowroomUI _showroom;
+        private Page _showroomReturn = Page.SinglePlayer;
+
+        // Crate room: the same shape as the Showroom — a full-screen 3D page
+        // with its own rig, entered from the root menu and from the Showroom.
+        private CrateOpenUI _crates;
+        private Page _cratesReturn = Page.Root;
+
+        // Cheats page state.
+        private string _cheatEntry = "";
+        private string _cheatStatus = "";
+        private float _cheatShake;
+
         private void Start()
         {
             RefreshLists();
+            _titleTex = Resources.Load<Texture2D>("UI/TinyTorque_Title");
+            _lastInputTime = Time.unscaledTime;
 
             if (!string.IsNullOrEmpty(NetSession.LastDisconnectReason))
             {
@@ -82,22 +113,56 @@ namespace AIHWSim.Menu
 
         private void RefreshLists()
         {
+            // Progression gating happens HERE and only here — the picker layer.
+            // VehiclePresets.Resolve still resolves every name (bots, LAN peers
+            // and the headless regression stay progression-blind); a locked car
+            // simply isn't offered. If the saved pick is now locked (fresh
+            // progress file), the clamp below lands on a legal entry.
+            string prevPick = _vehicles.Count > 0
+                ? _vehicles[Mathf.Clamp(_vehicleIdx, 0, _vehicles.Count - 1)] : null;
+
             _vehicles = new List<string> { "" };  // "" = stock default
-            _vehicles.AddRange(VehiclePresets.DisplayNames());  // ★-prefixed built-ins
-            _vehicles.AddRange(VehicleLibrary.List());
+            foreach (var name in VehiclePresets.DisplayNames())
+                if (!Persistence.Progression.IsCarLocked(name)) _vehicles.Add(name);
+            _vehicles.AddRange(VehicleLibrary.List());   // user saves: never gated
             _tracks = new List<string> { "" };    // "" = classic oval
             _tracks.AddRange(TrackPresets.DisplayNames());
             _tracks.AddRange(TrackLibrary.List());
+
+            if (prevPick != null)
+            {
+                int found = _vehicles.IndexOf(prevPick);
+                if (found >= 0) _vehicleIdx = found;
+            }
             _vehicleIdx = Mathf.Clamp(_vehicleIdx, 0, _vehicles.Count - 1);
             _trackIdx = Mathf.Clamp(_trackIdx, 0, _tracks.Count - 1);
         }
 
-        /// <summary>Resolve a picker vehicle name: "" = stock, ★-preset, or a save.</summary>
+        /// <summary>Resolve a picker vehicle name: "" = stock, ★-preset, or a
+        /// save — then overlay the Showroom loadout. This is the UI layer's
+        /// resolver, which is exactly where the loadout is allowed to apply;
+        /// VehiclePresets.Resolve and VehicleLibrary.Load themselves stay
+        /// byte-identical for bots, LAN internals and the headless regression.</summary>
         private static VehicleDesign ResolveVehicle(string name)
         {
-            if (string.IsNullOrEmpty(name)) return null;              // stock Default()
-            var preset = VehiclePresets.Resolve(name);
-            return preset ?? VehicleLibrary.Load(name);
+            VehicleDesign d = string.IsNullOrEmpty(name)
+                ? null                                        // stock Default()
+                : VehiclePresets.Resolve(name) ?? VehicleLibrary.Load(name);
+
+            var l = Persistence.Progression.LoadoutFor(name ?? "");
+            bool touched = l.hornStyle >= 0 || l.wheelStyle >= 0 || l.paintIdx >= 0
+                || l.topper != 0 || l.aeroKit != 0
+                // A loadout that ONLY carries cosmetics is still a loadout: leave
+                // these out and a car wearing nothing but a crown races bare.
+                || !string.IsNullOrEmpty(l.cosTopper) || !string.IsNullOrEmpty(l.cosRim)
+                || !string.IsNullOrEmpty(l.cosOrnament) || !string.IsNullOrEmpty(l.cosBobble)
+                || !string.IsNullOrEmpty(l.cosWing);
+            if (touched)
+            {
+                d ??= VehicleDesign.Default();   // stock with a loadout must materialize
+                Persistence.Progression.ApplyLoadout(d, name ?? "");
+            }
+            return d;
         }
 
         /// <summary>Resolve a picker track name: "" = classic oval, ★-preset, or a save.</summary>
@@ -108,48 +173,382 @@ namespace AIHWSim.Menu
             return preset ?? TrackLibrary.Load(name);
         }
 
+        private void Update()
+        {
+            // Pad B backs out one page. Consumed in Update — state changes here
+            // are always pass-safe (MenuNav's rule).
+            if (MenuNav.ConsumeBack() && _page != Page.Root)
+                GoBack();
+
+            // Idle → full-screen attract, arcade style. Any activity restores.
+            bool activity = InputReader.AnyPadActivity()
+                || KeyTable.CaptureThisFrame() != KeyCode.None
+                || InputReader.LeftMousePressed()
+                || InputReader.MouseDelta().sqrMagnitude > 4f;
+            if (activity)
+            {
+                _lastInputTime = Time.unscaledTime;
+                _attractHidden = false;
+            }
+            else if (_page == Page.Root && !_attractHidden
+                     && Time.unscaledTime - _lastInputTime > IdleSeconds)
+            {
+                _attractHidden = true;
+            }
+
+            if (_page == Page.Showroom) _showroom?.Tick();
+            if (_page == Page.Crates) _crates?.Tick();
+            _cheatShake = Mathf.Max(0f, _cheatShake - Time.unscaledDeltaTime * 1.6f);
+        }
+
+        /// <summary>One step out of the current page (pad B / ← Back).</summary>
+        private void GoBack()
+        {
+            _status = "";
+            switch (_page)
+            {
+                case Page.LanHost:
+                    SettingsStore.Save();
+                    GoTo(Page.Multiplayer);
+                    break;
+                case Page.LanJoin:
+                    if (_connecting) { _connecting = false; NetSession.Instance?.Leave(); }
+                    LanDiscovery.StopListen();
+                    SettingsStore.Save();
+                    GoTo(Page.Multiplayer);
+                    break;
+                case Page.Championship:
+                    GoTo(Page.Root);
+                    break;
+                case Page.Crates:
+                    CloseCrates();
+                    break;
+                case Page.Shop:
+                    GoTo(Page.Root);
+                    break;
+                case Page.Showroom:
+                    CloseShowroom(applySelection: false);
+                    break;
+                case Page.Cheats:
+                    GoTo(Page.Options);
+                    break;
+                default:
+                    GoTo(Page.Root);
+                    break;
+            }
+        }
+
         private void OnGUI()
         {
             GUI.skin = GarageSkin.Skin;
+            UIScale.Begin();
+            if (Event.current.type == EventType.Layout)
+            {
+                _pageDraw = _page;
+                _attractDraw = _attractHidden;
+            }
 
-            float w = 380f, h = _page == Page.Options
-                ? Mathf.Min(680f, Screen.height - 20f)
-                : _page == Page.SinglePlayer ? Mathf.Min(560f, Screen.height - 20f) : 430f;
-            var area = new Rect((Screen.width - w) * 0.5f, (Screen.height - h) * 0.5f, w, h);
+            // Idle attract: the live loop plays full-screen with just a small
+            // "press any button" bug — no panel, no nav.
+            if (_attractDraw)
+            {
+                var bug = new GUIStyle(GarageSkin.Header) { alignment = TextAnchor.MiddleRight };
+                GUI.Label(new Rect(0f, UIScale.H - 34f, UIScale.W - 16f, 24f),
+                    "TINYTORQUE RC — press any button", bug);
+                UIScale.End();
+                return;
+            }
+
+            MenuNav.BeginFrame("menu:" + _pageDraw);
+
+            // The Showroom owns the whole screen (its 3D camera fills it; its
+            // panels sit at the edges) — no centered box, no backdrop.
+            if (_pageDraw == Page.Showroom)
+            {
+                DrawShowroomPage();
+                MenuNav.EndFrame();
+                UIScale.End();
+                return;
+            }
+            if (_pageDraw == Page.Crates)
+            {
+                DrawCratesPage();
+                MenuNav.EndFrame();
+                UIScale.End();
+                return;
+            }
+
+            bool root = _pageDraw == Page.Root;
+
+            // The Root page IS the title screen: the showroom key art fills the
+            // frame and the menu sits low so the gold logo stays clear.
+            if (root && _titleTex != null)
+                GUI.DrawTexture(Cover(_titleTex.width, _titleTex.height), _titleTex, ScaleMode.StretchToFill);
+
+            float w = 380f, h = _pageDraw == Page.Options
+                ? Mathf.Min(680f, UIScale.H - 20f)
+                : _pageDraw == Page.SinglePlayer ? Mathf.Min(560f, UIScale.H - 20f)
+                : _pageDraw == Page.Multiplayer ? Mathf.Min(560f, UIScale.H - 20f)
+                // The shop scrolls ten offers and the championship lists four
+                // rounds plus a points table; both drown in the default 430.
+                : _pageDraw == Page.Shop ? Mathf.Min(620f, UIScale.H - 20f)
+                : _pageDraw == Page.Championship ? Mathf.Min(600f, UIScale.H - 20f) : 430f;
+            Rect area;
+            if (root && _titleTex != null)
+            {
+                float y = UIScale.H * 0.42f;
+                h = Mathf.Min(h, UIScale.H - y - 12f);
+                area = new Rect((UIScale.W - w) * 0.5f, y, w, h);
+            }
+            else
+            {
+                area = new Rect((UIScale.W - w) * 0.5f, (UIScale.H - h) * 0.5f, w, h);
+            }
+            // Wrong-cheat shake: BeginArea's rect is read per pass, and layout
+            // inside it is area-relative — offsetting only moves the panel.
+            if (_pageDraw == Page.Cheats && _cheatShake > 0f)
+                area.x += Mathf.Sin(Time.unscaledTime * 55f) * 9f * _cheatShake;
             GUILayout.BeginArea(area, GUI.skin.box);
 
-            var title = new GUIStyle(GarageSkin.Header) { fontSize = 22, alignment = TextAnchor.MiddleCenter };
-            GUILayout.Label("AI HARDWARE CONTROL SIM", title);
+            // The key art already carries the logo on Root; every other page
+            // gets the text wordmark.
+            if (!(root && _titleTex != null))
+            {
+                GUILayout.Label("TINYTORQUE", GarageSkin.Title);
+                var sub = new GUIStyle(GarageSkin.StatLabel)
+                    { alignment = TextAnchor.MiddleCenter, fontStyle = FontStyle.Bold };
+                GUILayout.Label("—  R C   S E R I E S  —", sub);
+            }
             GUILayout.Space(10);
 
-            switch (_page)
+            switch (_pageDraw)
             {
                 case Page.Root: DrawRoot(); break;
                 case Page.SinglePlayer: DrawSinglePlayer(); break;
                 case Page.Multiplayer: DrawMultiplayer(); break;
+                case Page.Championship: DrawChampionship(); break;
+                case Page.Shop: DrawShop(); break;
                 case Page.Options: DrawOptions(); break;
                 case Page.Resume: DrawResume(); break;
                 case Page.LanHost: DrawLanHost(); break;
                 case Page.LanJoin: DrawLanJoin(); break;
+                case Page.Cheats: DrawCheats(); break;
             }
 
             GUILayout.FlexibleSpace();
             if (!string.IsNullOrEmpty(_status)) GUILayout.Label(_status, GarageSkin.StatLabel);
             GUILayout.EndArea();
+            MenuNav.EndFrame();
+            UIScale.End();
+        }
+
+        // Layout-snapshotted twin of _attractHidden (same rule as _pageDraw:
+        // whether the panel exists must not change between Layout and Repaint).
+        private bool _attractDraw;
+
+        /// <summary>Smallest rect of the given aspect covering the screen, in UI units.</summary>
+        private static Rect Cover(float tw, float th)
+        {
+            float s = Mathf.Max(UIScale.W / tw, UIScale.H / th);
+            float cw = tw * s, ch = th * s;
+            return new Rect((UIScale.W - cw) * 0.5f, (UIScale.H - ch) * 0.5f, cw, ch);
+        }
+
+        // ---- showroom --------------------------------------------------------
+
+        private void OpenShowroom(Page returnTo)
+        {
+            _showroomReturn = returnTo;
+            string current = _vehicles.Count > 0
+                ? _vehicles[Mathf.Clamp(_vehicleIdx, 0, _vehicles.Count - 1)] : "";
+            GoTo(Page.Showroom, () =>
+            {
+                _showroom = new ShowroomUI();
+                _showroom.Enter(current);
+            });
+        }
+
+        private void CloseShowroom(bool applySelection)
+        {
+            if (_showroom != null)
+            {
+                if (applySelection)
+                {
+                    int found = _vehicles.IndexOf(_showroom.SelectedName);
+                    if (found >= 0) _vehicleIdx = found;
+                }
+                _showroom.Exit();
+                _showroom = null;
+            }
+            GoTo(_showroomReturn);
+        }
+
+        // ---- shop ------------------------------------------------------------
+
+        private Vector2 _shopScroll;
+
+        private void DrawShop()
+        {
+            GUILayout.Label("SCRAP SHOP", GarageSkin.Header);
+            GUILayout.Label($"Scrap: {Persistence.Progression.Scrap}   ·   " +
+                            $"stock rotates in {ShopStock.TimeToRotation()}", GarageSkin.StatLabel);
+            GUILayout.Space(4);
+
+            _shopScroll = GUILayout.BeginScrollView(_shopScroll);
+
+            GUILayout.Label("TODAY'S ITEMS", GarageSkin.Header);
+            foreach (var item in ShopStock.Offers())
+            {
+                bool owned = Persistence.Progression.IsUnlocked(item.id);
+                int price = UnlockCatalog.DirectCost(item);
+                var col = CosmeticCatalog.RarityColor(item.rarity);
+                GUILayout.Label($"{item.display} · {CosmeticCatalog.RarityLabel(item.rarity)}",
+                    new GUIStyle(GarageSkin.StatLabel) { normal = { textColor = col } });
+                GUI.enabled = !owned && Persistence.Progression.Scrap >= price;
+                if (MenuNav.Button(owned ? "   Owned" : $"   Buy — {price} scrap",
+                        GUILayout.Height(22f)) && Persistence.Progression.Buy(item.id))
+                    _status = $"{item.display} bought.";
+                GUI.enabled = true;
+            }
+
+            GUILayout.Space(8);
+            GUILayout.Label("CRATES", GarageSkin.Header);
+            foreach (var def in CosmeticCatalog.Crates)
+            {
+                int price = ShopStock.CratePrice(def.id);
+                GUILayout.Label($"{def.label} — {def.pulls} pull{(def.pulls == 1 ? "" : "s")}" +
+                                $"   (you hold {Persistence.Progression.CrateCount(def.id)})",
+                                GarageSkin.StatLabel);
+                GUI.enabled = Persistence.Progression.Scrap >= price;
+                if (MenuNav.Button($"   Buy — {price} scrap", GUILayout.Height(22f)) &&
+                    ShopStock.BuyCrate(def.id))
+                    _status = $"{def.label} added to your crates.";
+                GUI.enabled = true;
+            }
+
+            GUILayout.EndScrollView();
+
+            GUILayout.Space(6);
+            if (MenuButton("Crates ▶")) OpenCrates(Page.Shop);
+            if (MenuButton("← Back")) GoTo(Page.Root);
+        }
+
+        // ---- crate room ------------------------------------------------------
+
+        private void OpenCrates(Page returnTo)
+        {
+            _cratesReturn = returnTo;
+            GoTo(Page.Crates, () =>
+            {
+                _crates = new CrateOpenUI();
+                _crates.Enter();
+            });
+        }
+
+        private void CloseCrates()
+        {
+            _crates?.Exit();
+            _crates = null;
+            GoTo(_cratesReturn);
+        }
+
+        private void DrawCratesPage()
+        {
+            // Null during the exit dip — same rule as the Showroom: Layout
+            // registered the panels, this Repaint draws none, and the fade
+            // covers the one dark frame.
+            if (_crates == null) return;
+            if (_crates.Draw() == CrateOpenUI.ResultBack) CloseCrates();
+        }
+
+        private void DrawShowroomPage()
+        {
+            // Null during the exit dip: Layout registered the panels, this
+            // Repaint draws none — requesting FEWER cached entries is legal,
+            // and the fade hides the one dark frame.
+            if (_showroom == null) return;
+            switch (_showroom.Draw())
+            {
+                case ShowroomUI.ResultSelected: CloseShowroom(applySelection: true); break;
+                case ShowroomUI.ResultBack: CloseShowroom(applySelection: false); break;
+            }
+        }
+
+        // ---- cheats ----------------------------------------------------------
+
+        private void DrawCheats()
+        {
+            GUILayout.Label("CHEAT CODES", GarageSkin.Header);
+            GUILayout.Space(6);
+            GUILayout.Label("Heard a magic word? Type it here.", GarageSkin.StatLabel);
+            GUILayout.Space(4);
+
+            GUILayout.BeginHorizontal();
+            _cheatEntry = GUILayout.TextField(_cheatEntry, GUILayout.Width(190));
+            bool submit = MenuNav.Button("Redeem", GUILayout.Width(90));
+            GUILayout.EndHorizontal();
+            if (Event.current.type == EventType.KeyDown &&
+                (Event.current.keyCode == KeyCode.Return || Event.current.keyCode == KeyCode.KeypadEnter))
+            {
+                submit = true;
+                Event.current.Use();
+            }
+
+            if (submit && !string.IsNullOrWhiteSpace(_cheatEntry))
+            {
+                var item = Persistence.Progression.Redeem(_cheatEntry, out bool alreadyHad);
+                if (item == null)
+                {
+                    _cheatStatus = "…nothing happened.";
+                    _cheatShake = 1f;
+                    Audio.SfxPlayer.Ensure()?.PlayUi(Audio.ProceduralAudio.UiDeny);
+                }
+                else if (alreadyHad)
+                {
+                    _cheatStatus = $"{item.display} — already unlocked.";
+                    Audio.SfxPlayer.Ensure()?.PlayUi(Audio.ProceduralAudio.UiBack);
+                }
+                else
+                {
+                    _cheatStatus = $"UNLOCKED: {item.display}!\n{item.blurb}";
+                    Audio.SfxPlayer.Ensure()?.PlayUi(Audio.ProceduralAudio.UiUnlock);
+                    RefreshLists();   // an unlocked car appears in the pickers now
+                }
+                _cheatEntry = "";
+            }
+
+            GUILayout.Space(6);
+            if (!string.IsNullOrEmpty(_cheatStatus))
+                GUILayout.Label(_cheatStatus, GarageSkin.Header);
+
+            var p = Persistence.Progression.Current;
+            GUILayout.Space(6);
+            GUILayout.Label($"Unlocked {p.unlocked.Count}/{Persistence.UnlockCatalog.All.Length} " +
+                            $"· Level {p.level} · {p.wins} wins", GarageSkin.StatLabel);
+
+            GUILayout.Space(8);
+            if (MenuButton("← Back")) GoTo(Page.Options);
         }
 
         // ---- pages -----------------------------------------------------------
 
         private void DrawRoot()
         {
-            if (MenuButton("Single Player")) { _page = Page.SinglePlayer; RefreshLists(); }
-            if (MenuButton("Multiplayer")) { _page = Page.Multiplayer; RefreshLists(); }
+            if (MenuButton("Single Player")) GoTo(Page.SinglePlayer, RefreshLists);
+            if (MenuButton("Multiplayer")) GoTo(Page.Multiplayer, RefreshLists);
+            if (MenuButton(Championship.Active ? "Championship (in progress)" : "Championship"))
+                GoTo(Page.Championship, RefreshLists);
+
+            int held = Persistence.Progression.Current.crates.Count;
+            if (MenuButton(held > 0 ? $"Crates ({held}) ▶" : "Crates"))
+                OpenCrates(Page.Root);
+            if (MenuButton($"Shop — {Persistence.Progression.Scrap} scrap")) GoTo(Page.Shop);
 
             GUI.enabled = SaveSystem.ListSnapshots().Count > 0;
-            if (MenuButton("Resume Drive")) { _page = Page.Resume; RefreshSnapshots(); }
+            if (MenuButton("Resume Drive")) GoTo(Page.Resume, RefreshSnapshots);
             GUI.enabled = true;
 
-            if (MenuButton("Options")) _page = Page.Options;
+            if (MenuButton("Options")) GoTo(Page.Options);
             if (MenuButton("Quit")) Quit();
         }
 
@@ -159,42 +558,30 @@ namespace AIHWSim.Menu
             GUILayout.Space(6);
 
             _vehicleIdx = CyclePicker("Vehicle", _vehicles, _vehicleIdx, v => v == "" ? "Stock Default" : v);
+            if (MenuNav.Button("Showroom — preview & customize ▶"))
+                OpenShowroom(Page.SinglePlayer);
             _trackIdx = CyclePicker("Track", _tracks, _trackIdx, t => t == "" ? "Classic Oval" : t);
 
             // AI opponents.
-            GUILayout.BeginHorizontal();
-            GUILayout.Label("Opponents", GUILayout.Width(70));
-            if (GUILayout.Button("−", GUILayout.Width(30))) _spBots = Mathf.Max(0, _spBots - 1);
-            GUILayout.Label(_spBots == 0 ? "None" : $"{_spBots} bots", GarageSkin.Header);
-            if (GUILayout.Button("+", GUILayout.Width(30))) _spBots = Mathf.Min(7, _spBots + 1);
-            GUILayout.EndHorizontal();
+            _spBots = MenuNav.Stepper("Opponents", _spBots, 0, 7,
+                v => v == 0 ? "None" : $"{v} bots");
 
             if (_spBots > 0)
             {
                 _spDiff = CyclePicker("Difficulty", DiffNames, _spDiff, x => x);
-                _spRubber = GUILayout.Toggle(_spRubber, " Rubber-band (keep the pack close)");
+                _spRubber = MenuNav.Toggle(_spRubber, " Rubber-band (keep the pack close)");
             }
 
             // How the player's own car is driven.
             _spControl = CyclePicker("Driving", ControlNames, _spControl, x => x);
 
             // Race distance.
-            GUILayout.BeginHorizontal();
-            GUILayout.Label("Race laps", GUILayout.Width(70));
-            if (GUILayout.Button("−", GUILayout.Width(30))) _spLaps = Mathf.Max(0, _spLaps - 1);
-            GUILayout.Label(_spLaps == 0 ? "Free drive" : $"{_spLaps} laps", GarageSkin.Header);
-            if (GUILayout.Button("+", GUILayout.Width(30))) _spLaps = Mathf.Min(50, _spLaps + 1);
-            GUILayout.EndHorizontal();
+            _spLaps = MenuNav.Stepper("Race laps", _spLaps, 0, 50,
+                v => v == 0 ? "Free drive" : $"{v} laps");
 
             if (_spBots > 0 || _spLaps > 0)
-            {
-                GUILayout.BeginHorizontal();
-                GUILayout.Label("Countdown", GUILayout.Width(70));
-                if (GUILayout.Button("−", GUILayout.Width(30))) _spCountdown = Mathf.Max(0, _spCountdown - 1);
-                GUILayout.Label(_spCountdown == 0 ? "None" : $"{_spCountdown} s", GarageSkin.Header);
-                if (GUILayout.Button("+", GUILayout.Width(30))) _spCountdown = Mathf.Min(60, _spCountdown + 1);
-                GUILayout.EndHorizontal();
-            }
+                _spCountdown = MenuNav.Stepper("Countdown", _spCountdown, 0, 60,
+                    v => v == 0 ? "None" : $"{v} s");
 
             // Arcade is always offered — hiding it behind "set some laps first"
             // made the whole mode undiscoverable. It still REQUIRES a lap count
@@ -204,13 +591,13 @@ namespace AIHWSim.Menu
             // a spin-out would corrupt the controller-validation run.
             bool firmware = _spControl == 1;
             GUI.enabled = !firmware;
-            bool wantArcade = GUILayout.Toggle(_spArcade && !firmware, " Arcade mode (power-ups & weapons)");
+            bool wantArcade = MenuNav.Toggle(_spArcade && !firmware, " Arcade mode (power-ups & weapons)");
             if (wantArcade && !_spArcade && _spLaps == 0) _spLaps = 3;   // arcade needs a race
             _spArcade = wantArcade && !firmware;
             if (_spArcade)
             {
-                _spTrackLimits = GUILayout.Toggle(_spTrackLimits, "    Track limits (off-track penalty)");
-                _spArcadeHandling = GUILayout.Toggle(_spArcadeHandling,
+                _spTrackLimits = MenuNav.Toggle(_spTrackLimits, "    Track limits (off-track penalty)");
+                _spArcadeHandling = MenuNav.Toggle(_spArcadeHandling,
                     "    Arcade handling (extra grip + driving assists)");
                 GUILayout.Label("    Item boxes on track · use with Left Shift / gamepad X.\n" +
                                 "    Built for the ★ themed circuits; works on any map with a finish line.\n" +
@@ -228,7 +615,7 @@ namespace AIHWSim.Menu
             if (MenuButton("Garage")) LoadIfBuilt(GameFlow.GarageSceneName, GameFlow.LoadGarage);
             if (MenuButton("Track Builder")) LoadIfBuilt(GameFlow.TrackBuilderSceneName, GameFlow.LoadTrackBuilder);
             GUILayout.Space(8);
-            if (MenuButton("← Back")) _page = Page.Root;
+            if (MenuButton("← Back")) GoTo(Page.Root);
         }
 
         private void StartSinglePlayer()
@@ -279,6 +666,136 @@ namespace AIHWSim.Menu
             LoadIfBuilt(GameFlow.TrackSceneName, GameFlow.LoadTrack);
         }
 
+        // ---- championship ----------------------------------------------------
+
+        private int _champIdx;      // series picker
+        private int _champBots = 3; // opponents, pinned for the whole series
+
+        private void DrawChampionship()
+        {
+            GUILayout.Label("CHAMPIONSHIP", GarageSkin.Header);
+            GUILayout.Space(4);
+
+            if (Championship.Active) DrawChampionshipInProgress();
+            else DrawChampionshipSetup();
+
+            GUILayout.Space(8);
+            if (MenuButton("← Back")) GoTo(Page.Root);
+        }
+
+        private void DrawChampionshipSetup()
+        {
+            var all = ChampionshipCatalog.All;
+            _champIdx = Mathf.Clamp(_champIdx, 0, all.Length - 1);
+            var names = new List<string>(all.Length);
+            foreach (var s in all) names.Add(s.label);
+            _champIdx = CyclePicker("Series", names, _champIdx, x => x);
+
+            var series = all[_champIdx];
+            GUILayout.Label(series.blurb, GarageSkin.StatLabel);
+            for (int i = 0; i < series.tracks.Length; i++)
+                GUILayout.Label($"   Round {i + 1}: " +
+                    (series.tracks[i] == "" ? "Classic Oval" : series.tracks[i]),
+                    GarageSkin.StatLabel);
+
+            GUILayout.Space(4);
+            _vehicleIdx = CyclePicker("Vehicle", _vehicles, _vehicleIdx, v => v == "" ? "Stock Default" : v);
+            if (MenuNav.Button("Showroom — preview & customize ▶"))
+                OpenShowroom(Page.Championship);
+            _champBots = MenuNav.Stepper("Opponents", _champBots, 1, 7, v => $"{v} bots");
+            _spDiff = CyclePicker("Difficulty", DiffNames, _spDiff, x => x);
+            _spLaps = MenuNav.Stepper("Laps per round", Mathf.Max(1, _spLaps), 1, 20, v => $"{v} laps");
+            GUILayout.Label("Points: 10-8-6-5-4-3-2-1. The roster is fixed for the\n" +
+                            "whole series — win it outright for a Gold Vault.",
+                            GarageSkin.StatLabel);
+
+            GUILayout.Space(8);
+            if (MenuButton("Start series ▶")) StartChampionship(series);
+        }
+
+        private void DrawChampionshipInProgress()
+        {
+            var series = Championship.Series;
+            bool done = Championship.Complete;
+            GUILayout.Label(series != null ? series.label : "Series", GarageSkin.Title);
+            GUILayout.Label(done
+                ? "All rounds raced."
+                : $"Round {Championship.RoundNumber} of {Championship.Rounds} — " +
+                  (Championship.NextTrack() == "" ? "Classic Oval" : Championship.NextTrack()),
+                GarageSkin.StatLabel);
+
+            GUILayout.Space(4);
+            int pos = 1;
+            foreach (var (name, points, isBot) in Championship.Standings())
+                GUILayout.Label($"{pos++}.  {name}{(isBot ? "" : "  (you)")}   {points} pts",
+                    GarageSkin.StatLabel);
+
+            GUILayout.Space(8);
+            if (!done && MenuButton($"Race round {Championship.RoundNumber} ▶"))
+                StartChampionshipRound();
+            if (done && MenuButton("Finish series")) Championship.Abandon();
+            if (!done && MenuButton("Abandon series")) Championship.Abandon();
+        }
+
+        /// <summary>
+        /// Open a series and roll straight into round 1. The roster is pinned
+        /// here — bot names come from MakeBotSlot so the standings match the
+        /// names on the results screen exactly.
+        /// </summary>
+        private void StartChampionship(SeriesDef series)
+        {
+            var s = SettingsStore.Current;
+            string pname = string.IsNullOrWhiteSpace(s.player1Name) ? "Player" : s.player1Name;
+            var botNames = new List<string>(_champBots);
+            for (int k = 1; k <= _champBots; k++)
+                botNames.Add(MakeBotSlot(k, _spDiff).name);
+
+            Championship.Begin(series.id, pname, botNames, _spDiff);
+            StartChampionshipRound();
+        }
+
+        /// <summary>Build the session for the next round and drive into it. The
+        /// vehicle is whatever the player currently has selected; the track,
+        /// opponents and difficulty come from the pinned series.</summary>
+        private void StartChampionshipRound()
+        {
+            if (!Championship.Active || Championship.Complete) return;
+            var st = Championship.State;
+            var s = SettingsStore.Current;
+            string vehicle = _vehicles.Count > 0
+                ? _vehicles[Mathf.Clamp(_vehicleIdx, 0, _vehicles.Count - 1)] : "";
+
+            SessionConfig.SetSinglePlayer();
+            SessionConfig.TargetLaps = Mathf.Max(1, _spLaps);
+            SessionConfig.RubberBand = _spRubber;
+            SessionConfig.CountdownSeconds = _spCountdown;
+            SessionConfig.ChampionshipRound = true;
+
+            GameFlow.ActiveDesign = ResolveVehicle(vehicle);
+            Championship.LoadNextRoundTrack();
+
+            string pname = st.driverNames.Count > 0 ? st.driverNames[0]
+                : (string.IsNullOrWhiteSpace(s.player1Name) ? "Player" : s.player1Name);
+            SessionConfig.Players.Add(new PlayerSlot
+            {
+                name = pname,
+                profileId = pname,
+                design = GameFlow.ActiveDesign,
+                deviceKind = InputDeviceKind.MergedKeyboardGamepad,
+                assists = SessionConfig.P1Assists(s),
+                isBot = false,
+                // A championship is always driven by hand — a firmware or bot
+                // session scoring a points table would be a strange trophy.
+                control = DriveControl.Human,
+            });
+            for (int k = 1; k < st.driverNames.Count; k++)
+                SessionConfig.Players.Add(MakeBotSlot(k, st.botDifficulty));
+
+            s.lastVehicle = vehicle;
+            SettingsStore.Save();
+            LoadIfBuilt(GameFlow.TrackSceneName, GameFlow.LoadTrack);
+        }
+
         /// <summary>Build one AI opponent: a preset car with a distinct paint colour.</summary>
         private static PlayerSlot MakeBotSlot(int k, int difficulty)
         {
@@ -310,22 +827,18 @@ namespace AIHWSim.Menu
 
             _mpTrackIdx = CyclePicker("Track", _tracks, _mpTrackIdx, t => t == "" ? "Classic Oval" : t);
 
-            GUILayout.BeginHorizontal();
-            GUILayout.Label("Race laps", GUILayout.Width(70));
-            if (GUILayout.Button("−", GUILayout.Width(30))) _mpLaps = Mathf.Max(0, _mpLaps - 1);
-            GUILayout.Label(_mpLaps == 0 ? "Sandbox (no race)" : _mpLaps.ToString(), GarageSkin.Header);
-            if (GUILayout.Button("+", GUILayout.Width(30))) _mpLaps = Mathf.Min(50, _mpLaps + 1);
-            GUILayout.EndHorizontal();
+            _mpLaps = MenuNav.Stepper("Race laps", _mpLaps, 0, 50,
+                v => v == 0 ? "Sandbox (no race)" : v.ToString());
 
             // Same rule as the single-player page: always offered, and ticking it
             // with a sandbox selected sets a race up instead of doing nothing.
-            bool wantMpArcade = GUILayout.Toggle(_spArcade, " Arcade mode (power-ups & weapons)");
+            bool wantMpArcade = MenuNav.Toggle(_spArcade, " Arcade mode (power-ups & weapons)");
             if (wantMpArcade && !_spArcade && _mpLaps == 0) _mpLaps = 3;
             _spArcade = wantMpArcade;
             if (_spArcade)
             {
-                _spTrackLimits = GUILayout.Toggle(_spTrackLimits, "    Track limits (off-track penalty)");
-                _spArcadeHandling = GUILayout.Toggle(_spArcadeHandling,
+                _spTrackLimits = MenuNav.Toggle(_spTrackLimits, "    Track limits (off-track penalty)");
+                _spArcadeHandling = MenuNav.Toggle(_spArcadeHandling,
                     "    Arcade handling (extra grip + driving assists)");
                 GUILayout.Label("    Both players pick up independently; one shared board.",
                                 GarageSkin.StatLabel);
@@ -342,15 +855,11 @@ namespace AIHWSim.Menu
             if (problem != null) GUILayout.Label(problem, GarageSkin.StatLabel);
 
             GUILayout.Space(6);
-            if (MenuButton("Host LAN Game")) { _page = Page.LanHost; RefreshLists(); }
+            if (MenuButton("Host LAN Game")) GoTo(Page.LanHost, RefreshLists);
             if (MenuButton("Join LAN Game"))
-            {
-                _page = Page.LanJoin;
-                RefreshLists();
-                LanDiscovery.StartListen();
-            }
+                GoTo(Page.LanJoin, () => { RefreshLists(); LanDiscovery.StartListen(); });
             GUILayout.Space(8);
-            if (MenuButton("← Back")) { SettingsStore.Save(); _page = Page.Root; }
+            if (MenuButton("← Back")) { SettingsStore.Save(); GoTo(Page.Root); }
         }
 
         private void DrawPlayerRow(int n, ref string name, ref int vehIdx, ref int devChoice)
@@ -358,13 +867,11 @@ namespace AIHWSim.Menu
             GUILayout.BeginHorizontal();
             GUILayout.Label($"P{n}", GUILayout.Width(24));
             name = GUILayout.TextField(name, GUILayout.Width(96));
-            if (GUILayout.Button("◀", GUILayout.Width(24)))
-                vehIdx = (vehIdx - 1 + _vehicles.Count) % _vehicles.Count;
-            string veh = _vehicles[Mathf.Clamp(vehIdx, 0, _vehicles.Count - 1)];
-            GUILayout.Label(veh == "" ? "Stock" : veh, GUILayout.Width(90));
-            if (GUILayout.Button("▶", GUILayout.Width(24)))
-                vehIdx = (vehIdx + 1) % _vehicles.Count;
-            if (GUILayout.Button(DeviceLabel(devChoice), GUILayout.Width(86)))
+            // The car pick is a nav-aware cycle; the device button follows it —
+            // compact, but every part of the row works from the pad.
+            vehIdx = MenuNav.Cycle("", Mathf.Clamp(vehIdx, 0, _vehicles.Count - 1), _vehicles.Count,
+                k => _vehicles[k] == "" ? "Stock" : _vehicles[k], 0f);
+            if (MenuNav.Button(DeviceLabel(devChoice), GUILayout.Width(86)))
                 devChoice = (devChoice + 1) % (1 + PadCount());
             GUILayout.EndHorizontal();
         }
@@ -466,9 +973,9 @@ namespace AIHWSim.Menu
                 string mode = (SessionMode)s.mode == SessionMode.SplitScreen ? "Split-screen" : "Single player";
                 string track = string.IsNullOrEmpty(s.trackName) ? "Classic Oval" : s.trackName;
                 GUILayout.BeginHorizontal();
-                if (GUILayout.Button($"{mode} · {track} · {name.Replace("snapshot_", "")}"))
+                if (MenuNav.Button($"{mode} · {track} · {name.Replace("snapshot_", "")}"))
                     resume = s;
-                if (GUILayout.Button("✕", GUILayout.Width(28)))
+                if (MenuNav.Button("✕", GUILayout.Width(28)))
                     deleted = name;
                 GUILayout.EndHorizontal();
             }
@@ -481,7 +988,7 @@ namespace AIHWSim.Menu
             GUILayout.EndScrollView();
 
             GUILayout.Space(8);
-            if (MenuButton("← Back")) _page = Page.Root;
+            if (MenuButton("← Back")) GoTo(Page.Root);
         }
 
         private void ResumeSnapshot(SessionSnapshot s)
@@ -532,17 +1039,18 @@ namespace AIHWSim.Menu
             GUILayout.EndHorizontal();
 
             _vehicleIdx = CyclePicker("Vehicle", _vehicles, _vehicleIdx, v => v == "" ? "Stock Default" : v);
+            if (MenuNav.Button("Showroom ▶")) OpenShowroom(Page.LanHost);
             _trackIdx = CyclePicker("Track", _tracks, _trackIdx, t => t == "" ? "Classic Oval" : t);
             GUILayout.Space(4);
 
             // The host's arcade rules are the session's — joiners are told them
             // in the welcome and never consult their own settings, so a lobby is
             // never half arcade.
-            _spArcade = GUILayout.Toggle(_spArcade, " Arcade mode (power-ups & weapons)");
+            _spArcade = MenuNav.Toggle(_spArcade, " Arcade mode (power-ups & weapons)");
             if (_spArcade)
             {
-                _spTrackLimits = GUILayout.Toggle(_spTrackLimits, "    Track limits (off-track penalty)");
-                _spArcadeHandling = GUILayout.Toggle(_spArcadeHandling,
+                _spTrackLimits = MenuNav.Toggle(_spTrackLimits, "    Track limits (off-track penalty)");
+                _spArcadeHandling = MenuNav.Toggle(_spArcadeHandling,
                     "    Arcade handling (extra grip + driving assists)");
                 GUILayout.Label("    Item boxes are live in free roam too, so there is\n" +
                                 "    something to do between races.", GarageSkin.StatLabel);
@@ -555,7 +1063,7 @@ namespace AIHWSim.Menu
 
             if (MenuButton("Start Hosting ▶")) StartLanHost();
             GUILayout.Space(8);
-            if (MenuButton("← Back")) { SettingsStore.Save(); _page = Page.Multiplayer; }
+            if (MenuButton("← Back")) { SettingsStore.Save(); GoTo(Page.Multiplayer); }
         }
 
         private void StartLanHost()
@@ -618,6 +1126,7 @@ namespace AIHWSim.Menu
             s.player1Name = GUILayout.TextField(s.player1Name, GUILayout.Width(160));
             GUILayout.EndHorizontal();
             _vehicleIdx = CyclePicker("Vehicle", _vehicles, _vehicleIdx, v => v == "" ? "Stock Default" : v);
+            if (MenuNav.Button("Showroom ▶")) OpenShowroom(Page.LanJoin);
             GUILayout.Space(4);
 
             if (_connecting)
@@ -643,7 +1152,7 @@ namespace AIHWSim.Menu
             foreach (var g in _discovered)
             {
                 string track = string.IsNullOrEmpty(g.info.trackName) ? "Classic Oval" : g.info.trackName;
-                if (GUILayout.Button($"{g.info.gameName} · {track} · {g.info.players}/{g.info.maxPlayers}"))
+                if (MenuNav.Button($"{g.info.gameName} · {track} · {g.info.players}/{g.info.maxPlayers}"))
                     Connect(g.address, g.info.port);
             }
             if (_discovered.Count == 0)
@@ -653,7 +1162,7 @@ namespace AIHWSim.Menu
             GUILayout.BeginHorizontal();
             GUILayout.Label("IP", GUILayout.Width(24));
             _joinIp = GUILayout.TextField(_joinIp, GUILayout.Width(150));
-            if (GUILayout.Button("Connect", GUILayout.Width(80)))
+            if (MenuNav.Button("Connect", GUILayout.Width(80)))
                 Connect(_joinIp.Trim(), NetSession.DefaultPort);
             GUILayout.EndHorizontal();
 
@@ -662,7 +1171,7 @@ namespace AIHWSim.Menu
             {
                 LanDiscovery.StopListen();
                 SettingsStore.Save();
-                _page = Page.Multiplayer;
+                GoTo(Page.Multiplayer);
             }
         }
 
@@ -704,33 +1213,23 @@ namespace AIHWSim.Menu
             // Scroll so the page never clips in small (editor) game views.
             _optionsScroll = GUILayout.BeginScrollView(_optionsScroll);
 
-            GUILayout.Label($"Master volume: {s.masterVolume:P0}");
-            float vol = GUILayout.HorizontalSlider(s.masterVolume, 0f, 1f);
-            if (!Mathf.Approximately(vol, s.masterVolume)) { s.masterVolume = vol; changed = true; }
-
-            GUILayout.Label($"Sound effects: {s.sfxVolume:P0}");
-            float sfx = GUILayout.HorizontalSlider(s.sfxVolume, 0f, 1f);
-            if (!Mathf.Approximately(sfx, s.sfxVolume)) { s.sfxVolume = sfx; changed = true; }
-
-            GUILayout.Label($"Engine + tyres: {s.engineVolume:P0}");
-            float eng = GUILayout.HorizontalSlider(s.engineVolume, 0f, 1f);
-            if (!Mathf.Approximately(eng, s.engineVolume)) { s.engineVolume = eng; changed = true; }
+            changed |= MenuNav.Slider01("Master volume", ref s.masterVolume);
+            changed |= MenuNav.Slider01("Sound effects", ref s.sfxVolume);
+            changed |= MenuNav.Slider01("Engine + tyres", ref s.engineVolume);
+            changed |= MenuNav.Slider01("Music", ref s.musicVolume);
 
             GUILayout.Space(4);
             string[] quality = QualitySettings.names;
-            int qShown = s.qualityLevel >= 0 ? s.qualityLevel : QualitySettings.GetQualityLevel();
-            GUILayout.BeginHorizontal();
-            GUILayout.Label($"Quality: {quality[Mathf.Clamp(qShown, 0, quality.Length - 1)]}");
-            GUILayout.FlexibleSpace();
-            if (GUILayout.Button("◀", GUILayout.Width(30))) { s.qualityLevel = (qShown - 1 + quality.Length) % quality.Length; changed = true; }
-            if (GUILayout.Button("▶", GUILayout.Width(30))) { s.qualityLevel = (qShown + 1) % quality.Length; changed = true; }
-            GUILayout.EndHorizontal();
+            int qShown = Mathf.Clamp(s.qualityLevel >= 0 ? s.qualityLevel : QualitySettings.GetQualityLevel(),
+                0, quality.Length - 1);
+            int qNew = MenuNav.Cycle("Quality", qShown, quality.Length, i => quality[i], 60f);
+            if (qNew != qShown) { s.qualityLevel = qNew; changed = true; }
 
-            bool fs = GUILayout.Toggle(s.fullscreen, " Fullscreen");
+            bool fs = MenuNav.Toggle(s.fullscreen, " Fullscreen");
             if (fs != s.fullscreen) { s.fullscreen = fs; changed = true; }
-            bool vs = GUILayout.Toggle(s.vSync, " VSync");
+            bool vs = MenuNav.Toggle(s.vSync, " VSync");
             if (vs != s.vSync) { s.vSync = vs; changed = true; }
-            bool ms = GUILayout.Toggle(s.mouseSteer, " Mouse steering (single player)");
+            bool ms = MenuNav.Toggle(s.mouseSteer, " Mouse steering (single player)");
             if (ms != s.mouseSteer) { s.mouseSteer = ms; changed = true; }
 
             // Keyboard-only feel: ramps the digital A/D step like a transmitter
@@ -759,21 +1258,14 @@ namespace AIHWSim.Menu
 
             // Preset row. The sliders below stay live: touching any of them flips
             // the preset to Custom, so this is a shortcut rather than a cage.
-            GUILayout.BeginHorizontal();
-            GUILayout.Label("Preset", GUILayout.Width(60));
             string[] presetNames = { "Off", "Standard", "Full", "Custom" };
             int preset = Mathf.Clamp(s.assistPreset, 0, 3);
-            for (int i = 0; i < presetNames.Length; i++)
+            int presetNew = MenuNav.Cycle("Preset", preset, presetNames.Length, i => presetNames[i], 60f);
+            if (presetNew != preset)
             {
-                bool on = preset == i;
-                if (GUILayout.Toggle(on, presetNames[i], GarageSkin.Skin.button,
-                        GUILayout.Width(70)) != on && !on)
-                {
-                    s.assistPreset = i;
-                    changed = true;
-                }
+                s.assistPreset = presetNew;
+                changed = true;
             }
-            GUILayout.EndHorizontal();
 
             bool sliderMoved = false;
             sliderMoved |= AssistSlider("Steering help", ref s.p1AssistSteer);
@@ -802,20 +1294,22 @@ namespace AIHWSim.Menu
             { s.noiseSeed = seed; changed = true; }
             GUILayout.EndHorizontal();
             GUILayout.Label("Seed used is stamped into the telemetry sidecar.", GarageSkin.StatLabel);
-            GUILayout.BeginHorizontal();
-            GUILayout.Label($"Actuation delay: {s.actuationDelayTicks} ticks", GUILayout.Width(150));
-            int del = Mathf.RoundToInt(GUILayout.HorizontalSlider(s.actuationDelayTicks, 0f, 5f,
-                GUILayout.ExpandWidth(true)));
+            int del = MenuNav.Stepper("Actuation delay", s.actuationDelayTicks, 0, 5,
+                v => $"{v} ticks", 110f);
             if (del != s.actuationDelayTicks) { s.actuationDelayTicks = del; changed = true; }
-            GUILayout.EndHorizontal();
 
             // Telemetry — opt-in CSV logging (off by default). Also toggleable
             // mid-drive from pause ▸ Settings, where it starts after the menu closes.
             GUILayout.Space(6);
             GUILayout.Label("TELEMETRY", GarageSkin.Header);
-            bool lg = GUILayout.Toggle(s.logTelemetry, " Log sensor/telemetry data (CSV)");
+            bool lg = MenuNav.Toggle(s.logTelemetry, " Log sensor/telemetry data (CSV)");
             if (lg != s.logTelemetry) { s.logTelemetry = lg; changed = true; }
             GUILayout.Label("Off by default; writes to TelemetryLogs/ on Save.", GarageSkin.StatLabel);
+
+            // Extras.
+            GUILayout.Space(6);
+            GUILayout.Label("EXTRAS", GarageSkin.Header);
+            if (MenuNav.Button("Cheat Codes…")) GoTo(Page.Cheats);
 
             GUILayout.EndScrollView();
 
@@ -826,39 +1320,48 @@ namespace AIHWSim.Menu
             }
 
             GUILayout.Space(8);
-            if (MenuButton("← Back")) _page = Page.Root;
+            if (MenuButton("← Back")) GoTo(Page.Root);
         }
 
-        /// <summary>Moved to <see cref="GarageSkin.Slider01"/> so the pause and LAN
-        /// settings panels draw the identical row. Kept as a thin alias rather
-        /// than rewriting eleven call sites for no behaviour change.</summary>
+        /// <summary>The shared 0..1 row, now through MenuNav so the pad can
+        /// focus it and nudge left/right. Kept as a thin alias rather than
+        /// rewriting eleven call sites for no behaviour change.</summary>
         private static bool AssistSlider(string label, ref float value) =>
-            GarageSkin.Slider01(label, ref value);
+            MenuNav.Slider01(label, ref value);
 
         // ---- helpers -----------------------------------------------------------
 
+        // Routed through MenuNav so every page's plain buttons are gamepad
+        // focusable/activatable. The other control shapes (cycle pickers,
+        // toggles, sliders) convert in the menu-shell pass.
         private static bool MenuButton(string label) =>
-            GUILayout.Button(label, GUILayout.Height(34));
+            MenuNav.MenuButton(label);
 
+        // The nav-aware "◀ value ▶" row; drawing lives in MenuNav so the pad
+        // can focus it and left/right through the options.
         private int CyclePicker(string label, List<string> options, int index,
             System.Func<string, string> display)
         {
-            GUILayout.BeginHorizontal();
-            GUILayout.Label(label, GUILayout.Width(60));
-            if (GUILayout.Button("◀", GUILayout.Width(30)))
-                index = (index - 1 + options.Count) % options.Count;
-            GUILayout.Label(display(options[Mathf.Clamp(index, 0, options.Count - 1)]),
-                GarageSkin.Header, GUILayout.ExpandWidth(true));
-            if (GUILayout.Button("▶", GUILayout.Width(30)))
-                index = (index + 1) % options.Count;
-            GUILayout.EndHorizontal();
-            return Mathf.Clamp(index, 0, options.Count - 1);
+            int i = Mathf.Clamp(index, 0, options.Count - 1);
+            return MenuNav.Cycle(label, i, options.Count, k => display(options[k]), 60f);
         }
 
         private void LoadIfBuilt(string sceneName, System.Action load)
         {
-            if (Application.CanStreamedLevelBeLoaded(sceneName)) load();
+            if (Application.CanStreamedLevelBeLoaded(sceneName)) ScreenFade.To(load);
             else _status = $"Scene '{sceneName}' missing — run Tools ▸ AIHWSim ▸ Create it first.";
+        }
+
+        /// <summary>Page change through a quick fade dip. The mutation happens
+        /// inside the fade's coroutine — between frames, outside any OnGUI
+        /// pass — which is the safest possible timing.</summary>
+        private void GoTo(Page p, System.Action also = null)
+        {
+            ScreenFade.Dip(() =>
+            {
+                _page = p;
+                also?.Invoke();
+            });
         }
 
         private static void Quit()

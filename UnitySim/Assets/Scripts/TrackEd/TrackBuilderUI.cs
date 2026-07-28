@@ -118,6 +118,88 @@ namespace AIHWSim.TrackEd
                 case EditState.DrawingSpline: UpdateDrawingSpline(overUI); break;
                 case EditState.DraggingPoint: UpdateDraggingPoint(); break;
             }
+
+            UpdatePadInput();
+        }
+
+        // ---- gamepad item manipulation ---------------------------------------
+        //
+        // Fixed pad bindings (a hint line documents them): left stick moves the
+        // selected item in the camera-relative ground plane, LB/RB yaws it,
+        // LT/RT scales it down/up (items auto-drop to the surface, so there is
+        // no up/down to move — scale is what the triggers do HERE, unlike the
+        // garage), right stick orbits the camera, A selects the next item,
+        // B deselects. Re-poses through RepositionItem — no rebuilds.
+
+        private bool _padMoving;
+
+        private void UpdatePadInput()
+        {
+            if (_state != EditState.Idle) { PadMoveEnded(); return; }
+
+            // Right stick: camera orbit, always live.
+            Vector2 rs = InputReader.RightStick();
+            if (rs.sqrMagnitude > 0.04f)
+                bootstrap.Orbit.PadOrbit(rs * (120f * Time.unscaledDeltaTime));
+
+            if (PadTable.PressedAny(PadButton.South) && D.items.Count > 0)
+                _selItem = (_selItem + 1) % D.items.Count;
+            if (PadTable.PressedAny(PadButton.East)) _selItem = -1;
+
+            if (_selItem < 0 || _selItem >= D.items.Count) { PadMoveEnded(); return; }
+            var it = D.items[_selItem];
+
+            Vector2 ls = InputReader.LeftStick();
+            float trig = InputReader.TriggerAxis();
+            float yawDir = (PadTable.HeldAny(PadButton.RightShoulder) ? 1f : 0f)
+                         - (PadTable.HeldAny(PadButton.LeftShoulder) ? 1f : 0f);
+
+            float dt = Time.unscaledDeltaTime;
+            bool moved = false;
+
+            if (ls.sqrMagnitude > 0.04f && bootstrap.Cam != null)
+            {
+                if (!_padMoving)
+                {
+                    _padMoving = true;
+                    bootstrap.PushUndo("padmove");   // coalesces for the whole hold
+                }
+                var ct = bootstrap.Cam.transform;
+                Vector3 fwd = ct.forward; fwd.y = 0f;
+                fwd = fwd.sqrMagnitude > 1e-4f ? fwd.normalized : Vector3.forward;
+                Vector3 right = ct.right; right.y = 0f;
+                right = right.sqrMagnitude > 1e-4f ? right.normalized : Vector3.right;
+                Vector3 move = (right * ls.x + fwd * ls.y) * (4f * dt);
+                it.x += move.x;
+                it.z += move.z;
+                moved = true;
+            }
+            else
+            {
+                PadMoveEnded();
+            }
+
+            if (yawDir != 0f)
+            {
+                bootstrap.PushUndo("rotate");        // coalesces with the button
+                it.yawDeg = Mathf.Repeat(it.yawDeg + yawDir * 90f * dt, 360f);
+                moved = true;
+            }
+            if (Mathf.Abs(trig) > 0.15f)
+            {
+                // Same clamped value + "scale" undo key as the slider, so pad
+                // and slider edits coalesce identically.
+                SetItemScale(it, it.scale * (1f + trig * 0.9f * dt));
+            }
+
+            if (moved) bootstrap.RepositionItem(_selItem);
+        }
+
+        private void PadMoveEnded()
+        {
+            if (!_padMoving) return;
+            _padMoving = false;
+            bootstrap.BreakUndoCoalescing();   // the next hold is its own undo step
         }
 
         // ---- idle: hotkeys, paint start, selection ---------------------------
@@ -828,18 +910,20 @@ namespace AIHWSim.TrackEd
         {
             if (bootstrap == null) return;
             GUI.skin = GarageSkin.Skin;
+            UI.UIScale.Begin();
 
             DrawTopBar();
             DrawLeftPanel();
             DrawRightPanel();
             if (_showLoad) DrawLoadList();
             else _loadRect = default;
+            UI.UIScale.End();
         }
 
         private void DrawTopBar()
         {
-            float w = Mathf.Min(Screen.width - 20f, 900f);
-            _topRect = new Rect((Screen.width - w) * 0.5f, 8f, w, 44f);
+            float w = Mathf.Min(UI.UIScale.W - 20f, 900f);
+            _topRect = new Rect((UI.UIScale.W - w) * 0.5f, 8f, w, 44f);
             GUILayout.BeginArea(_topRect, GUI.skin.box);
             GUILayout.BeginHorizontal();
 
@@ -888,7 +972,7 @@ namespace AIHWSim.TrackEd
 
         private void DrawLeftPanel()
         {
-            float h = Mathf.Min(Screen.height - 120f, 560f);
+            float h = Mathf.Min(UI.UIScale.H - 120f, 560f);
             _leftRect = new Rect(10f, 60f, 190f, h);
 
             // Two-row tabs read better in 190 px.
@@ -1047,8 +1131,8 @@ namespace AIHWSim.TrackEd
 
         private void DrawRightPanel()
         {
-            float h = Mathf.Min(Screen.height - 120f, 480f);
-            _rightRect = new Rect(Screen.width - 230f, 60f, 220f, h);
+            float h = Mathf.Min(UI.UIScale.H - 120f, 480f);
+            _rightRect = new Rect(UI.UIScale.W - 230f, 60f, 220f, h);
             GUILayout.BeginArea(_rightRect, GUI.skin.box);
 
             // Scroll so small game views (editor) never clip the panel.
@@ -1311,6 +1395,9 @@ namespace AIHWSim.TrackEd
                     bootstrap.RequestRebuild();
                 }
             }
+
+            GUILayout.Label("Pad: LS move · LB/RB rotate · LT/RT scale\n" +
+                            "RS orbit · A next · B deselect", GarageSkin.StatLabel);
         }
 
         /// <summary>Item size limits. Wide enough to turn a boulder into a
@@ -1330,7 +1417,7 @@ namespace AIHWSim.TrackEd
 
         private void DrawLoadList()
         {
-            float h = Mathf.Min(Screen.height - 140f, 320f);
+            float h = Mathf.Min(UI.UIScale.H - 140f, 320f);
             _loadRect = new Rect(_topRect.x + 240f, 56f, 260f, h);
             GUILayout.BeginArea(_loadRect, GUI.skin.box);
             GUILayout.Label("SAVED TRACKS", GarageSkin.Header);
@@ -1383,8 +1470,10 @@ namespace AIHWSim.TrackEd
 
         private bool PointerOverUI()
         {
-            Vector2 p = InputReader.PointerPosition();
-            var gui = new Vector2(p.x, Screen.height - p.y);
+            // Panel rects are cached in UI units (drawn under the UIScale
+            // matrix); the raw screen-pixel pointer must be converted the same
+            // way — GUI.matrix never touches this hand-rolled test.
+            var gui = UI.UIScale.GuiPointer();
             return _topRect.Contains(gui) || _leftRect.Contains(gui) ||
                    _rightRect.Contains(gui) || (_showLoad && _loadRect.Contains(gui));
         }

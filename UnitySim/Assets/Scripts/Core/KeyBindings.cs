@@ -17,6 +17,7 @@ namespace AIHWSim.Core
         LookBack = 8,
         ModeToggle = 9,
         Pause = 10,
+        Horn = 11,
     }
 
     /// <summary>Named starting points. Custom is what any hand-edited binding becomes.</summary>
@@ -57,6 +58,7 @@ namespace AIHWSim.Core
         public int lookBack = (int)KeyCode.C;
         public int modeToggle = (int)KeyCode.M;
         public int pause = (int)KeyCode.Escape;
+        public int horn = (int)KeyCode.H;
 
         // ---- gamepad (digital actions only; see PadTable) ----
         public int padBrake = (int)PadButton.East;
@@ -65,6 +67,8 @@ namespace AIHWSim.Core
         public int padUseItem = (int)PadButton.West;
         public int padLookBack = (int)PadButton.RightStickPress;
         public int padModeToggle = (int)PadButton.Select;
+        // L3 — the one face-adjacent button still free (R3 is look-back).
+        public int padHorn = (int)PadButton.LeftStickPress;
 
         /// <summary>The live bindings. Lives inside <see cref="Persistence.GameSettings"/>
         /// so it is saved, loaded and reset by the machinery that already exists
@@ -96,6 +100,7 @@ namespace AIHWSim.Core
                 case DriveAction.LookBack: return (KeyCode)lookBack;
                 case DriveAction.ModeToggle: return (KeyCode)modeToggle;
                 case DriveAction.Pause: return (KeyCode)pause;
+                case DriveAction.Horn: return (KeyCode)horn;
                 default: return KeyCode.None;
             }
         }
@@ -148,6 +153,7 @@ namespace AIHWSim.Core
                     case DriveAction.LookBack: lookBack = v; break;
                     case DriveAction.ModeToggle: modeToggle = v; break;
                     case DriveAction.Pause: pause = v; break;
+                    case DriveAction.Horn: horn = v; break;
                     default: return;
                 }
             }
@@ -164,6 +170,7 @@ namespace AIHWSim.Core
                 case DriveAction.UseItem: return (PadButton)padUseItem;
                 case DriveAction.LookBack: return (PadButton)padLookBack;
                 case DriveAction.ModeToggle: return (PadButton)padModeToggle;
+                case DriveAction.Horn: return (PadButton)padHorn;
                 default: return PadButton.None;
             }
         }
@@ -174,6 +181,7 @@ namespace AIHWSim.Core
         {
             DriveAction.Brake, DriveAction.Handbrake, DriveAction.Respawn,
             DriveAction.UseItem, DriveAction.LookBack, DriveAction.ModeToggle,
+            DriveAction.Horn,
         };
 
         public void SetPad(DriveAction a, PadButton b)
@@ -187,6 +195,7 @@ namespace AIHWSim.Core
                 case DriveAction.UseItem: padUseItem = v; break;
                 case DriveAction.LookBack: padLookBack = v; break;
                 case DriveAction.ModeToggle: padModeToggle = v; break;
+                case DriveAction.Horn: padHorn = v; break;
                 default: return;
             }
             layout = (int)KeyLayout.Custom;
@@ -207,6 +216,7 @@ namespace AIHWSim.Core
                 case DriveAction.LookBack: return "Look back";
                 case DriveAction.ModeToggle: return "Manual / auto";
                 case DriveAction.Pause: return "Pause";
+                case DriveAction.Horn: return "Horn";
                 default: return a.ToString();
             }
         }
@@ -234,6 +244,7 @@ namespace AIHWSim.Core
                 useItem = (int)KeyCode.Keypad0;
                 lookBack = (int)KeyCode.Keypad1;
                 modeToggle = (int)KeyCode.End;
+                horn = (int)KeyCode.Keypad2;
             }
             else
             {
@@ -248,6 +259,7 @@ namespace AIHWSim.Core
                 useItem = (int)KeyCode.LeftShift;
                 lookBack = (int)KeyCode.C;
                 modeToggle = (int)KeyCode.M;
+                horn = (int)KeyCode.H;
             }
             // Pause is not part of a layout: Escape is the pause key on every
             // layout, and PausePressed accepts it unconditionally anyway.
@@ -259,6 +271,7 @@ namespace AIHWSim.Core
             padUseItem = (int)PadButton.West;
             padLookBack = (int)PadButton.RightStickPress;
             padModeToggle = (int)PadButton.Select;
+            padHorn = (int)PadButton.LeftStickPress;
 
             layout = (int)l;
         }

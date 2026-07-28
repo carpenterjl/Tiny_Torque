@@ -1,6 +1,7 @@
 using System.Collections.Generic;
 using AIHWSim.Core;
 using AIHWSim.Garage;
+using AIHWSim.UI;
 using AIHWSim.Vehicles;
 using UnityEngine;
 
@@ -114,6 +115,10 @@ namespace AIHWSim.Track
 
         private void Update()
         {
+            // Music mood, pushed per-frame (idempotent): the countdown ducks
+            // the track theme, the results screen brings in the victory theme.
+            Audio.MusicDirector.RaceMood(_counting, _showResults && !_dismissed);
+
             if (_counting)
             {
                 _countdown -= Time.deltaTime; // scaled: a pause also holds the countdown
@@ -132,7 +137,7 @@ namespace AIHWSim.Track
             {
                 _graceRunning = false;
                 foreach (var e in _entries) if (!e.finished) e.place = 0;
-                _showResults = true;
+                EnterResults();
             }
 
             if (!rubberBand || bots == null || bots.Count == 0 || timer == null) return;
@@ -189,13 +194,32 @@ namespace AIHWSim.Track
                 e.finished = true;
                 e.place = _nextPlace++;
                 PlayerFinished?.Invoke(e.rig, e.place);
-                if (AllFinished()) _showResults = true;
+                if (AllFinished()) EnterResults();
                 else if (resultsGraceSeconds > 0f && !_graceRunning)
                 {
                     _graceRunning = true;
                     _graceUntil = Time.time + resultsGraceSeconds;
                 }
             }
+        }
+
+        /// <summary>
+        /// The single door into the results overlay — both the everyone-home
+        /// path and the grace-expired path come through here, so a championship
+        /// round banks its points exactly once and no matter how it ended.
+        /// Deliberately NOT in OnGUI: this writes to progress.json, and a
+        /// Layout/Repaint pair would do it twice.
+        /// </summary>
+        private void EnterResults()
+        {
+            if (_showResults) return;
+            _showResults = true;
+
+            if (!SessionConfig.ChampionshipRound || !Core.Championship.Active) return;
+            var rows = new List<(string, int)>(_entries.Count);
+            foreach (var e in _entries)
+                if (e.rig?.slot != null) rows.Add((e.rig.slot.name, e.place));
+            Core.Championship.RecordRound(rows);
         }
 
         private Entry Find(CarVehicle car)
@@ -212,26 +236,54 @@ namespace AIHWSim.Track
             return true;
         }
 
+        // Layout-snapshotted "results overlay is up" — the Keep-driving button
+        // flips _dismissed mid-pass under pad activation (see MenuNav), and
+        // whether the overlay exists must not change between Layout and Repaint.
+        private bool _resultsDraw;
+
+        // Same rule for the championship block: which BUTTONS the results panel
+        // offers ("Next round" vs "Rematch") must be decided once per frame.
+        private bool _champDraw;
+
         private void OnGUI()
         {
             GUI.skin = GarageSkin.Skin;
-            if (_showResults && !_dismissed) { DrawResults(); return; }
-            if (_counting) { DrawBig(Mathf.CeilToInt(Mathf.Max(0f, _countdown)).ToString()); return; }
+            UIScale.Begin();
+            if (Event.current.type == EventType.Layout)
+            {
+                _resultsDraw = _showResults && !_dismissed;
+                _champDraw = SessionConfig.ChampionshipRound && Core.Championship.Active;
+            }
+            if (_resultsDraw)
+            {
+                UI.MenuNav.BeginFrame("race:results");
+                DrawResults();
+                UI.MenuNav.EndFrame();
+                UIScale.End();
+                return;
+            }
+            if (_counting)
+            {
+                DrawBig(Mathf.CeilToInt(Mathf.Max(0f, _countdown)).ToString());
+                UIScale.End();
+                return;
+            }
             if (_goTimer > 0f) DrawBig("GO!");
             // In arcade the ArcadeHud draws the live board; two banners centred at
             // the same y would just overlap.
             if (!arcade) DrawBanner();
+            UIScale.End();
         }
 
         private static void DrawBig(string s)
         {
             var style = new GUIStyle(GarageSkin.Header) { fontSize = 80, alignment = TextAnchor.MiddleCenter };
-            GUI.Label(new Rect(0f, Screen.height * 0.22f, Screen.width, 140f), s, style);
+            GUI.Label(new Rect(0f, UIScale.H * 0.22f, UIScale.W, 140f), s, style);
         }
 
         private void DrawBanner()
         {
-            var area = new Rect((Screen.width - 260f) * 0.5f, 40f, 260f, 26f + _entries.Count * 18f);
+            var area = new Rect((UIScale.W - 260f) * 0.5f, 40f, 260f, 26f + _entries.Count * 18f);
             GUILayout.BeginArea(area, GUI.skin.box);
             GUILayout.Label($"RACE — first to {targetLaps} laps", GarageSkin.Header);
             foreach (var e in Standings())
@@ -245,11 +297,20 @@ namespace AIHWSim.Track
 
         private void DrawResults()
         {
-            float w = 360f, h = 170f + _entries.Count * 26f;
-            var area = new Rect((Screen.width - w) * 0.5f, (Screen.height - h) * 0.5f, w, h);
+            bool champ = _champDraw;
+            var series = champ ? Core.Championship.Series : null;
+            bool finale = champ && Core.Championship.Complete;
+
+            float w = 360f, h = 170f + _entries.Count * 26f
+                + (UI.AwardReveal.Pending ? 84f : 0f)
+                + (champ ? 46f + _entries.Count * 18f : 0f);
+            var area = new Rect((UIScale.W - w) * 0.5f, (UIScale.H - h) * 0.5f, w, h);
             GUILayout.BeginArea(area, GUI.skin.box);
             var title = new GUIStyle(GarageSkin.Header) { fontSize = 20, alignment = TextAnchor.MiddleCenter };
-            GUILayout.Label("RACE RESULTS", title);
+            GUILayout.Label(champ
+                ? (finale ? $"{series?.label} — FINAL"
+                          : $"{series?.label} — ROUND {Core.Championship.State.round} of {Core.Championship.Rounds}")
+                : "RACE RESULTS", title);
             GUILayout.Space(6);
 
             foreach (var e in Standings())
@@ -261,20 +322,61 @@ namespace AIHWSim.Track
                 GUILayout.Label($"{place}  {e.rig.slot.name}   total {Fmt(e.totalTime)}   best {best}{pts}");
             }
 
+            // The crates this race paid out announce themselves right here.
+            UI.AwardReveal.Draw();
+
+            if (champ) DrawChampionshipTable(finale);
+
             GUILayout.Space(8);
-            if (GUILayout.Button("Keep driving", GUILayout.Height(30))) _dismissed = true;
-            if (GUILayout.Button("Rematch", GUILayout.Height(30)))
+            if (!champ && UI.MenuNav.Button("Keep driving", GUILayout.Height(30)))
             {
-                Time.timeScale = 1f;
-                GameFlow.LoadTrack(); // SessionConfig persists; scene rebuilds fresh
+                _dismissed = true;
+                UI.AwardReveal.Dismiss();
             }
-            if (GUILayout.Button("Main Menu", GUILayout.Height(30)))
+            // A championship swaps the rematch for the next round: re-running a
+            // round you already scored would be a cheat, and the standings only
+            // move forward.
+            if (champ && !finale && UI.MenuNav.Button("Next round ▶", GUILayout.Height(30)))
             {
                 Time.timeScale = 1f;
+                UI.AwardReveal.Dismiss();
+                Core.Championship.LoadNextRoundTrack();
+                UI.ScreenFade.To(GameFlow.LoadTrack); // SessionConfig persists; scene rebuilds fresh
+            }
+            if (!champ && UI.MenuNav.Button("Rematch", GUILayout.Height(30)))
+            {
+                Time.timeScale = 1f;
+                UI.AwardReveal.Dismiss();
+                UI.ScreenFade.To(GameFlow.LoadTrack); // SessionConfig persists; scene rebuilds fresh
+            }
+            if (UI.MenuNav.Button("Main Menu", GUILayout.Height(30)))
+            {
+                Time.timeScale = 1f;
+                UI.AwardReveal.Dismiss();
                 if (Application.CanStreamedLevelBeLoaded(GameFlow.MenuSceneName))
-                    GameFlow.LoadMenu();
+                    UI.ScreenFade.To(GameFlow.LoadMenu);
             }
             GUILayout.EndArea();
+        }
+
+        /// <summary>The series points table under the race result, and the
+        /// trophy line once the last round has been scored.</summary>
+        private void DrawChampionshipTable(bool finale)
+        {
+            GUILayout.Space(6);
+            var head = new GUIStyle(GarageSkin.Header) { alignment = TextAnchor.MiddleCenter };
+            GUILayout.Label(finale ? "FINAL STANDINGS" : "CHAMPIONSHIP", head);
+
+            int pos = 1;
+            foreach (var (name, points, isBot) in Core.Championship.Standings())
+                GUILayout.Label($"{pos++}.  {name}{(isBot ? "" : "  (you)")}   {points} pts",
+                    GarageSkin.StatLabel);
+
+            if (!finale) return;
+            var big = new GUIStyle(GarageSkin.Title) { fontSize = 18, alignment = TextAnchor.MiddleCenter };
+            GUILayout.Label(Core.Championship.PlayerWon()
+                ? "CHAMPION — Gold Vault earned"
+                : "Series over — better luck next season", big);
         }
 
         private List<Entry> Standings()

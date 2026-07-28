@@ -196,13 +196,20 @@ namespace AIHWSim.Garage
             var rig = root.AddComponent<SensorRig>();
 
             root.SetActive(true); // CarVehicle.Awake builds everything now
-            return new Built
+
+            var built = new Built
             {
                 car = car, rig = rig, root = root,
                 sensors = sensorList.ToArray(), aeroVisuals = aeroVisuals,
                 batteryVisuals = batteryVisuals, antennaVisuals = antennaVisuals,
                 lightVisuals = lightVisuals,
             };
+
+            // Unlockable cosmetics last: they mount off the body shell and the
+            // wheel holders, which only exist once Awake has run. Visual only —
+            // nothing below this line changes how the car drives.
+            CosmeticMounts.Apply(built, design);
+            return built;
         }
 
         /// <summary>Instantiate one antenna's cosmetic visual child from a spec.</summary>

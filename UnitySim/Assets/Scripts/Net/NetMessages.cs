@@ -61,6 +61,8 @@ namespace AIHWSim.Net
         // The joiner's arcade-assist prefs — applied host-side to their car
         // (the host simulates everyone).
         public float aSteer, aStab, aTrac, aAbs;
+        // v10: the joiner's progression level, purely for the roster badge.
+        public int level = 1;
     }
 
     [Serializable]
@@ -69,6 +71,7 @@ namespace AIHWSim.Net
         public int slot;
         public string name = "";
         public string vehicleJson = "";
+        public int level = 1;             // v10: shown as "Lv N" in the roster
     }
 
     [Serializable]
@@ -217,6 +220,13 @@ namespace AIHWSim.Net
         public Vector3 angVel;      // lets a receiver extrapolate rotation, not just position
         public float steerDeg;
         public float wheelRadPerSec;
+        /// <summary>Bit 1 = horn sounding (v10). A flags byte rather than a
+        /// bool so the next boolean rides free instead of costing another
+        /// protocol bump.</summary>
+        public byte flags;
+
+        public const byte FlagHorn = 1;
+        public bool HornOn => (flags & FlagHorn) != 0;
     }
 
     /// <summary>
@@ -248,6 +258,9 @@ namespace AIHWSim.Net
         /// driftBoostUntil). Rides up so the host can relay it as
         /// <see cref="ArcEffect.Boost"/> like any boost it awarded itself.</summary>
         public bool miniTurbo;
+        /// <summary>Horn sounding right now (v10). Held-state, not an edge —
+        /// the receiver gates a loop with it.</summary>
+        public bool hornOn;
     }
 
     public struct InputState
@@ -256,6 +269,7 @@ namespace AIHWSim.Net
         public bool handbrake;
         public bool respawnEdge;
         public bool useItemEdge;   // arcade: fire the held power-up
+        public bool hornHeld;      // v10: hold-to-sound, mirrored on the host rig
     }
 
     /// <summary>
@@ -359,7 +373,8 @@ namespace AIHWSim.Net
             w.WriteValueSafe(s.brake);
             byte flags = (byte)((s.handbrake ? 1 : 0) |
                                 (s.respawnEdge ? 2 : 0) |
-                                (s.useItemEdge ? 4 : 0));
+                                (s.useItemEdge ? 4 : 0) |
+                                (s.hornHeld ? 8 : 0));
             w.WriteValueSafe(flags);
         }
 
@@ -373,6 +388,7 @@ namespace AIHWSim.Net
             s.handbrake = (flags & 1) != 0;
             s.respawnEdge = (flags & 2) != 0;
             s.useItemEdge = (flags & 4) != 0;
+            s.hornHeld = (flags & 8) != 0;
             return s;
         }
 
@@ -449,6 +465,7 @@ namespace AIHWSim.Net
             w.WriteValueSafe(c.angVel);
             w.WriteValueSafe(c.steerDeg);
             w.WriteValueSafe(c.wheelRadPerSec);
+            w.WriteValueSafe(c.flags);    // appended in v10 (bit 1 = horn)
         }
 
         public static void WriteOwnState(FastBufferWriter w, in OwnStateMsg s)
@@ -465,7 +482,8 @@ namespace AIHWSim.Net
                                 (s.warned ? 2 : 0) |
                                 (s.drifting ? 4 : 0) |
                                 ((s.driftTier & 3) << 3) |
-                                (s.miniTurbo ? 32 : 0));
+                                (s.miniTurbo ? 32 : 0) |
+                                (s.hornOn ? 64 : 0));
             w.WriteValueSafe(flags);
         }
 
@@ -486,6 +504,7 @@ namespace AIHWSim.Net
             s.drifting = (flags & 4) != 0;
             s.driftTier = (flags >> 3) & 3;
             s.miniTurbo = (flags & 32) != 0;
+            s.hornOn = (flags & 64) != 0;
             return s;
         }
 
@@ -508,6 +527,7 @@ namespace AIHWSim.Net
             r.ReadValueSafe(out c.angVel);
             r.ReadValueSafe(out c.steerDeg);
             r.ReadValueSafe(out c.wheelRadPerSec);
+            r.ReadValueSafe(out c.flags);
             return c;
         }
     }

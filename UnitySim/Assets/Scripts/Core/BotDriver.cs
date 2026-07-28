@@ -203,6 +203,7 @@ namespace AIHWSim.Core
         public float Brake() { EnsureFresh(); return _brake; }
         public bool Handbrake() => false;
         public bool LookBackHeld() => false;      // no camera to swing
+        public bool HornHeld() => false;          // bots have nothing to say
         public float MouseSteerDelta() => 0f;
 
         /// <summary>

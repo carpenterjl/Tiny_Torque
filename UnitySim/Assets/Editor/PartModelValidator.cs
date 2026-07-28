@@ -29,21 +29,35 @@ namespace AIHWSim.EditorTools
         private readonly struct Spec
         {
             public readonly string Key, Root;
-            public readonly float? X, Y, Z, MaxExtent;
+            public readonly float? X, Y, Z, MinExtent, MaxExtent;
             public readonly int MaxTris;
 
             /// <summary>Vehicle part: exact authored axes (null = free).</summary>
             public Spec(string key, float? x, float? y, float? z, int maxTris)
             {
                 Key = key; Root = "PartModels/";
-                X = x; Y = y; Z = z; MaxExtent = null; MaxTris = maxTris;
+                X = x; Y = y; Z = z; MinExtent = null; MaxExtent = null; MaxTris = maxTris;
             }
 
             /// <summary>Track prop: bound the extent and the triangle budget.</summary>
             public Spec(string key, float maxExtent, int maxTris)
             {
                 Key = key; Root = "TrackProps/";
-                X = null; Y = null; Z = null; MaxExtent = maxExtent; MaxTris = maxTris;
+                X = null; Y = null; Z = null;
+                MinExtent = null; MaxExtent = maxExtent; MaxTris = maxTris;
+            }
+
+            /// <summary>
+            /// Cosmetic: a ±10 % window round the authored extent. The shared
+            /// 0.02 m floor is no use here — a bobble is 13 mm across — and a
+            /// two-sided window is a better check anyway, catching a re-export
+            /// that drifts in either direction, not just the x100 bake.
+            /// </summary>
+            public Spec(string key, float minExtent, float maxExtent, int maxTris)
+            {
+                Key = key; Root = "Cosmetics/";
+                X = null; Y = null; Z = null;
+                MinExtent = minExtent; MaxExtent = maxExtent; MaxTris = maxTris;
             }
         }
 
@@ -185,6 +199,65 @@ namespace AIHWSim.EditorTools
             new Spec("haunt_ramp_tomb",    2.87f,  2000),
             new Spec("haunt_tree",         2.17f,  2000),
             new Spec("haunt_wisp",         0.49f,   600),
+            // TinyTorque cosmetics (build_cosmetics.py). Extent windows are the
+            // measured post-transform size +-10 %, budgets the measured triangle
+            // count +15 %. Both come out of the exporter's own JSON block, so a
+            // re-export that changes a shape has to update these on purpose.
+            // 47 unlockables:
+            new Spec("bob_8ball", 0.0119f, 0.0145f, 1900),
+            new Spec("bob_bear", 0.0129f, 0.0157f, 1200),
+            new Spec("bob_cone", 0.0135f, 0.0165f, 600),
+            new Spec("bob_dice", 0.0185f, 0.0226f, 2350),
+            new Spec("bob_eyeball", 0.0121f, 0.0148f, 2100),
+            new Spec("bob_ghost", 0.0144f, 0.0176f, 600),
+            new Spec("bob_helmet", 0.0133f, 0.0163f, 850),
+            new Spec("bob_mushroom", 0.0166f, 0.0203f, 1450),
+            new Spec("bob_star", 0.0174f, 0.0213f, 400),
+            new Spec("orn_bat", 0.0359f, 0.0438f, 1650),
+            new Spec("orn_crystal", 0.0223f, 0.0272f, 650),
+            new Spec("orn_duck", 0.0266f, 0.0325f, 1150),
+            new Spec("orn_flame", 0.0192f, 0.0234f, 900),
+            new Spec("orn_jet", 0.0262f, 0.0321f, 500),
+            new Spec("orn_lightning", 0.0275f, 0.0336f, 350),
+            new Spec("orn_phoenix", 0.0338f, 0.0413f, 1350),
+            new Spec("orn_skull", 0.014f, 0.0171f, 1250),
+            new Spec("orn_wrench", 0.0273f, 0.0334f, 750),
+            new Spec("rim_blade", 0.0368f, 0.045f, 2250),
+            new Spec("rim_bone", 0.0369f, 0.0452f, 3950),
+            new Spec("rim_cog", 0.0368f, 0.045f, 4950),
+            new Spec("rim_deepdish", 0.0368f, 0.045f, 2550),
+            new Spec("rim_lace", 0.0368f, 0.045f, 3100),
+            new Spec("rim_mesh", 0.0368f, 0.045f, 2550),
+            new Spec("rim_pinwheel", 0.0368f, 0.045f, 1700),
+            new Spec("rim_steelie", 0.0368f, 0.045f, 2950),
+            new Spec("rim_turbine", 0.0368f, 0.045f, 2800),
+            new Spec("rim_web", 0.0368f, 0.045f, 4250),
+            new Spec("top_blocks", 0.0488f, 0.0597f, 1450),
+            new Spec("top_booster", 0.0754f, 0.0922f, 1150),
+            new Spec("top_candelabra", 0.0425f, 0.0519f, 4300),
+            new Spec("top_cauldron", 0.0377f, 0.0461f, 1750),
+            new Spec("top_crown", 0.0438f, 0.0535f, 2350),
+            new Spec("top_gift", 0.0358f, 0.0437f, 1300),
+            new Spec("top_lightbar", 0.0523f, 0.064f, 1900),
+            new Spec("top_pizza", 0.0507f, 0.0619f, 3400),
+            new Spec("top_pumpkin", 0.0352f, 0.043f, 3700),
+            new Spec("top_spare", 0.0631f, 0.0771f, 2050),
+            new Spec("top_surfboard", 0.1046f, 0.1279f, 750),
+            new Spec("top_wizardhat", 0.0543f, 0.0664f, 1450),
+            new Spec("wing_batwing", 0.1664f, 0.2034f, 1350),
+            new Spec("wing_broom", 0.1547f, 0.1891f, 1800),
+            new Spec("wing_ducktail", 0.153f, 0.187f, 550),
+            new Spec("wing_fae", 0.075f, 0.0917f, 1950),
+            new Spec("wing_gt", 0.1634f, 0.1998f, 1650),
+            new Spec("wing_kite", 0.0883f, 0.108f, 300),
+            new Spec("wing_plank", 0.1465f, 0.1791f, 1100),
+
+            // The four crates: authored at full size (they are shown on their own
+            // rig, not bolted to a car), so their extents are ~0.5 m not ~0.05 m.
+            new Spec("chrome", 0.5472f, 0.6688f, 2750),
+            new Spec("crate", 0.5508f, 0.6732f, 2550),
+            new Spec("haunt", 0.6237f, 0.7623f, 1750),
+            new Spec("vault", 0.5454f, 0.6666f, 4100),
         };
 
         public static void Report()
@@ -223,8 +296,9 @@ namespace AIHWSim.EditorTools
                     // Props have no axis contract; bound them at both ends so the
                     // x100 metre->centimetre bake and its inverse both get caught.
                     float ext = Mathf.Max(b.size.x, Mathf.Max(b.size.y, b.size.z));
-                    if (ext > s.MaxExtent.Value) why += $" extent={ext:0.000}>{s.MaxExtent.Value:0.000}";
-                    if (ext < MinExtentMetres) why += $" extent={ext:0.000}<{MinExtentMetres:0.000}";
+                    float floor = s.MinExtent ?? MinExtentMetres;
+                    if (ext > s.MaxExtent.Value) why += $" extent={ext:0.0000}>{s.MaxExtent.Value:0.0000}";
+                    if (ext < floor) why += $" extent={ext:0.0000}<{floor:0.0000}";
                 }
                 if (tris > s.MaxTris) why += $" tris={tris}>{s.MaxTris}";
 

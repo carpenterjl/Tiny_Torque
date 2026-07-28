@@ -179,6 +179,7 @@ namespace AIHWSim.Garage
                 bodyShape = BodyShape.Baja,
                 bodySize = new Vector3(0.20f, 0.10f, 0.42f),
                 bodyColor = new Color(0.80f, 0.80f, 0.80f),
+                hornStyle = 2,     // air horn — it's the truck of the family
                 mass = 1.95f,
                 steerRate = 460f,
             };
@@ -218,6 +219,7 @@ namespace AIHWSim.Garage
                 bodyShape = BodyShape.Patrol,
                 bodySize = new Vector3(0.20f, 0.10f, 0.42f),
                 bodyColor = new Color(0.80f, 0.80f, 0.80f),
+                hornStyle = 1,     // police siren, obviously
                 mass = 1.8f,
                 steerRate = 520f,
             };

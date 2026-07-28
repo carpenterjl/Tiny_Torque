@@ -1,6 +1,7 @@
 using AIHWSim.Core;
 using AIHWSim.Garage;
 using AIHWSim.TrackEd;
+using AIHWSim.UI;
 using UnityEngine;
 
 namespace AIHWSim.Net
@@ -29,6 +30,11 @@ namespace AIHWSim.Net
         private Vector2 _bodyScroll;
         private bool _resultsDismissed;
 
+        // Layout-snapshotted twins of everything that decides WHICH controls
+        // exist this frame (see MenuNav's class doc — pad activation lands on
+        // a Layout pass, so live flags may flip mid-pass).
+        private bool _openDraw, _showMapsDraw, _showSettingsDraw, _resultsDraw;
+
         private NetSession S => NetSession.Instance;
 
         private void Update()
@@ -41,28 +47,48 @@ namespace AIHWSim.Net
                 if (!_open) SettingsPanel.Reset();
             }
             if (S != null && S.State == NetSession.LanState.Racing) _resultsDismissed = false;
+
+            // Pad B steps out of the panel layer by layer.
+            if (_open && MenuNav.ConsumeBack())
+            {
+                if (_showMaps) _showMaps = false;
+                else if (_showSettings) { _showSettings = false; SettingsPanel.Reset(); }
+                else { _open = false; SettingsPanel.Reset(); }
+            }
         }
 
         private void OnGUI()
         {
             if (S == null) return;
             GUI.skin = GarageSkin.Skin;
+            UIScale.Begin();
+            if (Event.current.type == EventType.Layout)
+            {
+                _openDraw = _open;
+                _showMapsDraw = _showMaps;
+                _showSettingsDraw = _showSettings;
+                _resultsDraw = S.State == NetSession.LanState.Results && !_resultsDismissed;
+            }
 
             DrawCountdown();
-            if (S.State == NetSession.LanState.Results && !_resultsDismissed)
+            if (_resultsDraw)
             {
+                MenuNav.BeginFrame("lan:results");
                 DrawResults();
+                MenuNav.EndFrame();
+                UIScale.End();
                 return;
             }
-            if (!_open) return;
+            if (!_openDraw) { UIScale.End(); return; }
+            MenuNav.BeginFrame("lan:menu");
 
-            float w = _showMaps ? 480f : (_showSettings ? 460f : 300f);
-            float h = Mathf.Min(Screen.height - 60f, _showSettings ? 600f : 380f);
-            var area = new Rect((Screen.width - w) * 0.5f, (Screen.height - h) * 0.5f, w, h);
+            float w = _showMapsDraw ? 480f : (_showSettingsDraw ? 460f : 300f);
+            float h = Mathf.Min(UIScale.H - 60f, _showSettingsDraw ? 600f : 380f);
+            var area = new Rect((UIScale.W - w) * 0.5f, (UIScale.H - h) * 0.5f, w, h);
             GUILayout.BeginArea(area, GUI.skin.box);
             GUILayout.BeginHorizontal();
 
-            GUILayout.BeginVertical(GUILayout.Width(_showSettings ? 440f : 280f));
+            GUILayout.BeginVertical(GUILayout.Width(_showSettingsDraw ? 440f : 280f));
             var title = new GUIStyle(GarageSkin.Header) { fontSize = 18, alignment = TextAnchor.MiddleCenter };
             GUILayout.Label(S.IsHost ? "LAN SESSION (HOST)" : "LAN SESSION", title);
             GUILayout.Space(6);
@@ -72,9 +98,9 @@ namespace AIHWSim.Net
             {
                 GUILayout.BeginHorizontal();
                 var st = S.Standings[p.slot];
-                GUILayout.Label($"{p.name}{(p.slot == S.LocalSlot ? " (you)" : "")}  ·  lap {st.lap}");
+                GUILayout.Label($"Lv{p.level} {p.name}{(p.slot == S.LocalSlot ? " (you)" : "")}  ·  lap {st.lap}");
                 GUILayout.FlexibleSpace();
-                if (S.IsHost && p.slot != 0 && GUILayout.Button("Kick", GUILayout.Width(48)))
+                if (S.IsHost && p.slot != 0 && MenuNav.Button("Kick", GUILayout.Width(48)))
                     S.HostKick(p.slot);
                 GUILayout.EndHorizontal();
             }
@@ -83,21 +109,16 @@ namespace AIHWSim.Net
             if (S.IsHost)
             {
                 bool canRace = S.State == NetSession.LanState.FreeRoam && HostHasFinishLine();
-                GUILayout.BeginHorizontal();
-                GUILayout.Label("Laps", GUILayout.Width(40));
-                if (GUILayout.Button("−", GUILayout.Width(28))) _laps = Mathf.Max(1, _laps - 1);
-                GUILayout.Label(_laps.ToString(), GarageSkin.Header, GUILayout.Width(30));
-                if (GUILayout.Button("+", GUILayout.Width(28))) _laps = Mathf.Min(50, _laps + 1);
-                GUILayout.EndHorizontal();
+                _laps = MenuNav.Stepper("Laps", _laps, 1, 50, v => v.ToString(), 40f);
 
                 GUI.enabled = canRace;
-                if (GUILayout.Button("Start Race ▶", GUILayout.Height(30)))
+                if (MenuNav.Button("Start Race ▶", GUILayout.Height(30)))
                 {
                     S.HostStartRace(_laps);
                     _open = false;
                 }
                 GUI.enabled = S.State == NetSession.LanState.FreeRoam;
-                if (GUILayout.Button(_showMaps ? "Change Map ◀" : "Change Map ▶", GUILayout.Height(30)))
+                if (MenuNav.Button(_showMapsDraw ? "Change Map ◀" : "Change Map ▶", GUILayout.Height(30)))
                     _showMaps = !_showMaps;
                 GUI.enabled = true;
                 if (!HostHasFinishLine())
@@ -108,17 +129,17 @@ namespace AIHWSim.Net
             // PauseMenu, so without this a networked player could not reach a
             // single setting without leaving the session.
             GUILayout.Space(6);
-            if (GUILayout.Button(_showSettings ? "Hide settings" : "Settings…", GUILayout.Height(28)))
+            if (MenuNav.Button(_showSettingsDraw ? "Hide settings" : "Settings…", GUILayout.Height(28)))
             {
                 _showSettings = !_showSettings;
                 SettingsPanel.Reset();
             }
-            if (_showSettings) SettingsPanel.Draw(rigs, 340f);
+            if (_showSettingsDraw) SettingsPanel.Draw(rigs, 340f);
 
             GUILayout.FlexibleSpace();
-            if (GUILayout.Button("Leave Session", GUILayout.Height(30)))
+            if (MenuNav.Button("Leave Session", GUILayout.Height(30)))
                 S.Leave();
-            if (GUILayout.Button("Close (Esc)", GUILayout.Height(26)))
+            if (MenuNav.Button("Close (Esc)", GUILayout.Height(26)))
             {
                 _open = false;
                 SettingsPanel.Reset();
@@ -126,10 +147,12 @@ namespace AIHWSim.Net
             GUILayout.EndScrollView();
             GUILayout.EndVertical();
 
-            if (_showMaps && S.IsHost) DrawMapList();
+            if (_showMapsDraw && S.IsHost) DrawMapList();
 
             GUILayout.EndHorizontal();
             GUILayout.EndArea();
+            MenuNav.EndFrame();
+            UIScale.End();
         }
 
         private bool HostHasFinishLine()
@@ -145,10 +168,10 @@ namespace AIHWSim.Net
             GUILayout.BeginVertical();
             GUILayout.Label("MAPS", GarageSkin.Header);
             _mapScroll = GUILayout.BeginScrollView(_mapScroll);
-            if (GUILayout.Button("Classic Oval"))
+            if (MenuNav.Button("Classic Oval"))
                 ChangeMap(null);
             foreach (var name in TrackLibrary.List())
-                if (GUILayout.Button(name))
+                if (MenuNav.Button(name))
                     ChangeMap(TrackLibrary.Load(name));
             GUILayout.EndScrollView();
             GUILayout.EndVertical();
@@ -171,13 +194,14 @@ namespace AIHWSim.Net
                 fontSize = 72,
                 alignment = TextAnchor.MiddleCenter,
             };
-            GUI.Label(new Rect(0, Screen.height * 0.28f, Screen.width, 100f), text, style);
+            GUI.Label(new Rect(0, UIScale.H * 0.28f, UIScale.W, 100f), text, style);
         }
 
         private void DrawResults()
         {
-            float w = 380f, h = 200f + S.Roster.Count * 24f;
-            var area = new Rect((Screen.width - w) * 0.5f, (Screen.height - h) * 0.5f, w, h);
+            float w = 380f, h = 200f + S.Roster.Count * 24f
+                + (AwardReveal.Pending ? 84f : 0f);
+            var area = new Rect((UIScale.W - w) * 0.5f, (UIScale.H - h) * 0.5f, w, h);
             GUILayout.BeginArea(area, GUI.skin.box);
             var title = new GUIStyle(GarageSkin.Header) { fontSize = 20, alignment = TextAnchor.MiddleCenter };
             GUILayout.Label("RACE RESULTS", title);
@@ -188,22 +212,34 @@ namespace AIHWSim.Net
                 var st = S.Standings[p.slot];
                 string place = st.finished ? $"P{st.place}" : "DNF";
                 string best = st.bestLap >= 0f ? Fmt(st.bestLap) : "--:--";
-                GUILayout.Label($"{place}  {p.name}   total {Fmt(st.totalTime)}   best {best}");
+                GUILayout.Label($"{place}  Lv{p.level} {p.name}   total {Fmt(st.totalTime)}   best {best}");
             }
+
+            // This machine's own prize/XP from the race, if any.
+            AwardReveal.Draw();
 
             GUILayout.Space(8);
             if (S.IsHost)
             {
-                if (GUILayout.Button("Rematch", GUILayout.Height(30)))
+                if (MenuNav.Button("Rematch", GUILayout.Height(30)))
+                {
+                    AwardReveal.Dismiss();
                     S.HostStartRace(_laps);
-                if (GUILayout.Button("Back to free roam", GUILayout.Height(30)))
+                }
+                if (MenuNav.Button("Back to free roam", GUILayout.Height(30)))
+                {
+                    AwardReveal.Dismiss();
                     S.HostEndResults();
+                }
             }
             else
             {
                 GUILayout.Label("Waiting for the host…", GarageSkin.StatLabel);
-                if (GUILayout.Button("Keep driving", GUILayout.Height(28)))
+                if (MenuNav.Button("Keep driving", GUILayout.Height(28)))
+                {
                     _resultsDismissed = true;
+                    AwardReveal.Dismiss();
+                }
             }
             GUILayout.EndArea();
         }

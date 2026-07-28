@@ -1,5 +1,6 @@
 using System.Collections.Generic;
 using AIHWSim.Garage;
+using AIHWSim.UI;
 using UnityEngine;
 
 namespace AIHWSim.Core
@@ -25,6 +26,10 @@ namespace AIHWSim.Core
     {
         private static Vector2 _scroll;
         private static bool _showKeys;
+        // Layout-snapshotted twin — the Controls section adds ~30 controls, so
+        // whether it is open must not change between a Layout pass and its
+        // paired Repaint (see MenuNav's class doc).
+        private static bool _showKeysDraw;
 
         // Rebind capture. One panel is ever on screen, so this is static state
         // rather than an instance field for the same reason the panel itself is.
@@ -65,21 +70,24 @@ namespace AIHWSim.Core
             // allowed to change layout, keeps that true.
             if (_capturing && Event.current.type == EventType.Layout)
                 changed |= PollCapture();
+            if (Event.current.type == EventType.Layout)
+                _showKeysDraw = _showKeys;
 
             GUILayout.Label("SETTINGS", GarageSkin.Header);
             _scroll = GUILayout.BeginScrollView(_scroll, GUILayout.Height(height));
 
             // ---- audio ----
             GUILayout.Label("AUDIO", GarageSkin.Header);
-            changed |= GarageSkin.Slider01("Master", ref s.masterVolume);
-            changed |= GarageSkin.Slider01("Sound effects", ref s.sfxVolume);
-            changed |= GarageSkin.Slider01("Engine + tyres", ref s.engineVolume);
+            changed |= MenuNav.Slider01("Master", ref s.masterVolume);
+            changed |= MenuNav.Slider01("Sound effects", ref s.sfxVolume);
+            changed |= MenuNav.Slider01("Engine + tyres", ref s.engineVolume);
+            changed |= MenuNav.Slider01("Music", ref s.musicVolume);
 
             // ---- control feel ----
             GUILayout.Space(4);
             GUILayout.Label("CONTROL FEEL", GarageSkin.Header);
-            changed |= GarageSkin.Slider01("KB steer smoothing", ref s.kbSteerSmoothing);
-            changed |= GarageSkin.Slider01("KB throttle smoothing", ref s.kbThrottleSmoothing);
+            changed |= MenuNav.Slider01("KB steer smoothing", ref s.kbSteerSmoothing);
+            changed |= MenuNav.Slider01("KB throttle smoothing", ref s.kbThrottleSmoothing);
             GUILayout.Label("0% is the old instant step. Gamepad sticks are never shaped.",
                 GarageSkin.StatLabel);
 
@@ -89,19 +97,19 @@ namespace AIHWSim.Core
             changed |= DrawPresetRow(s);
 
             bool moved = false;
-            moved |= GarageSkin.Slider01("Steering help", ref s.p1AssistSteer);
-            moved |= GarageSkin.Slider01("Stability", ref s.p1AssistStability);
-            moved |= GarageSkin.Slider01("Traction ctrl", ref s.p1AssistTraction);
-            moved |= GarageSkin.Slider01("ABS", ref s.p1AssistAbs);
+            moved |= MenuNav.Slider01("Steering help", ref s.p1AssistSteer);
+            moved |= MenuNav.Slider01("Stability", ref s.p1AssistStability);
+            moved |= MenuNav.Slider01("Traction ctrl", ref s.p1AssistTraction);
+            moved |= MenuNav.Slider01("ABS", ref s.p1AssistAbs);
 
             if (LocalHumans(rigs) > 1)
             {
                 GUILayout.Space(4);
                 GUILayout.Label("ASSISTS — P2", GarageSkin.Header);
-                moved |= GarageSkin.Slider01("Steering help", ref s.p2AssistSteer);
-                moved |= GarageSkin.Slider01("Stability", ref s.p2AssistStability);
-                moved |= GarageSkin.Slider01("Traction ctrl", ref s.p2AssistTraction);
-                moved |= GarageSkin.Slider01("ABS", ref s.p2AssistAbs);
+                moved |= MenuNav.Slider01("Steering help", ref s.p2AssistSteer);
+                moved |= MenuNav.Slider01("Stability", ref s.p2AssistStability);
+                moved |= MenuNav.Slider01("Traction ctrl", ref s.p2AssistTraction);
+                moved |= MenuNav.Slider01("ABS", ref s.p2AssistAbs);
             }
             if (moved)
             {
@@ -120,17 +128,17 @@ namespace AIHWSim.Core
 
             // ---- bindings ----
             GUILayout.Space(4);
-            if (GUILayout.Button(_showKeys ? "Controls ▲" : "Controls ▼", GUILayout.Height(26)))
+            if (MenuNav.Button(_showKeysDraw ? "Controls ▲" : "Controls ▼", GUILayout.Height(26)))
             {
                 _showKeys = !_showKeys;
                 _capturing = false;
             }
-            if (_showKeys) changed |= DrawKeys();
+            if (_showKeysDraw) changed |= DrawKeys();
 
             // ---- telemetry ----
             GUILayout.Space(4);
             GUILayout.Label("TELEMETRY", GarageSkin.Header);
-            bool lg = GUILayout.Toggle(s.logTelemetry, " Log sensor/telemetry data (CSV)");
+            bool lg = MenuNav.Toggle(s.logTelemetry, " Log sensor/telemetry data (CSV)");
             if (lg != s.logTelemetry) { s.logTelemetry = lg; changed = true; }
 
             GUILayout.EndScrollView();
@@ -147,23 +155,12 @@ namespace AIHWSim.Core
 
         private static bool DrawPresetRow(Persistence.GameSettings s)
         {
-            bool changed = false;
-            GUILayout.BeginHorizontal();
-            GUILayout.Label("Preset", GUILayout.Width(60));
             string[] names = { "Off", "Standard", "Full", "Custom" };
             int preset = Mathf.Clamp(s.assistPreset, 0, 3);
-            for (int i = 0; i < names.Length; i++)
-            {
-                bool on = preset == i;
-                if (GUILayout.Toggle(on, names[i], GarageSkin.Skin.button,
-                        GUILayout.Width(62)) != on && !on)
-                {
-                    s.assistPreset = i;
-                    changed = true;
-                }
-            }
-            GUILayout.EndHorizontal();
-            return changed;
+            int now = MenuNav.Cycle("Preset", preset, names.Length, i => names[i], 60f);
+            if (now == preset) return false;
+            s.assistPreset = now;
+            return true;
         }
 
         // ---- bindings ---------------------------------------------------------
@@ -174,7 +171,7 @@ namespace AIHWSim.Core
             DriveAction.SteerLeft, DriveAction.SteerRight,
             DriveAction.Brake, DriveAction.Handbrake,
             DriveAction.Respawn, DriveAction.UseItem, DriveAction.LookBack,
-            DriveAction.ModeToggle, DriveAction.Pause,
+            DriveAction.Horn, DriveAction.ModeToggle, DriveAction.Pause,
         };
 
         private static bool DrawKeys()
@@ -216,14 +213,14 @@ namespace AIHWSim.Core
                 GUILayout.BeginHorizontal();
                 GUILayout.Label(KeyBindings.Label(a), GUILayout.Width(120));
                 bool waiting = _capturing && _capturePad && _capture == a;
-                if (GUILayout.Button(waiting ? "press a button…" : PadTable.Label(b.Pad(a)),
+                if (MenuNav.Button(waiting ? "press a button…" : PadTable.Label(b.Pad(a)),
                         GUILayout.Width(120)))
                     BeginCapture(a, false, pad: true);
                 GUILayout.EndHorizontal();
             }
 
             GUILayout.Space(4);
-            if (GUILayout.Button("Reset to defaults", GUILayout.Height(24)))
+            if (MenuNav.Button("Reset to defaults", GUILayout.Height(24)))
             {
                 b.ApplyLayout(KeyLayout.Wasd);
                 _capturing = false;
@@ -244,7 +241,7 @@ namespace AIHWSim.Core
         private static bool LayoutButton(KeyBindings b, KeyLayout current, KeyLayout which, string label)
         {
             bool on = current == which;
-            if (GUILayout.Toggle(on, label, GarageSkin.Skin.button, GUILayout.Width(62)) == on || on)
+            if (!MenuNav.Button(on ? "● " + label : label, GUILayout.Width(70)) || on)
                 return false;
             b.ApplyLayout(which);
             _capturing = false;
@@ -256,7 +253,7 @@ namespace AIHWSim.Core
             bool waiting = _capturing && !_capturePad && _capture == a && _captureAlt == alt;
             var key = alt ? b.AltKey(a) : b.Key(a);
             string text = waiting ? "press a key…" : KeyTable.Label(key);
-            if (GUILayout.Button(text, GUILayout.Width(alt ? 76 : 96)))
+            if (MenuNav.Button(text, GUILayout.Width(alt ? 76 : 96)))
                 BeginCapture(a, alt, pad: false);
         }
 

@@ -139,11 +139,12 @@ namespace AIHWSim.Track
         private void OnGUI()
         {
             if (!showDefaultHud) return;
+            UI.UIScale.Begin();
             var t = First;
             var style = new GUIStyle(GUI.skin.box) { alignment = TextAnchor.MiddleLeft, fontSize = 13 };
             bool cps = CheckpointCount > 0;
             float w = 210f, h = cps ? 110f : 92f;
-            var rect = new Rect(Screen.width - w - 10f, Screen.height - h - 10f, w, h);
+            var rect = new Rect(UI.UIScale.W - w - 10f, UI.UIScale.H - h - 10f, w, h);
             string body =
                 $"Lap: {(t?.LapCount ?? 0)}\n" +
                 $"Current: {(t != null && t.Armed ? Fmt(t.CurrentLap) : "cross line to start")}\n" +
@@ -151,6 +152,7 @@ namespace AIHWSim.Track
                 $"Best:    {(t != null && t.HasBest ? Fmt(t.BestLap) : "--:--.---")}" +
                 (cps ? $"\nCP:      {(t?.NextCheckpoint ?? 0)}/{CheckpointCount}" : "");
             GUI.Box(rect, body, style);
+            UI.UIScale.End();
         }
     }
 }

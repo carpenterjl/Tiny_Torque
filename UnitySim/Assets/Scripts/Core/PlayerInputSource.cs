@@ -32,6 +32,11 @@ namespace AIHWSim.Core
         /// camera concern — it reaches no physics and no controller — which is
         /// why the network and bot implementations simply return false.</summary>
         bool LookBackHeld();
+        /// <summary>Held: sound the horn. Purely audio — no physics, no
+        /// controller — but unlike look-back it IS synced over LAN (a horn
+        /// nobody else hears is pointless), so the network implementations
+        /// latch it from the stream rather than returning false.</summary>
+        bool HornHeld();
         float MouseSteerDelta();
     }
 
@@ -179,6 +184,21 @@ namespace AIHWSim.Core
 #endif
                 default:
                     return InputReader.LookBackHeld();
+            }
+        }
+
+        public bool HornHeld()
+        {
+            switch (_kind)
+            {
+#if ENABLE_INPUT_SYSTEM
+                case InputDeviceKind.Keyboard:
+                    return InputReader.HornKeyHeld();
+                case InputDeviceKind.Gamepad:
+                    return InputReader.HornPadHeld(Pad);
+#endif
+                default:
+                    return InputReader.HornHeld();
             }
         }
 

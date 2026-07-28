@@ -30,6 +30,9 @@ namespace AIHWSim.Net
 
         public int slot;
         public CarVehicle car;
+        /// <summary>This ghost's horn (from its owner's design JSON), set by
+        /// whoever builds the ghost.</summary>
+        public int hornStyle;
 
         private struct Snap
         {
@@ -65,6 +68,7 @@ namespace AIHWSim.Net
             // never run StepPhysics — so the audio is driven from the streamed
             // speed estimate instead. Passing a null car selects that path.
             _audio = Audio.VehicleAudio.Attach(gameObject, null);
+            if (_audio != null) _audio.hornStyle = hornStyle;
         }
 
         public void Receive(byte epoch, float hostTime, in CarState s)
@@ -100,6 +104,10 @@ namespace AIHWSim.Net
                 wheelRadPerSec = s.wheelRadPerSec,
             });
             if (_buffer.Count > 30) _buffer.RemoveAt(0);
+
+            // Horn is latest-value, not interpolated — a 60 ms late honk is
+            // still a honk, a lerped one is a fault.
+            if (_audio != null) _audio.externalHorn = s.HornOn;
         }
 
         private void Update()

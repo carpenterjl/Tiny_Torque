@@ -56,6 +56,30 @@ namespace AIHWSim.Audio
         public const string Engine = "engine";
         public const string Skid = "skid";
         public const string Impact = "impact";
+        // Menu / progression UI (arcade pass)
+        public const string UiMove = "ui_move";
+        public const string UiSelect = "ui_select";
+        public const string UiBack = "ui_back";
+        public const string UiDeny = "ui_deny";
+        public const string UiUnlock = "ui_unlock";
+        public const string UiLevelUp = "ui_levelup";
+        // Horns — all loops, played hold-to-sound by VehicleAudio.
+        public const string HornNormal = "horn_normal";
+        public const string HornSiren = "horn_siren";
+        public const string HornTruck = "horn_truck";
+        public const string HornMusical = "horn_musical";
+        public const string HornClown = "horn_clown";
+
+        /// <summary>VehicleDesign.hornStyle → clip key. Unknown values fall
+        /// back to the normal horn, so an old peer's design never goes silent.</summary>
+        public static string HornKey(int style) => style switch
+        {
+            1 => HornSiren,
+            2 => HornTruck,
+            3 => HornMusical,
+            4 => HornClown,
+            _ => HornNormal,
+        };
 
         /// <summary>Fetch (building on first use). Null only if the key is unknown.</summary>
         public static AudioClip Get(string key)
@@ -83,6 +107,17 @@ namespace AIHWSim.Audio
             Engine => BuildEngine(),
             Skid => BuildSkid(),
             Impact => BuildImpact(),
+            UiMove => BuildUiMove(),
+            UiSelect => BuildUiSelect(),
+            UiBack => BuildUiBack(),
+            UiDeny => BuildUiDeny(),
+            UiUnlock => BuildUiUnlock(),
+            UiLevelUp => BuildUiLevelUp(),
+            HornNormal => BuildHornNormal(),
+            HornSiren => BuildHornSiren(),
+            HornTruck => BuildHornTruck(),
+            HornMusical => BuildHornMusical(),
+            HornClown => BuildHornClown(),
             _ => null,
         };
 
@@ -223,6 +258,277 @@ namespace AIHWSim.Audio
                 }
             Normalize(d, 0.8f);
             return Make(Reveal, d);
+        }
+
+        // ================= menu / progression UI =================
+        //
+        // The menu voice: short, bright, sine-based ticks in the same family
+        // as Pickup/Reveal so the front end and the race sound like one game.
+        // Deny is the one square wave — a wrong answer should feel blunt.
+
+        private static AudioClip BuildUiMove()
+        {
+            int n = Samples(0.03f);
+            var d = new float[n];
+            for (int i = 0; i < n; i++)
+            {
+                float t = i / (float)n;
+                d[i] = Mathf.Sin(2f * Mathf.PI * 900f * i / Rate) * Env(t, 0.1f, 2.2f);
+            }
+            Normalize(d, 0.6f);
+            return Make(UiMove, d);
+        }
+
+        private static AudioClip BuildUiSelect()
+        {
+            // Two quick rising notes — Pickup's language at menu scale.
+            float[] notes = { 660f, 990f };
+            int per = Samples(0.06f);
+            var d = new float[per * notes.Length];
+            for (int k = 0; k < notes.Length; k++)
+                for (int i = 0; i < per; i++)
+                {
+                    float t = i / (float)per;
+                    float ph = 2f * Mathf.PI * notes[k] * i / Rate;
+                    d[k * per + i] = (Mathf.Sin(ph) * 0.8f + Mathf.Sin(ph * 2f) * 0.2f) * Env(t, 0.08f, 1.6f);
+                }
+            Normalize(d, 0.7f);
+            return Make(UiSelect, d);
+        }
+
+        private static AudioClip BuildUiBack()
+        {
+            int n = Samples(0.10f);
+            var d = new float[n];
+            for (int i = 0; i < n; i++)
+            {
+                float t = i / (float)n;
+                float f = Mathf.Lerp(700f, 450f, t);          // falling: stepping out
+                d[i] = Mathf.Sin(2f * Mathf.PI * f * i / Rate) * Env(t, 0.06f, 1.6f);
+            }
+            Normalize(d, 0.6f);
+            return Make(UiBack, d);
+        }
+
+        private static AudioClip BuildUiDeny()
+        {
+            // Two blunt square buzzes with a gap — "no".
+            int buzz = Samples(0.06f), gap = Samples(0.04f);
+            var d = new float[buzz * 2 + gap];
+            for (int k = 0; k < 2; k++)
+            {
+                int off = k * (buzz + gap);
+                for (int i = 0; i < buzz; i++)
+                {
+                    float t = i / (float)buzz;
+                    float s = Mathf.Sin(2f * Mathf.PI * 220f * i / Rate);
+                    d[off + i] = Mathf.Sign(s) * 0.5f * Env(t, 0.05f, 0.9f);
+                }
+            }
+            Normalize(d, 0.65f);
+            return Make(UiDeny, d);
+        }
+
+        private static AudioClip BuildUiUnlock()
+        {
+            // The mystery-item fanfare: a rising major arpeggio (C5 E5 G5 C6)
+            // with each note sustained under the next, plus a noise sparkle
+            // tail — the one UI sound allowed to be a moment.
+            float secs = 0.9f;
+            int n = Samples(secs);
+            var d = new float[n];
+            float[] notes = { 523.25f, 659.25f, 783.99f, 1046.5f };
+            float step = 0.13f;
+            for (int k = 0; k < notes.Length; k++)
+            {
+                int start = Samples(step * k);
+                for (int i = start; i < n; i++)
+                {
+                    float t = (i - start) / (float)(n - start);
+                    float ph = 2f * Mathf.PI * notes[k] * (i - start) / Rate;
+                    d[i] += (Mathf.Sin(ph) * 0.7f + Mathf.Sin(ph * 2f) * 0.15f) * Env(t, 0.03f, 1.3f) * 0.5f;
+                }
+            }
+            var rng = new Rng(0x0117);
+            int sparkleStart = Samples(0.45f);
+            float y = 0f;
+            for (int i = sparkleStart; i < n; i++)
+            {
+                float t = (i - sparkleStart) / (float)(n - sparkleStart);
+                // High-passed noise glitter: white minus its own low-pass.
+                float w = rng.Next();
+                y += (w - y) * 0.15f;
+                d[i] += (w - y) * 0.35f * Env(t, 0.2f, 1.8f);
+            }
+            Normalize(d, 0.85f);
+            return Make(UiUnlock, d);
+        }
+
+        private static AudioClip BuildUiLevelUp()
+        {
+            // A major triad swelling together with a detuned shimmer —
+            // ShieldUp's technique, brighter and prouder.
+            float secs = 0.6f;
+            int n = Samples(secs);
+            var d = new float[n];
+            float[] notes = { 523.25f, 659.25f, 783.99f };
+            for (int i = 0; i < n; i++)
+            {
+                float t = i / (float)n;
+                float v = 0f;
+                for (int k = 0; k < notes.Length; k++)
+                {
+                    float ph = 2f * Mathf.PI * notes[k] * i / Rate;
+                    v += Mathf.Sin(ph) + Mathf.Sin(ph * 1.008f) * 0.6f;
+                }
+                d[i] = v * Env(t, 0.3f, 1.1f);
+            }
+            Normalize(d, 0.8f);
+            return Make(UiLevelUp, d);
+        }
+
+        // ================= horns =================
+        //
+        // All five are LOOPS gated by VehicleAudio's hold-to-sound volume, so
+        // the tonal ones snap every partial to a whole number of cycles
+        // (LoopCycles) and the breathy one cross-fades its noise tail
+        // (LoopFade). A horn with a click in it honks twice per press.
+
+        /// <summary>Dual-tone electric car horn: two saw-ish stacks a major
+        /// third apart, beating slightly — the classic "meep".</summary>
+        private static AudioClip BuildHornNormal()
+        {
+            float secs = 0.6f;
+            int n = Samples(secs);
+            var d = new float[n];
+            float c1 = LoopCycles(420f, secs), c2 = LoopCycles(528f, secs);
+            for (int i = 0; i < n; i++)
+            {
+                float t = i / (float)n;
+                float p1 = 2f * Mathf.PI * c1 * t;
+                float p2 = 2f * Mathf.PI * c2 * t;
+                d[i] = Mathf.Sin(p1) * 0.5f + Mathf.Sin(p1 * 2f) * 0.25f + Mathf.Sin(p1 * 3f) * 0.12f
+                     + Mathf.Sin(p2) * 0.5f + Mathf.Sin(p2 * 2f) * 0.25f + Mathf.Sin(p2 * 3f) * 0.12f;
+            }
+            Normalize(d, 0.7f);
+            return Make(HornNormal, d);
+        }
+
+        /// <summary>Police two-tone wail: the pitch sweeps 650→850→650 Hz over
+        /// the loop. The modulator completes exactly one cycle per loop and the
+        /// carrier phase is integrated, so the wrap is seamless by
+        /// construction.</summary>
+        private static AudioClip BuildHornSiren()
+        {
+            float secs = 2.0f;
+            int n = Samples(secs);
+            var d = new float[n];
+            float phase = 0f;
+            for (int i = 0; i < n; i++)
+            {
+                float t = i / (float)n;
+                // One whole modulation cycle; freq returns to its start value.
+                float f = 750f + 100f * Mathf.Sin(2f * Mathf.PI * t);
+                phase += f / Rate;
+                float ph = 2f * Mathf.PI * phase;
+                d[i] = Mathf.Sin(ph) * 0.7f + Mathf.Sin(ph * 2f) * 0.2f;
+            }
+            // The carrier phase does not land exactly on a cycle boundary, so
+            // give the wrap a short cross-fade as well — belt and braces.
+            int fade = Samples(0.02f);
+            for (int i = 0; i < fade; i++)
+            {
+                float t = i / (float)fade;
+                d[i] = d[i] * t + d[n - fade + i] * (1f - t) * 0.5f;
+            }
+            Normalize(d, 0.7f);
+            return Make(HornSiren, d);
+        }
+
+        /// <summary>Truck air horn: a low detuned three-stack with breath noise
+        /// low-passed onto it. Tonal core wraps on whole cycles; the breath is
+        /// cross-faded.</summary>
+        private static AudioClip BuildHornTruck()
+        {
+            float secs = 0.8f;
+            int n = Samples(secs);
+            int fade = Samples(0.06f);
+            var raw = new float[n + fade];
+            var rng = new Rng(0x7A0C);
+            float c1 = LoopCycles(110f, secs), c2 = LoopCycles(220f, secs), c3 = LoopCycles(332f, secs);
+            for (int i = 0; i < raw.Length; i++)
+            {
+                float t = i / (float)n;
+                raw[i] = Mathf.Sin(2f * Mathf.PI * c1 * t) * 0.6f
+                       + Mathf.Sin(2f * Mathf.PI * c2 * t) * 0.4f
+                       + Mathf.Sin(2f * Mathf.PI * c3 * t) * 0.25f
+                       + rng.Next() * 0.25f;                      // breath
+            }
+            LowPass(raw, 0.12f);
+            var d = LoopFade(raw, n, fade);
+            Normalize(d, 0.8f);
+            return Make(HornTruck, d);
+        }
+
+        /// <summary>Musical horn: an original five-note fanfare (C-E-G-C-G) on
+        /// a bright square, looping — the "La Cucaracha horn" energy without
+        /// quoting anybody. Notes are enveloped to silence, so the wrap is at
+        /// a rest and needs no cycle counting.</summary>
+        private static AudioClip BuildHornMusical()
+        {
+            float[] notes = { 523.25f, 659.25f, 783.99f, 1046.5f, 783.99f };
+            float[] beats = { 0.16f, 0.16f, 0.16f, 0.28f, 0.34f };
+            int total = 0;
+            foreach (var b in beats) total += Samples(b);
+            var d = new float[total];
+            int at = 0;
+            for (int k = 0; k < notes.Length; k++)
+            {
+                int len = Samples(beats[k]);
+                for (int i = 0; i < len; i++)
+                {
+                    float t = i / (float)len;
+                    float s = Mathf.Sin(2f * Mathf.PI * notes[k] * i / Rate);
+                    d[at + i] = Mathf.Sign(s) * 0.45f * Env(t, 0.04f, 1.2f);
+                }
+                at += len;
+            }
+            Normalize(d, 0.7f);
+            return Make(HornMusical, d);
+        }
+
+        /// <summary>Clown horn: one squeeze-bulb "honk-a" cycle — a honk that
+        /// bends down with a breathy release, then a gap. Envelopes end at
+        /// silence, so the loop point is a rest.</summary>
+        private static AudioClip BuildHornClown()
+        {
+            float secs = 0.55f;
+            int n = Samples(secs);
+            var d = new float[n];
+            var rng = new Rng(0xC10A);
+            int honk = Samples(0.28f);
+            float phase = 0f;
+            for (int i = 0; i < honk; i++)
+            {
+                float t = i / (float)honk;
+                float f = Mathf.Lerp(460f, 320f, t * t);          // sagging squeeze
+                phase += f / Rate;
+                float ph = 2f * Mathf.PI * phase;
+                d[i] = (Mathf.Sin(ph) * 0.6f + Mathf.Sin(ph * 2f) * 0.35f + Mathf.Sin(ph * 3f) * 0.15f)
+                       * Env(t, 0.05f, 0.9f);
+            }
+            // The bulb refilling: a soft noise puff after the honk.
+            int puffStart = honk, puffLen = Samples(0.12f);
+            float y = 0f;
+            for (int i = 0; i < puffLen && puffStart + i < n; i++)
+            {
+                float t = i / (float)puffLen;
+                float w = rng.Next();
+                y += (w - y) * 0.2f;
+                d[puffStart + i] += y * 0.35f * Env(t, 0.3f, 1.5f);
+            }
+            Normalize(d, 0.75f);
+            return Make(HornClown, d);
         }
 
         private static AudioClip BuildBoost()

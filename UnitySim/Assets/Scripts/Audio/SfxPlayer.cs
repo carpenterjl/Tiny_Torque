@@ -119,5 +119,20 @@ namespace AIHWSim.Audio
             _ui.pitch = pitch;
             _ui.PlayOneShot(clip, Mathf.Clamp01(volume) * SfxGain);
         }
+
+        /// <summary>
+        /// Play a menu/UI sound. Identical to <see cref="Play2D"/> except it
+        /// ignores the pause gate — the pause menu is exactly where UI clicks
+        /// happen, and AudioSources don't scale with timeScale anyway.
+        /// </summary>
+        public void PlayUi(string key, float volume = 1f, float pitch = 1f)
+        {
+            if (!Enabled) return;
+            var clip = ProceduralAudio.Get(key);
+            if (clip == null) return;
+
+            _ui.pitch = pitch;
+            _ui.PlayOneShot(clip, Mathf.Clamp01(volume) * SfxGain);
+        }
     }
 }

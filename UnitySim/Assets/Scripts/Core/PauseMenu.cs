@@ -1,6 +1,7 @@
 using System.Collections.Generic;
 using AIHWSim.Garage;
 using AIHWSim.Track;
+using AIHWSim.UI;
 using AIHWSim.Vehicles;
 using UnityEngine;
 #if UNITY_EDITOR
@@ -46,6 +47,14 @@ namespace AIHWSim.Core
         private string _status = "";
         private PendingExit _pending;
 
+        // Layout-snapshotted twins of the flags that change WHICH controls
+        // exist. Pad activation lands on a Layout pass (see MenuNav), so the
+        // live flags may flip mid-pass; drawing from the snapshot keeps the
+        // pass's Layout and Repaint identical, and the new state owns the next
+        // frame — the same timing a mouse click has.
+        private bool _showTuneDraw, _showSettingsDraw, _pausedDraw;
+        private PendingExit _pendingDraw;
+
         private void Start()
         {
             _tunable = tunableBehaviour as ITunable;
@@ -60,12 +69,28 @@ namespace AIHWSim.Core
             if (SettingsPanel.Capturing) return;
             if (InputReader.PausePressed())
                 SetPaused(!_paused);
+
+            // Pad B steps out: sub-panel → prompt → menu, same as Esc's spirit.
+            if (_paused && MenuNav.ConsumeBack())
+            {
+                if (_pending != PendingExit.None) _pending = PendingExit.None;
+                else if (_showTune || _showSettings)
+                {
+                    _showTune = false;
+                    _showSettings = false;
+                    SettingsPanel.Reset();
+                }
+                else SetPaused(false);
+            }
         }
 
         public void SetPaused(bool paused)
         {
             _paused = paused;
             Time.timeScale = paused ? 0f : 1f;
+            // Music keeps playing through the freeze (AudioSources ignore
+            // timeScale) but drops to half so the pause reads as a pause.
+            Audio.MusicDirector.SetPaused(paused);
             if (!paused)
             {
                 _showTune = false;
@@ -81,23 +106,38 @@ namespace AIHWSim.Core
 
         private void OnGUI()
         {
-            if (!_paused) return;
+            if (Event.current.type == EventType.Layout)
+            {
+                _pausedDraw = _paused;
+                _showTuneDraw = _showTune;
+                _showSettingsDraw = _showSettings;
+                _pendingDraw = _pending;
+            }
+            if (!_pausedDraw) return;
 
             // Match the rest of the in-game UI. ArcadeHud and LanSessionMenu both
             // set this and either can be on screen at the same moment, so leaving
             // this menu on the default skin made it the odd one out.
             GUI.skin = GarageSkin.Skin;
+            UIScale.Begin();
+            MenuNav.BeginFrame(_pendingDraw != PendingExit.None ? "pause:prompt" : "pause");
 
-            if (_pending != PendingExit.None) { DrawSavePrompt(); return; }
+            if (_pendingDraw != PendingExit.None)
+            {
+                DrawSavePrompt();
+                MenuNav.EndFrame();
+                UIScale.End();
+                return;
+            }
 
             // The ten-button stack alone is taller than the old 290 px, so this
             // panel was clipping inside BeginArea long before the settings panel
             // was added to it. The scroll view below is the actual fix — with it,
             // the height only has to be reasonable rather than exactly right.
-            float w = _showSettings ? 460f : (_showTune ? 380f : 300f);
-            float h = Mathf.Min(Screen.height - 60f,
-                _showSettings ? 620f : (_showTune && _tunable != null ? 560f : 470f));
-            var area = new Rect((Screen.width - w) * 0.5f, (Screen.height - h) * 0.5f, w, h);
+            float w = _showSettingsDraw ? 460f : (_showTuneDraw ? 380f : 300f);
+            float h = Mathf.Min(UIScale.H - 60f,
+                _showSettingsDraw ? 620f : (_showTuneDraw && _tunable != null ? 560f : 470f));
+            var area = new Rect((UIScale.W - w) * 0.5f, (UIScale.H - h) * 0.5f, w, h);
             GUILayout.BeginArea(area, GUI.skin.box);
 
             var title = new GUIStyle(GUI.skin.label)
@@ -110,16 +150,16 @@ namespace AIHWSim.Core
             GUILayout.Space(6);
             _bodyScroll = GUILayout.BeginScrollView(_bodyScroll);
 
-            if (GUILayout.Button("Resume (Esc)", GUILayout.Height(30))) SetPaused(false);
+            if (MenuNav.Button("Resume (Esc)", GUILayout.Height(30))) SetPaused(false);
             bool inRace = _race != null && _race.isActiveAndEnabled;
             if (inRace)
             {
-                if (GUILayout.Button("Restart race", GUILayout.Height(30))) RestartRace();
+                if (MenuNav.Button("Restart race", GUILayout.Height(30))) RestartRace();
             }
-            else if (GUILayout.Button("Restart run", GUILayout.Height(30))) Restart();
-            if (GUILayout.Button("Garage", GUILayout.Height(30))) RequestExit(PendingExit.Garage);
-            if (GUILayout.Button("Track Builder", GUILayout.Height(30))) RequestExit(PendingExit.TrackBuilder);
-            if (GUILayout.Button("Main Menu", GUILayout.Height(30)))
+            else if (MenuNav.Button("Restart run", GUILayout.Height(30))) Restart();
+            if (MenuNav.Button("Garage", GUILayout.Height(30))) RequestExit(PendingExit.Garage);
+            if (MenuNav.Button("Track Builder", GUILayout.Height(30))) RequestExit(PendingExit.TrackBuilder);
+            if (MenuNav.Button("Main Menu", GUILayout.Height(30)))
             {
                 if (Application.CanStreamedLevelBeLoaded(GameFlow.MenuSceneName))
                     RequestExit(PendingExit.MainMenu);
@@ -127,17 +167,17 @@ namespace AIHWSim.Core
                     _status = "Menu scene missing — run Tools ▸ AIHWSim ▸ Create Menu Scene.";
             }
             if (rigs != null && rigs.Count > 0 &&
-                GUILayout.Button("Save snapshot", GUILayout.Height(30))) SaveSnapshot();
-            if (GUILayout.Button("Save telemetry", GUILayout.Height(30))) SaveTelemetry();
+                MenuNav.Button("Save snapshot", GUILayout.Height(30))) SaveSnapshot();
+            if (MenuNav.Button("Save telemetry", GUILayout.Height(30))) SaveTelemetry();
             if (_tunable != null &&
-                GUILayout.Button(_showTune ? "Hide tuning" : "Tune…", GUILayout.Height(30)))
+                MenuNav.Button(_showTuneDraw ? "Hide tuning" : "Tune…", GUILayout.Height(30)))
                 _showTune = !_showTune;
-            if (GUILayout.Button(_showSettings ? "Hide settings" : "Settings…", GUILayout.Height(30)))
+            if (MenuNav.Button(_showSettingsDraw ? "Hide settings" : "Settings…", GUILayout.Height(30)))
                 _showSettings = !_showSettings;
-            if (GUILayout.Button("Quit", GUILayout.Height(30))) RequestExit(PendingExit.Quit);
+            if (MenuNav.Button("Quit", GUILayout.Height(30))) RequestExit(PendingExit.Quit);
 
-            if (_showTune && _tunable != null) DrawTuning();
-            if (_showSettings) DrawSettings();
+            if (_showTuneDraw && _tunable != null) DrawTuning();
+            if (_showSettingsDraw) DrawSettings();
 
             if (!string.IsNullOrEmpty(_status))
             {
@@ -147,13 +187,17 @@ namespace AIHWSim.Core
 
             GUILayout.EndScrollView();
             GUILayout.EndArea();
+            MenuNav.EndFrame();
+            UIScale.End();
         }
 
-        /// <summary>Ask about unsaved telemetry before leaving the drive session.</summary>
+        /// <summary>Ask about unsaved telemetry before leaving the drive session.
+        /// Drawn inside the caller's UIScale block; dispatches on the Layout
+        /// snapshot so a pad activation can't desync the pass.</summary>
         private void DrawSavePrompt()
         {
             float w = 340f, h = 190f;
-            var area = new Rect((Screen.width - w) * 0.5f, (Screen.height - h) * 0.5f, w, h);
+            var area = new Rect((UIScale.W - w) * 0.5f, (UIScale.H - h) * 0.5f, w, h);
             GUILayout.BeginArea(area, GUI.skin.box);
 
             var title = new GUIStyle(GUI.skin.label)
@@ -166,10 +210,10 @@ namespace AIHWSim.Core
                             "It will be discarded if you leave without saving.");
             GUILayout.Space(6);
 
-            string dest = _pending == PendingExit.Garage ? "Garage"
-                : _pending == PendingExit.TrackBuilder ? "Track Builder"
-                : _pending == PendingExit.MainMenu ? "Main Menu" : "Quit";
-            if (GUILayout.Button($"Save log & go to {dest}", GUILayout.Height(30)))
+            string dest = _pendingDraw == PendingExit.Garage ? "Garage"
+                : _pendingDraw == PendingExit.TrackBuilder ? "Track Builder"
+                : _pendingDraw == PendingExit.MainMenu ? "Main Menu" : "Quit";
+            if (MenuNav.Button($"Save log & go to {dest}", GUILayout.Height(30)))
             {
                 string last = null;
                 foreach (var r in AllRunners)
@@ -177,9 +221,9 @@ namespace AIHWSim.Core
                 _status = string.IsNullOrEmpty(last) ? "" : $"Saved: {last}";
                 DoExit(TakePending());
             }
-            if (GUILayout.Button($"Discard & go to {dest}", GUILayout.Height(30)))
+            if (MenuNav.Button($"Discard & go to {dest}", GUILayout.Height(30)))
                 DoExit(TakePending());
-            if (GUILayout.Button("Cancel", GUILayout.Height(28)))
+            if (MenuNav.Button("Cancel", GUILayout.Height(28)))
                 _pending = PendingExit.None;
 
             GUILayout.EndArea();

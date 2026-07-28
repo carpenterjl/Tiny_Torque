@@ -1,4 +1,5 @@
 using AIHWSim.Garage;
+using AIHWSim.UI;
 using AIHWSim.Vehicles;
 using UnityEngine;
 
@@ -21,10 +22,12 @@ namespace AIHWSim.Net
         {
             if (S == null) return;
             GUI.skin = GarageSkin.Skin;
+            UIScale.Begin();
             DrawOwnBox();
             if (S.Arcade) DrawArcadeBoard();
             if (S.State == NetSession.LanState.Racing || S.State == NetSession.LanState.Countdown)
                 DrawRaceBanner();
+            UIScale.End();
         }
 
         /// <summary>
@@ -51,7 +54,7 @@ namespace AIHWSim.Net
             });
 
             float w = 230f, h = 26f + _order.Count * 18f;
-            GUILayout.BeginArea(new Rect(Screen.width - w - 12f, 12f, w, h), GUI.skin.box);
+            GUILayout.BeginArea(new Rect(UIScale.W - w - 12f, 12f, w, h), GUI.skin.box);
             GUILayout.Label("POSITIONS", GarageSkin.Header);
             foreach (var p in _order)
             {
@@ -73,7 +76,7 @@ namespace AIHWSim.Net
 
         private void DrawOwnBox()
         {
-            var area = new Rect(10f, Screen.height - 106f, 240f, 96f);
+            var area = new Rect(10f, UIScale.H - 106f, 240f, 96f);
             GUILayout.BeginArea(area, GUI.skin.box);
 
             var me = S.Roster.Find(p => p.slot == S.LocalSlot);
@@ -100,7 +103,7 @@ namespace AIHWSim.Net
         private void DrawRaceBanner()
         {
             float h = 26f + S.Roster.Count * 18f;
-            var area = new Rect((Screen.width - 250f) * 0.5f, 8f, 250f, h);
+            var area = new Rect((UIScale.W - 250f) * 0.5f, 8f, 250f, h);
             GUILayout.BeginArea(area, GUI.skin.box);
             GUILayout.Label($"RACE — first to {S.TargetLaps} laps", GarageSkin.Header);
             foreach (var p in S.Roster)

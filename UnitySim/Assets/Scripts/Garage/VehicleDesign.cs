@@ -190,6 +190,11 @@ namespace AIHWSim.Garage
         // by the garage PAINT tab; "" = plain bodyColor. Rides the design JSON so
         // save/load, snapshots, and LAN vehicle transfer carry it automatically.
         public string liveryPng = "";
+        // Which horn this car carries: 0 normal / 1 police siren / 2 air horn /
+        // 3 musical / 4 clown (see ProceduralAudio.HornKey). Initializer = the
+        // usual JsonUtility back-compat: old designs read as 0 and keep the
+        // normal horn. Rides the design JSON, so LAN peers hear the right one.
+        public int hornStyle = 0;
         public float mass = 1.6f;
         // Composite mass model: when true, total mass / CoM / inertia are computed
         // from the chassis + every part (MassProperties); false = legacy scalar.
@@ -212,6 +217,19 @@ namespace AIHWSim.Garage
         public List<BatterySpec> batteries = new List<BatterySpec>(); // old JSON → empty = infinite rail
         public List<AntennaSpec> antennas = new List<AntennaSpec>();  // old JSON → empty (cosmetic)
         public List<LightSpec> lights = new List<LightSpec>();        // old JSON → empty (cosmetic)
+
+        // Unlockable cosmetics (CosmeticCatalog ids; "" = none). Five slots, one
+        // item each, rims applying to every wheel. They live on the DESIGN rather
+        // than beside it so they ride the existing JSON into races, split-screen,
+        // snapshots and LAN peers with no extra plumbing — the same trick
+        // hornStyle and liveryPng use. Old designs read as empty strings and wear
+        // nothing. Purely visual: no mass, no aero, no collider, so
+        // MassProperties and every controller see an unchanged car.
+        public string cosTopper = "";
+        public string cosRim = "";
+        public string cosOrnament = "";
+        public string cosBobble = "";
+        public string cosWing = "";
 
         /// <summary>
         /// The stock car: a 1/10-scale RC (F1TENTH-style) — four wheels (steered

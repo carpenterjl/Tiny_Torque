@@ -162,8 +162,220 @@ namespace AIHWSim.Garage
                     default:                        UpdateDragging(overUI); break;
                 }
                 UpdateSceneHover(overUI);
+                UpdatePadInput();
             }
             if (_previewShown) _previewRig?.Tick(Time.unscaledDeltaTime);
+        }
+
+        // ==================== Gamepad part manipulation ====================
+        //
+        // The controller's editor bindings (fixed, not rebindable this pass):
+        //   left stick  — move the selected part in the camera-relative plane
+        //   LT / RT     — lower / raise it
+        //   LB / RB     — yaw left / right
+        //   right stick Y — pitch "forward/back" (sensor aim, antenna tilt,
+        //                   wing attack angle — whatever the part's inspector
+        //                   would call that axis)
+        //   A — cycle-select the next part · B — deselect
+        //   X — mirror-mode toggle · Y — frame the selection
+        // The panels themselves stay mouse/keyboard-driven; this layer is the
+        // hands-on-the-car half.
+
+        private int _padStroke;
+        private bool _padEditing;
+
+        private void UpdatePadInput()
+        {
+            if (_drag != DragState.Idle) { EndPadStroke(); return; }
+
+            if (PadTable.PressedAny(PadButton.South)) CyclePadSelection();
+            if (PadTable.PressedAny(PadButton.East) && _sel >= 0)
+            {
+                _sel = -1;
+                bootstrap.SetHighlight(_selType, -1);
+            }
+            if (PadTable.PressedAny(PadButton.West)) _mirrorMode = !_mirrorMode;
+            if (PadTable.PressedAny(PadButton.North)) FocusSelection();
+
+            if (_sel < 0) { EndPadStroke(); return; }
+
+            Vector2 ls = InputReader.LeftStick();
+            float lift = InputReader.TriggerAxis();
+            float yawDir = (PadTable.HeldAny(PadButton.RightShoulder) ? 1f : 0f)
+                         - (PadTable.HeldAny(PadButton.LeftShoulder) ? 1f : 0f);
+            float pitch = InputReader.RightStick().y;
+
+            bool editing = ls.sqrMagnitude > 0.04f || Mathf.Abs(lift) > 0.15f
+                || yawDir != 0f || Mathf.Abs(pitch) > 0.2f;
+            if (!editing) { EndPadStroke(); return; }
+
+            // One undo step per manipulation burst: pushed on the first edited
+            // frame, key changes on release so the next burst is its own step.
+            if (!_padEditing)
+            {
+                _padEditing = true;
+                bootstrap.PushUndo("pad" + _padStroke);
+            }
+
+            float dt = Time.unscaledDeltaTime;
+            Vector3 move = Vector3.zero;
+            if (bootstrap.Cam != null)
+            {
+                var ct = bootstrap.Cam.transform;
+                Vector3 fwd = ct.forward; fwd.y = 0f; fwd = fwd.sqrMagnitude > 1e-4f ? fwd.normalized : Vector3.forward;
+                Vector3 right = ct.right; right.y = 0f; right = right.sqrMagnitude > 1e-4f ? right.normalized : Vector3.right;
+                move = (right * ls.x + fwd * ls.y) * (0.15f * dt);
+            }
+            move.y = lift * 0.10f * dt;
+
+            ApplyPadEdit(move, yawDir * 90f * dt, pitch * 60f * dt);
+            bootstrap.RequestRebuild();
+        }
+
+        private void EndPadStroke()
+        {
+            if (!_padEditing) return;
+            _padEditing = false;
+            _padStroke++;   // next burst gets a fresh undo key
+        }
+
+        /// <summary>Move/rotate whatever is selected, keeping a mirror twin in
+        /// step (position x and yaw mirror; height, pitch and tilt copy).</summary>
+        private void ApplyPadEdit(Vector3 move, float dYaw, float dPitch)
+        {
+            switch (_selType)
+            {
+                case PartType.Wheel when WheelSelected:
+                {
+                    var w = D.wheels[_sel];
+                    w.localPos += move;
+                    w.yaw += dYaw;
+                    var t = FindTwin(D.wheels, w.mirrorGroup, _sel);
+                    if (t != null) { t.localPos = Mirror(w.localPos); t.yaw = -w.yaw; }
+                    break;
+                }
+                case PartType.Sensor when SensorSelected:
+                {
+                    var s = D.sensors[_sel];
+                    s.localPos += move;
+                    s.aimEuler.y += dYaw;
+                    s.aimEuler.x = Mathf.Clamp(s.aimEuler.x + dPitch, -80f, 80f);
+                    var t = FindTwin(D.sensors, s.mirrorGroup, _sel);
+                    if (t != null) { t.localPos = Mirror(s.localPos); t.aimEuler = new Vector3(s.aimEuler.x, -s.aimEuler.y, s.aimEuler.z); }
+                    break;
+                }
+                case PartType.Aero when AeroSelected:
+                {
+                    var a = D.aero[_sel];
+                    a.localPos += move;
+                    a.yawDeg += dYaw;
+                    a.angleDeg = Mathf.Clamp(a.angleDeg + dPitch, 0f, 15f);
+                    var t = FindTwin(D.aero, a.mirrorGroup, _sel);
+                    if (t != null) { t.localPos = Mirror(a.localPos); t.yawDeg = -a.yawDeg; t.angleDeg = a.angleDeg; }
+                    break;
+                }
+                case PartType.Battery when BatterySelected:
+                    D.batteries[_sel].localPos += move;
+                    break;
+                case PartType.Antenna when AntennaSelected:
+                {
+                    var an = D.antennas[_sel];
+                    an.localPos += move;
+                    an.yawDeg += dYaw;
+                    an.tiltDeg = Mathf.Clamp(an.tiltDeg + dPitch, -45f, 60f);
+                    var t = FindTwin(D.antennas, an.mirrorGroup, _sel);
+                    if (t != null) { t.localPos = Mirror(an.localPos); t.yawDeg = -an.yawDeg; t.tiltDeg = an.tiltDeg; }
+                    break;
+                }
+                case PartType.Light when LightSelected:
+                {
+                    var l = D.lights[_sel];
+                    l.localPos += move;
+                    l.yawDeg += dYaw;
+                    var t = FindTwin(D.lights, l.mirrorGroup, _sel);
+                    if (t != null) { t.localPos = Mirror(l.localPos); t.yawDeg = -l.yawDeg; }
+                    break;
+                }
+            }
+        }
+
+        private static Vector3 Mirror(Vector3 p) => new Vector3(-p.x, p.y, p.z);
+
+        private static WheelSpec FindTwin(System.Collections.Generic.List<WheelSpec> list, int group, int self)
+        {
+            if (group < 0) return null;
+            for (int i = 0; i < list.Count; i++)
+                if (i != self && list[i].mirrorGroup == group) return list[i];
+            return null;
+        }
+
+        private static SensorSpec FindTwin(System.Collections.Generic.List<SensorSpec> list, int group, int self)
+        {
+            if (group < 0) return null;
+            for (int i = 0; i < list.Count; i++)
+                if (i != self && list[i].mirrorGroup == group) return list[i];
+            return null;
+        }
+
+        private static AeroSpec FindTwin(System.Collections.Generic.List<AeroSpec> list, int group, int self)
+        {
+            if (group < 0) return null;
+            for (int i = 0; i < list.Count; i++)
+                if (i != self && list[i].mirrorGroup == group) return list[i];
+            return null;
+        }
+
+        private static AntennaSpec FindTwin(System.Collections.Generic.List<AntennaSpec> list, int group, int self)
+        {
+            if (group < 0) return null;
+            for (int i = 0; i < list.Count; i++)
+                if (i != self && list[i].mirrorGroup == group) return list[i];
+            return null;
+        }
+
+        private static LightSpec FindTwin(System.Collections.Generic.List<LightSpec> list, int group, int self)
+        {
+            if (group < 0) return null;
+            for (int i = 0; i < list.Count; i++)
+                if (i != self && list[i].mirrorGroup == group) return list[i];
+            return null;
+        }
+
+        /// <summary>A steps through every part on the car in list order.</summary>
+        private void CyclePadSelection()
+        {
+            var order = new System.Collections.Generic.List<(PartType type, int count)>
+            {
+                (PartType.Wheel, D.wheels?.Count ?? 0),
+                (PartType.Sensor, D.sensors?.Count ?? 0),
+                (PartType.Aero, D.aero?.Count ?? 0),
+                (PartType.Battery, D.batteries?.Count ?? 0),
+                (PartType.Antenna, D.antennas?.Count ?? 0),
+                (PartType.Light, D.lights?.Count ?? 0),
+            };
+            int total = 0;
+            foreach (var (_, c) in order) total += c;
+            if (total == 0) return;
+
+            // Flatten the current selection to a linear index, advance, unflatten.
+            int flat = -1, at = 0;
+            foreach (var (type, count) in order)
+            {
+                if (type == _selType && _sel >= 0 && _sel < count) { flat = at + _sel; break; }
+                at += count;
+            }
+            int next = (flat + 1) % total;
+            foreach (var (type, count) in order)
+            {
+                if (next < count)
+                {
+                    _selType = type;
+                    _sel = next;
+                    bootstrap.SetHighlight(type, next);
+                    return;
+                }
+                next -= count;
+            }
         }
 
         // Paint-mode pointer handling: LMB strokes (Alt = eyedropper); camera
@@ -809,6 +1021,7 @@ namespace AIHWSim.Garage
         {
             if (bootstrap == null) return;
             GUI.skin = GarageSkin.Skin;
+            UI.UIScale.Begin();
             if (Event.current.type == EventType.Repaint) _hoverKey = null;
             DrawTopBar();
             DrawLeftPanel();
@@ -817,6 +1030,7 @@ namespace AIHWSim.Garage
             if (_showLoad) DrawLoadList();
             if (_drag != DragState.Idle) DrawDragHint();
             DrawHoverTooltip();
+            UI.UIScale.End();
         }
 
         // Floating tooltip (drawn topmost): palette icons get name + description +
@@ -870,12 +1084,14 @@ namespace AIHWSim.Garage
 
             // Anchor near the pointer, offset so the box never sits under it,
             // flipped/clamped at the screen edges.
+            // mousePosition is already in UI units under the scaled matrix, so
+            // the clamps compare against the UI-space screen size.
             Vector2 mp = Event.current.mousePosition;
             float x = mp.x + 18f, y = mp.y + 18f;
-            if (x + w > Screen.width - 4f) x = mp.x - w - 18f;
-            if (y + h > Screen.height - 4f) y = mp.y - h - 18f;
-            x = Mathf.Clamp(x, 4f, Mathf.Max(4f, Screen.width - w - 4f));
-            y = Mathf.Clamp(y, 4f, Mathf.Max(4f, Screen.height - h - 4f));
+            if (x + w > UI.UIScale.W - 4f) x = mp.x - w - 18f;
+            if (y + h > UI.UIScale.H - 4f) y = mp.y - h - 18f;
+            x = Mathf.Clamp(x, 4f, Mathf.Max(4f, UI.UIScale.W - w - 4f));
+            y = Mathf.Clamp(y, 4f, Mathf.Max(4f, UI.UIScale.H - h - 4f));
             var box = new Rect(x, y, w, h);
 
             GUI.Box(box, GUIContent.none);
@@ -896,7 +1112,7 @@ namespace AIHWSim.Garage
 
         private void DrawDragHint()
         {
-            var r = new Rect(Screen.width * 0.5f - 200f, Screen.height - 40f, 400f, 26f);
+            var r = new Rect(UI.UIScale.W * 0.5f - 200f, UI.UIScale.H - 40f, 400f, 26f);
             var st = new GUIStyle(GUI.skin.box) { alignment = TextAnchor.MiddleCenter };
             GUI.Box(r, "Placing… click body to drop • scroll rotate • Esc cancel", st);
         }
@@ -904,7 +1120,7 @@ namespace AIHWSim.Garage
         private void DrawTopBar()
         {
             float w = 600f, h = 34f;
-            _topRect = new Rect((Screen.width - w) * 0.5f, 6f, w, h);
+            _topRect = new Rect((UI.UIScale.W - w) * 0.5f, 6f, w, h);
             GUILayout.BeginArea(_topRect, GUI.skin.box);
             GUILayout.BeginHorizontal();
             GUILayout.Label("Name:", GUILayout.Width(42));
@@ -925,7 +1141,7 @@ namespace AIHWSim.Garage
 
         private void DrawLeftPanel()
         {
-            float w = 250f, h = Screen.height - 100f - 130f;
+            float w = 250f, h = UI.UIScale.H - 100f - 130f;
             _leftRect = new Rect(8f, 50f, w, h);
             GUILayout.BeginArea(_leftRect, GUI.skin.box);
 
@@ -1009,6 +1225,20 @@ namespace AIHWSim.Garage
             D.bodyColor.r = Slider("R", D.bodyColor.r, 0f, 1f);
             D.bodyColor.g = Slider("G", D.bodyColor.g, 0f, 1f);
             D.bodyColor.b = Slider("B", D.bodyColor.b, 0f, 1f);
+
+            // Horn: pure audio flavour, cycled like the tyre/antenna styles.
+            GUILayout.Space(4);
+            string[] hornNames = { "Standard", "Police siren", "Air horn", "Musical", "Clown" };
+            int horn = Mathf.Clamp(D.hornStyle, 0, hornNames.Length - 1);
+            GUILayout.BeginHorizontal();
+            if (GUILayout.Button($"Horn: {hornNames[horn]}"))
+            {
+                bootstrap.PushUndo("horn");
+                D.hornStyle = (horn + 1) % hornNames.Length;
+            }
+            if (GUILayout.Button("🔊", GUILayout.Width(34)))
+                Audio.SfxPlayer.Ensure()?.PlayUi(Audio.ProceduralAudio.HornKey(D.hornStyle));
+            GUILayout.EndHorizontal();
 
             Header("STEERING");
             D.steerRate = Slider("Servo °/s", D.steerRate, 60f, 1200f);
@@ -1115,8 +1345,8 @@ namespace AIHWSim.Garage
 
         private void DrawRightPanel()
         {
-            float w = 270f, h = Screen.height - 100f;
-            _rightRect = new Rect(Screen.width - w - 8f, 50f, w, h);
+            float w = 270f, h = UI.UIScale.H - 100f;
+            _rightRect = new Rect(UI.UIScale.W - w - 8f, 50f, w, h);
             GUILayout.BeginArea(_rightRect, GUI.skin.box);
             Header("PARTS");
 
@@ -1579,7 +1809,7 @@ namespace AIHWSim.Garage
         {
             var s = VehicleStats.Compute(D);
             float w = 250f, h = (D.useCompositeMass ? 230f : 190f) + (s.hasAeroParts ? 18f : 0f);
-            _statsRect = new Rect(8f, Screen.height - h - 8f, w, h);
+            _statsRect = new Rect(8f, UI.UIScale.H - h - 8f, w, h);
             GUILayout.BeginArea(_statsRect, GUI.skin.box);
             GUILayout.Label("STATS", GarageSkin.Header);
             GUILayout.Label($"Mass: {s.totalMass:0.00} kg", GarageSkin.StatLabel);
@@ -1778,8 +2008,11 @@ namespace AIHWSim.Garage
 
         private bool PointerOverUI()
         {
-            Vector2 p = InputReader.PointerPosition();
-            Vector2 g = new Vector2(p.x, Screen.height - p.y);
+            // The cached panel rects are in UI units (built under the UIScale
+            // matrix), so the raw screen-pixel pointer must be converted the
+            // same way before testing — GUI.matrix only transforms IMGUI's own
+            // events, not this hand-rolled test.
+            Vector2 g = UI.UIScale.GuiPointer();
             if (_leftRect.Contains(g) || _rightRect.Contains(g) || _topRect.Contains(g) || _statsRect.Contains(g)) return true;
             if (_showLoad && _loadRect.Contains(g)) return true;
             return false;

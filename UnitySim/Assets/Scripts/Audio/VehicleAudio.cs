@@ -42,6 +42,18 @@ namespace AIHWSim.Audio
         /// ClientCarView computes it, this component only listens.</summary>
         public float externalSlip01;
 
+        /// <summary>Which horn this car carries (VehicleDesign.hornStyle),
+        /// copied on at the attach sites. 0 normal / 1 siren / 2 truck /
+        /// 3 musical / 4 clown.</summary>
+        public int hornStyle;
+
+        /// <summary>Hold-to-sound, pushed by the owner's CarInput each frame.</summary>
+        public bool hornHeld;
+
+        /// <summary>Ghost/remote path: the streamed horn bit, pushed by
+        /// ClientCarView (ghosts) or the host's OwnState handler (remote rigs).</summary>
+        public bool externalHorn;
+
         // Idle whine so a stationary car is not silent, and the pitch band the
         // motor sweeps through. Clamped hard: a runaway pitch multiplier on a
         // synthesized loop sounds like a fault, not like speed.
@@ -74,6 +86,8 @@ namespace AIHWSim.Audio
 
         private AudioSource _engine;
         private AudioSource _skid;
+        private AudioSource _horn;        // lazy: most cars never honk
+        private float _hornVol;
         private float _pitch = 1f;
         private float _engineVol;
         private float _skidVol;
@@ -125,10 +139,18 @@ namespace AIHWSim.Audio
 
         private void Update()
         {
-            if (!Enabled) { Silence(); return; }
+            if (!Enabled || Time.timeScale <= 0f) { Silence(); return; }
 
             float gain = Mathf.Clamp01(SettingsStore.Current.engineVolume);
-            if (gain <= 0f || Time.timeScale <= 0f) { Silence(); return; }
+            if (gain <= 0f)
+            {
+                // Engine slider at zero mutes the drivetrain, not the horn —
+                // that lives in the SFX bucket (see UpdateHorn).
+                if (_engine != null) _engine.volume = 0f;
+                if (_skid != null) _skid.volume = 0f;
+                UpdateHorn();
+                return;
+            }
 
             float targetPitch, targetEngine, targetSkid;
             float targetSkidPitch = 1f;
@@ -177,6 +199,29 @@ namespace AIHWSim.Audio
                 _skid.pitch = _skidPitch;
                 _skid.volume = _skidVol * gain * 0.8f;
             }
+
+            UpdateHorn();
+        }
+
+        /// <summary>
+        /// The horn voice. Lazily created on the first press (most cars never
+        /// honk), then volume-gated like the other loops. Gain bucket is
+        /// SFX, not engine — a horn is a deliberate action, and it must not
+        /// vanish for players who turn the motor drone down.
+        /// </summary>
+        private void UpdateHorn()
+        {
+            bool wants = hornHeld || externalHorn;
+            if (_horn == null)
+            {
+                if (!wants) return;
+                _horn = MakeLoop(ProceduralAudio.HornKey(hornStyle));
+                if (_horn == null) return;
+            }
+            // Fast attack, faster release: a horn answers the button.
+            float kh = 1f - Mathf.Exp(-Time.deltaTime * (wants ? 30f : 40f));
+            _hornVol = Mathf.Lerp(_hornVol, wants ? 0.9f : 0f, kh);
+            _horn.volume = _hornVol * SfxPlayer.SfxGain;
         }
 
         /// <summary>
@@ -216,6 +261,8 @@ namespace AIHWSim.Audio
         {
             if (_engine != null) _engine.volume = 0f;
             if (_skid != null) _skid.volume = 0f;
+            if (_horn != null) _horn.volume = 0f;
+            _hornVol = 0f;
         }
 
         /// <summary>Loudest motor wins — with independent per-wheel motors, the

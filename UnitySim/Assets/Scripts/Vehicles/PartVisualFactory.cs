@@ -125,10 +125,14 @@ namespace AIHWSim.Vehicles
 
         // ==================== WHEEL ====================
 
-        /// <summary>Radius the wheel meshes are authored at (66 mm RC tyre).</summary>
-        private const float WheelAuthorRadius = 0.033f;
+        /// <summary>Radius the wheel meshes are authored at (66 mm RC tyre).
+        /// Public because cosmetic rims are baked to the same radius and scale
+        /// by the same factor (see CosmeticMounts).</summary>
+        public const float WheelAuthorRadius = 0.033f;
 
-        /// <summary>Map a wheel-style index to its authored FBX key.</summary>
+        /// <summary>Map a wheel-style index to its authored FBX key. Styles
+        /// 6-8 are FINISHES, not meshes: the slick re-tinted chrome/gold/neon
+        /// (append-only ints, so old saves never shift).</summary>
         private static string WheelStyleKey(int style) => style switch
         {
             1 => "knobby",
@@ -136,8 +140,69 @@ namespace AIHWSim.Vehicles
             3 => "coupe",     // TinyTorque gold-rim street tyre
             4 => "baja",      // TinyTorque orange-rim balloon tyre
             5 => "patrol",    // TinyTorque chrome steelie
+            6 => "slick",     // chrome finish (unlockable)
+            7 => "slick",     // gold finish (unlockable)
+            8 => "slick",     // neon finish (unlockable)
             _ => "slick",
         };
+
+        // Neon rim: hot-pink emissive, the one wheel that glows in the dark maps.
+        private static Material _neonRim;
+        private static Material NeonRim => Em(ref _neonRim,
+            new Color(0.9f, 0.12f, 0.5f), new Color(2.6f, 0.3f, 1.6f));
+
+        /// <summary>
+        /// Hide the stock wheel face so a cosmetic rim can take its place —
+        /// the pack's "hide Rim_*, RimBarrel_* and RimNut_*" rule, generalised.
+        ///
+        /// Stated as a KEEP list rather than a hide list, because the two wheel
+        /// families name their pieces differently: the legacy tyres carry
+        /// rim/hub/stud tokens, while the TinyTorque wheels are separated by
+        /// material (chrome/gold/orange/dark) and share no rim token at all.
+        /// What both agree on is the tyre and the brake disc, so everything else
+        /// inside the wheel mesh goes.
+        ///
+        /// Scoped to the imported mesh instance so the motor can — a sibling
+        /// primitive under the same holder — keeps turning up on powered wheels.
+        /// </summary>
+        public static void HideStockRim(Transform holder)
+        {
+            if (holder == null) return;
+            for (int i = 0; i < holder.childCount; i++)
+            {
+                var child = holder.GetChild(i);
+                if (!child.name.StartsWith("wheel_")) continue;
+                foreach (var r in child.GetComponentsInChildren<Renderer>(true))
+                {
+                    string n = r.gameObject.name.ToLowerInvariant();
+                    bool keep = n.Contains("tire") || n.Contains("tyre") || n.Contains("brake");
+                    if (!keep) r.enabled = false;
+                }
+            }
+        }
+
+        /// <summary>Swap the rim-family materials for a finish (styles 6-8).
+        /// Works on both the authored meshes (token-named pieces) and the
+        /// primitive fallback (shared Rim/Hub/Stud materials).</summary>
+        private static void ApplyWheelFinish(GameObject root, int style)
+        {
+            if (style < 6) return;
+            Material finish = style == 6 ? Chrome : style == 7 ? Gold : NeonRim;
+            foreach (var r in root.GetComponentsInChildren<Renderer>())
+            {
+                string n = r.gameObject.name.ToLowerInvariant();
+                bool rimFamily = n.Contains("rim") || n.Contains("hub") || n.Contains("stud")
+                    || n.Contains("chrome") || n.Contains("gold");
+                if (!rimFamily)
+                {
+                    // Primitive fallback pieces keep primitive names — match by
+                    // the shared material instead.
+                    var m = r.sharedMaterial;
+                    rimFamily = m == Rim || m == Hub || m == Stud;
+                }
+                if (rimFamily) r.sharedMaterial = finish;
+            }
+        }
 
         /// <summary>
         /// Build a stylized wheel inside <paramref name="holder"/>. The holder's
@@ -174,6 +239,7 @@ namespace AIHWSim.Vehicles
                     ("dark", DarkTrim), ("brake", Hub),
                     ("tire", Tire), ("tyre", Tire), ("rim", Rim), ("hub", Hub),
                     ("stud", Stud));
+                ApplyWheelFinish(mesh, style);
                 if (powered) BuildMotorCan(holder, radius, inboardSign);
                 return;
             }
@@ -210,6 +276,7 @@ namespace AIHWSim.Vehicles
                 Vector3.zero, new Vector3(0f, 0f, 90f),
                 new Vector3(radius * 0.42f, halfWidth + radius * 0.06f, radius * 0.42f));
 
+            ApplyWheelFinish(holder.gameObject, style);
             if (powered) BuildMotorCan(holder, radius, inboardSign);
         }
 

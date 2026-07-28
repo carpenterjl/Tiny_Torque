@@ -72,7 +72,23 @@ namespace AIHWSim.Net
         // decorative props into live Rigidbodies, and render the map under flat
         // daylight with no sky, fog or glow. Wire format unchanged again;
         // refused for the same reason as v7 and v8.
-        public const int ProtocolVersion = 9;
+        //
+        // v10: horns + player levels (the arcade UI pass). This one is a REAL
+        // wire change: CarState grew a trailing flags byte (bit 1 = horn), so a
+        // v9 peer reading a v10 state stream would mis-frame every packet after
+        // the first car. The horn also takes a spare bit in the input flags
+        // (bit 8, client → host) and the OwnState flags (bit 64, owner → host),
+        // hornStyle rides in the design JSON, and HelloMsg/RosterEntry carry a
+        // player level for the roster badges. Mixed builds refused, as always.
+        //
+        // v11: unlockable cosmetics. NOT a message-layout change — the five
+        // cosmetic ids ride the design JSON, exactly as hornStyle and liveryPng
+        // do, so a v10 peer would still parse every packet. It is bumped anyway
+        // because a v10 build has no Cosmetics FBX folder and no catalog: it
+        // would silently drop half of what the other screen is showing, and a
+        // LAN race where the cars do not match is worse than one that refuses
+        // to start.
+        public const int ProtocolVersion = 11;
         public const int MaxPlayers = 4;
         public const ushort DefaultPort = 7777;
 
@@ -91,6 +107,8 @@ namespace AIHWSim.Net
             public string vehicleJson = "";
             public bool sceneReady;
             public Vehicles.AssistSettings assists;   // applied to the host-side rig
+            /// <summary>Progression level, display-only (roster "Lv N" badge, v10).</summary>
+            public int level = 1;
         }
 
         /// <summary>One player's lap standing, mirrored to every machine.</summary>
@@ -241,6 +259,7 @@ namespace AIHWSim.Net
                 vehicleJson = GameFlow.ActiveDesign != null ? JsonUtility.ToJson(GameFlow.ActiveDesign) : "",
                 sceneReady = true,
                 assists = SessionConfig.P1Assists(Persistence.SettingsStore.Current),
+                level = Persistence.Progression.Current.level,   // display-only badge
             });
             Debug.Log($"[NetSession] Hosting on UDP {port}");
             return true;
@@ -340,6 +359,9 @@ namespace AIHWSim.Net
                             ? JsonUtility.ToJson(GameFlow.ActiveDesign) : "",
                         aSteer = a.steer, aStab = a.stability,
                         aTrac = a.traction, aAbs = a.abs,
+                        // Display-only: the roster badge. Progression GATING
+                        // never touches the net layer.
+                        level = Persistence.Progression.Current.level,
                     };
                     SendJson(NetMsg.Hello, NetworkManager.ServerClientId, hello,
                         NetworkDelivery.ReliableFragmentedSequenced);
@@ -516,6 +538,7 @@ namespace AIHWSim.Net
                 slot = slot,
                 name = string.IsNullOrWhiteSpace(hello.name) ? $"Player {slot + 1}" : hello.name,
                 vehicleJson = hello.vehicleJson ?? "",
+                level = Mathf.Max(1, hello.level),
                 assists = new Vehicles.AssistSettings
                 {
                     steer = Mathf.Clamp01(hello.aSteer), stability = Mathf.Clamp01(hello.aStab),
@@ -591,10 +614,10 @@ namespace AIHWSim.Net
             SessionConfig.Players.Clear();
             foreach (var e in entries)
             {
-                Roster.Add(new NetPlayer { slot = e.slot, name = e.name, vehicleJson = e.vehicleJson });
-                var ps = ToPlayerSlot(new NetPlayer { slot = e.slot, name = e.name, vehicleJson = e.vehicleJson },
-                    isLocal: e.slot == LocalSlot);
-                SessionConfig.Players.Add(ps);
+                var np = new NetPlayer
+                    { slot = e.slot, name = e.name, vehicleJson = e.vehicleJson, level = e.level };
+                Roster.Add(np);
+                SessionConfig.Players.Add(ToPlayerSlot(np, isLocal: e.slot == LocalSlot));
             }
             SessionConfig.Players.Sort((a, b) =>
                 RosterSlotOf(a).CompareTo(RosterSlotOf(b)));
@@ -616,6 +639,7 @@ namespace AIHWSim.Net
                     slot = Roster[i].slot,
                     name = Roster[i].name,
                     vehicleJson = Roster[i].vehicleJson,
+                    level = Roster[i].level,
                 };
             return arr;
         }
@@ -792,6 +816,7 @@ namespace AIHWSim.Net
                         angVel = o.angVel,
                         steerDeg = o.steerDeg,
                         wheelRadPerSec = o.wheelRadPerSec,
+                        flags = (byte)(o.hornOn ? CarState.FlagHorn : 0),
                     });
                     continue;
                 }
@@ -809,6 +834,10 @@ namespace AIHWSim.Net
                     angVel = body.angularVelocity,
                     steerDeg = rig.car.CurrentSteerAngle,
                     wheelRadPerSec = wheelSpeed,
+                    // Host-simulated car (the host's own, or a remote driven
+                    // through NetworkInputSource): the horn state is on the rig.
+                    flags = (byte)(rig.input != null && rig.input.HornHeldNow
+                        ? CarState.FlagHorn : 0),
                 });
             }
             _nm.CustomMessagingManager.SendNamedMessageToAll(NetMsg.State, w,

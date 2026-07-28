@@ -35,8 +35,13 @@ namespace AIHWSim.Menu
                 BuildCamera();
             }
 
+            // First boot runs the intro (video → title card) and creates the
+            // menu UI when it finishes; returning from a race goes straight in.
             var uiGo = new GameObject("MenuUI");
-            uiGo.AddComponent<MenuUI>();
+            if (!SplashSequence.ShownThisBoot && !Application.isBatchMode)
+                SplashSequence.Run(gameObject, () => uiGo.AddComponent<MenuUI>());
+            else
+                uiGo.AddComponent<MenuUI>();
         }
 
         private void BuildLighting()

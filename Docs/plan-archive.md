@@ -8,8 +8,817 @@ describe is documented in [README.md](../README.md).
 Active work lives in the session plan file, not here; a plan moves into this archive
 once its milestones are done.
 
-Covering the project bootstrap through the TinyTorque map-pack import (466459 chars, 34 plans).
+Covering the project bootstrap through the preview-render fixes (516992 chars, 37 plans).
 Last updated 2026-07-28.
+
+---
+
+# Fix contaminated part-preview icons + showroom car sunk in the podium (2026-07-28)
+
+**Archived with the user eyeball pass still UNDRIVEN** — the icon and podium fixes compiled clean but had not been looked at in the running game when the cosmetics pass started.
+
+
+## Context
+
+Two rendering bugs reported after the arcade UI pass:
+
+1. **Part icons in the Track Builder and Garage palettes show the wrong/clipped
+   geometry** — each icon is contaminated by other models. Root cause
+   (`Garage/PartIconFactory.cs:57-104`): `Snapshot()` builds every icon's model
+   at the same fixed origin `(0,-500,0)` and tears down with **deferred**
+   `Object.Destroy`, but `cam.Render()` is **immediate** — and both palettes
+   batch-build all icons in a single frame (`GarageUI.cs:108-114` in `Start()`;
+   `TrackBuilderUI.cs:1120` lazily inside one OnGUI repaint). So icon N renders
+   with models 1..N-1 still parked at the same point: clean first icon, then
+   increasingly clipped garbage — cached permanently by key. The recent large
+   map props amplified it (bigger bounds → wider frustum swallows more strays).
+   `TrackIconFactory.cs:36-37` also defers `Destroy(col)` so temp colliders are
+   live during the render.
+
+2. **Showroom vehicle clips under the podium floor.** Codebase convention
+   (`MenuBootstrap.cs:66`, `GarageBootstrap.cs:79`) is *car origin at y=0,
+   floor top at y=−0.078 ("~ wheel contact")*. `ShowroomRig.cs:52-57` builds
+   the podium with its **top at stage y=0** and (:88-98) parents the car at
+   stage y=0 too — so the lower ~78 mm (wheels + underside) is buried in the
+   disc. Default-design math: tyre bottom = wheel `localPos.y` (−0.015) +
+   `SuspensionGeometry.HubOffsetLocal(...).y` (−0.030) − `radius` (0.033) =
+   **−0.078**. Wheel sizes vary per design (TT Baja), so the fix should be
+   computed per design, not hardcoded.
+
+No physics, wire, or save-format changes — preview-only code.
+
+## Milestone A — plan housekeeping
+
+- [x] Splice the finished arcade UI plan (kept verbatim below the ARCHIVE
+      marker at the END of this file) into `Docs/plan-archive.md` as the newest
+      entry, titled
+      `# Arcade UI/theme overhaul: reskin, splash video, music, horns, showroom, progression, controller nav (2026-07-28)`,
+      noting its 9-item play-test checklist was still undriven when archived
+      (this session's two bugs came out of the user starting it). Bump the
+      archive header char/plan counts; update the plan-archive memory. Delete
+      the archived material from this file.
+
+## Milestone B — icon isolation (`Garage/PartIconFactory.cs`)
+
+- [x] In `Snapshot()` teardown, the three temporaries are now **deactivated
+      immediately** (`SetActive(false)`) before the deferred
+      `Object.Destroy(root/camGo/lightGo)`. **Deviation from the planned
+      `DestroyImmediate`:** `SetActive(false)` takes effect on the same
+      statement, achieves exactly the same isolation, and avoids
+      `DestroyImmediate` inside `OnGUI` (the track builder builds its icons
+      from a repaint). It also fixes a second symptom the plan hadn't named —
+      the leftover **icon lights** accumulated too, so later icons were
+      progressively over-lit.
+- [x] `TrackIconFactory` needed no change: its temp colliders live on the
+      snapshot root, which is now deactivated before the frame ends, so they
+      can't touch physics either.
+- [x] No cache invalidation needed — both caches are in-memory only
+      (`PartIconFactory._cache`, `TrackIconFactory._cache`), rebuilt each run.
+- [x] Framing math untouched: bounds are computed per-item, so with the strays
+      gone every icon frames exactly its own model (large props included).
+
+## Milestone C — showroom rest height (`Menu/ShowroomRig.cs`)
+
+- [x] Added private static `RestHeight(VehicleDesign d)`: max over `d.wheels`
+      of `-(w.localPos.y + SuspensionGeometry.HubOffsetLocal(w.localPos.x,
+      w.suspAngleDeg, w.suspLength).y - w.radius)`, falling back to the
+      codebase's `DefaultRest = 0.078f` for a wheel-less design. (No such
+      helper existed — `-0.078f` was hardcoded in the two bootstraps; this
+      reproduces it for the default design and adapts to big-wheel cars.)
+- [x] **Deviation from the planned fix:** rather than raising the car, `Show`
+      now calls `DropFloor(RestHeight(design))`, which lowers the podium disc
+      and gold rim by the rest height. This is the codebase's own convention
+      (car origin at 0, ground at −0.078 — `MenuBootstrap.cs:66`,
+      `GarageBootstrap.cs:79`), and it leaves the car's transform completely
+      untouched, so the camera aim (tuned at car-origin + 0.06), the turntable
+      pivot and the rev squat all keep working exactly as before. Raising the
+      car instead would have shifted it 78 mm off the framing the camera was
+      tuned against. `Build()` seeds `DropFloor(DefaultRest)` so the empty
+      podium is already at the right height before the first car lands.
+- [x] Leave `MenuBootstrap`/`GarageBootstrap` floors alone.
+
+## Milestone D — verify
+
+- [x] Batch compile: **0 `error CS`**, `Exiting batchmode successfully now!`
+      (return code 0).
+- [x] No PMV/TPV/Opus reruns — preview-only code paths (no physics, no assets,
+      no wire, no save format). Stated in the summary.
+- [ ] User eyeball pass: Garage palette icons each show exactly their own
+      part; Track Builder tabs (esp. the themed-prop tabs) each icon shows
+      exactly its own prop; Showroom cars (TT Coupe + TT Baja for the wheel
+      extremes) sit on top of the podium disc, no clipping, squat/rev intact.
+
+---
+
+# Arcade UI/theme overhaul: reskin, splash video, music, horns, showroom, progression, controller nav (2026-07-28)
+
+**Archived with the play-test checklist still UNDRIVEN** — the two preview-rendering bugs fixed in the next pass came out of the user starting it.
+
+
+## Context
+
+The game plays like an arcade racer but still presents like an engineering tool:
+grey/orange IMGUI panels, no title art, no music, silent menus, mouse-only
+navigation, and vehicle selection is a `◀ name ▶` cycle row. The user wants the
+whole presentation brought up to the TinyTorque brand — the title art
+(`E:\EE Projects\AI_3D_Modeling\TinyTorque_RC\renders\TinyTorque_Title.png`:
+deep navy, champagne-gold 3D logo, glossy showroom floor) sets the art
+direction, and `TinyTorque_Game_Intro_audio.mp4` (4.9 MB, H.264+AAC, composed
+soundtrack) is the intro video.
+
+User decisions (AskUserQuestion): **music = hybrid** (drop-in .ogg/.wav/.mp3
+files with a procedural chiptune fallback per theme); **unlock pool = cosmetics
++ preset cars** with **TT Coupe as the default unlocked car**, plus a **cheats
+menu** with pun codes (`donut` → TT Patrol, user-specified); **progression =
+one global local profile** (no per-server scoping — drops the host-GUID work);
+**all four extras**: global UI scaling, menu SFX, cursor auto-hide on gamepad,
+screen-fade transitions. Suggestion accepted: menu idles into the existing live
+attract loop after ~20 s.
+
+Non-negotiables, as every pass: no physics changes; Opus regression
+bit-identical; append-only enums/serialized ints; gating lives ONLY in UI
+pickers — `VehiclePresets.Resolve`, `VehicleLibrary`, `VehicleFactory`,
+`SessionConfig`, `NetSession` stay progression-blind.
+
+## Key facts established while exploring
+
+- **UI is 100% runtime IMGUI**; `Garage/GarageSkin.cs` is the single styling
+  authority (palette consts, runtime 4×4 `Solid(Color)` textures, shared
+  styles, `Slider01`) — every OnGUI class sets `GUI.skin = GarageSkin.Skin`, so
+  a palette/font/texture swap there reskins everything at once. Font is Unity's
+  default; `Font.CreateDynamicFontFromOSFont("Bahnschrift", …)` works on this
+  Windows-only target with no TTF asset.
+- **No gamepad menu navigation exists anywhere** — no focus concept at all.
+  IMGUI hard rule (documented at `SettingsPanel.cs:63-67`): control count must
+  match between Layout and Repaint; state that changes controls may only mutate
+  on Layout (or in `Update()`).
+- **Fixed pixel layout, no `GUI.matrix`.** `GUI.matrix` scale auto-transforms
+  IMGUI hit-testing, but the custom pixel-space tests must be audited:
+  `GarageUI.PointerOverUI` (:1779), `TrackBuilderUI.PointerOverUI` (:1384),
+  `SplitScreenHud` camera-pixelRect math, `ArcadeFeedback` view rects. 3D
+  picking rays stay in raw screen pixels.
+- **No music, no audio files, no VideoPlayer**; `com.unity.modules.video` is
+  NOT in `Packages/manifest.json`; no StreamingAssets folder (the installer
+  packs `Builds/Release/*` recursively, so one ships automatically). All sound
+  is `ProceduralAudio.cs` (loop rules: tonal = whole cycles via `LoopCycles`,
+  noise = head↔tail crossfade via `LoopFade`). `SfxPlayer` is deliberately
+  scene-local and gates on `timeScale > 0`. The only persistent object today is
+  `NetSession` — there is no coroutine host for file loading.
+- Race-end hooks: `RaceDirector.PlayerFinished` (place int, local) and
+  `NetSession.RaceEnded` + `RaceEndMsg.rows[].place` (fires on host AND
+  clients). Persistence is JSON via `SaveSystem` under `AppPaths.BaseDir/Saves`
+  (`progress.json` is greenfield). JsonUtility field initializers = the
+  back-compat idiom.
+- LAN wire: `NetPack.WriteInput` flag byte has bit 8 free; `WriteOwnState` has
+  bit 64 free; `CarState` needs one appended flags byte → structural change →
+  **protocol v9 → v10**. `vehicleJson` rides whole, so `hornStyle` is free.
+- `MenuAttract` (live 3D circuit + 4 bot cars) is the menu background and keeps
+  running; `MenuBootstrap`'s showcar-turntable fallback is the proven whole-car
+  preview path. `PartPreviewRig` culls to VizLayer only — a whole-car showroom
+  camera needs normal layers. `OrbitCamera` exists.
+- `VehicleStats.Compute` returns estTopSpeedMs / totalStallTorqueNm /
+  totalMass / yawInertia / frontWeightPct / rideFreqHz / steered — enough to
+  derive SPEED/ACCEL/HANDLING bars.
+- The previous two passes (map props + map ports) are uncommitted in the tree;
+  this pass stacks on them.
+
+## Milestone 0 — plan housekeeping
+
+- [x] Splice the finished map-port plan (below the archive marker at the END of
+      this file — match it at the END, never the first hit) into
+      `Docs/plan-archive.md` as one newest-first entry titled
+      `# Rebuild the four themed maps as faithful ports of the Blender maps (2026-07-27)`,
+      noting its 8-box play-test checklist was still undriven when archived.
+      Bump the archive header counts (483885 chars, 35 plans); update the
+      plan-archive memory.
+- [x] Delete the archived material from this file.
+
+## Milestone 1 — Arcade skin foundation
+
+- [x] `Garage/GarageSkin.cs`: navy/gold palette — Bg `(0.055,0.075,0.13)`,
+      Panel `(0.09,0.12,0.19)`, Btn `(0.13,0.17,0.26)`, BtnHover
+      `(0.19,0.24,0.35)`, Accent `(0.94,0.78,0.36)` champagne gold, AccentDim
+      `(0.55,0.43,0.18)`, Text `(0.93,0.91,0.86)`. Font →
+      `CreateDynamicFontFromOSFont` chain Bahnschrift → Impact → Arial. New
+      `Rounded(Color, radius)` 9-slice corner textures for button/box; new
+      `Title` style (gold, 26, centered) and `FocusRing` style (rounded gold
+      outline, transparent center). The rebuild-if-destroyed guard covers the
+      new textures via the same cache.
+- [x] **New** `UI/UIScale.cs` (`AIHWSim.UI`): `S = clamp(Screen.height/1080,
+      0.6, 2.5)`, `Begin()/End()` GUI.matrix wrap, `W/H` UI-space screen size,
+      `GuiPointer()` for the custom rect tests. Wrap every game-facing OnGUI
+      (MenuUI, PauseMenu, LanSessionMenu, RaceDirector, ArcadeHud, LanHud,
+      LapTimer, SplitScreenHud, GarageUI, TrackBuilderUI, TrackBootstrap exit
+      prompt); convert the four pixel-space hit-tests; leave dev overlays
+      (Graph/Metrics/Mission/SensorHud) unscaled; leave picking rays unscaled.
+- [x] **New** `UI/UiRuntime.cs`: DontDestroyOnLoad GO `TinyTorqueRuntime`
+      (lazy `Ensure()`), hosting `ScreenFade`, `MusicDirector` (M3),
+      `CursorAutoHide`. NO AudioListener. `ScreenFade.To(mid, out, in)` for
+      scene loads (unscaled time, `GUI.depth = -1000`), `Dip(mid)` 0.12 s for
+      page changes. `CursorAutoHide`: pad input hides cursor, mouse movement
+      shows it; exposes `PadIsLastInput`.
+- [x] **New** `UI/MenuNav.cs` — the IMGUI gamepad focus system. Input polled
+      once per frame (d-pad/left-stick with 0.4 s/0.12 s repeat, South =
+      submit, East = back, via `PadTable` + new `InputReader.LeftStick()`
+      any-pad helpers, which landed here instead of M7 because MenuNav needs
+      them). Focus movement applies at the top of the frame's first Layout
+      pass; wrappers add zero controls; disabled controls are skipped; back is
+      consumed from host `Update()`; suppressed while
+      `SettingsPanel.Capturing`; ring drawn Repaint-only, pad-input only.
+      **Deviation from the planned design:** activation does NOT use
+      `GUIUtility.ExitGUI()` — its runtime abort semantics for the paired
+      Repaint are undocumented, and a layout-cache mismatch there takes the
+      whole menu down. Instead activation is consumed on a Layout pass and
+      every host dispatches its control flow off a **Layout-snapshotted** copy
+      of its page/tab state (`_pageDraw` in MenuUI): a mid-Layout page switch
+      draws the old page for the rest of that frame — Layout and Repaint always
+      agree — and the new page owns the next frame, the same timing a mouse
+      click has always had. One nav owner per frame (first `BeginFrame`
+      claims it); non-owners' wrappers degrade to plain mouse controls.
+      Proof wiring: all of MenuUI's `MenuButton`s route through
+      `MenuNav.MenuButton`, so every page's plain buttons are already
+      pad-navigable; remaining control shapes convert in M2.
+- [x] `Audio/ProceduralAudio.cs`: append `UiMove` (30 ms 900 Hz tick),
+      `UiSelect` (660→990 blip), `UiBack` (700→450 fall), `UiDeny` (220 Hz
+      double-buzz), `UiUnlock` (0.9 s rising arpeggio + sparkle fanfare),
+      `UiLevelUp` (0.6 s triad swell). `Audio/SfxPlayer.cs`: add
+      `PlayUi(key, vol, pitch)` — `Play2D` without the timescale gate (pause
+      menu must click). MenuNav wrappers fire move/select/back.
+
+## Milestone 2 — Splash video, title card, menu shell
+
+- [x] `Packages/manifest.json`: add `"com.unity.modules.video": "1.0.0"`.
+      Create `Assets/StreamingAssets/` with `TinyTorque_Intro.mp4` (copy of the
+      renders mp4) and `Music/README.txt` (naming convention). Copy
+      `TinyTorque_Title.png` → `Assets/Resources/UI/TinyTorque_Title.png`.
+- [x] **New** `Menu/SplashSequence.cs`: states Video → Title → Done;
+      `static bool ShownThisBoot` so returning from a race skips it.
+      VideoPlayer built from code: `VideoSource.Url` from streamingAssetsPath,
+      `RenderTexture` render mode drawn letterboxed via IMGUI,
+      `audioOutputMode = AudioSource` through a 2D source so master volume
+      applies; `errorReceived`/`loopPointReached` → advance (codec failure
+      still boots). Title state: title PNG aspect-cover + pulsing gold
+      `PRESS ANY BUTTON`. Any key/pad/mouse skips video → title → menu.
+      `MenuBootstrap.Awake` creates MenuUI via the splash completion callback
+      on first boot, immediately thereafter; `Finish()` starts menu music.
+- [x] `Menu/MenuUI.cs`: retitle to `TINYTORQUE` / gold `RC SERIES`; Root page
+      draws the title texture as a dimmed backdrop strip over the live attract.
+      Convert ALL pages to MenuNav wrappers (MenuButton → Button, CyclePicker →
+      Cycle, options toggles/sliders); page changes through `ScreenFade.Dip`,
+      scene loads through `ScreenFade.To`. Idle 20 s on Root → hide the panel
+      (small "press any button" bug), any input restores. Fresh-install default
+      `lastVehicle = "★ TT Coupe"` (`GameSettings` initializer; old files keep
+      their value).
+- [x] Reskin + nav: `PauseMenu`, `SettingsPanel` (wrappers; rebind capture
+      untouched), `LanSessionMenu`, `RaceDirector.DrawResults` (pad-navigable
+      Keep driving / Rematch / Main Menu — needs BeginFrame/EndFrame too).
+      All four dispatch off Layout-snapshotted flags per the M1 pattern; the
+      Root-page menu sits low over the full title key art (the panel keeps the
+      text wordmark on every other page); Cycle/Stepper/Slider01/Toggle
+      wrappers cover the cycle pickers, ± steppers, options sliders, preset
+      rows and rebind buttons across MenuUI/PauseMenu/SettingsPanel/
+      LanSessionMenu.
+
+## Milestone 3 — Music (files + procedural fallback)
+
+- [x] `Persistence/GameSettings.cs`: `public float musicVolume = 0.7f;`.
+      Slider in MenuUI Options and `SettingsPanel.Draw` audio block (separate
+      code paths — both).
+- [x] **New** `Audio/MusicDirector.cs` on `TinyTorqueRuntime`: two 2D sources,
+      1.5 s crossfade, volume = `musicVolume × fadeWeight` (master rides
+      `AudioListener.volume` — never multiplied in). Theme keys `menu, generic,
+      downtown, toyroom, enchanted, haunted, results`. Resolution per key:
+      `AppPaths.BaseDir/Music/<key>.(ogg|wav|mp3)` →
+      `streamingAssetsPath/Music/<key>.*` → `ProceduralMusic.Get(key)`; loader
+      = `UnityWebRequestMultimedia.GetAudioClip` coroutine (the runtime GO is
+      the missing host); writes a `Music/README.txt` into BaseDir on first run.
+      Scene hook via `SceneManager.sceneLoaded`: Menu/Garage/Builder → `menu`,
+      Track → `ThemeFor(GameFlow.ActiveTrack)` mapping `TrackDesign.ambience`
+      (`downtown/toyroom/enchanted/haunted`, else `generic`). Race hooks:
+      countdown ducks to 0.4, GO restores, results → `results` theme (local via
+      RaceDirector, LAN via `RaceEnded`); pause ducks ×0.5. AudioSources ignore
+      timeScale, so music plays through pause by nature.
+- [x] **New** `Audio/ProceduralMusic.cs`: deterministic chiptune renderer
+      (event-additive: notes render into one shared buffer and tails WRAP
+      modulo the loop length, which is what makes the loop seamless without
+      cycle-counting every voice; needed two new manifest modules,
+      `unitywebrequest` + `unitywebrequestaudio`, for the file loader)
+      (pattern sequencer → one seamless 16-bar mono buffer; pulse lead,
+      triangle bass, square pad, noise percussion; fixed-seed LCG like
+      ProceduralAudio). Themes: `menu` "Showroom Shine" 92 BPM D-major glossy
+      arps; `downtown` 122 BPM A-minor synthwave, driving 8th bass; `toyroom`
+      132 BPM C-major music-box romp; `enchanted` 100 BPM 3/4 F-Lydian waltz,
+      bell pad; `haunted` 96 BPM D-harmonic-minor ostinato + theremin-ish lead;
+      `generic` 128 BPM G-Mixolydian garage-rock vamp; `results` 8-bar C-major
+      victory fanfare. Lazy build (~30 s ≈ 5 MB mono float); keep ≤ 2 themes
+      cached, evict on switch.
+
+## Milestone 4 — Horns (5 styles, bindable, per-vehicle, LAN v10)
+
+- [x] `ProceduralAudio.cs` loopable horn clips: `HornNormal` 420+522 Hz
+      dual-tone; `HornSiren` two-tone wail (whole modulation cycles per loop);
+      `HornTruck` 110/220/330 Hz air horn + breath noise; `HornMusical` 5-note
+      original fanfare loop; `HornClown` honk-a-honk squeeze-bulb cycle.
+- [x] `Garage/VehicleDesign.cs`: `public int hornStyle = 0;`
+      (normal/siren/truck/musical/clown). Presets: TT Patrol = siren,
+      TT Baja = truck.
+- [x] Input chain (every layer, no silent stale path): `KeyBindings` —
+      `DriveAction.Horn = 11`, `horn = KeyCode.H`, `padHorn =
+      PadButton.LeftStickPress` (L3; lookBack already owns R3), all switches +
+      `PadActions` + `ApplyLayout`; `InputReader.HornHeld()` (+ key/pad
+      variants — Held, hold-to-sound); `IDriverInputSource.HornHeld()` in
+      `PlayerInputSource` + all implementers (`BotDriver` false,
+      `NetworkInputSource` latched, gated source gates it); `CarInput` pushes
+      `hornHeld` into the car's `VehicleAudio` and exposes `HornHeldNow`;
+      `SettingsPanel.KeyActions` gains Horn (pad list follows PadActions).
+- [x] `Audio/VehicleAudio.cs`: `hornStyle`, `hornHeld`, `externalHorn` fields;
+      lazy third `MakeLoop` voice, volume-gated like skid, gain bucket =
+      `SfxGain` (not engineVolume). Attach sites set style: `TrackBootstrap`
+      :328/:774, `ClientCarView` from its design. GarageUI BODY tab: horn cycle
+      row + test button.
+- [x] LAN v10: `InputState.hornHeld` (input flag bit 8), `OwnStateMsg.hornOn`
+      (flag bit 64), `CarState` + appended flags byte (bit 1 horn) —
+      writers/readers all in `NetPack`; confirm the `16 + n*80` buffer
+      headroom. `OwnStateSender`/`ClientInputSender` set it; `BroadcastState`
+      relays; host pushes remote `hornOn` → that rig's
+      `VehicleAudio.externalHorn`; `ClientCarView` sets `externalHorn`
+      (latest-value, no lerp). `ProtocolVersion = 10` + history paragraph.
+
+## Milestone 5 — Showroom (vehicle select)
+
+- [x] **New** `Menu/ShowroomRig.cs`: podium parked at `(0, -600, 0)` (the
+      PartPreviewRig trick) — glossy navy floor disc, gold rim ring, key/fill/
+      rim lights, own on-demand camera (depth 10, normal layers — NOT the
+      VizLayer-only mask) over the still-running attract.
+      `SetDesign` → `VehicleFactory.Build(..., previewKinematic: true)`;
+      turntable 10°/s + `spinVelocity` injected from right-stick X / LMB drag,
+      exponential decay.
+- [x] **New** `Menu/ShowroomUI.cs` + `Page.Showroom`: left = vehicle list
+      (presets + library, 🔒 badges on locked); right = stats + customization;
+      bottom Select/Back. Entry: SP/LanHost/LanJoin vehicle row becomes
+      `Vehicle: <name> [Showroom ▶]`; split-screen rows keep compact (filtered)
+      cycle pickers. Rev: hold RT/W → 2D engine loop pitch-ramp 0.4→1.8 +
+      cosmetic body squat. Horn preview button. Locked car: stats visible,
+      Select disabled, "Win races to unlock (or know the magic word…)".
+- [x] Stats bars from `VehicleStats.Compute`: SPEED = `clamp01(estTopSpeedMs /
+      18)`; ACCEL = `clamp01(((stallNm / rw) / mass) / 30)` (rw = mean powered
+      wheel radius, fallback 0.033); HANDLING = `0.35·agility + 0.25·balance +
+      0.20·response + 0.20·steerAuthority` where agility =
+      `clamp01(0.030·mass/yawInertia)`, balance = `1 − |frontPct−50|/35`,
+      response = `clamp01((rideFreqHz−1.5)/3.5)`, steerAuthority =
+      `clamp01(steered/2)`; calibrate constants so the five presets order
+      sensibly. SPECIAL row = flavor placeholder ("Siren's Call" Patrol, "Big
+      Air" Baja, "Precision Ghost" Opus — no gameplay yet).
+- [x] Cosmetic loadouts: `VehicleLoadout { vehicleName, hornStyle=-1,
+      wheelStyle=-1, paintIdx=-1, topper=0, aeroKit=0 }` persisted in
+      `PlayerProgress.loadouts` (ProgressStore skeleton lands here, M6 extends
+      it). Applied ONLY by `Progression.ApplyLoadout(design, name)` at UI call
+      sites (StartSinglePlayer / MakeSlot / LAN connect / showroom preview) —
+      never inside `VehiclePresets.Resolve` or `VehicleLibrary.Load`. Topper
+      slots = none / light-bar / pods / whip / twin-flags; aero kits = none /
+      street (splitter + 4° wing) / track (splitter + canards + 10° wing) —
+      kits genuinely change stats, labeled "affects handling". Paint choice
+      clears `liveryPng` only on explicit selection (−1 = don't touch).
+
+## Milestone 6 — Progression, mystery items, cheats
+
+- [x] **New** `Persistence/ProgressStore.cs`: `PlayerProgress { version,
+      unlocked, redeemedCodes, xp, level, wins, racesFinished, loadouts }` in
+      `Saves/progress.json`; static `Progression` façade — `IsUnlocked`
+      (unknown ids = true), `TryRollMystery`, `AddXp` (level n→n+1 costs
+      100·n), `OnWin`, `LastAward` for the results overlay. One global profile,
+      shared by split-screen — documented.
+- [x] **New** `Persistence/UnlockCatalog.cs` — 20 locked items with pun codes:
+      `car_patrol`/`donut` (user-specified), `car_baja`/`bajablast`,
+      `car_realtwin`/`twinning`, `car_opus`/`magnumopus`,
+      `horn_siren`/`pullover`, `horn_truck`/`convoy`, `horn_musical`/`freebird`,
+      `horn_clown`/`clowncar`, `wheel_style_6`/`hubcapital` chrome,
+      `wheel_style_7`/`rollmodel` gold, `wheel_style_8`/`glowgetter` neon,
+      `antenna_style_2`/`flagship`, `antenna_style_3`/`doubletrouble`,
+      `light_style_0`/`lightsout`, `light_style_1`/`podrace`,
+      `aero_kit_street`/`groundeffect`, `aero_kit_track`/`downforce`,
+      `paint_gold`/`midastouch`, `paint_midnight`/`navyseal`,
+      `paint_hotpink`/`flamingo`. Always free: stock design, TT Coupe, user
+      Vehicles/*.json, wheel styles 0–5 (0–2 generic + 3–5 show-car wheels,
+      which already exist), antenna 0–1, standard palette. Bots keep drawing
+      locked cars (a tease; `MakeBotSlot` untouched). Wheel styles 6–8 are
+      **appended** cosmetic variants — existing meshes with chrome/gold/
+      emissive-neon material tints in `PartVisualFactory.WheelStyleKey`/
+      `BuildWheelViz` (append-only int, old saves untouched).
+- [x] Award hooks: local — alongside the `PlayerFinished` wiring in
+      `TrackBootstrap`, `!isBot && place == 1 && Players.Count > 1` →
+      `Progression.OnWin()` (mystery roll until pool empty, then +100 XP; small
+      grants for podium/finish). LAN — `RaceEnded` on host and clients: local
+      slot's row `place == 1` → same. Results overlays (RaceDirector + LAN)
+      draw the MYSTERY ITEM reveal: 1.2 s name-cycling (Repaint-only text, no
+      layout change), `UiUnlock` fanfare; XP case shows `+XP` fill and LEVEL UP
+      with `UiLevelUp`.
+- [x] Picker filtering (UI-only): `MenuUI.RefreshLists` filters locked presets;
+      clamp `_vehicleIdx`; locked `lastVehicle` falls back to index 0. Showroom
+      shows locked greyed. Garage stays fully ungated (engineer sandbox).
+      Enforcement check at review: grep `Progression.` — allowed surfaces are
+      MenuUI, ShowroomUI, the results overlays (AwardReveal), the cheats page,
+      TrackBootstrap's two award hooks, and NetSession's two Hello/roster
+      sites, which read `Current.level` for the DISPLAY badge only — gating
+      still never touches resolve/build/net behaviour.
+- [x] Roster levels: `HelloMsg`/`RosterEntry` + `public int level = 1;` (rides
+      the v10 bump); `Lv N` beside names in the LAN session roster + results
+      (LanSessionMenu — the panels that show names; LanHud's race banner left
+      unbadged to keep it glanceable).
+- [x] `Page.Cheats` from Options ("EXTRAS · Cheat Codes"): text field + Redeem
+      (Enter submits); normalize trim/lower/despace; hit → unlock + `UiUnlock`
+      + flourish; already-had → notice; miss → `UiDeny` + decaying panel shake
+      (Repaint-only offset).
+
+## Milestone 7 — Controller support in the editors
+
+- [x] `InputReader`: stick/trigger helpers (`LeftStick()`, `RightStick()`,
+      `TriggerAxis()`) so editors never touch `Gamepad.current` directly.
+      (Landed in M1 — MenuNav needed them first.)
+- [x] Garage (`GarageUI.Update` → new `UpdatePadInput()`, selected part, no
+      active mouse drag): left stick = camera-relative X/Z move (0.15 m/s ×
+      stick, unscaled dt); LT/RT = localPos.y down/up; LB/RB = yaw ∓ 90°/s;
+      right-stick Y = pitch (`aimEuler.x` sensors / `tiltDeg` antennas /
+      `angleDeg` wings — the fields the inspector edits); A = cycle-select
+      part, B = deselect, X = mirror, Y = focus. Undo: `PushUndo("pad<n>")` on
+      the first edited frame of a burst, key advanced on release (one undo
+      step per hold). **Deviations:** mirror twins stay linked via an explicit
+      `FindTwin(mirrorGroup)` sync (position x/yaw mirrored, height/pitch/tilt
+      copied) rather than routing through the mouse-drag commit path — the
+      drag machine is pointer-shaped end to end; and the editors' PANELS stay
+      mouse/keyboard (no MenuNav conversion inside the two editors) — the pad
+      layer is the hands-on-the-car/track half, which is what the user's
+      binding spec described.
+- [x] Builder (`TrackBuilderUI`): left stick = move selected item
+      (`RepositionItem`, no rebuild); LT/RT = scale ∓ (same clamped value +
+      "scale" undo tag as the slider, so pad and slider coalesce identically —
+      items auto-drop, so triggers map to scale here; deliberate deviation
+      from the garage's up/down, documented in the selection panel's new pad
+      hint line); LB/RB = yaw; right stick = camera orbit via the new
+      `OrbitCamera.PadOrbit(Vector2)` (shared class — the garage camera gets
+      it for free); A = select next item, B = deselect. Panel nav stays
+      mouse/keyboard, same deviation as the garage. Bindings fixed (not
+      rebindable) this pass.
+
+## Milestone 8 — Verification + docs
+
+- [x] **V1 compile**: five incremental batch compiles across the milestones,
+      all ending 0 `error CS` (one real failure caught and fixed on the way:
+      `UnityWebRequestMultimedia` needed the `unitywebrequest` +
+      `unitywebrequestaudio` manifest modules; plus one CS0136 shadowing slip
+      in ShowroomUI).
+- [x] **V2/V3**: `[PMV] RESULT ALL PASS (110 assets)` and
+      `[TPV] RESULT ALL PASS (8 presets)`.
+- [x] **V4 Opus regression**: **bit-identical** — the result JSON diffs empty
+      against the map-port pass's run (itself identical to R6/R4): legA
+      −13.615608215332032 mm, turn +0.1873779296875°, legB
+      +15.803813934326172 mm, brake +42.34135055541992 mm, total
+      +58.14552307128906 mm, drift −42.4041748046875 mm, completed true,
+      fault 0, phase 10.
+- [x] **V5 release build**: `Build Finished, Result: Success.`,
+      `Assembly-CSharp.dll` stamped Jul 28 03:05,
+      `_Data/StreamingAssets/` carries `TinyTorque_Intro.mp4` +
+      `Music/README.txt`, `AIHWSim/SkyGradient` still serialized into the
+      build; installer needs no edit (recursive pack).
+- [x] README: menu/UI overhaul + Showroom + progression sections, horns +
+      music in §Sound, the horn row + pad tables under Controls, protocol
+      v9 → v10 in both places with a v10 history paragraph.
+
+## Play-test checklist (user)
+
+- [ ] Boot the release build: Unity logo → intro video (any input skips) →
+      title card → menu with music. Second trip to the menu skips the splash.
+- [ ] Pad-only session: navigate every page (root → race setup → Options →
+      Cheats → Showroom → pause → results → LAN lobby incl. a pad rebind)
+      with the gold focus ring, A/B, and left/right on sliders/pickers —
+      watching the console for any IMGUI layout-mismatch exceptions, which
+      are the MenuNav failure signature. Then the same screens mouse-only.
+- [ ] Window sizes: 720p windowed, 1080p, and (if available) 1440p/4K — panel
+      sizes, editor panel-edge clicks (PointerOverUI), split-screen HUD boxes.
+- [ ] Music: menu theme, one themed map each (four different songs), generic
+      on a race circuit, results sting, countdown duck, pause duck, the Music
+      slider live — then drop an .mp3 named `downtown` into the save-folder
+      Music directory and hear it override.
+- [ ] Horns: all five from the garage test button; hold-to-sound in a drive;
+      TT Patrol sirens by default. LAN ×2+: remote horns audible from the
+      right car with the right voice; a v9 build vs v10 host is refused.
+- [ ] Progression: win vs bots → mystery reveal; `donut` unlocks TT Patrol
+      (and a wrong word buzzes + shakes); locked cars show padlocked in the
+      Showroom and absent from the quick pickers; a Showroom loadout (paint +
+      horn + wheels + aero) survives restart and shows in-race; split-screen
+      P2 and a LAN client win both credit the local profile.
+- [ ] Showroom feel: spin (right stick + RMB drag), rev, honk; stats bars
+      move when the aero kit changes.
+- [ ] Editors on pad: move/rotate/raise a garage part (mirror twin follows),
+      scale a builder prop with triggers, orbit with right stick, undo bursts
+      are single steps, interleaved mouse+pad editing stays consistent.
+- [ ] Old saves: existing user vehicles/maps load; an old settings.json keeps
+      its bindings and picks.
+
+## Known risks
+
+1. **MenuNav is the highest-risk piece** — IMGUI has no focus concept.
+   Mitigations are structural: focus moves on Layout only, activation +
+   `GUIUtility.ExitGUI()`, back in `Update()`, wrappers add zero controls,
+   explicit-rect focus ring. Built first, soaked on the Root page.
+2. **GUI.matrix hit-tests**: the two `PointerOverUI`s and `SplitScreenHud` are
+   the three that will actually bite; picking rays must stay unscaled.
+3. **First VideoPlayer use**: Windows H.264 via WMF is reliable; the
+   `errorReceived → skip` path keeps a codec-less machine booting.
+4. **Audio ownership**: one AudioListener (scene cameras); the runtime GO
+   carries sources only; SfxPlayer stays scene-local; music volume never
+   multiplies master.
+5. **CarState grows a byte** — single choke point in `NetPack`, but every
+   machine needs the rebuilt standalone (v10 refuses v9, as designed).
+6. **Unlock gating leak-proofing** — `Progression.` referenced only from the
+   four allowed UI surfaces; everything below the menu layer stays
+   progression-blind so headless regression and LAN internals cannot change.
+7. Chiptune quality ceiling is "good chiptune" — drop-in files override it with
+   zero code, which is the point of hybrid.
+
+---
+
+# Rebuild the four themed maps as faithful ports of the Blender maps (2026-07-27)
+
+**Archived with the play-test checklist still UNDRIVEN.**
+
+## Context
+
+The last pass imported 63 props from the four TinyTorque Blender **prop kits**
+and hand-authored four compact circuits (44–48 tiles ≈ 44×48 m, ~30 items
+each) that use them. But the source project also ships four fully laid-out
+**preview maps** — `TinyTorque_map.blend`, `_toy_map`, `_ench_map`,
+`_haunt_map`, built by `scripts/tt_11_map.py`, `tt_16_toy_map.py`,
+`tt_17_ench_map.py`, `tt_18_haunt_map.py`, rendered to
+`renders/map*/…_{plan,aerial,street}.png`. Those renders are what the maps are
+supposed to look like, and the current in-game circuits are not them: a
+handful of props on a small loop, under one flat daylight directional light, on
+a blue background.
+
+The request: make the in-game maps look **exactly** as the renders lay them
+out; add the environmental features / shading / lighting that give each map its
+ambient feel; scale the default map size up to fit; and make items rescalable
+in the Track Builder.
+
+The Blender maps are ~750–1000 units at 1 unit = 1 m, with 353–830 placements
+each over ~17 prop meshes. The props are already imported at **0.1** (1
+authored metre = 0.1 game metre), so a faithful port is the same layout
+divided by 10 — 76–124 game metres per side, 300–700 items per map. Each
+theme module also carries its own sky gradient, ground palette, haze density,
+key sun and glow points (`tt_15_mapkit.py`: `sky`, `mat_ground`, `haze`,
+`key_sun`, `wash`, `glow_point`), which is where most of the look actually
+lives — the enchanted vale is "a dim moon-blue sun and every warm note in
+frame is a lit window", the hollow runs "twice the haze density of the other
+maps", the attic is an interior with 13 m wallpapered walls.
+
+User decisions: **full districts** (every district ported, scatter counts as
+authored), **faithful long laps** (the circuit runs the roads exactly where the
+renders draw them — 200–300 m laps, 2–3× today's), **full ambience** (sky
+dome, fog, themed lights, glow points, themed ground, plus the toy room's
+actual walls/skirting/dado rail).
+
+Non-negotiables, same as the last two passes: no physics/vehicle changes;
+Opus regression bit-identical to R4 (Opus Proving Ground untouched); floor
+indices and ItemDef ids append-only (old saved user maps must keep loading);
+the three dedicated race circuits (Boost Speedway, Dust Devil Rally, Neon
+Vortex) untouched.
+
+## Key facts established while exploring
+
+- `TrackDesign.tileSize` (default 1 m) is honoured everywhere that matters —
+  `TileCenter`, `WorldToTile`, `SurfaceMap.Lookup`, the floor slab. Setting it
+  to **2.0** is how a 112 m map fits in 56 tiles instead of 112, which keeps
+  tile counts at 1.8k–3.1k (today's 44×44 = 1.9k). `Resize` clamps 4..60 and
+  must go to 4..80.
+- Roads in the source maps are flat preview ribbons at z≈0.04 in a deletable
+  `ROADS` collection. **Only the racing line becomes a spline**; every other
+  road is painted floor tiles. This matters because `BotPath.Build`
+  (Core/BotPath.cs:50) picks the spline with the **most control points**, not
+  the longest — a decorative second spline would silently steal the bot line.
+  Every themed preset therefore ships exactly one spline.
+- Road widths already match at 1:10: arcade `ROAD_W` 22 → 2.2 m, toy 30 → 3.0,
+  ench 20 → 2.0, haunt 18 → 1.8. Inside the builder's existing 0.5–3 m width
+  slider.
+- `PlacedItem` has no scale field, but the Blender layouts use per-placement
+  `scale=rng.uniform(...)` throughout — so per-item scale is a *prerequisite*
+  for a faithful port, not just a builder feature.
+- `toy_domino`, `toy_brick`, `haunt_pumpkin`, `dt_cone` are dynamic ItemDefs.
+  The layouts place ~250 of them as decorative fill (83-piece domino kerb ring,
+  150-piece floor scatter, 61 pumpkins). 250 Rigidbodies is a physics problem,
+  hence a per-item **pinned** flag.
+- Cost is dominated by `StaticBatchingUtility.Combine`, not by `Instantiate`
+  (600 prefab instantiates ≈ 25 ms). Expected map build 0.3–0.8 s.
+- The builder rebuilds the whole preview on every item edit
+  (`TrackBuilderBootstrap.RebuildAll`). Rotate and scale are pure transform
+  changes — they must not trigger a rebuild once maps are this big.
+- `Orbit.maxDistance = 60f` (TrackBuilderBootstrap.cs:76) hard-clamps
+  `FrameMap`, so a 124 m map cannot be framed today.
+- Built-in Render Pipeline, everything on `Shader.Find("Standard")` (fog-aware).
+  LAN `MaxPayloadSize` is 256 KB against a ~70 KB 600-item trackJson.
+
+## Milestone 0 — plan housekeeping
+
+- [x] Splice the finished map-pack plan into `Docs/plan-archive.md` as ONE new
+      newest-first entry titled
+      `# Import TinyTorque map prop packs + four themed circuits (2026-07-27)`,
+      with a bold note that its play-test checklist was still undriven when
+      archived. Archive header updated to 34 plans / 466459 chars.
+      (Trap hit and repaired: the splice matched the archive marker where
+      Milestone 0 merely *mentions* it, swallowing the active plan into the
+      entry — match the marker at the END of the file, not the first hit.)
+- [x] Delete the archived material from this file.
+
+## Milestone 1 — Per-item scale + pinning + bigger maps
+
+Data and builder work that the ports depend on.
+
+- [x] `TrackEd/TrackDesign.cs`: `PlacedItem` gains `public float scale = 1f;`
+      and `public bool pinned;` (pinned = "scenery, never gets a Rigidbody").
+      New `TrackDesign.EnsureItems()` repairs old JSON (JsonUtility gives a
+      missing float 0, so `scale <= 0 → 1`); call it everywhere `EnsureFloor`
+      is called, and unconditionally inside `TrackFactory.Build`. `ambience`
+      string field (Milestone 2) lands here too. `Resize` clamp 4..60 → 4..80.
+- [x] `TrackEd/TrackFactory.cs`: apply `it.scale` to the item root
+      (`go.transform.localScale`) — hulls, mesh and lamp offset all inherit it.
+      Skip the Rigidbody block when `it.pinned`; scale `def.dynamicMass` by
+      `scale³` so a 2× brick is not feather-light; scale the `ItemBehavior.Light`
+      range/intensity.
+- [x] `TrackEd/TrackGhost.cs`: `Scale` property applied in `SetPose`.
+- [x] `TrackEd/TrackBuilderUI.cs`:
+      - SELECTION panel: `Scale ×N` readout, `−`/`+` (×1.15 steps), a
+        0.2–5 slider reusing `SliderRow` (:1166), and a `Pinned` toggle shown
+        only for `def.dynamic` items.
+      - Shift+scroll scales the ghost while placing (plain scroll still rotates).
+      - MAP panel: `±5` resize buttons beside the existing `±1`, and a tile-size
+        `◀ 2.0 m ▶` control (1.0 / 1.5 / 2.0 / 3.0). Changing tile size re-lays
+        the grid and moves the map edge under fixed item positions — show a
+        status warning naming how many items fall outside.
+      - `SnapPose` (:585) subdivides each tile into `k = max(1, round(tileSize))`
+        cells so a 2 m map still snaps placement at 1 m. `k == 1` reproduces
+        today's tile-centre snapping exactly.
+- [x] `TrackEd/TrackBuilderBootstrap.cs`: `RepositionItem(int index)` — find the
+      item root by `PlacedItemMarker` and re-apply pose+scale without rebuilding;
+      rotate/scale use it. `Orbit.maxDistance` derived from the design span
+      (`Mathf.Max(60f, span * 1.2f)`), refreshed in `SetDesign`/`FrameMap`.
+
+## Milestone 2 — Map ambience (sky, fog, lights, room)
+
+- [x] **New** `TrackEd/MapAmbience.cs` — `AmbienceDef` (sky top/horizon/ground
+      colours + optional horizon wedge and its compass yaw, ambient colour, fog
+      colour + density, key-light colour/intensity/euler, surround-ground
+      colour, a glow-point list, and an `extras` hook) plus five defs keyed
+      `""`/`downtown`/`toyroom`/`enchanted`/`haunted`. Values ported from the
+      Blender modules: e.g. arcade dusk ramp `(0.050,0.038,0.040)` →
+      `(0.140,0.078,0.056)` → `(0.026,0.048,0.105)` with the warm south wedge;
+      ench aurora wedge `(0.130,0.320,0.340)`; haunt near-black with a moon.
+      **Fog densities are the Blender haze densities × 10** (1 game m = 10
+      Blender m): arcade 0.0030, toy 0.0022, ench 0.0042, haunt 0.0068.
+      Key lights from each module's `key_sun`: arcade sun 3.4 W warm
+      `(1.0,0.80,0.60)`; ench moon 2.1 `(0.62,0.76,1.00)`; haunt moon 2.2
+      `(0.58,0.74,1.00)`; toy window 2.6 `(1.0,0.86,0.66)` raking low.
+      Glow points from `glow_point`: crater, castle keep, village green,
+      mansion hall, crypt mouth, chapel, attic standard lamp.
+- [x] **New** `Assets/Resources/SkyGradient.shader` — unlit, `Cull Front`,
+      `ZWrite Off`, `Fog { Mode Off }`, three-stop vertical gradient plus a
+      horizon wedge. Lives under `Resources/` so it is guaranteed into the
+      build (the vehicle pass's shader-stripping trap). `MapAmbience` builds an
+      inverted 400 m sphere with it under `built.root`; if the shader fails to
+      load it silently falls back to today's behaviour (flat camera background).
+- [x] `MapAmbience.Apply(design, root)` also sets `RenderSettings.fog`
+      (`FogMode.Exponential`), `fogColor`, `fogDensity`, `ambientLight`, and
+      creates/retunes the scene's directional key light and the glow points.
+      Called from `TrackFactory.Build` so the builder preview and the drive
+      scene get identical atmosphere — the same "what you build is what you
+      drive" contract the factory already keeps.
+- [x] `extras` for `toyroom` builds the room shell: north wall at z = +43 and
+      west wall at x = −47, 13 m tall, striped wallpaper via
+      `TrackBuilder.StripeTexture`, skirting + dado-rail boxes, real box
+      colliders. This is what stops the floor reading as tarmac.
+- [x] `TrackFactory.BuildSurround` takes the ambience ground colour and grows
+      to 400 m.
+- [x] `Core/TrackBootstrap.cs` (`BuildLighting`, the three camera builders),
+      `TrackEd/TrackBuilderBootstrap.cs` (`BuildLighting`, `BuildCamera`) and
+      `Menu/MenuAttract.cs` (`BuildCamera`) defer to the ambience: camera
+      background = horizon colour, far clip ≥ 900 m to clear the dome.
+
+## Milestone 3 — Four faithful map ports
+
+- [x] **New** `TrackEd/MapLayout.cs` — the Blender placement helpers ported to
+      C#, so the presets read like the source modules: `Along(line, spacing,
+      offset, start)`, `SegDist`, `RoadDist`, `Scatter(...)` over a seeded
+      `System.Random`, `PaintLine(design, pts, widthTiles, type)`,
+      `PaintEllipse`, plus `Row`/`Ring` sugar. Deterministic per seed so TPV
+      and the LAN JSON are stable build-to-build.
+- [x] `TrackEd/TrackPresets.cs`: the four themed builders rewritten as 1:10
+      ports (names unchanged — `MenuAttract` and the `lastTrack` setting
+      reference them). Grid sizes, all at `tileSize = 2`:
+
+      | Preset | Source | Grid | World | Districts ported |
+      | --- | --- | --- | --- | --- |
+      | ★ Downtown Dash | `tt_11_map` | 38×47 | 76×94 m | downtown block grid, industrial strip, stunt park, badlands + volcano |
+      | ★ Playroom Raceway | `tt_16_toy_map` | 48×44 | 96×88 m | furniture skyline, bed, dining, toybox yard, rug circuit, floor scatter |
+      | ★ Enchanted Ascent | `tt_17_ench_map` | 56×56 | 112×112 m | castle plateau, village ring, formal gardens, enchanted wood, tourney ground, peaks |
+      | ★ Graveyard Shift | `tt_18_haunt_map` | 54×52 | 108×104 m | mansion rise, 4-block cemetery, chapel ruin, barrow field, pumpkin patch, dead wood, spirits |
+
+      Ench and haunt shift ~10 m in Z (and ench's two backdrop peaks pull in
+      from z 69–76 to ≈60) so each map stays centred on the origin inside the
+      grid.
+- [x] Per map, in order: paint the district ground (asphalt city / sand
+      badlands; wood floor + carpet rug ellipse; grass vale + dirt causeway;
+      dirt hollow + mud), paint the road network as floor tiles with
+      `PaintLine`, then add **one** closed racing spline following the source
+      roads — arcade: main avenue south + the badlands loop; toy: the rug's
+      printed oval; ench: causeway → garden lane → village ring, closed with
+      one added leg; haunt: drive → cemetery link → cemetery spine → barrow
+      road, which already closes on the existing roads.
+- [x] Then the district functions, mirroring the source module function for
+      function, carrying the authored `rot_z` and `scale`. Decorative fills of
+      dynamic props (domino kerb ring, floor bricks, pumpkin rows) ship
+      `pinned = true`; ~15–25 live dynamic props per map stay near the racing
+      line so they still scatter when hit.
+- [x] Finish / spawn / 3–5 checkpoints and `BoxRow`s spread along the longer
+      lap. Landmark hulls stay ≥ 3 m clear of the ribbon (TPV cannot see
+      overlap). Budget ≤ 700 items per map, reported by TPV.
+- [x] Each builder gets `d.ambience = "<key>"`.
+
+## Milestone 4 — Load cost, validation, protocol
+
+- [x] `TrackEd/TrackFactory.BuildFloor` splits: the drive scene
+      (`interactive: true`) builds ONE merged mesh per floor type instead of
+      3.1k tile GameObjects; the builder keeps per-tile renderers because
+      `RepaintTile` needs them. `Track/TrackBuilder.cs` gains a shared cached
+      cube mesh so tiles stop going through `CreatePrimitive` + `Destroy`.
+- [x] `Editor/TrackPresetValidator.cs`: report item count, renderer count and
+      world extent per preset; new failures for **more than one spline** on a
+      themed preset, for the max-`Count` spline not being the closed one (the
+      BotPath trap), for items outside the map (already), and for
+      `scale <= 0`. Existing grade/overpass checks unchanged.
+- [x] `Net/NetSession.cs`: `ProtocolVersion` 8 → 9 with a history paragraph —
+      `PlacedItem.scale`/`pinned` and `TrackDesign.ambience`/`tileSize` all
+      ride in the full trackJson, and a v8 peer would build a v9 map at scale
+      1, un-pinned (250 stray Rigidbodies) and with no atmosphere.
+
+## Milestone 5 — Verification + docs
+
+- [x] **V1 compile**: batch `-batchmode -nographics -quit`, 0 `error CS`
+      (PowerShell does not wait — poll or `-Wait`; build the argument list as
+      ONE quoted string or the project path splits at its space).
+- [x] **V2 `PartModelValidator.Report`**: `[PMV] RESULT ALL PASS` (110 assets,
+      unchanged — no new FBXs this pass).
+- [x] **V3 `TrackPresetValidator.Report`**: `[TPV] RESULT ALL PASS` (8
+      presets), with the new item/extent lines recorded for the README.
+- [x] **V4 Opus regression**: `-batchmode`, NO `-nographics`, NO `-quit`, poll
+      the JSON — bit-identical to R4 (legA −13.615608215332032 mm, turn
+      +0.1873779296875°, legB +15.803813934326172 mm, brake +42.34135055541992
+      mm, total +58.14552307128906 mm, drift −42.4041748046875 mm, completed
+      true, fault 0, phase 10).
+- [x] **V5 release build** via `BuildMenu.BuildRelease` (forced by v9); verify
+      the `Assembly-CSharp.dll` timestamp.
+- [x] `README.md`: rewrite the map-pack section — the four maps as ports of the
+      Blender preview maps (source module, grid, world size, districts), the
+      ambience table (sky/fog/key light per theme), per-item scale + pinning,
+      the tile-size control and the new 80-tile ceiling, protocol v9.
+
+## Play-test checklist (user)
+
+- [ ] Each map reads like its render from the builder's top-down view (T) and
+      from the car: districts in the right places, landmarks on the right
+      horizon, the toy room unmistakably indoors.
+- [ ] A clean lap on each: checkpoints ring in order, the ribbon never runs
+      into a landmark hull, gates clear the roofline.
+- [ ] Fog depth feels right per map — especially Graveyard Shift, which is
+      deliberately ~2× the others and may need the density tuned by eye.
+- [ ] Emissives (neon, lit windows, lava, jack-o'-lanterns, crystals) read
+      against the new dark ambients **in the release player**, not just the
+      editor.
+- [ ] Builder: select a prop → scale slider resizes it live with no rebuild
+      hitch; Pinned toggle stops a cone rolling; ±5 resize and the tile-size
+      control behave; a 112 m map frames with F.
+- [ ] Old saved user maps still load and their items are still 1×.
+- [ ] LAN: v8 vs v9 → "Version mismatch"; two v9 machines render the same
+      atmosphere and the same 600 props.
+- [ ] Map load time is acceptable on the target machine (expected 0.3–0.8 s).
+
+## Known risks
+
+1. **Load cost is dominated by static batching**, not instantiation. If a
+   600-item map hitches on load, the lever is batching in chunks rather than
+   cutting props.
+2. **BotPath picks the spline with the most control points.** One spline per
+   themed preset, asserted by TPV.
+3. **Fog + dark ambient can bury the props.** The Blender maps get away with
+   near-black because they are photographed with a compositor bloom; Unity has
+   none. Ambient floors may need lifting above the ported values — tune by eye
+   and record the final numbers in the README.
+4. **A custom shader is a new dependency.** Keeping `SkyGradient.shader` under
+   `Resources/` guarantees inclusion, and the dome degrades to the current flat
+   background if it fails to load.
+5. **Tile-size changes move the map edge under fixed items.** Warned in the UI,
+   not prevented; `Resize` culling is untouched.
+6. **Painted roads stair-step on a 2 m grid.** Honest for a tile map and
+   invisible at car height, but it will show in the top-down view.
+7. The scatter uses a seeded `System.Random`, not Python's Mersenne Twister —
+   the same densities and regions, not the same individual positions.
 
 ---
 

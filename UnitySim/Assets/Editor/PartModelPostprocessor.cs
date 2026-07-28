@@ -4,8 +4,9 @@ namespace AIHWSim.EditorTools
 {
     /// <summary>
     /// Forces deterministic import settings on the Blender-authored part meshes
-    /// under <c>Resources/PartModels/</c>, so runtime code (PartMeshLibrary) can
-    /// rely on exact scale and orientation regardless of Unity/FBX defaults:
+    /// under <c>Resources/PartModels/</c>, <c>Resources/TrackProps/</c> and
+    /// <c>Resources/Cosmetics/</c>, so runtime code (PartMeshLibrary) can rely
+    /// on exact scale and orientation regardless of Unity/FBX defaults:
     ///   • useFileScale off + globalScale 1  → 1 Blender metre = 1 Unity unit
     ///     (meshes authored in metres import at real size; no 0.01/100 surprises).
     ///   • no imported materials/cameras/lights/animation → the FBX carries shape
@@ -20,7 +21,8 @@ namespace AIHWSim.EditorTools
         {
             string p = path.Replace('\\', '/');
             return p.Contains("Resources/PartModels/")   // vehicle parts
-                || p.Contains("Resources/TrackProps/");  // track scenery + arcade props
+                || p.Contains("Resources/TrackProps/")   // track scenery + arcade props
+                || p.Contains("Resources/Cosmetics/");   // unlockable cosmetics + crates
         }
 
         private void OnPreprocessModel()

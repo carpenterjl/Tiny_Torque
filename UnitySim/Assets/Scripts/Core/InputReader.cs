@@ -131,6 +131,7 @@ namespace AIHWSim.Core
         public static bool RespawnKeyPressed() => KeyTable.Pressed(B.Key(DriveAction.Respawn));
         public static bool UseItemKeyPressed() => KeyTable.Pressed(B.Key(DriveAction.UseItem));
         public static bool LookBackKeyHeld() => KeyTable.Held(B.Key(DriveAction.LookBack));
+        public static bool HornKeyHeld() => KeyTable.Held(B.Key(DriveAction.Horn));
 
 #if ENABLE_INPUT_SYSTEM
         // ---- pad-only reads, for one specific pad (split-screen) ----
@@ -139,6 +140,7 @@ namespace AIHWSim.Core
         public static bool RespawnPadPressed(Gamepad gp) => PadTable.Pressed(gp, B.Pad(DriveAction.Respawn));
         public static bool UseItemPadPressed(Gamepad gp) => PadTable.Pressed(gp, B.Pad(DriveAction.UseItem));
         public static bool LookBackPadHeld(Gamepad gp) => PadTable.Held(gp, B.Pad(DriveAction.LookBack));
+        public static bool HornPadHeld(Gamepad gp) => PadTable.Held(gp, B.Pad(DriveAction.Horn));
 #endif
 
         // Foot brake in [0, 1].
@@ -157,6 +159,10 @@ namespace AIHWSim.Core
 
         /// <summary>Held: look behind. Held rather than toggled so you cannot
         /// leave the camera facing backwards.</summary>
+        /// <summary>Hold-to-sound — a horn is a Held, not a Pressed.</summary>
+        public static bool HornHeld() =>
+            HornKeyHeld() || PadTable.HeldAny(B.Pad(DriveAction.Horn));
+
         public static bool LookBackHeld() =>
             LookBackKeyHeld() || PadTable.HeldAny(B.Pad(DriveAction.LookBack));
 
@@ -352,6 +358,65 @@ namespace AIHWSim.Core
             try { return Input.GetMouseButton(2); } catch { }
 #endif
             return false;
+        }
+
+        // --- Raw pad axis helpers (menu navigation + editor manipulation) ---
+        //
+        // Merged across every connected pad (max magnitude per axis), the same
+        // any-pad philosophy as PadTable.HeldAny: menus and editors should
+        // answer to whichever controller the player happens to pick up, unlike
+        // driving, which binds a specific pad per player slot. Like PadTable,
+        // these need the new Input System; without it they read zero.
+
+        /// <summary>Left stick, any pad, deadzoned per the system settings.</summary>
+        public static Vector2 LeftStick()
+        {
+            Vector2 v = Vector2.zero;
+#if ENABLE_INPUT_SYSTEM
+            foreach (var gp in Gamepad.all)
+            {
+                var s = gp.leftStick.ReadValue();
+                if (Mathf.Abs(s.x) > Mathf.Abs(v.x)) v.x = s.x;
+                if (Mathf.Abs(s.y) > Mathf.Abs(v.y)) v.y = s.y;
+            }
+#endif
+            return v;
+        }
+
+        /// <summary>Right stick, any pad.</summary>
+        public static Vector2 RightStick()
+        {
+            Vector2 v = Vector2.zero;
+#if ENABLE_INPUT_SYSTEM
+            foreach (var gp in Gamepad.all)
+            {
+                var s = gp.rightStick.ReadValue();
+                if (Mathf.Abs(s.x) > Mathf.Abs(v.x)) v.x = s.x;
+                if (Mathf.Abs(s.y) > Mathf.Abs(v.y)) v.y = s.y;
+            }
+#endif
+            return v;
+        }
+
+        /// <summary>Right trigger minus left trigger in [-1, 1], any pad.</summary>
+        public static float TriggerAxis()
+        {
+            float v = 0f;
+#if ENABLE_INPUT_SYSTEM
+            foreach (var gp in Gamepad.all)
+                v = MaxMag(v, gp.rightTrigger.ReadValue() - gp.leftTrigger.ReadValue());
+#endif
+            return Mathf.Clamp(v, -1f, 1f);
+        }
+
+        /// <summary>True when any gamepad control was actuated this frame —
+        /// the "player is on the pad" signal for cursor auto-hide and the menu
+        /// focus ring. Buttons via PadTable's capture, sticks/triggers here.</summary>
+        public static bool AnyPadActivity()
+        {
+            if (PadTable.CaptureThisFrame() != PadButton.None) return true;
+            var l = LeftStick(); var r = RightStick();
+            return l.sqrMagnitude > 0.09f || r.sqrMagnitude > 0.09f || Mathf.Abs(TriggerAxis()) > 0.25f;
         }
 
         // --- Garage editor hotkeys ---

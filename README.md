@@ -94,21 +94,58 @@ quadcopter and hardware-in-the-loop over serial are planned follow-ons.
   map center). The track pause menu's **Track Builder** button returns here; the
   classic oval still loads when no custom map is active.
 
-- **Menu scene** (Tools ▸ AIHWSim ▸ Create Menu Scene): the game's entry point.
-  Behind the menu a live **attract loop** plays — a handful of AI cars drive laps
-  around a random race circuit while a camera slowly orbits (falls back to a
-  rotating showcar if the track can't build).
-  **Single Player** — a full **race setup**: pick your vehicle and track, the
-  number of **AI opponents** (0–7), their **difficulty** (Easy/Medium/Hard) with
-  an optional **rubber-band** catch-up, how your own car is **driven** (Manual,
-  Autonomous via the C firmware controller, or Autonomous via the bot AI), and the
-  **lap count** — then Race (0 opponents + 0 laps = free drive), or jump to the
-  Garage / Track Builder. **Multiplayer** — a **2-player split-screen** setup
-  (per-player name, vehicle, and device: keyboard or a specific gamepad; shared
-  track; first-to-N-laps race or sandbox) plus LAN, **Resume Drive** (saved
-  session snapshots), and **Options** (volume, quality, fullscreen, vSync, mouse
-  steering, assists, sim-realism, **telemetry logging**, player names — persisted
-  to `UnitySim/Saves/settings.json`).
+- **Menu scene** (Tools ▸ AIHWSim ▸ Create Menu Scene): the game's entry point,
+  wearing the TinyTorque showroom look since the arcade UI pass — deep navy
+  panels, champagne-gold accents, rounded corners, the Bahnschrift display font,
+  and the title key art as the main menu's backdrop. First boot plays the
+  **intro video** (StreamingAssets, skippable with any input) into the **title
+  card** ("press any button"); returning from a race skips both. Behind the menu
+  a live **attract loop** plays — AI cars driving a random circuit — and after
+  ~20 s of idling on the main menu the panel hides so the attract runs
+  full-screen, arcade style, until you touch anything. Every menu (and the
+  pause/LAN/results/settings panels) is fully **gamepad-navigable**: d-pad or
+  left stick moves a gold focus ring, A activates, B backs out, left/right
+  nudges sliders and cycles pickers; the OS cursor hides while the pad is the
+  active device. The whole UI also scales with resolution (authored at 1080p,
+  crisp at 4K, no overflow at 720p), and scene changes fade instead of cutting.
+  **Single Player** — a full **race setup**: pick your vehicle (or open the
+  **Showroom** — see below), track, the number of **AI opponents** (0–7), their
+  **difficulty** (Easy/Medium/Hard) with an optional **rubber-band** catch-up,
+  how your own car is **driven** (Manual, Autonomous via the C firmware
+  controller, or Autonomous via the bot AI), and the **lap count** — then Race
+  (0 opponents + 0 laps = free drive), or jump to the Garage / Track Builder.
+  **Multiplayer** — a **2-player split-screen** setup (per-player name, vehicle,
+  and device: keyboard or a specific gamepad; shared track; first-to-N-laps race
+  or sandbox) plus LAN, **Resume Drive** (saved session snapshots), and
+  **Options** (volume incl. a **music** slider, quality, fullscreen, vSync,
+  mouse steering, assists, sim-realism, **telemetry logging**, player names —
+  persisted to `UnitySim/Saves/settings.json` — and a **Cheat Codes** page under
+  EXTRAS).
+
+- **Showroom** (from the Single Player and LAN pages): the arcade-facing car
+  picker. The selected car turns on a lit podium — spin it with the right stick
+  or a right-mouse drag, hold throttle to rev it, honk its horn — with
+  **SPEED / ACCEL / HANDLING** bars derived from the real physics stats (top
+  speed from the motor-vs-drag balance, thrust-to-mass, a composite of yaw
+  agility, weight balance, ride response and steering authority — aero kits
+  genuinely move the bars), a per-car **Special** slot reserved for future
+  arcade abilities, and **Customize**: horn, wheel finish, topper (light bar /
+  pods / antennas), aero kit and paint, saved per vehicle as a loadout in
+  `Saves/progress.json` and applied whenever that car is picked. Locked cars
+  show greyed with a padlock — visible on purpose.
+
+- **Progression**: winning a race (against at least one opponent, local or LAN)
+  opens a **mystery item** on the results screen — one random unlock from a
+  20-item pool of preset cars (TT Patrol, TT Baja, Real Twin, Opus Vector — the
+  TT Coupe is the starter and always yours), horns, wheel finishes, toppers,
+  aero kits and premium paints. When the pool runs dry, wins pay **XP** toward a
+  player level (shown as `Lv N` in LAN rosters); podium finishes bank smaller
+  grants. One global local profile (`Saves/progress.json`), shared by
+  split-screen — the couch shares the toy box. **Cheat codes** exist: each
+  locked item has a word (they're puns; `donut` is real), typed into Options ▸
+  Cheat Codes. The rest are in `UnlockCatalog.cs`, which is the intended
+  spoiler. Gating lives only in the pickers — bots still drive locked cars, LAN
+  peers' designs always build, and the engineering garage is never gated.
 
 **Single-player races vs bots**: opponents drive a variety of preset cars in
 distinct paint colours, following the track's racing line (spline centerline, the
@@ -695,9 +732,25 @@ and the incoming warning be one implementation instead of two. The one thing a
 client genuinely cannot derive is whether a missile is locked onto it — it owns
 no missiles, only their poses — so that arrives as a flag.
 
-This is **protocol v9**. Every machine in a session must run the same build; the
+This is **protocol v11**. Every machine in a session must run the same build; the
 exact version check at connection approval rejects a mismatch cleanly rather than
 letting it half-work.
+
+v11 is the unlockable cosmetics. It is NOT a message-layout change — the five
+cosmetic ids ride each car's design JSON, the same way `hornStyle` and
+`liveryPng` do, so a v10 peer would parse every packet correctly. It is bumped
+anyway because a v10 build has no `Resources/Cosmetics/` folder and no catalog:
+it would silently drop whatever the other screen is showing, and a LAN race
+where the cars do not match is worse than one that refuses to start.
+
+v10 is horns + player levels, and unlike the last few bumps it is a REAL wire
+change: `CarState` grew a trailing flags byte (bit 1 = horn sounding), so a v9
+peer reading a v10 state stream would mis-frame every packet after the first
+car. The horn also rides a spare bit in the input flags (client → host) and the
+own-state flags (owner → host), each car's `hornStyle` travels in its design
+JSON, and the hello/roster JSON carries a progression level for the `Lv N`
+badge. Nothing about progression itself is networked — unlocks are local, and
+the level is display-only.
 
 v8 was the TinyTorque map packs: a map travels as its full track JSON, and v8
 maps name 63 new scenery item ids (dt_/toy_/ench_/haunt_). The factory
@@ -843,14 +896,43 @@ each car carries its own voice: a fixed per-car pitch offset plus a slow wander
 on level and pitch, so a long slide never holds one note and two sliding cars
 are two voices rather than the same loop twice.
 
-**Master volume**, **Sound effects** and **Engine + tyres** are separate sliders
-in Options and in the pause menu, where they now take effect immediately.
+**Every car also carries a horn** — hold **H** (or **L3** on a pad, rebindable
+like any control) to sound it. Five voices, all synthesized: the standard
+dual-tone "meep", a police two-tone wail (the TT Patrol's default), a truck air
+horn (the TT Baja's), an original five-note musical fanfare, and a clown
+squeeze-bulb. Which horn a car carries is part of its design (`hornStyle` —
+cycled in the garage BODY tab or the Showroom), rides its design JSON over LAN,
+and the horn state itself is synced (protocol v10), so a honk is heard by the
+whole session from the car that made it. The horn sits in the SFX volume
+bucket, not Engine + tyres — turning the motor drone down must not silence a
+deliberate action.
 
-The garage and the main menu stay silent on purpose. Audio attaches per rig in
-`TrackBootstrap`, not in `VehicleFactory`, so a humming garage and a revving
-menu are a deliberate one-line opt-in rather than an accident. Note also that
-Unity permits exactly one `AudioListener`, and split-screen gives it to P1 — so
-in split-screen you hear the world from player one's ear.
+**Music** is the game's first, and it is HYBRID: a persistent `MusicDirector`
+crossfades a theme per scene — the menu/garage/builder share one, and each
+drive scene picks its theme from the map's `ambience` key, so Downtown Dash
+sounds like it looks (synthwave), the Playroom is a music-box romp, the vale a
+moonlit waltz, the hollow a spooky ostinato, everything else a garage-rock
+vamp, with a victory theme on the results screen. All seven themes are
+**procedural chiptune loops** rendered at runtime in the ProceduralAudio
+tradition (event-additive, note tails wrap the loop seamlessly, fixed seeds) —
+but **drop an `.ogg`/`.wav`/`.mp3` into a `Music/` folder** (next to `Saves/`,
+or the one shipped in `StreamingAssets/`) named `menu`, `generic`, `downtown`,
+`toyroom`, `enchanted`, `haunted` or `results`, and your track replaces the
+chiptune with zero configuration. The countdown ducks the music, pause halves
+it (AudioSources ignore timeScale, so it plays on), and menus click, blip and
+fanfare through their own small UI-sound set.
+
+**Master volume**, **Sound effects**, **Engine + tyres** and **Music** are
+separate sliders in Options and in the pause menu, where they take effect
+immediately.
+
+The garage and the main menu attract cars stay silent on purpose. Audio
+attaches per rig in `TrackBootstrap`, not in `VehicleFactory`, so a humming
+garage and a revving menu are a deliberate one-line opt-in rather than an
+accident (the Showroom's rev is exactly that opt-in — a 2D engine loop, not
+the car's own). Note also that Unity permits exactly one `AudioListener`, and
+split-screen gives it to P1 — so in split-screen you hear the world from
+player one's ear.
 
 None of this can touch the simulation: the audio components only ever read.
 `CarVehicle.TyreSlip01`, the one property added for tyre noise, is assigned at
@@ -1070,13 +1152,106 @@ figure-8 was the map that motivated the overpass detector; none of the current
 presets cross over themselves, so a `[TPV] GEOM … overpass(...)` line on a new
 map is worth a second look.)
 
+## Cosmetics, crates and the championship
+
+Forty-seven unlockable decorations from the TinyTorque pack, in five slots —
+**topper** (roof), **rim** (all four wheels), **ornament** (bonnet), **bobble**
+(antenna tip) and **wing** (rear deck) — themed across arcade, toybox,
+enchanted and haunted, and tiered common → legendary.
+
+They are **purely visual**. Nothing a cosmetic does touches mass, aero,
+colliders or the wheel configs: `MassProperties` sees the same car, the bots
+drive the same car, and the Opus mission scores the same numbers with a crown on
+the roof as without one. They ride the design JSON, so an equipped item shows up
+in a race, in split-screen and on a LAN peer's screen with no extra plumbing.
+
+### The pipeline
+
+`Blender/build_cosmetics.py` opens `TinyTorque_cosmetics.blend` read-only,
+separates each of the 51 objects by material, renames the pieces to the tokens
+`PartMeshLibrary.AssignByName` binds, applies the game frame and scale, and
+writes one FBX per item into `Resources/Cosmetics/`. It also prints a JSON block
+carrying the authored PBR of all **39 materials** — base colour, metallic,
+roughness, emission colour and strength, alpha — which is pasted into
+`CosmeticCatalog`. Nothing about a cosmetic's look is eyeballed; the crown in
+the game is the crown that was modelled.
+
+Two scale factors, both measured off the source car rather than assumed:
+`s_item = 0.420 / <coupe body length>` = 0.092278, and
+`s_rim = 0.033 / <coupe tyre radius>` = 0.069500. A rim is baked to the author
+radius so it rides the same `radius / WheelAuthorRadius` factor the tyre does,
+and fits any wheel size.
+
+Mount frames come from the pack's own `MOUNTS` table, re-expressed as fractions
+of the authoring car's body box and applied to whatever body box the design
+actually has. On the coupe that reproduces the authored mount exactly; on a
+Baja, a LowRacer or something assembled in the garage it puts the hat on the
+roof instead of through it. The bobble is the exception — it reads the built
+antenna's own bounds, because antenna height varies with style and size.
+
+Two materials cannot transfer exactly. The ghost and fae spectres drive alpha
+and emission off a Fresnel node, which the Standard shader has no equivalent
+for, so they land on the midpoint of the authored face..edge range; the ranges
+are in the comments next to them.
+
+### Crates
+
+Four boxes, with the pack's own weights, floors and pity counts:
+
+| Crate | Pulls | Earned by | Floor | Pity |
+| --- | --- | --- | --- | --- |
+| Scrap Crate | 1 | finish any race | — | 40 |
+| Chrome Case | 2 | finish on the podium (≥2 opponents) | Uncommon | 25 |
+| Gold Vault | 3 | win a championship | Rare | 12 |
+| Cursed Casket | 2 | win the Midnight Series | Rare | 8 |
+
+Crates replaced the old random-item-on-win grant, and **everything is in
+them**: the 20 original unlocks (cars, horns, wheel finishes, roof kits, aero
+kits, paints) were given rarity tiers and joined the 47 cosmetics in one pool
+and one save key space. Cheat codes still work on the original 20.
+
+The manifest also ships a per-item `odds` table. It is deliberately not
+transcribed: every entry in it is exactly `weight[rarity] / |pool[rarity]|`, so
+rolling a rarity by weight and then picking uniformly inside it reproduces those
+numbers — and keeps reproducing them now that the pool is bigger. The themed
+Cursed Casket draws only haunted items, which is also why the legacy unlocks,
+having no theme, stay out of it and leave its authored eleven intact.
+
+A duplicate pays **scrap** instead. Scrap buys any item outright at its tier
+price, from a shop whose six offers rotate daily (seeded from the calendar date,
+so no server and no rerolling by restarting) — the manifest's own escape hatch
+from box luck. Crates are also buyable, priced at 4× their expected duplicate
+value, which makes buying one a worse deal than earning one on purpose.
+
+### Championship
+
+Three series of four rounds over the existing circuits — **Rookie Cup**,
+**Torque Trophy** and the haunted **Midnight Series** — scored 10-8-6-5-4-3-2-1.
+The roster is pinned when the series starts, bot names and difficulty included,
+because a points table only means something if the same drivers contested every
+round. The standings live in `progress.json`, so a series survives quitting; the
+results screen swaps Rematch for **Next round**, and the last round shows the
+final table. Winning outright pays the Gold Vault, and winning the Midnight
+Series pays the Cursed Casket too — which is what gives the pack's "seasonal"
+box an honest trigger in a game with no seasons.
+
+### Where things are
+
+Root menu → **Crates** opens the crate room (a turntable, per-pull reveals, the
+box's real odds and its pity counter). Root menu → **Shop** spends scrap.
+Showroom → **Cosmetics** equips them: a slot strip, a cycle a gamepad can drive
+and an icon grid a mouse can, both writing the same value. Locked entries are
+shown, not hidden — clicking one **fits it to the turntable car** so it can be
+spun and inspected, without ever being written to the saved loadout.
+
 ## Layout
 
 ```
 UnitySim/       Unity 6 project (host: physics, sensors, telemetry, graphs)
 Controllers/    Portable C firmware + CMake build (the code under test)
 Tools/          Interactive HTML tools — hardware→vehicle, control design, calibration
-Blender/        Editable source (parts.blend) for the 3D part models
+Blender/        Editable source (parts.blend) + the export scripts for parts,
+                map props and cosmetics
 Opus_Car_Spec/  Datasheets, mass budget and calibration log for the Opus Vector
 Docs/           Interface spec and notes
 ```
@@ -1206,8 +1381,19 @@ starts in **Manual** mode.
 | Respawn (to nearest track point) | R     | ⓨ (north button)           |
 | Use item (arcade) | Left Shift           | ⓧ (west button)            |
 | Look back     | C (held)                 | Right stick click          |
+| Horn (held)   | H                        | Left stick click           |
 | Manual ⇄ Auto | M                        | Select                     |
 | Pause         | Esc                      | Start                      |
+
+Every menu is pad-navigable (d-pad/left stick + Ⓐ select / Ⓑ back), and the
+two editors take the pad too: **left stick** moves the selected part or prop
+in the camera plane, **LB/RB** rotates it, **LT/RT** raises/lowers a garage
+part (props auto-drop, so in the Track Builder the triggers **scale** instead),
+**right stick** pitches a garage part (sensor aim / antenna tilt / wing angle)
+or orbits the builder camera, **Ⓐ** cycles the selection, **Ⓑ** deselects,
+and in the garage **Ⓧ** toggles mirror mode and **Ⓨ** frames the selection.
+Editor pad bindings are fixed; the driving controls above are rebindable in
+Options / pause ▸ Settings ▸ Controls.
 
 Send the car off a dirt jump, weave the cone slalom, and cross the finish line
 to start the lap timer (bottom-right). Press **M** to hand control to

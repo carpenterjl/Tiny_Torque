@@ -121,6 +121,19 @@ namespace AIHWSim.Core
                 // Hold the grid immediately so nothing rolls before RaceDirector.Start.
                 if (SessionConfig.CountdownSeconds > 0)
                     foreach (var rig in _rigs) rig.car.Frozen = true;
+
+                // Progression: a human win against at least one opponent rolls
+                // a Scrap Crate for finishing and a Chrome Case for a podium,
+                // plus XP for the level badge. The award itself is UI-layer
+                // state — RaceDirector's results overlay draws the reveal, and
+                // the crates wait in the Showroom until the player opens them.
+                if (SessionConfig.Players.Count > 1)
+                    race.PlayerFinished += (rig, place) =>
+                    {
+                        if (rig?.slot == null || rig.slot.isBot) return;
+                        Persistence.Progression.OnRaceFinished(
+                            place, SessionConfig.Players.Count - 1);
+                    };
             }
 
             // Arcade layer, gated exactly like the race above: item boxes and
@@ -250,6 +263,7 @@ namespace AIHWSim.Core
             _runner = _rigs.Count > 0 ? _rigs[0].runner : null;
             HookCarEpochs();
             session.OwnStateReceived += OnOwnState;
+            session.RaceEnded += OnLanRaceEnded;   // progression fires on every machine
 
             var hud = new GameObject("LanHud").AddComponent<Net.LanHud>();
             hud.ownCar = _rigs.Count > 0 ? _rigs[0].car : null;
@@ -325,7 +339,8 @@ namespace AIHWSim.Core
                 : (IDriverInputSource)Net.NetSession.Instance.InputSourceFor(p.slot);
 
             // Motor, tyre and impact sound, same as every local rig gets.
-            Audio.VehicleAudio.Attach(built.car.gameObject, built.car);
+            var va = Audio.VehicleAudio.Attach(built.car.gameObject, built.car);
+            if (va != null) va.hornStyle = design.hornStyle;
 
             Camera cam = null;
             if (isLocal) cam = BuildLanCamera(built.car.transform);
@@ -411,6 +426,11 @@ namespace AIHWSim.Core
             // Track limits are judged by the machine with the wheels; the host's
             // copy is kinematic, so the verdict rides in with the pose.
             _arcade?.NotifyRemoteTrackLimit(slot, s.penalized, s.warned);
+            // v10: the remote player's horn, audible from their kinematic copy
+            // on the host's machine (clients hear it via the CarState relay).
+            var rig = _rigs.Find(r => r.netSlot == slot);
+            var audio = rig?.car != null ? rig.car.GetComponent<Audio.VehicleAudio>() : null;
+            if (audio != null) audio.externalHorn = s.hornOn;
         }
 
         private Camera BuildLanCamera(Transform target)
@@ -609,6 +629,7 @@ namespace AIHWSim.Core
             session.CarStateReceived += OnCarState;
             session.RosterChanged += OnClientRosterChanged;
             session.RaceStarted += OnClientRaceStarted;
+            session.RaceEnded += OnLanRaceEnded;   // progression fires on every machine
 
             if (session.Arcade && timed) BuildLanArcade(authority: false);
 
@@ -657,6 +678,7 @@ namespace AIHWSim.Core
             var view = built.root.AddComponent<Net.ClientCarView>();
             view.slot = p.slot;
             view.car = built.car;
+            view.hornStyle = design.hornStyle;   // so their honk sounds like their car
             _ghosts[p.slot] = view;
 
             // Ghosts get rigs too, so the arcade director sees the same shape of
@@ -721,7 +743,23 @@ namespace AIHWSim.Core
             session.RosterChanged -= OnClientRosterChanged;
             session.RaceStarted -= OnClientRaceStarted;
             session.OwnStateReceived -= OnOwnState;
+            session.RaceEnded -= OnLanRaceEnded;
             if (session.GridProvider == TeleportToGrid) session.GridProvider = null;
+        }
+
+        /// <summary>LAN progression: the RaceEnd broadcast reaches host and
+        /// clients alike, so each machine banks its own player's result.</summary>
+        private void OnLanRaceEnded(Net.RaceEndMsg m)
+        {
+            var session = Net.NetSession.Instance;
+            if (session == null || m.rows == null) return;
+            foreach (var row in m.rows)
+            {
+                if (row.slot != session.LocalSlot) continue;
+                if (row.place > 0)
+                    Persistence.Progression.OnRaceFinished(row.place, m.rows.Length - 1);
+                break;
+            }
         }
 
         /// <summary>
@@ -771,7 +809,8 @@ namespace AIHWSim.Core
             // the field around you is audible. Attached here rather than in
             // VehicleFactory so the garage preview and the menu attract cars stay
             // silent. Read-only, which is why it is safe on firmware rigs too.
-            Audio.VehicleAudio.Attach(built.car.gameObject, built.car);
+            var vAudio = Audio.VehicleAudio.Attach(built.car.gameObject, built.car);
+            if (vAudio != null) vAudio.hornStyle = design.hornStyle;
 
             // Input source: bot AI (opponents & the player's "autonomous (bot AI)")
             // drives via CarInput exactly like a human; C-firmware autonomous uses
@@ -1185,8 +1224,9 @@ namespace AIHWSim.Core
         private void OnGUI()
         {
             if (_splitScreen) return; // split-screen: humans only, no DLL box
+            UI.UIScale.Begin();
             const float w = 230f, h = 74f;
-            var area = new Rect(Screen.width - w - 10f, 44f, w, h);
+            var area = new Rect(UI.UIScale.W - w - 10f, 44f, w, h);
             GUILayout.BeginArea(area, GUI.skin.box);
             string status = _runner != null && _runner.ControllerReady
                 ? "controller: LOADED" : "controller: none";
@@ -1194,6 +1234,7 @@ namespace AIHWSim.Core
             if (GUILayout.Button("Reload Controller DLL"))
                 _runner?.ReloadController();
             GUILayout.EndArea();
+            UI.UIScale.End();
         }
     }
 }

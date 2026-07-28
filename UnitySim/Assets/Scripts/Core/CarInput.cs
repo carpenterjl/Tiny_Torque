@@ -33,7 +33,12 @@ namespace AIHWSim.Core
         /// <summary>Per-player device routing; defaults to the classic merged input.</summary>
         public IDriverInputSource source;
 
+        /// <summary>This frame's horn state — read by the LAN senders so the
+        /// wire carries exactly what the audio plays.</summary>
+        public bool HornHeldNow { get; private set; }
+
         private readonly float[] _setpoints = new float[4];
+        private Audio.VehicleAudio _audio;
         private float _mouseSteer;
 
         /// <summary>Spine segment this car was last near, seeding the respawn
@@ -71,6 +76,13 @@ namespace AIHWSim.Core
                 // this costs one null check in a normal race.
                 if (source.UseItemPressed())
                     Arcade.ArcadeDirector.Instance?.RequestUse(car);
+
+                // Horn: hold-to-sound, routed to this car's audio voice. The
+                // component is attached by TrackBootstrap after the rig builds,
+                // hence the lazy lookup.
+                HornHeldNow = source.HornHeld();
+                if (_audio == null) _audio = car.GetComponent<Audio.VehicleAudio>();
+                if (_audio != null) _audio.hornHeld = HornHeldNow;
             }
 
             if (chase != null) chase.lookBack = source.LookBackHeld();

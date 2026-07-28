@@ -4,25 +4,31 @@ using UnityEngine;
 namespace AIHWSim.Garage
 {
     /// <summary>
-    /// A lazily-built dark "VAB" GUISkin for the garage, plus a few shared styles.
-    /// All backgrounds are tiny runtime-generated textures (no imported assets), so
-    /// the garage gets a consistent KSP-ish look while staying IMGUI. Rebuilt
-    /// automatically if Unity tears the textures down on a play-mode transition.
+    /// The lazily-built GUISkin every OnGUI class in the game draws with — one
+    /// styling authority, so changing it here reskins every screen at once.
+    /// Since the arcade pass it wears the TinyTorque showroom look from the
+    /// title art: deep navy panels, champagne-gold accents, rounded corners,
+    /// and an OS-loaded display font (Bahnschrift on any Windows 10+ box, no
+    /// TTF asset shipped). All backgrounds are tiny runtime-generated textures
+    /// (no imported assets). Rebuilt automatically if Unity tears the textures
+    /// down on a play-mode transition.
     /// </summary>
     public static class GarageSkin
     {
-        public static readonly Color Bg        = new Color(0.10f, 0.11f, 0.13f, 0.96f);
-        public static readonly Color Panel     = new Color(0.14f, 0.15f, 0.18f, 0.98f);
-        public static readonly Color Btn       = new Color(0.20f, 0.22f, 0.26f, 1f);
-        public static readonly Color BtnHover  = new Color(0.26f, 0.29f, 0.34f, 1f);
-        public static readonly Color Accent    = new Color(1.00f, 0.62f, 0.20f, 1f); // KSP orange
-        public static readonly Color AccentDim = new Color(0.55f, 0.36f, 0.14f, 1f);
-        public static readonly Color Text      = new Color(0.86f, 0.88f, 0.92f, 1f);
+        public static readonly Color Bg        = new Color(0.055f, 0.075f, 0.13f, 0.97f); // deep navy
+        public static readonly Color Panel     = new Color(0.09f, 0.12f, 0.19f, 0.98f);
+        public static readonly Color Btn       = new Color(0.13f, 0.17f, 0.26f, 1f);
+        public static readonly Color BtnHover  = new Color(0.19f, 0.24f, 0.35f, 1f);
+        public static readonly Color Accent    = new Color(0.94f, 0.78f, 0.36f, 1f); // champagne gold
+        public static readonly Color AccentDim = new Color(0.55f, 0.43f, 0.18f, 1f);
+        public static readonly Color Text      = new Color(0.93f, 0.91f, 0.86f, 1f); // warm white
 
         private static GUISkin _skin;
+        private static Font _font;
         private static readonly Dictionary<Color, Texture2D> _solids = new Dictionary<Color, Texture2D>();
+        private static readonly Dictionary<(Color, int), Texture2D> _rounded = new Dictionary<(Color, int), Texture2D>();
 
-        public static GUIStyle Header, StatLabel, TabActive;
+        public static GUIStyle Header, StatLabel, TabActive, Title, FocusRing;
 
         public static GUISkin Skin
         {
@@ -46,35 +52,108 @@ namespace AIHWSim.Garage
             return t;
         }
 
+        /// <summary>
+        /// A solid fill with alpha-rounded corners, for 9-slicing (set the
+        /// style's border to <c>radius + 2</c> on every side). Cached per
+        /// (color, radius); 1 px anti-aliased edge so corners don't shimmer.
+        /// </summary>
+        public static Texture2D Rounded(Color c, int radius)
+        {
+            var key = (c, radius);
+            if (_rounded.TryGetValue(key, out var t) && t != null) return t;
+            t = RoundedTex(c, radius, -1);
+            _rounded[key] = t;
+            return t;
+        }
+
+        /// <summary>
+        /// Rounded-rect outline (transparent centre) — the gamepad focus ring.
+        /// Distinguished in the cache by a negated radius key so it never
+        /// collides with the filled variant of the same color.
+        /// </summary>
+        public static Texture2D RoundedOutline(Color c, int radius, int thickness)
+        {
+            var key = (c, -radius);
+            if (_rounded.TryGetValue(key, out var t) && t != null) return t;
+            t = RoundedTex(c, radius, thickness);
+            _rounded[key] = t;
+            return t;
+        }
+
+        // thickness < 0 = filled. Distance field against the corner circles;
+        // pixels outside fade over ~1px, outline keeps only a band of pixels
+        // within `thickness` of the edge.
+        private static Texture2D RoundedTex(Color c, int radius, int thickness)
+        {
+            int size = radius * 2 + 8;
+            var t = new Texture2D(size, size, TextureFormat.RGBA32, false) { hideFlags = HideFlags.HideAndDontSave };
+            var px = new Color[size * size];
+            float r = radius;
+            for (int y = 0; y < size; y++)
+            for (int x = 0; x < size; x++)
+            {
+                // Distance outside the rounded rect (0 inside).
+                float dx = Mathf.Max(0f, Mathf.Max(r - 0.5f - x, x - (size - 1 - (r - 0.5f))));
+                float dy = Mathf.Max(0f, Mathf.Max(r - 0.5f - y, y - (size - 1 - (r - 0.5f))));
+                float dist = Mathf.Sqrt(dx * dx + dy * dy) - r;
+                float alpha = Mathf.Clamp01(-dist);           // 1 inside, AA ramp at the edge
+                if (thickness >= 0)                            // outline: keep the edge band only
+                    alpha = Mathf.Min(alpha, Mathf.Clamp01(dist + thickness + 1f));
+                px[y * size + x] = new Color(c.r, c.g, c.b, c.a * alpha);
+            }
+            t.SetPixels(px); t.Apply(false);
+            return t;
+        }
+
+        private const int CornerR = 6;   // button corner radius (border = CornerR + 2)
+        private const int PanelR  = 8;   // box/panel corner radius
+
         private static void Build()
         {
             _solids.Clear();
+            _rounded.Clear();
             _skin = ScriptableObject.CreateInstance<GUISkin>();
 
             var baseSkin = GUI.skin;
-            // Start from sensible defaults, then override the pieces we care about.
-            _skin.font = baseSkin != null ? baseSkin.font : null;
+            // Display font from the OS (Windows-only target) — no TTF asset to
+            // ship or strip. Bahnschrift ships with Windows 10+; the fallbacks
+            // exist everywhere. If the whole chain fails, keep Unity's default.
+            if (_font == null)
+                _font = Font.CreateDynamicFontFromOSFont(new[] { "Bahnschrift", "Impact", "Arial" }, 14);
+            _skin.font = _font != null ? _font : (baseSkin != null ? baseSkin.font : null);
 
-            _skin.box = Style(new GUIStyle(baseSkin.box), Panel, Text, Panel);
-            _skin.box.border = new RectOffset(2, 2, 2, 2);
+            var dark = new Color(0.03f, 0.045f, 0.08f, 1f);   // input wells / slider tracks
+
+            _skin.box = new GUIStyle(baseSkin.box);
+            _skin.box.normal.background = Rounded(Panel, PanelR);
+            _skin.box.normal.textColor = Text;
+            _skin.box.hover.background = _skin.box.normal.background;
+            _skin.box.hover.textColor = Text;
+            _skin.box.border = new RectOffset(PanelR + 2, PanelR + 2, PanelR + 2, PanelR + 2);
 
             _skin.label = new GUIStyle(baseSkin.label) { normal = { textColor = Text } };
 
-            _skin.button = Style(new GUIStyle(baseSkin.button), Btn, Text, BtnHover);
-            _skin.button.active.background = Solid(Accent);
+            _skin.button = new GUIStyle(baseSkin.button);
+            _skin.button.normal.background = Rounded(Btn, CornerR);
+            _skin.button.normal.textColor = Text;
+            _skin.button.hover.background = Rounded(BtnHover, CornerR);
+            _skin.button.hover.textColor = Text;
+            _skin.button.focused.background = _skin.button.normal.background;
+            _skin.button.focused.textColor = Text;
+            _skin.button.active.background = Rounded(Accent, CornerR);
             _skin.button.active.textColor = Color.black;
-            _skin.button.onNormal.background = Solid(AccentDim);
+            _skin.button.onNormal.background = Rounded(AccentDim, CornerR);
             _skin.button.onNormal.textColor = Color.white;
-            _skin.button.border = new RectOffset(2, 2, 2, 2);
+            _skin.button.border = new RectOffset(CornerR + 2, CornerR + 2, CornerR + 2, CornerR + 2);
             _skin.button.margin = new RectOffset(3, 3, 3, 3);
-            _skin.button.padding = new RectOffset(6, 6, 4, 4);
+            _skin.button.padding = new RectOffset(8, 8, 5, 5);
 
             _skin.toggle = new GUIStyle(baseSkin.toggle) { normal = { textColor = Text }, onNormal = { textColor = Accent } };
 
-            _skin.textField = Style(new GUIStyle(baseSkin.textField), new Color(0.06f, 0.07f, 0.09f, 1f), Text, new Color(0.06f, 0.07f, 0.09f, 1f));
+            _skin.textField = Style(new GUIStyle(baseSkin.textField), dark, Text, dark);
 
             _skin.horizontalSlider = new GUIStyle(baseSkin.horizontalSlider);
-            _skin.horizontalSlider.normal.background = Solid(new Color(0.06f, 0.07f, 0.09f, 1f));
+            _skin.horizontalSlider.normal.background = Solid(dark);
             _skin.horizontalSliderThumb = new GUIStyle(baseSkin.horizontalSliderThumb);
             _skin.horizontalSliderThumb.normal.background = Solid(Accent);
             _skin.horizontalSliderThumb.active.background = Solid(Accent);
@@ -90,8 +169,22 @@ namespace AIHWSim.Garage
             Header = new GUIStyle(_skin.label) { fontStyle = FontStyle.Bold, normal = { textColor = Accent } };
             StatLabel = new GUIStyle(_skin.label) { fontSize = 11 };
             TabActive = new GUIStyle(_skin.button);
-            TabActive.normal.background = Solid(AccentDim);
+            TabActive.normal.background = Rounded(AccentDim, CornerR);
             TabActive.normal.textColor = Color.white;
+
+            // Big gold page title, and the gamepad focus ring (an outline box
+            // drawn over the focused control on Repaint — explicit rect only,
+            // so it never participates in layout).
+            Title = new GUIStyle(_skin.label)
+            {
+                fontStyle = FontStyle.Bold,
+                fontSize = 26,
+                alignment = TextAnchor.MiddleCenter,
+                normal = { textColor = Accent },
+            };
+            FocusRing = new GUIStyle(GUIStyle.none);
+            FocusRing.normal.background = RoundedOutline(Accent, CornerR + 2, 2);
+            FocusRing.border = new RectOffset(CornerR + 4, CornerR + 4, CornerR + 4, CornerR + 4);
         }
 
         /// <summary>

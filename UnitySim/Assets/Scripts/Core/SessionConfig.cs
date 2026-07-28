@@ -67,6 +67,11 @@ namespace AIHWSim.Core
         /// <summary>Off-track detection + penalty (sub-toggle of arcade).</summary>
         public static bool TrackLimits;
 
+        /// <summary>This race is a championship round: the results screen banks
+        /// points into <see cref="Championship"/> and offers the next round
+        /// instead of a rematch.</summary>
+        public static bool ChampionshipRound;
+
         /// <summary>
         /// Arcade handling: every car in the session — humans and bots alike — is
         /// raised to an assist floor and a grip baseline, so the themed circuits
@@ -92,6 +97,7 @@ namespace AIHWSim.Core
             Arcade = false;
             TrackLimits = false;
             ArcadeHandling = true;   // the default the menu offers next time
+            ChampionshipRound = false;
         }
 
         /// <summary>The roster TrackBootstrap builds from — always at least one slot.</summary>

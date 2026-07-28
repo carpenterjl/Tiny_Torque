@@ -19,6 +19,9 @@ namespace AIHWSim.Persistence
         /// <summary>Vehicle motor and tyre sound, separately adjustable because a
         /// continuous drone is the first thing anyone wants to turn down.</summary>
         public float engineVolume = 0.7f;
+        /// <summary>Menu + race music (MusicDirector). Like the others, sits
+        /// under masterVolume, which rides AudioListener.volume.</summary>
+        public float musicVolume = 0.7f;
         public int qualityLevel = -1;      // -1 = leave the project default
         public bool fullscreen = true;
         public bool vSync = true;
@@ -49,7 +52,11 @@ namespace AIHWSim.Persistence
         // Defaults for the menu pages.
         public string player1Name = "Player 1";
         public string player2Name = "Player 2";
-        public string lastVehicle = "";    // "" = stock default design
+        // Fresh installs open on the TT Coupe — the face of the arcade side
+        // and the progression system's starter car. Existing settings files
+        // keep whatever they had (initializers only fill absent JSON keys),
+        // and "" still means the stock engineering design.
+        public string lastVehicle = "★ TT Coupe";
         public string lastTrack = "";      // "" = classic oval
         public int lastLaps = 0;           // 0 = free drive
 

@@ -81,6 +81,9 @@ namespace AIHWSim.Net
                 driftTier = arc != null ? arc.driftTier : 0,
                 miniTurbo = arc != null &&
                     Arcade.ArcadeDirector.Clock < arc.driftBoostUntil,
+                // v10: the horn rides up with the pose for the same reason the
+                // drift does — nobody else simulates this car.
+                hornOn = rig?.input != null && rig.input.HornHeldNow,
             });
         }
     }

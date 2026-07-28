@@ -1,5 +1,6 @@
 using System.Collections.Generic;
 using AIHWSim.Garage;
+using AIHWSim.UI;
 using UnityEngine;
 
 namespace AIHWSim.Core
@@ -17,19 +18,24 @@ namespace AIHWSim.Core
         private void OnGUI()
         {
             GUI.skin = GarageSkin.Skin;
+            UIScale.Begin();
             foreach (var rig in rigs)
             {
                 if (rig?.car == null || rig.camera == null) continue;
                 DrawPlayerBox(rig);
             }
+            UIScale.End();
         }
 
         private void DrawPlayerBox(PlayerRig rig)
         {
-            // Camera pixel rect is bottom-left origin; IMGUI is top-left.
+            // Camera pixel rect is bottom-left origin and in REAL screen pixels;
+            // IMGUI here runs top-left and under the UIScale matrix, so the
+            // viewport is flipped and then converted to UI units.
             Rect px = rig.camera.pixelRect;
             bool arcade = rig.arcade != null;
-            var area = new Rect(px.x + 10f, Screen.height - px.yMax + 10f, 230f, arcade ? 118f : 96f);
+            Rect view = UIScale.FromScreen(new Rect(px.x, Screen.height - px.yMax, px.width, px.height));
+            var area = new Rect(view.x + 10f, view.y + 10f, 230f, arcade ? 118f : 96f);
 
             GUILayout.BeginArea(area, GUI.skin.box);
             GUILayout.Label(rig.slot.name, GarageSkin.Header);
@@ -74,9 +80,7 @@ namespace AIHWSim.Core
             // THIS player's viewport so neither half bleeds onto the other. Same
             // renderer the solo HUD uses, so the two can never drift apart.
             if (arcade)
-                Arcade.ArcadeFeedback.Draw(
-                    new Rect(px.x, Screen.height - px.yMax, px.width, px.height),
-                    rig.arcade, Arcade.ArcadeDirector.Instance);
+                Arcade.ArcadeFeedback.Draw(view, rig.arcade, Arcade.ArcadeDirector.Instance);
         }
 
         private static string Fmt(float t) =>

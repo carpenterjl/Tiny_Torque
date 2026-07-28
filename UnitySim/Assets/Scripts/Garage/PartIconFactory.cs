@@ -98,6 +98,15 @@ namespace AIHWSim.Garage
             cam.targetTexture = null;
             RenderTexture.ReleaseTemporary(rt);
 
+            // Deactivate BEFORE the deferred Destroy. Destroy only takes effect at
+            // the end of the frame, but cam.Render() above is immediate and both
+            // palettes snapshot their whole icon set inside one frame — so without
+            // this, icon N photographs every model built for icons 1..N-1 still
+            // parked at `origin` (and is lit by their leftover lights). SetActive
+            // is immediate, so each snapshot sees only its own geometry.
+            root.SetActive(false);
+            camGo.SetActive(false);
+            lightGo.SetActive(false);
             UnityEngine.Object.Destroy(root);
             UnityEngine.Object.Destroy(camGo);
             UnityEngine.Object.Destroy(lightGo);

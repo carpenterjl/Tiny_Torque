@@ -1,5 +1,6 @@
 using AIHWSim.Core;
 using AIHWSim.Garage;
+using AIHWSim.UI;
 using UnityEngine;
 
 namespace AIHWSim.Arcade
@@ -36,6 +37,7 @@ namespace AIHWSim.Arcade
         {
             if (director == null) return;
             GUI.skin = GarageSkin.Skin;
+            UIScale.Begin();
 
             if (showBoard) DrawBoard();
             if (!splitScreen)
@@ -43,10 +45,11 @@ namespace AIHWSim.Arcade
                 DrawItemPanel();
                 // Solo owns the whole screen. In split-screen the same overlay is
                 // drawn per viewport by SplitScreenHud, which already has the
-                // rects.
-                ArcadeFeedback.Draw(new Rect(0f, 0f, Screen.width, Screen.height),
+                // rects. Rect is in UI units — Draw runs under the scaled matrix.
+                ArcadeFeedback.Draw(new Rect(0f, 0f, UIScale.W, UIScale.H),
                     localRig != null ? localRig.arcade : null, director);
             }
+            UIScale.End();
         }
 
         private void DrawBoard()
@@ -59,7 +62,7 @@ namespace AIHWSim.Arcade
             _order.Sort((a, b) => a.livePosition.CompareTo(b.livePosition));
 
             float w = 210f, h = 26f + _order.Count * 18f;
-            GUILayout.BeginArea(new Rect(Screen.width - w - 12f, 12f, w, h), GUI.skin.box);
+            GUILayout.BeginArea(new Rect(UIScale.W - w - 12f, 12f, w, h), GUI.skin.box);
             GUILayout.Label("POSITIONS", GarageSkin.Header);
             foreach (var r in _order)
             {
@@ -77,7 +80,7 @@ namespace AIHWSim.Arcade
             if (me == null) return;
 
             const float w = 200f, h = 62f;
-            var area = new Rect((Screen.width - w) * 0.5f, Screen.height - h - 16f, w, h);
+            var area = new Rect((UIScale.W - w) * 0.5f, UIScale.H - h - 16f, w, h);
             GUILayout.BeginArea(area, GUI.skin.box);
 
             string label;
@@ -114,7 +117,7 @@ namespace AIHWSim.Arcade
             };
             _limitStyle.normal.textColor =
                 me.penalized ? new Color(1f, 0.35f, 0.25f) : GarageSkin.Accent;
-            GUI.Label(new Rect(0f, Screen.height * 0.62f, Screen.width, 40f), msg, _limitStyle);
+            GUI.Label(new Rect(0f, UIScale.H * 0.62f, UIScale.W, 40f), msg, _limitStyle);
         }
     }
 }

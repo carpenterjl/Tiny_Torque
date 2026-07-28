@@ -41,6 +41,16 @@ namespace AIHWSim.Garage
             if (newDistance > 0f) distance = Mathf.Clamp(newDistance, minDistance, maxDistance);
         }
 
+        /// <summary>Gamepad orbit: feed stick deltas into the same yaw/pitch
+        /// the right-mouse drag drives (the track builder maps its right stick
+        /// here). Ignores <see cref="blockDrag"/> — a stick is never "over a
+        /// panel".</summary>
+        public void PadOrbit(Vector2 stickDelta)
+        {
+            yaw += stickDelta.x;
+            pitch = Mathf.Clamp(pitch - stickDelta.y, -5f, maxPitch);
+        }
+
         private void LateUpdate()
         {
             if (!blockDrag && InputReader.RightMouseHeld())
