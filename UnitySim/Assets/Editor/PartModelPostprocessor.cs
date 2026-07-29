@@ -50,12 +50,23 @@ namespace AIHWSim.EditorTools
             // away and softens exactly the edges the models were built around.
             mi.importNormals = ModelImporterNormals.Import;
             mi.importTangents = ModelImporterTangents.CalculateMikk;
-            // Body shells stay CPU-readable: the garage paint mode cooks runtime
-            // MeshColliders from them and reads hit UVs (RaycastHit.textureCoord),
-            // which requires readable meshes in player builds. Everything else
-            // (wheels/battery/antenna) is render-only.
+            // CPU-readable meshes, two cases:
+            //   • body shells — the garage paint mode cooks runtime MeshColliders
+            //     from them and reads hit UVs (RaycastHit.textureCoord);
+            //   • EVERY track prop — TrackCatalog.MeshProp now cooks a non-convex
+            //     MeshCollider per piece at map build, replacing the coarse
+            //     primitive hulls. Runtime cooking needs the CPU copy, which a
+            //     player build strips from non-readable meshes — it works in the
+            //     editor either way, which is exactly the trap.
+            // Wheels/battery/antenna/cosmetics stay render-only.
             string file = System.IO.Path.GetFileName(assetPath);
-            mi.isReadable = file.StartsWith("body_");
+            string p = assetPath.Replace('\\', '/');
+            mi.isReadable = file.StartsWith("body_") || p.Contains("Resources/TrackProps/");
         }
+
+        /// <summary>Bumped so a settings change here reimports every asset in
+        /// scope on the next editor/batch run (the TrackProps isReadable flip
+        /// must reach all 126 existing FBX, not just future ones).</summary>
+        public override uint GetVersion() => 2;
     }
 }

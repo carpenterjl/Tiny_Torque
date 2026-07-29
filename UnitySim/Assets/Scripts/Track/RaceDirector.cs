@@ -13,23 +13,20 @@ namespace AIHWSim.Track
     /// live standings banner while racing and a results overlay when every
     /// player has finished, with Keep driving / Rematch / Main Menu.
     /// Works in single-player too (a solo time-attack to N laps).
+    ///
+    /// The countdown, the finish event, the results frame and the crate reveal
+    /// live in <see cref="MatchDirector"/>, shared with the arena modes. What is
+    /// here is what a RACE is: laps, checkpoint progress, and rubber-banding.
     /// </summary>
-    public sealed class RaceDirector : MonoBehaviour
+    public sealed class RaceDirector : MatchDirector
     {
         public int targetLaps;
         public LapTimer timer;
-        public List<PlayerRig> players = new List<PlayerRig>();
 
         // Optional catch-up assist (menu race option): trailing bots speed up,
-        // leaders ease off. Populated by TrackBootstrap; logic in Update (Step 5).
+        // leaders ease off. Populated by TrackBootstrap.
         public List<BotDriver> bots = new List<BotDriver>();
         public bool rubberBand;
-
-        // Race-start countdown (seconds) that holds every car until GO.
-        public int countdownSeconds;
-        private float _countdown;
-        private bool _counting;
-        private float _goTimer;
 
         /// <summary>Arcade session: the arcade HUD owns the live board, and the
         /// results table gains a points column.</summary>
@@ -48,10 +45,6 @@ namespace AIHWSim.Track
         private float _graceUntil;
         private bool _graceRunning;
 
-        /// <summary>Raised when a car crosses the line for the final time, with its
-        /// 1-based place. The arcade layer awards points from it.</summary>
-        public event System.Action<PlayerRig, int> PlayerFinished;
-
         private sealed class Entry
         {
             public PlayerRig rig;
@@ -62,50 +55,14 @@ namespace AIHWSim.Track
 
         private readonly List<Entry> _entries = new List<Entry>();
         private int _nextPlace = 1;
-        private bool _showResults;
-        private bool _dismissed;
 
-        private void Start()
+        protected override bool CanRun => timer != null && targetLaps > 0 && players.Count > 0;
+
+        protected override void OnMatchStart()
         {
-            if (timer == null || targetLaps <= 0 || players.Count == 0)
-            {
-                enabled = false;
-                return;
-            }
             foreach (var rig in players)
                 _entries.Add(new Entry { rig = rig });
             timer.LapCompleted += OnLap;
-
-            if (countdownSeconds > 0)
-            {
-                _countdown = countdownSeconds;
-                _counting = true;
-                FreezeCars(true);
-            }
-        }
-
-        private void FreezeCars(bool frozen)
-        {
-            foreach (var e in _entries)
-                if (e.rig?.car != null) e.rig.car.Frozen = frozen;
-        }
-
-        /// <summary>Pause-menu "Restart race": reset standings and re-run the countdown.</summary>
-        public void RestartRace()
-        {
-            ResetRace();
-            if (countdownSeconds > 0)
-            {
-                _countdown = countdownSeconds;
-                _counting = true;
-                _goTimer = 0f;
-                FreezeCars(true);
-            }
-            else
-            {
-                _counting = false;
-                FreezeCars(false);
-            }
         }
 
         private void OnDestroy()
@@ -113,27 +70,35 @@ namespace AIHWSim.Track
             if (timer != null) timer.LapCompleted -= OnLap;
         }
 
-        private void Update()
+        public override void RestartMatch()
         {
-            // Music mood, pushed per-frame (idempotent): the countdown ducks
-            // the track theme, the results screen brings in the victory theme.
-            Audio.MusicDirector.RaceMood(_counting, _showResults && !_dismissed);
+            base.RestartMatch();
+            _graceRunning = false;
+        }
 
-            if (_counting)
+        /// <summary>Pause-menu "Restart race" — kept under its old name because
+        /// PauseMenu calls it by that name.</summary>
+        public void RestartRace() => RestartMatch();
+
+        public override void ResetMatch()
+        {
+            base.ResetMatch();
+            foreach (var e in _entries)
             {
-                _countdown -= Time.deltaTime; // scaled: a pause also holds the countdown
-                if (_countdown <= 0f)
-                {
-                    _counting = false;
-                    _goTimer = 0.8f;
-                    FreezeCars(false);
-                }
-                return; // grid is held — no rubber-band yet
+                e.finished = false;
+                e.totalTime = 0f;
+                e.place = 0;
             }
-            if (_goTimer > 0f) _goTimer -= Time.deltaTime;
+            _nextPlace = 1;
+            _graceRunning = false;
+        }
 
+        public void ResetRace() => ResetMatch();
+
+        protected override void OnMatchTick()
+        {
             // Leader's grace expired: everyone still out there is a DNF.
-            if (_graceRunning && !_showResults && Time.time >= _graceUntil)
+            if (_graceRunning && !ShowingResults && Time.time >= _graceUntil)
             {
                 _graceRunning = false;
                 foreach (var e in _entries) if (!e.finished) e.place = 0;
@@ -168,22 +133,6 @@ namespace AIHWSim.Track
             return t.LapCount + (float)t.NextCheckpoint / cps;
         }
 
-        /// <summary>Restart the race (pause-menu Restart).</summary>
-        public void ResetRace()
-        {
-            foreach (var e in _entries)
-            {
-                e.finished = false;
-                e.totalTime = 0f;
-                e.place = 0;
-            }
-            _nextPlace = 1;
-            _showResults = false;
-            _dismissed = false;
-            _graceRunning = false;
-            AIHWSim.Arcade.ArcadeDirector.Instance?.ResetArcade();
-        }
-
         private void OnLap(CarVehicle car, LapTracker t)
         {
             var e = Find(car);
@@ -193,7 +142,7 @@ namespace AIHWSim.Track
             {
                 e.finished = true;
                 e.place = _nextPlace++;
-                PlayerFinished?.Invoke(e.rig, e.place);
+                RaiseFinished(e.rig, e.place);
                 if (AllFinished()) EnterResults();
                 else if (resultsGraceSeconds > 0f && !_graceRunning)
                 {
@@ -204,17 +153,12 @@ namespace AIHWSim.Track
         }
 
         /// <summary>
-        /// The single door into the results overlay — both the everyone-home
-        /// path and the grace-expired path come through here, so a championship
-        /// round banks its points exactly once and no matter how it ended.
-        /// Deliberately NOT in OnGUI: this writes to progress.json, and a
-        /// Layout/Repaint pair would do it twice.
+        /// A championship round banks its points exactly once and no matter how
+        /// it ended, because the base calls this from the single door into the
+        /// results overlay rather than from OnGUI.
         /// </summary>
-        private void EnterResults()
+        protected override void OnResultsEntered()
         {
-            if (_showResults) return;
-            _showResults = true;
-
             if (!SessionConfig.ChampionshipRound || !Core.Championship.Active) return;
             var rows = new List<(string, int)>(_entries.Count);
             foreach (var e in _entries)
@@ -236,53 +180,20 @@ namespace AIHWSim.Track
             return true;
         }
 
-        // Layout-snapshotted "results overlay is up" — the Keep-driving button
-        // flips _dismissed mid-pass under pad activation (see MenuNav), and
-        // whether the overlay exists must not change between Layout and Repaint.
-        private bool _resultsDraw;
+        // ---- overlay ---------------------------------------------------------
 
-        // Same rule for the championship block: which BUTTONS the results panel
-        // offers ("Next round" vs "Rematch") must be decided once per frame.
+        // Which BUTTONS the results panel offers ("Next round" vs "Rematch")
+        // must be decided once per frame, like the overlay itself.
         private bool _champDraw;
 
-        private void OnGUI()
-        {
-            GUI.skin = GarageSkin.Skin;
-            UIScale.Begin();
-            if (Event.current.type == EventType.Layout)
-            {
-                _resultsDraw = _showResults && !_dismissed;
-                _champDraw = SessionConfig.ChampionshipRound && Core.Championship.Active;
-            }
-            if (_resultsDraw)
-            {
-                UI.MenuNav.BeginFrame("race:results");
-                DrawResults();
-                UI.MenuNav.EndFrame();
-                UIScale.End();
-                return;
-            }
-            if (_counting)
-            {
-                DrawBig(Mathf.CeilToInt(Mathf.Max(0f, _countdown)).ToString());
-                UIScale.End();
-                return;
-            }
-            if (_goTimer > 0f) DrawBig("GO!");
-            // In arcade the ArcadeHud draws the live board; two banners centred at
-            // the same y would just overlap.
-            if (!arcade) DrawBanner();
-            UIScale.End();
-        }
+        protected override void OnLayoutSnapshot() =>
+            _champDraw = SessionConfig.ChampionshipRound && Core.Championship.Active;
 
-        private static void DrawBig(string s)
+        protected override void DrawLiveBanner()
         {
-            var style = new GUIStyle(GarageSkin.Header) { fontSize = 80, alignment = TextAnchor.MiddleCenter };
-            GUI.Label(new Rect(0f, UIScale.H * 0.22f, UIScale.W, 140f), s, style);
-        }
-
-        private void DrawBanner()
-        {
+            // In arcade the ArcadeHud draws the live board; two banners centred
+            // at the same y would just overlap.
+            if (arcade) return;
             var area = new Rect((UIScale.W - 260f) * 0.5f, 40f, 260f, 26f + _entries.Count * 18f);
             GUILayout.BeginArea(area, GUI.skin.box);
             GUILayout.Label($"RACE — first to {targetLaps} laps", GarageSkin.Header);
@@ -295,24 +206,25 @@ namespace AIHWSim.Track
             GUILayout.EndArea();
         }
 
-        private void DrawResults()
+        protected override string ResultsTitle
         {
-            bool champ = _champDraw;
-            var series = champ ? Core.Championship.Series : null;
-            bool finale = champ && Core.Championship.Complete;
+            get
+            {
+                if (!_champDraw) return "RACE RESULTS";
+                var series = Core.Championship.Series;
+                return Core.Championship.Complete
+                    ? $"{series?.label} — FINAL"
+                    : $"{series?.label} — ROUND {Core.Championship.State.round} of {Core.Championship.Rounds}";
+            }
+        }
 
-            float w = 360f, h = 170f + _entries.Count * 26f
-                + (UI.AwardReveal.Pending ? 84f : 0f)
-                + (champ ? 46f + _entries.Count * 18f : 0f);
-            var area = new Rect((UIScale.W - w) * 0.5f, (UIScale.H - h) * 0.5f, w, h);
-            GUILayout.BeginArea(area, GUI.skin.box);
-            var title = new GUIStyle(GarageSkin.Header) { fontSize = 20, alignment = TextAnchor.MiddleCenter };
-            GUILayout.Label(champ
-                ? (finale ? $"{series?.label} — FINAL"
-                          : $"{series?.label} — ROUND {Core.Championship.State.round} of {Core.Championship.Rounds}")
-                : "RACE RESULTS", title);
-            GUILayout.Space(6);
+        protected override float ResultRowsHeight =>
+            _entries.Count * 26f + (_champDraw ? 46f + _entries.Count * 18f : 0f);
 
+        protected override float ResultButtonsHeight => 30f;
+
+        protected override void DrawResultRows()
+        {
             foreach (var e in Standings())
             {
                 var lap = timer.GetTracker(e.rig.car);
@@ -321,42 +233,32 @@ namespace AIHWSim.Track
                 string pts = arcade && e.rig.arcade != null ? $"   {e.rig.arcade.points} pts" : "";
                 GUILayout.Label($"{place}  {e.rig.slot.name}   total {Fmt(e.totalTime)}   best {best}{pts}");
             }
+            if (_champDraw) DrawChampionshipTable(Core.Championship.Complete);
+        }
 
-            // The crates this race paid out announce themselves right here.
-            UI.AwardReveal.Draw();
+        protected override void DrawResultButtons()
+        {
+            bool champ = _champDraw;
+            bool finale = champ && Core.Championship.Complete;
 
-            if (champ) DrawChampionshipTable(finale);
-
-            GUILayout.Space(8);
-            if (!champ && UI.MenuNav.Button("Keep driving", GUILayout.Height(30)))
-            {
-                _dismissed = true;
-                UI.AwardReveal.Dismiss();
-            }
+            if (!champ && MenuNav.Button("Keep driving", GUILayout.Height(30)))
+                DismissResults();
             // A championship swaps the rematch for the next round: re-running a
             // round you already scored would be a cheat, and the standings only
             // move forward.
-            if (champ && !finale && UI.MenuNav.Button("Next round ▶", GUILayout.Height(30)))
+            if (champ && !finale && MenuNav.Button("Next round ▶", GUILayout.Height(30)))
             {
                 Time.timeScale = 1f;
-                UI.AwardReveal.Dismiss();
+                AwardReveal.Dismiss();
                 Core.Championship.LoadNextRoundTrack();
-                UI.ScreenFade.To(GameFlow.LoadTrack); // SessionConfig persists; scene rebuilds fresh
+                ScreenFade.To(GameFlow.LoadTrack); // SessionConfig persists; scene rebuilds fresh
             }
-            if (!champ && UI.MenuNav.Button("Rematch", GUILayout.Height(30)))
+            if (!champ && MenuNav.Button("Rematch", GUILayout.Height(30)))
             {
                 Time.timeScale = 1f;
-                UI.AwardReveal.Dismiss();
-                UI.ScreenFade.To(GameFlow.LoadTrack); // SessionConfig persists; scene rebuilds fresh
+                AwardReveal.Dismiss();
+                ScreenFade.To(GameFlow.LoadTrack); // SessionConfig persists; scene rebuilds fresh
             }
-            if (UI.MenuNav.Button("Main Menu", GUILayout.Height(30)))
-            {
-                Time.timeScale = 1f;
-                UI.AwardReveal.Dismiss();
-                if (Application.CanStreamedLevelBeLoaded(GameFlow.MenuSceneName))
-                    UI.ScreenFade.To(GameFlow.LoadMenu);
-            }
-            GUILayout.EndArea();
         }
 
         /// <summary>The series points table under the race result, and the
@@ -392,8 +294,5 @@ namespace AIHWSim.Track
             });
             return sorted;
         }
-
-        private static string Fmt(float t) =>
-            t <= 0f ? "--:--" : $"{(int)(t / 60f):00}:{t % 60f:00.0}";
     }
 }

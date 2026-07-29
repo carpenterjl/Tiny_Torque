@@ -15,6 +15,26 @@ namespace AIHWSim.TrackEd
         public Renderer[,] tileRenderers;  // [tx, tz] visual per tile (builder repaint)
         public List<GameObject> splineRoots = new List<GameObject>();  // one per spline
         public List<MeshCollider> ribbonColliders = new List<MeshCollider>(); // surface runs only
+
+        /// <summary>
+        /// EVERY spawn item on the map, dropped to the surface, with the placed
+        /// item's <c>order</c> carried through as its team index.
+        ///
+        /// A race needs one grid and derives the rest of the row from it, so
+        /// <see cref="spawnPos"/> stays exactly what it was. An arena needs a
+        /// ring of them, and a team arena needs to know which end each belongs
+        /// to — which is what <c>order</c> already means for checkpoints and
+        /// costs nothing to reuse here.
+        /// </summary>
+        public List<SpawnPoint> spawns = new List<SpawnPoint>();
+    }
+
+    /// <summary>One authored spawn: where, facing which way, for whose team.</summary>
+    public struct SpawnPoint
+    {
+        public Vector3 pos;
+        public Quaternion rot;
+        public int team;   // PlacedItem.order; 0/1 in a team arena, 0 elsewhere
     }
 
     /// <summary>
@@ -240,6 +260,13 @@ namespace AIHWSim.TrackEd
 
         private static void BuildItems(TrackDesign d, Transform parent, bool interactive, BuiltTrack built)
         {
+            // Wall-clock the item pass: since the mesh migration this is where
+            // MeshColliders cook (once per unique mesh, engine-cached), and the
+            // 1 200-item town is the load worth watching. If this line ever
+            // reports hundreds of milliseconds, pre-bake with Physics.BakeMesh
+            // jobs before instantiating.
+            var cookWatch = System.Diagnostics.Stopwatch.StartNew();
+
             var itemsRoot = new GameObject("Items");
             itemsRoot.transform.SetParent(parent, false);
 
@@ -378,6 +405,10 @@ namespace AIHWSim.TrackEd
 
             if (batchable != null && batchable.Count > 0)
                 StaticBatchingUtility.Combine(batchable.ToArray(), itemsRoot);
+
+            cookWatch.Stop();
+            Debug.Log($"[TrackFactory] items built in {cookWatch.ElapsedMilliseconds} ms " +
+                      $"({d.items.Count} items, incl. MeshCollider cooking + static batch)");
         }
 
         /// <summary>The surface-dropped pose for a placed item (position + yaw
@@ -413,6 +444,20 @@ namespace AIHWSim.TrackEd
             {
                 if (DropToSurface(built, hint, out var p, out _)) return p + Vector3.up * 0.08f;
                 return new Vector3(hint.x, 0.08f, hint.z);
+            }
+
+            // Collect them all first: the arena modes need the whole ring, and
+            // the single-spawn answer below is just the first of them.
+            foreach (var it in d.items)
+            {
+                var def = TrackCatalog.Item(it.itemId);
+                if (def == null || def.behavior != ItemBehavior.Spawn) continue;
+                built.spawns.Add(new SpawnPoint
+                {
+                    pos = Drop(new Vector3(it.x, it.y, it.z)),
+                    rot = Quaternion.Euler(0f, it.yawDeg, 0f),
+                    team = Mathf.Max(0, it.order),
+                });
             }
 
             var spawn = d.FindByBehavior(ItemBehavior.Spawn);

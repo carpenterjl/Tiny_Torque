@@ -37,6 +37,11 @@ namespace AIHWSim.Core
         /// wire carries exactly what the audio plays.</summary>
         public bool HornHeldNow { get; private set; }
 
+        /// <summary>Boost held this frame, read by the aerial controller. A
+        /// held state rather than an event because the tank drains while it is
+        /// down.</summary>
+        public bool BoostHeldNow { get; private set; }
+
         private readonly float[] _setpoints = new float[4];
         private Audio.VehicleAudio _audio;
         private float _mouseSteer;
@@ -75,7 +80,12 @@ namespace AIHWSim.Core
                 // Arcade: fire the held power-up. Null outside arcade sessions, so
                 // this costs one null check in a normal race.
                 if (source.UseItemPressed())
+                {
                     Arcade.ArcadeDirector.Instance?.RequestUse(car);
+                    // The derby's mine rides the same button. Only one of these
+                    // directors ever exists, so only one of them answers.
+                    Modes.DerbyDirector.Instance?.RequestUse(car);
+                }
 
                 // Horn: hold-to-sound, routed to this car's audio voice. The
                 // component is attached by TrackBootstrap after the rig builds,
@@ -83,6 +93,13 @@ namespace AIHWSim.Core
                 HornHeldNow = source.HornHeld();
                 if (_audio == null) _audio = car.GetComponent<Audio.VehicleAudio>();
                 if (_audio != null) _audio.hornHeld = HornHeldNow;
+
+                // Aerials: the mode owns the meter and the flip window, so the
+                // press is forwarded rather than acted on. Costs one null check
+                // in every session that is not soccer, exactly like item use.
+                if (source.JumpPressed())
+                    Modes.AerialControl.Of(car)?.RequestJump();
+                BoostHeldNow = source.BoostHeld();
             }
 
             if (chase != null) chase.lookBack = source.LookBackHeld();

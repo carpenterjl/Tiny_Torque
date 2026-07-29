@@ -24,6 +24,10 @@ namespace AIHWSim.Garage
             ("TT Coupe",    TTCoupe),
             ("TT Baja",     TTBaja),
             ("TT Patrol",   TTPatrol),
+            ("TT Rattletrap", TTRattletrap),
+            ("TT Redline",  TTRedline),
+            ("TT Highwing", TTHighwing),
+            ("TT Autopia",  TTAutopia),
             ("Opus Vector", OpusVector),
         };
 
@@ -133,8 +137,10 @@ namespace AIHWSim.Garage
         // the source models' own wheel empties, so the arches align by
         // construction. bodySize is EXACTLY (0.20, 0.10, 0.42): BuildBodyVisual
         // divides by BodyMeshAuthorSize, so this renders the mesh undistorted at
-        // its authored proportions. bodyColor (0.8 grey) matches the authored
-        // paint channel — the silver the cars were modeled in.
+        // its authored proportions. bodyColor (0.8 grey) is vestigial for these
+        // three since the livery bake: their "paint" is a baked texture
+        // (coupepaint/bajapaint/patrolpaint tokens) and no renderer binds the
+        // tintable channel any more, so the colour is never seen.
 
         /// <summary>TT Coupe — RWD street sports coupe, gold trim, glass canopy.</summary>
         private static VehicleDesign TTCoupe()
@@ -243,6 +249,113 @@ namespace AIHWSim.Garage
             // Roof light bar (strobes at runtime) + the twin trunk whips.
             d.lights.Add(new LightSpec { name = "bar", localPos = new Vector3(0f, 0.0341f, -0.0229f), style = 0 });
             d.antennas.Add(new AntennaSpec { name = "whips", localPos = new Vector3(0f, -0.0008f, -0.161f), tiltDeg = 0f, antennaStyle = 3 });
+            return d;
+        }
+
+        // ---- the four Legendary cars ------------------------------------------
+        // Same contract as the show cars above: wheel positions and radii are
+        // pasted from build_vehicles.py's VEHJSON, bodySize is exactly the
+        // authored (0.20, 0.10, 0.42), and bodyColor is the source blend's own
+        // paint colour so each car looks the way it was modelled before anyone
+        // touches the picker. None of the four carries a light or antenna part —
+        // their booms, wings and lamp pods are body geometry.
+
+        /// <summary>
+        /// Shared spine for the four: four wheels off the exported positions,
+        /// the standard sensor rig, and encoders. Only the numbers that give a
+        /// car its character are left to the caller.
+        /// </summary>
+        private static VehicleDesign Legendary(string name, BodyShape shape, Color paint,
+            float halfTrack, float halfBase, float radius, int wheelStyle,
+            float mass, float steerRate, bool fourWheelDrive,
+            float stiffness, float damping, float travel)
+        {
+            var d = new VehicleDesign
+            {
+                name = name,
+                bodyShape = shape,
+                bodySize = new Vector3(0.20f, 0.10f, 0.42f),
+                bodyColor = paint,
+                mass = mass,
+                steerRate = steerRate,
+            };
+            for (int i = 0; i < 4; i++)
+            {
+                bool front = i < 2;
+                float x = (i % 2 == 0) ? -halfTrack : halfTrack;
+                float z = front ? halfBase : -halfBase;
+                var w = Wheel(front ? (i == 0 ? "wheel_fl" : "wheel_fr")
+                                    : (i == 2 ? "wheel_rl" : "wheel_rr"),
+                              x, z, front, fourWheelDrive || !front);
+                w.radius = radius;
+                w.wheelStyle = wheelStyle;
+                w.suspStiffness = stiffness;
+                w.suspDampingRatio = damping;
+                w.suspTravel = travel;
+                d.wheels.Add(w);
+            }
+            d.sensors.Add(new SensorSpec { name = "cam_front", kind = SensorType.Camera, localPos = new Vector3(0f, 0.10f, 0.05f), aimEuler = new Vector3(6f, 0f, 0f) });
+            d.sensors.Add(new SensorSpec { name = "tof_front", kind = SensorType.Tof, localPos = new Vector3(0f, 0.03f, 0.22f), range = 4f });
+            AddEncoders(d);
+            return d;
+        }
+
+        /// <summary>TT Rattletrap — rusted-out wrecker, boom and hook on the deck.
+        /// The heaviest, softest, draggiest thing in the game, and the only car
+        /// whose paint is a baked texture rather than a tintable panel.</summary>
+        private static VehicleDesign TTRattletrap()
+        {
+            // bodyColor cannot repaint this car (PartVisualFactory.RustPaint owns
+            // the panels), but it is still what the tyre smoke and the HUD tint
+            // read, so it carries the authored faded teal.
+            var d = Legendary("TT Rattletrap", BodyShape.Rattle,
+                new Color(0.055f, 0.245f, 0.255f),
+                0.0787f, 0.1099f, 0.041583f, 9,
+                mass: 2.15f, steerRate: 420f, fourWheelDrive: false,
+                stiffness: 240f, damping: 0.5f, travel: 0.045f);
+            d.hornStyle = 2;    // air horn — it is the tow truck of the family
+            foreach (var w in d.wheels) w.gripMult = 1.05f;
+            return d;
+        }
+
+        /// <summary>TT Redline — #7 number car, gold flank flash, swan-neck wing.
+        /// Light, stiff and quick to turn in.</summary>
+        private static VehicleDesign TTRedline()
+        {
+            var d = Legendary("TT Redline", BodyShape.Redline,
+                new Color(0.520f, 0.036f, 0.040f),
+                0.0903f, 0.1230f, 0.040864f, 10,
+                mass: 1.62f, steerRate: 610f, fourWheelDrive: false,
+                stiffness: 460f, damping: 0.72f, travel: 0.022f);
+            foreach (var w in d.wheels) w.gripMult = 1.10f;
+            return d;
+        }
+
+        /// <summary>TT Highwing — aero-era veteran, #12, wing up on stalks in the
+        /// clean air. Heavier and more planted than the Redline, and the wing is
+        /// worth more downforce for being where it is.</summary>
+        private static VehicleDesign TTHighwing()
+        {
+            var d = Legendary("TT Highwing", BodyShape.Highwing,
+                new Color(0.030f, 0.068f, 0.230f),
+                0.0872f, 0.1184f, 0.040000f, 11,
+                mass: 1.74f, steerRate: 575f, fourWheelDrive: false,
+                stiffness: 420f, damping: 0.70f, travel: 0.025f);
+            foreach (var w in d.wheels) w.gripMult = 1.06f;
+            return d;
+        }
+
+        /// <summary>TT Autopia — the 1955 Mark I ride car: pontoon flanks, oval
+        /// grille, wraparound screen, whitewalls. Soft, slow-witted and utterly
+        /// unbothered, which is the point of it.</summary>
+        private static VehicleDesign TTAutopia()
+        {
+            var d = Legendary("TT Autopia", BodyShape.Autopia,
+                new Color(0.840f, 0.560f, 0.045f),
+                0.0881f, 0.1197f, 0.036981f, 12,
+                mass: 1.88f, steerRate: 470f, fourWheelDrive: false,
+                stiffness: 300f, damping: 0.58f, travel: 0.035f);
+            d.hornStyle = 3;    // musical — it is a theme-park ride
             return d;
         }
 

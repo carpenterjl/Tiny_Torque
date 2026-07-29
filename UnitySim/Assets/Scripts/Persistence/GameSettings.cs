@@ -25,6 +25,11 @@ namespace AIHWSim.Persistence
         public int qualityLevel = -1;      // -1 = leave the project default
         public bool fullscreen = true;
         public bool vSync = true;
+        // Read live by CameraBloom every frame, so the toggle needs no apply
+        // step. Initializer true: JsonUtility only overwrites fields it finds
+        // in the JSON, so an old settings.json without this field keeps the
+        // default — upgrades get bloom on, matching new installs.
+        public bool bloom = true;
         public bool mouseSteer = false;
 
         // Keyboard steer shaping, 0 (instant/raw) .. 1 (full transmitter-style
@@ -69,6 +74,9 @@ namespace AIHWSim.Persistence
         // settings.json deserializes these to 0 — realism by default.
         public float p1AssistSteer, p1AssistStability, p1AssistTraction, p1AssistAbs;
         public float p2AssistSteer, p2AssistStability, p2AssistTraction, p2AssistAbs;
+        // Launch control joined the struct later; separate line so an old
+        // settings.json deserializes it to 0 like the rest.
+        public float p1AssistLaunch, p2AssistLaunch;
 
         // Simulation realism (old settings.json → 0 = legacy behaviour).
         public int noiseSeed = 0;            // sensor-noise seed; 0 = random each run (logged)

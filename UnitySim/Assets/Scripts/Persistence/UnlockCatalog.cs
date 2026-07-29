@@ -63,6 +63,23 @@ namespace AIHWSim.Persistence
                 rarity = Rarity.Legendary,
                 code = "magnumopus", blurb = "The masterpiece. Drives itself, if you let it." },
 
+            // ---- the Legendary four ----
+            // Every one of these is a whole authored car with its own body mesh,
+            // its own wheel and its own material set, so they all sit at the top
+            // tier. The three character cars keep their faces.
+            new UnlockItem { id = "car_rattletrap", display = "TT Rattletrap", kind = UnlockKind.Car,
+                rarity = Rarity.Legendary,
+                code = "rustnever", blurb = "Rust never sleeps. Neither does the hook." },
+            new UnlockItem { id = "car_redline", display = "TT Redline", kind = UnlockKind.Car,
+                rarity = Rarity.Legendary,
+                code = "luckyseven", blurb = "Number seven, and it knows it." },
+            new UnlockItem { id = "car_highwing", display = "TT Highwing", kind = UnlockKind.Car,
+                rarity = Rarity.Legendary,
+                code = "cleanair", blurb = "Wing up where the air is clean." },
+            new UnlockItem { id = "car_autopia", display = "TT Autopia", kind = UnlockKind.Car,
+                rarity = Rarity.Legendary,
+                code = "nineteenfiftyfive", blurb = "Please keep hands and arms inside the vehicle." },
+
             // ---- horns ----
             new UnlockItem { id = "horn_siren", display = "Police siren", kind = UnlockKind.Horn, payload = 1,
                 rarity = Rarity.Uncommon,

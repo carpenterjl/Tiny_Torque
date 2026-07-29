@@ -1,8 +1,9 @@
-"""Export the three TinyTorque_RC show cars into game parts.
+"""Export the TinyTorque_RC show cars into game parts.
 
 Headless (Blender 5.2 -- the source blends are 5.x-era):
     "C:\\Program Files\\Blender Foundation\\Blender 5.2\\blender.exe" ^
         --background --python build_vehicles.py
+    ... --python build_vehicles.py -- rattle redline    # a subset
 
 Re-runnable; the source blends are opened read-only-in-spirit and NEVER saved.
 For each car it writes into UnitySim/Assets/Resources/PartModels:
@@ -61,8 +62,14 @@ ROT = Matrix.Rotation(math.radians(-90.0), 4, 'Z')
 # Body/wheel tokens; AssignByName is first-match substring, so every token is
 # chosen to be unambiguous against the others and against legacy tokens.
 TOKENS = {
-    # tintable paint channel (authored 0.8 grey on all three cars)
-    "M_Paint": "paint", "M_Buggy_Paint": "paint", "M_Police_Paint": "paint",
+    # The three liveries. Long mislabelled "authored 0.8 grey" and mapped onto
+    # the tintable paint channel -- they are in fact PROCEDURAL (candy-crimson
+    # with graphite stripe and gold pinstripes; acid lime with graphite bands;
+    # the police black-and-white with navy flash and gold pinstripe), which a
+    # flat colour flattened to grey. Each is now Rattletrap-class: baked to a
+    # texture (see bake_token per car) under its own token.
+    "M_Paint": "coupepaint", "M_Buggy_Paint": "bajapaint",
+    "M_Police_Paint": "patrolpaint",
     # fixed accents
     "M_Dark": "dark", "M_Buggy_Dark": "dark", "M_Police_Dark": "dark",
     "M_Buggy_Seat": "dark",
@@ -93,6 +100,42 @@ TOKENS = {
 }
 NO_MATERIAL_TOKEN = "gunmetal"   # the buggy's bare suspension links
 
+# ---------------------------------------------------------------------------
+# the four "toon" cars (tt_22_toon / tt_23_autopia)
+# ---------------------------------------------------------------------------
+# These four share a chassis module and therefore a set of M_Toon_* materials,
+# then each carries two or three of its own. Anything whose authored numbers
+# land close enough to an existing token to be indistinguishable in game is
+# mapped onto that token rather than growing the table -- M_Toon_Gun onto
+# "gunmetal", M_Toon_Red and M_Auto_Red onto "em_tail". Everything that is
+# actually a new look gets a new token, because the whole point of this pass is
+# that the authored materials survive.
+TOON_SHARED = {
+    "M_Toon_Dark": "dark",
+    "M_Toon_Glass": "glass",
+    "M_Toon_Chrome": "chrome",
+    "M_Toon_Gun": "gunmetal",
+    "M_Toon_Steel": "steel",
+    "M_Toon_RustMetal": "rust",
+    "M_Toon_Lamp": "em_lamp",
+    "M_Toon_Red": "em_tail",
+    "M_Toon_Tire": "tire",
+}
+
+# The face rig authors one material set per car and only the iris colour
+# differs, so the iris is the only per-car face token.
+def face_tokens(car):
+    return {
+        "M_Face_Sclera_%s" % car: "sclera",
+        "M_Face_Pupil_%s" % car: "pupil",
+        "M_Face_Spec_%s" % car: "em_spec",
+        "M_Face_Tooth_%s" % car: "tooth",
+        "M_Face_Gum_%s" % car: "gum",
+        "M_Face_Tongue_%s" % car: "tongue",
+        "M_Face_Maw_%s" % car: "maw",
+        "M_Face_Iris_%s" % car: "iris" + car,
+    }
+
 # Wheel-FBX overrides: the brake disc must read "brake" whatever its metal is.
 WHEEL_DISC_TOKEN = "brake"
 
@@ -114,6 +157,10 @@ CARS = {
         "light_key": None,
         "ant_objs": ["Car_Antenna", "Car_AntennaTip", "Car_AntMount"],
         "ant_key": "antenna_whip",
+        "bake_token": "coupepaint",
+        # Candy metallic crimson + graphite stripe: the mask-weighted metallic
+        # a single scalar can carry (the bake keeps the colour honest).
+        "bake_metal": 0.60,
     },
     "baja": {
         "blend": "TinyTorque_buggy.blend",
@@ -128,6 +175,10 @@ CARS = {
         "light_key": "light_pods",
         "ant_objs": ["Buggy_Whip", "Buggy_Flag"],
         "ant_key": "antenna_flag",
+        "bake_token": "bajapaint",
+        # "Low metallic on purpose" (the source's own comment) -- at 0.7+ the
+        # lime loses its hue.
+        "bake_metal": 0.15,
     },
     "patrol": {
         "blend": "TinyTorque_police.blend",
@@ -142,6 +193,70 @@ CARS = {
         "light_key": "light_bar",
         "ant_objs": ["Police_Antennas"],
         "ant_key": "antenna_twin",
+        "bake_token": "patrolpaint",
+        # Gloss black-and-white fleet paint; the masks carry only a trace of
+        # metallic.
+        "bake_metal": 0.20,
+    },
+
+    # ---- the four Legendary cars -------------------------------------------
+    # No light group and no antenna group: everything these cars carry is part
+    # of the body. "tokens" is merged over TOKENS, "no_mat" catches the face
+    # rig's brows (authored with no material at all).
+    "rattle": {
+        "blend": "TinyTorque_rattle.blend",
+        "body_empty": "RATTLE_BODY",
+        "wheel_side": "W_FL_SIDE",
+        "light_objs": [], "light_split_z": None, "light_key": None,
+        "ant_objs": [], "ant_key": None,
+        "no_mat": "dark",
+        # M_Rattle_Paint is the one authored material in the whole project that
+        # a flat colour cannot represent: an object-space noise x height ramp
+        # blending faded teal into oxide, with roughness and metallic riding
+        # the same mask. It is baked to a texture instead -- see bake_token.
+        "tokens": dict(TOON_SHARED, **dict(face_tokens("rattle"),
+                                           M_Rattle_Paint="rustpaint")),
+        "bake_token": "rustpaint",
+    },
+    "redline": {
+        "blend": "TinyTorque_redline.blend",
+        "body_empty": "REDLINE_BODY",
+        "wheel_side": "W_FL_SIDE",
+        "light_objs": [], "light_split_z": None, "light_key": None,
+        "ant_objs": [], "ant_key": None,
+        "no_mat": "dark",
+        "tokens": dict(TOON_SHARED, **dict(face_tokens("redline"),
+                                           M_Redline_Paint="paint",
+                                           M_Redline_Livery="redgold",
+                                           M_Redline_Trim="redtrim")),
+    },
+    "highwing": {
+        "blend": "TinyTorque_highwing.blend",
+        "body_empty": "HIGHWING_BODY",
+        "wheel_side": "W_FL_SIDE",
+        "light_objs": [], "light_split_z": None, "light_key": None,
+        "ant_objs": [], "ant_key": None,
+        "no_mat": "dark",
+        "tokens": dict(TOON_SHARED, **dict(face_tokens("highwing"),
+                                           M_Highwing_Paint="paint",
+                                           M_Highwing_Livery="hwwhite",
+                                           M_Highwing_Trim="hwtrim")),
+    },
+    "autopia": {
+        "blend": "TinyTorque_autopia.blend",
+        "body_empty": "AUTOPIA_BODY",
+        "wheel_side": "W_FL_SIDE",
+        "light_objs": [], "light_split_z": None, "light_key": None,
+        "ant_objs": [], "ant_key": None,
+        "no_mat": "dark",
+        "tokens": {
+            "M_Auto_Paint": "paint", "M_Auto_Dark": "dark",
+            "M_Auto_Chrome": "chrome", "M_Auto_Gun": "gunmetal",
+            "M_Auto_Glass": "autoglass", "M_Auto_Seat": "seat",
+            "M_Auto_Lamp": "em_autolamp", "M_Auto_Red": "em_tail",
+            "M_Auto_Tire": "tire", "M_Auto_Cap": "hubcap",
+            "M_Auto_White": "whitewall",
+        },
     },
 }
 
@@ -300,6 +415,106 @@ def export_fbx(objs, key):
     return path
 
 
+BAKE_RES = 1024
+
+
+def bake_token_to_texture(parts, token, key, metal_override=None):
+    """Bake one token's procedural material down to an albedo PNG.
+
+    Every other authored material in this project is a set of constants, which
+    is why the rest of the pipeline exports numbers and rebuilds the material in
+    C#. The liveries are not: Rattletrap's paint is an object-space noise
+    multiplied by a height ramp, and the coupe/baja/patrol paints are banded
+    masks (clips, stripes, pinstripes) driving colour, roughness and metallic
+    together. No constant represents any of them, so the colour channel is
+    baked to a texture and shipped beside the FBX.
+
+    Returns (parts, info) where parts has the token's objects replaced by the
+    single joined, unwrapped object the bake belongs to, and info carries the
+    texture stem plus a mean roughness (measured off the bake) and metallic --
+    Rattletrap's derived from its own mask graph, the liveries' passed in as
+    metal_override (a masked field has no bake pass; the scalar is the honest
+    mask-weighted mean, commented per car at the config).
+    """
+    hits = [o for o in parts if o.name.startswith(token)]
+    if not hits:
+        die("bake_token '%s' matched no object" % token)
+    rest = [o for o in parts if o not in hits]
+
+    # One object, one UV layout, one image. Baking them separately would mean
+    # one texture per panel and a seam wherever the noise crossed a split.
+    deselect_all()
+    for o in hits:
+        o.select_set(True)
+    bpy.context.view_layer.objects.active = hits[0]
+    if len(hits) > 1:
+        bpy.ops.object.join()
+    ob = bpy.context.view_layer.objects.active
+    ob.name = token + "_1"
+
+    bpy.ops.object.mode_set(mode='EDIT')
+    bpy.ops.mesh.select_all(action='SELECT')
+    bpy.ops.uv.smart_project(angle_limit=math.radians(66), island_margin=0.02)
+    bpy.ops.object.mode_set(mode='OBJECT')
+
+    mat = ob.material_slots[0].material
+    nt = mat.node_tree
+    tex_node = nt.nodes.new("ShaderNodeTexImage")
+
+    scene = bpy.context.scene
+    scene.render.engine = 'CYCLES'
+    scene.cycles.samples = 8            # a procedural evaluated per texel:
+    scene.cycles.use_denoising = False  # more samples buy nothing here
+
+    def bake_pass(kind, name, is_data):
+        img = bpy.data.images.new(name, BAKE_RES, BAKE_RES,
+                                  alpha=False, is_data=is_data)
+        tex_node.image = img
+        nt.nodes.active = tex_node
+        if kind == 'DIFFUSE':
+            scene.render.bake.use_pass_direct = False
+            scene.render.bake.use_pass_indirect = False
+            scene.render.bake.use_pass_color = True
+        bpy.ops.object.bake(type=kind, use_clear=True, margin=8)
+        return img
+
+    albedo = bake_pass('DIFFUSE', key + "_albedo", False)
+    path = os.path.join(FBX_DIR, "body_" + key + "_paint.png")
+    albedo.filepath_raw = path
+    albedo.file_format = 'PNG'
+    albedo.save()
+    print("[build_vehicles] wrote %s (%dx%d)" % (path, BAKE_RES, BAKE_RES))
+
+    rough = bake_pass('ROUGHNESS', key + "_rough", True)
+    # Average COVERED texels only. Most of a smart-projected atlas is empty
+    # space, and it bakes to zero -- averaging the whole image would report a
+    # roughness below the material's own minimum, which is how this was wrong
+    # the first time. The authored floor is 0.44, so anything near zero is
+    # background, not a reading.
+    px = list(rough.pixels)[0::4]
+    lit = [v for v in px if v > 0.01]
+    if not lit:
+        die("roughness bake came back empty for token '%s'" % token)
+    rmean = sum(lit) / len(lit)
+
+    if metal_override is None:
+        # Rattletrap: the graph is roughness = 0.44 + 0.44*mask and
+        # metallic = 0.22*(1-mask), so one measured mean pins both. Reading
+        # the mask off the bake keeps this honest if the source is retuned.
+        mask = min(1.0, max(0.0, (rmean - 0.44) / 0.44))
+        metal = round(0.22 * (1.0 - mask), 4)
+    else:
+        metal = round(float(metal_override), 4)
+    info = {
+        "texture": "body_" + key + "_paint",
+        "roughness_mean": round(rmean, 4),
+        "metallic_mean": metal,
+    }
+
+    nt.nodes.remove(tex_node)
+    return rest + [ob], info
+
+
 def purge(objs):
     for o in objs:
         bpy.data.objects.remove(o, do_unlink=True)
@@ -399,10 +614,18 @@ def build_car(key, cfg):
             light_part_objs = ldups
 
     # ---- body -------------------------------------------------------------
+    tokens = dict(TOKENS)
+    tokens.update(cfg.get("tokens", {}))
+    no_mat = cfg.get("no_mat", NO_MATERIAL_TOKEN)
+
     dups = duplicate(body_meshes) + extra_body_objs
     bake(dups, M_body)
-    parts = separate_and_tokenise(dups, TOKENS, NO_MATERIAL_TOKEN)
+    parts = separate_and_tokenise(dups, tokens, no_mat)
     ensure_uvs(parts)
+    if cfg.get("bake_token"):
+        parts, tex = bake_token_to_texture(parts, cfg["bake_token"], key,
+                                           cfg.get("bake_metal"))
+        report["bake_texture"] = tex
     export_fbx(parts, "body_" + key)
     purge(parts)
 
@@ -412,7 +635,7 @@ def build_car(key, cfg):
                @ Matrix.Translation(-wheel_centre))
     dups = duplicate(wheel_meshes)
     bake(dups, M_wheel)
-    wtok = dict(TOKENS)
+    wtok = dict(tokens)
     # the disc must read "brake" whatever metal it carries
     for m in ("M_Gunmetal", "M_Buggy_Engine", "M_Police_Steel"):
         wtok[m] = WHEEL_DISC_TOKEN
@@ -437,6 +660,12 @@ def build_car(key, cfg):
         report["light_mount"] = None
 
     # ---- antenna part (origin = group bbox bottom-centre) -----------------
+    if not cfg["ant_objs"]:
+        report["ant_key"] = None
+        report["ant_mount"] = None
+        print("VEHJSON>>>" + json.dumps(report) + "<<<VEHJSON")
+        return
+
     objs = [bpy.data.objects[n] for n in cfg["ant_objs"]]
     alo, ahi = world_bbox(objs)
     base = Vector(((alo.x + ahi.x) * 0.5, (alo.y + ahi.y) * 0.5, alo.z))
@@ -453,8 +682,15 @@ def build_car(key, cfg):
 
 
 def main():
-    for key, cfg in CARS.items():
-        build_car(key, cfg)
+    # Anything after "--" selects a subset. Re-exporting a car that has not
+    # changed is harmless but rewrites its FBX and churns the .meta, so a pass
+    # that only touches new cars should only build those.
+    argv = sys.argv[sys.argv.index("--") + 1:] if "--" in sys.argv else []
+    want = [a for a in argv if not a.startswith("-")]
+    for key in (want or list(CARS)):
+        if key not in CARS:
+            die("unknown car '%s' (have: %s)" % (key, ", ".join(CARS)))
+        build_car(key, CARS[key])
     print("[build_vehicles] done.")
 
 

@@ -69,6 +69,7 @@ namespace AIHWSim.TrackEd
         public const string ToyRoom = "toyroom";
         public const string Enchanted = "enchanted";
         public const string Haunted = "haunted";
+        public const string CityNoon = "citynoon";
 
         // ---- defs ----------------------------------------------------------
 
@@ -184,6 +185,35 @@ namespace AIHWSim.TrackEd
                     new GlowSpec { pos = new Vector3(-28f, 1.0f, 8f), range = 20f,
                                    intensity = 2.2f, color = new Color(0.40f, 0.90f, 0.52f) },
                 },
+            },
+
+            // Midday over Torque Falls, and the brief inverts: the other four
+            // maps keep the sky dark and let lamps do the work, here the SKY is
+            // the fill. tt_25_city_map.sky/lights — one hard sun at 3.9, a cool
+            // sky fill and a warm bounce, all three of them suns because a
+            // town has no walls for an area light to stop against.
+            //
+            // No fog at all, which is the deliberate part. The source dropped
+            // its haze box for the same reason: a finite volume has a lid, and
+            // a camera looking three kilometres to a horizon crosses it at a
+            // fixed height in frame, so the "depth" it buys arrives as a hard
+            // seam across the sky. The ground fading to the sky colour is the
+            // whole of the aerial perspective a clear noon needs.
+            new AmbienceDef
+            {
+                key = CityNoon, label = "Midday",
+                skyTop = new Color(0.105f, 0.250f, 0.620f, 1f),
+                skyHorizon = new Color(0.640f, 0.720f, 0.850f, 1f),
+                skyGround = new Color(0.365f, 0.415f, 0.500f, 1f),
+                // No wedge: nothing in a noon sky sits on one compass side.
+                ambient = new Color(0.52f, 0.56f, 0.62f),
+                fog = new Color(0.66f, 0.72f, 0.82f), fogDensity = 0f,
+                sunColor = new Color(1.00f, 0.955f, 0.885f), sunIntensity = 1.45f,
+                // CM_Sun stands at (300, -420, 380) aiming (-20, 20, 8): a
+                // 39-degree elevation from the south-east, which in Unity's
+                // Y-up frame is pitch 39 / yaw 145.
+                sunEuler = new Vector3(39.0f, 145.0f, 0f),
+                groundColor = new Color(0.29f, 0.38f, 0.20f),
             },
         };
 

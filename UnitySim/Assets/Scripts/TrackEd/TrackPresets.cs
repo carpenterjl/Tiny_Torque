@@ -22,33 +22,70 @@ namespace AIHWSim.TrackEd
         // the 0.90 arcade track-limit threshold, so painting them as run-off makes
         // them count as off-track with no extra authoring.
         private const int Wood = 9, Carpet = 10, Neon = 11, Plank = 12,
-                          WetSand = 13, LavaRock = 14, Obsidian = 15, Grate = 16;
+                          WetSand = 13, LavaRock = 14, Obsidian = 15, Grate = 16,
+                          Paving = 17;
 
-        public static readonly (string name, Func<TrackDesign> build)[] All =
+        /// <summary>
+        /// What a map is FOR, which the pickers need and the geometry cannot
+        /// answer. A circuit and an arena both turn up in the race and mini-game
+        /// menus; a free-roam map must not, because there is nothing there to
+        /// race — no finish line, no lap, no ring of two teams, just a town.
+        /// It is reachable only through the mode built for it.
+        /// </summary>
+        public enum TrackKind { Circuit, Arena, FreeRoam }
+
+        public static readonly (string name, TrackKind kind, Func<TrackDesign> build)[] All =
         {
             // Dedicated race circuits (closed splines, boost pads, jumps).
-            ("Boost Speedway",   BoostSpeedway),
-            ("Dust Devil Rally", DustDevilRally),
-            ("Neon Vortex",      NeonVortex),
+            ("Boost Speedway",   TrackKind.Circuit, BoostSpeedway),
+            ("Dust Devil Rally", TrackKind.Circuit, DustDevilRally),
+            ("Neon Vortex",      TrackKind.Circuit, NeonVortex),
             // TinyTorque themed circuits: built from the four Blender map packs
             // (build_map_props.py), each with authored item boxes so
             // ArcadeDirector's automatic placement stays out of the way. These
             // replaced both the four vehicle-archetype maps (Whoop Canyon,
             // Monza Mini, Boulder Basin, Slide Yard — their matching cars were
             // retired) and the four iteration-24 arcade circuits.
-            ("Downtown Dash",    DowntownDash),
-            ("Playroom Raceway", PlayroomRaceway),
-            ("Enchanted Ascent", EnchantedAscent),
-            ("Graveyard Shift",  GraveyardShift),
+            ("Downtown Dash",    TrackKind.Circuit, DowntownDash),
+            ("Playroom Raceway", TrackKind.Circuit, PlayroomRaceway),
+            ("Enchanted Ascent", TrackKind.Circuit, EnchantedAscent),
+            ("Graveyard Shift",  TrackKind.Circuit, GraveyardShift),
+            // Arenas for the mini-game modes. No finish line and no racing
+            // line: a ring of spawn points is what makes them playable, and
+            // ArenaNav reads the floor slab for the rest.
+            ("Scrapyard Bowl",   TrackKind.Arena, ScrapyardBowl),
+            ("Cargo Yard",       TrackKind.Arena, CargoYard),
+            ("Torque Dome",      TrackKind.Arena, TorqueDome),
+            // The free-roam town. Kept out of every race picker by its kind,
+            // not by remembering to filter it in four places.
+            ("Torque Falls",     TrackKind.FreeRoam, TorqueFalls),
             // Not a circuit: a straight-line measurement range for the Opus Vector
             // mission firmware.
-            ("Opus Proving Ground", OpusProvingGround),
+            ("Opus Proving Ground", TrackKind.Circuit, OpusProvingGround),
         };
 
-        public static List<string> DisplayNames()
+        /// <summary>The name of the one free-roam map, for the mode that owns it.</summary>
+        public static string FreeRoamName
+        {
+            get
+            {
+                foreach (var p in All)
+                    if (p.kind == TrackKind.FreeRoam) return p.name;
+                return null;
+            }
+        }
+
+        /// <summary>
+        /// Preset names for a picker. <paramref name="raceable"/> — every map a
+        /// race or a mini-game can be started on — is the default because that
+        /// is what all but one caller wants; the Track Builder passes false so
+        /// the town can still be opened and edited like any other preset.
+        /// </summary>
+        public static List<string> DisplayNames(bool raceable = true)
         {
             var list = new List<string>(All.Length);
-            foreach (var p in All) list.Add(Prefix + p.name);
+            foreach (var p in All)
+                if (!raceable || p.kind != TrackKind.FreeRoam) list.Add(Prefix + p.name);
             return list;
         }
 
@@ -134,6 +171,149 @@ namespace AIHWSim.TrackEd
         }
 
         // ---- presets ---------------------------------------------------------
+
+
+        // ---- arenas (mini-game modes) ----------------------------------------
+        //
+        // An arena is the opposite of a circuit: closed, symmetric, and defined
+        // by where cars START rather than where they go. The spawn ring is the
+        // load-bearing part - ArenaNav derives the centre, the radius and each
+        // team's end from it, and TrackBootstrap refuses to compose a mode on a
+        // map that has none.
+
+        /// <summary>Ring of spawn items facing the middle. `order` carries the
+        /// team, so a free-for-all leaves it 0 and a team mode splits by end.</summary>
+        private static void SpawnRing(TrackDesign d, float radius, int count, bool teams)
+        {
+            for (int i = 0; i < count; i++)
+            {
+                float a = i * Mathf.PI * 2f / count;
+                float x = Mathf.Cos(a) * radius, z = Mathf.Sin(a) * radius;
+                // Face the centre: yaw 0 is +Z, so the heading is atan2(-x, -z).
+                float yaw = Mathf.Atan2(-x, -z) * Mathf.Rad2Deg;
+                int team = teams ? (z < 0f ? 0 : 1) : 0;
+                d.items.Add(It("spawn", x, z, yaw, 0f, team));
+            }
+        }
+
+        /// <summary>Perimeter wall, one block per step around a circle.</summary>
+        private static void WallRing(TrackDesign d, float radius, int count)
+        {
+            for (int i = 0; i < count; i++)
+            {
+                float a = i * Mathf.PI * 2f / count;
+                float x = Mathf.Cos(a) * radius, z = Mathf.Sin(a) * radius;
+                d.items.Add(It("wall_tall", x, z, Mathf.Atan2(x, z) * Mathf.Rad2Deg));
+            }
+        }
+
+        /// <summary>Straight run of wall between two points.</summary>
+        private static void WallLine(TrackDesign d, Vector2 a, Vector2 b, float step)
+        {
+            Vector2 ab = b - a;
+            int n = Mathf.Max(1, Mathf.RoundToInt(ab.magnitude / step));
+            float yaw = Mathf.Atan2(ab.x, ab.y) * Mathf.Rad2Deg + 90f;
+            for (int i = 0; i <= n; i++)
+            {
+                Vector2 pt = a + ab * (i / (float)n);
+                d.items.Add(It("wall_tall", pt.x, pt.y, yaw));
+            }
+        }
+
+        /// <summary>
+        /// DEMOLITION. A walled bowl of packed dirt with a concrete apron: open
+        /// in the middle so nobody can hide, a few barriers to break a line of
+        /// sight, and eight spawns on the rim.
+        /// </summary>
+        private static TrackDesign ScrapyardBowl()
+        {
+            var d = New("Scrapyard Bowl", 40, 40, Dirt);
+            PaintRect(d, 8, 8, 31, 31, Asphalt);   // the fighting floor
+            PaintRect(d, 16, 16, 23, 23, Checker); // centre, so the middle reads
+
+            WallRing(d, 9.2f, 44);
+            // Cover: four barriers on the diagonals, far enough in to be worth
+            // driving round and far enough apart to never trap a car.
+            d.items.Add(It("barrier", 3.4f, 3.4f, 45f));
+            d.items.Add(It("barrier", -3.4f, 3.4f, 45f));
+            d.items.Add(It("barrier", 3.4f, -3.4f, 45f));
+            d.items.Add(It("barrier", -3.4f, -3.4f, 45f));
+            d.items.Add(It("tire_stack", 0f, 2.6f));
+            d.items.Add(It("tire_stack", 0f, -2.6f));
+
+            SpawnRing(d, 7.6f, 8, teams: false);
+            return d;
+        }
+
+        /// <summary>
+        /// CAPTURE THE FLAG. A rectangular yard with a base at each end, a
+        /// central crate line to break the straight run, and two side lanes so
+        /// there is more than one way home.
+        /// </summary>
+        private static TrackDesign CargoYard()
+        {
+            var d = New("Cargo Yard", 44, 52, Asphalt);
+            PaintRect(d, 6, 4, 37, 11, Checker);    // blue end
+            PaintRect(d, 6, 40, 37, 47, Checker);   // orange end
+
+            WallLine(d, new Vector2(-9f, -12f), new Vector2(9f, -12f), 0.9f);
+            WallLine(d, new Vector2(-9f, 12f), new Vector2(9f, 12f), 0.9f);
+            WallLine(d, new Vector2(-9f, -12f), new Vector2(-9f, 12f), 0.9f);
+            WallLine(d, new Vector2(9f, -12f), new Vector2(9f, 12f), 0.9f);
+
+            // Midfield cover: two runs with a gap either side of centre.
+            WallLine(d, new Vector2(-6.5f, 0f), new Vector2(-2.5f, 0f), 0.9f);
+            WallLine(d, new Vector2(2.5f, 0f), new Vector2(6.5f, 0f), 0.9f);
+            d.items.Add(It("barrier", -4f, -5f, 90f));
+            d.items.Add(It("barrier", 4f, -5f, 90f));
+            d.items.Add(It("barrier", -4f, 5f, 90f));
+            d.items.Add(It("barrier", 4f, 5f, 90f));
+
+            // Four spawns per end. Team 0 defends -Z, team 1 defends +Z.
+            for (int i = 0; i < 4; i++)
+            {
+                float x = -3f + i * 2f;
+                d.items.Add(It("spawn", x, -9.5f, 0f, 0f, 0));
+                d.items.Add(It("spawn", x, 9.5f, 180f, 0f, 1));
+            }
+            return d;
+        }
+
+        /// <summary>
+        /// SOCCER. A walled pitch with a goal mouth at each end, boost pads on
+        /// the wings and corner ramps to get airborne from. The floor is smooth
+        /// so the ball rolls rather than skips.
+        /// </summary>
+        private static TrackDesign TorqueDome()
+        {
+            var d = New("Torque Dome", 40, 56, Obsidian);
+            PaintRect(d, 14, 2, 25, 6, Neon);     // goal mouths, so they read
+            PaintRect(d, 14, 49, 25, 53, Neon);
+            PaintRect(d, 4, 24, 13, 31, Boost);   // wing boost pads
+            PaintRect(d, 26, 24, 35, 31, Boost);
+
+            // Perimeter, with the goal mouths left open.
+            WallLine(d, new Vector2(-8f, -13.5f), new Vector2(-8f, 13.5f), 0.9f);
+            WallLine(d, new Vector2(8f, -13.5f), new Vector2(8f, 13.5f), 0.9f);
+            WallLine(d, new Vector2(-8f, -13.5f), new Vector2(-2.2f, -13.5f), 0.9f);
+            WallLine(d, new Vector2(2.2f, -13.5f), new Vector2(8f, -13.5f), 0.9f);
+            WallLine(d, new Vector2(-8f, 13.5f), new Vector2(-2.2f, 13.5f), 0.9f);
+            WallLine(d, new Vector2(2.2f, 13.5f), new Vector2(8f, 13.5f), 0.9f);
+
+            // Corner ramps: the only way to leave the floor without a jump.
+            d.items.Add(It("ramp", -6.5f, -10f, 45f));
+            d.items.Add(It("ramp", 6.5f, -10f, -45f));
+            d.items.Add(It("ramp", -6.5f, 10f, 135f));
+            d.items.Add(It("ramp", 6.5f, 10f, -135f));
+
+            for (int i = 0; i < 3; i++)
+            {
+                float x = -2.4f + i * 2.4f;
+                d.items.Add(It("spawn", x, -8f, 0f, 0f, 0));
+                d.items.Add(It("spawn", x, 8f, 180f, 0f, 1));
+            }
+            return d;
+        }
 
         // ---- dedicated race circuits ----------------------------------------
 
@@ -290,7 +470,7 @@ namespace AIHWSim.TrackEd
             var d = New("Downtown Dash", 38, 47, Dirt);
             d.tileSize = 2f;
             d.ambience = MapAmbience.Downtown;
-            var L = new MapLayout(d, 20260727);
+            var L = new MapLayout(d, 20260727, meshAxes: true);
 
             // Layout constants, verbatim from the source module.
             float[] avenueX = { -180f, -90f, 0f, 90f, 180f };
@@ -349,8 +529,10 @@ namespace AIHWSim.TrackEd
             var widths = new[] { 3.2f, 3.2f, 3.2f, 3.0f, 2.8f, 2.8f, 3.0f, 3.0f,
                                  3.0f, 3.0f, 2.8f, 2.8f, 2.8f, 2.6f, 2.6f, 2.6f,
                                  2.6f, 2.8f, 3.2f };
-            var roll = new[] { 0f, 0f, 0f, -8f, -10f, -8f, 0f, 0f, 0f, 0f,
-                               8f, 10f, 8f, -8f, -10f, -10f, -8f, -6f, 0f };
+            // Negated with the meshAxes mirror: the corners turned the other
+            // way, and banking has to lean INTO them, not out.
+            var roll = new[] { 0f, 0f, 0f, 8f, 10f, 8f, 0f, 0f, 0f, 0f,
+                               -8f, -10f, -8f, 8f, 10f, 10f, 8f, 6f, 0f };
             var surfs = new[] { Boost, Asphalt, Asphalt, Rumble, Asphalt, Asphalt,
                                 Asphalt, Asphalt, Asphalt, Asphalt, Dirt, Dirt,
                                 Dirt, Dirt, Dirt, Dirt, Dirt, Dirt, Boost };
@@ -372,12 +554,14 @@ namespace AIHWSim.TrackEd
             BoxRow(d, L.X(-180f), L.Z(100f), alongX: false);
             BoxRow(d, L.X(130f), L.Z(-390f), alongX: true, spread: 0.7f);
 
-            d.items.Add(It("finish", L.X(0f), L.Z(gateY), 0f));
-            d.items.Add(It("checkpoint", L.X(0f), L.Z(150f), 0f, 0f, 0));
-            d.items.Add(It("checkpoint", L.X(-180f), L.Z(120f), 180f, 0f, 1));
-            d.items.Add(It("checkpoint", L.X(-200f), L.Z(-320f), 152f, 0f, 2));
-            d.items.Add(It("checkpoint", L.X(168f), L.Z(-300f), 347f, 0f, 3));
-            d.items.Add(It("spawn", L.X(0f), L.Z(-110f), 0f));
+            // Hand headings are GAME-frame, so the mirror maps each one
+            // 0 -> 180 - 0 by hand (L.Prop rotations mirror themselves).
+            d.items.Add(It("finish", L.X(0f), L.Z(gateY), 180f));
+            d.items.Add(It("checkpoint", L.X(0f), L.Z(150f), 180f, 0f, 0));
+            d.items.Add(It("checkpoint", L.X(-180f), L.Z(120f), 0f, 0f, 1));
+            d.items.Add(It("checkpoint", L.X(-200f), L.Z(-320f), 28f, 0f, 2));
+            d.items.Add(It("checkpoint", L.X(168f), L.Z(-300f), 193f, 0f, 3));
+            d.items.Add(It("spawn", L.X(0f), L.Z(-110f), 180f));
             return d;
         }
 
@@ -542,7 +726,7 @@ namespace AIHWSim.TrackEd
             var d = New("Playroom Raceway", 48, 44, Wood);
             d.tileSize = 2f;
             d.ambience = MapAmbience.ToyRoom;
-            var L = new MapLayout(d, 20260728);
+            var L = new MapLayout(d, 20260728, meshAxes: true);
 
             const float wallN = 430f, wallW = -470f;
             var rugC = new Vector2(10f, -30f);
@@ -606,11 +790,11 @@ namespace AIHWSim.TrackEd
             BoxRow(d, L.X(rugC.x - rugA * 0.74f), L.Z(rugC.y), alongX: false, spread: 0.8f);
 
             // Start on the east end of the oval, running anticlockwise (+Z).
-            d.items.Add(It("finish", L.X(rugC.x + rugA * 0.74f), L.Z(rugC.y), 0f));
+            d.items.Add(It("finish", L.X(rugC.x + rugA * 0.74f), L.Z(rugC.y), 180f));
             d.items.Add(It("checkpoint", L.X(rugC.x), L.Z(rugC.y + rugB * 0.72f), 270f, 0f, 0));
-            d.items.Add(It("checkpoint", L.X(rugC.x - rugA * 0.74f), L.Z(rugC.y), 180f, 0f, 1));
+            d.items.Add(It("checkpoint", L.X(rugC.x - rugA * 0.74f), L.Z(rugC.y), 0f, 0f, 1));
             d.items.Add(It("checkpoint", L.X(rugC.x), L.Z(rugC.y - rugB * 0.72f), 90f, 0f, 2));
-            d.items.Add(It("spawn", L.X(rugC.x + rugA * 0.74f), L.Z(rugC.y - 40f), 0f));
+            d.items.Add(It("spawn", L.X(rugC.x + rugA * 0.74f), L.Z(rugC.y - 40f), 180f));
             return d;
         }
 
@@ -802,7 +986,7 @@ namespace AIHWSim.TrackEd
             d.tileSize = 2f;
             d.ambience = MapAmbience.Enchanted;
             // The vale runs −460..+560 in its own Y; a TrackDesign is centred.
-            var L = new MapLayout(d, 20260729, shiftZ: -50f);
+            var L = new MapLayout(d, 20260729, shiftZ: -50f, meshAxes: true);
 
             var castle = new Vector2(0f, 430f);
             var village = new Vector2(0f, 120f);
@@ -853,7 +1037,7 @@ namespace AIHWSim.TrackEd
             };
             var widths = new[] { 3.0f, 3.0f, 3.0f, 2.8f, 2.6f, 2.6f,
                                  2.8f, 2.8f, 2.8f, 2.6f, 2.8f, 3.0f };
-            var roll = new[] { 0f, 0f, 0f, 0f, -8f, -10f, -8f, -10f, -10f, -8f, -6f, 0f };
+            var roll = new[] { 0f, 0f, 0f, 0f, 8f, 10f, 8f, 10f, 10f, 8f, 6f, 0f };
             var surfs = new[] { Boost, Dirt, Dirt, Dirt, Dirt, Dirt,
                                 Grass, Dirt, Dirt, Rumble, Dirt, Dirt };
             d.splines.Add(Spline(lap, 2.8f, Dirt, closed: true, walls: false, stripes: false,
@@ -875,11 +1059,11 @@ namespace AIHWSim.TrackEd
             BoxRow(d, L.X(352f), L.Z(-60f), alongX: false);
             BoxRow(d, L.X(140f), L.Z(-350f), alongX: true, spread: 0.7f);
 
-            d.items.Add(It("finish", L.X(0f), L.Z(gateY), 0f));
-            d.items.Add(It("checkpoint", L.X(0f), L.Z(230f), 0f, 0.30f, 0));
-            d.items.Add(It("checkpoint", L.X(352f), L.Z(10f), 175f, 0f, 1));
-            d.items.Add(It("checkpoint", L.X(140f), L.Z(-350f), 250f, 0f, 2));
-            d.items.Add(It("spawn", L.X(0f), L.Z(-260f), 0f));
+            d.items.Add(It("finish", L.X(0f), L.Z(gateY), 180f));
+            d.items.Add(It("checkpoint", L.X(0f), L.Z(230f), 180f, 0.30f, 0));
+            d.items.Add(It("checkpoint", L.X(352f), L.Z(10f), 5f, 0f, 1));
+            d.items.Add(It("checkpoint", L.X(140f), L.Z(-350f), 290f, 0f, 2));
+            d.items.Add(It("spawn", L.X(0f), L.Z(-260f), 180f));
             return d;
         }
 
@@ -1078,7 +1262,7 @@ namespace AIHWSim.TrackEd
             var d = New("Graveyard Shift", 54, 52, Dirt);
             d.tileSize = 2f;
             d.ambience = MapAmbience.Haunted;
-            var L = new MapLayout(d, 20260730, shiftZ: -50f);
+            var L = new MapLayout(d, 20260730, shiftZ: -50f, meshAxes: true);
 
             var mansion = new Vector2(0f, 320f);
             var chapel = new Vector2(-280f, 130f);
@@ -1131,8 +1315,8 @@ namespace AIHWSim.TrackEd
             };
             var widths = new[] { 3.0f, 3.0f, 2.8f, 2.8f, 2.6f, 2.8f, 2.8f,
                                  2.8f, 2.6f, 2.6f, 2.8f, 2.8f, 3.0f, 3.0f };
-            var roll = new[] { 0f, -6f, -8f, 0f, 8f, 10f, 0f,
-                               -8f, -10f, -8f, -8f, -6f, 0f, 6f };
+            var roll = new[] { 0f, 6f, 8f, 0f, -8f, -10f, 0f,
+                               8f, 10f, 8f, 8f, 6f, 0f, -6f };
             var surfs = new[] { Boost, Dirt, Dirt, Dirt, Dirt, Dirt, Dirt,
                                 Dirt, Rumble, Dirt, Dirt, Mud, Dirt, Dirt };
             d.splines.Add(Spline(lap, 2.8f, Dirt, closed: true, walls: false, stripes: false,
@@ -1153,11 +1337,11 @@ namespace AIHWSim.TrackEd
             BoxRow(d, L.X(422f), L.Z(35f), alongX: false);
             BoxRow(d, L.X(110f), L.Z(-252f), alongX: true, spread: 0.7f);
 
-            d.items.Add(It("finish", L.X(0f), L.Z(gateY), 0f));
-            d.items.Add(It("checkpoint", L.X(10f), L.Z(160f), 20f, 0f, 0));
-            d.items.Add(It("checkpoint", L.X(425f), L.Z(110f), 160f, 0f, 1));
-            d.items.Add(It("checkpoint", L.X(110f), L.Z(-252f), 265f, 0f, 2));
-            d.items.Add(It("spawn", L.X(0f), L.Z(-215f), 0f));
+            d.items.Add(It("finish", L.X(0f), L.Z(gateY), 180f));
+            d.items.Add(It("checkpoint", L.X(10f), L.Z(160f), 160f, 0f, 0));
+            d.items.Add(It("checkpoint", L.X(425f), L.Z(110f), 20f, 0f, 1));
+            d.items.Add(It("checkpoint", L.X(110f), L.Z(-252f), 275f, 0f, 2));
+            d.items.Add(It("spawn", L.X(0f), L.Z(-215f), 180f));
             return d;
         }
 
@@ -1358,6 +1542,424 @@ namespace AIHWSim.TrackEd
                     new[] { new Vector2(-8f, -60f), new Vector2(-22f, -300f) }, 10f,
                     side * (roadW * 0.5f + 9f)))
                     L.Prop("haunt_fence", s.x, s.y, s.head);
+        }
+
+        // ---- Torque Falls: the free-roam town ------------------------------
+        //
+        // A port of tt_25_city_map.py, the only source map with no circuit in
+        // it. Same districts, same street grid, same numbers — but on the MESH
+        // axes (see MapLayout's meshAxes remarks), because a hundred and
+        // sixteen houses all facing their own street is the entire read of the
+        // place and the default layout convention turns every one of them
+        // round.
+        //
+        // Two things scale differently from the four circuit ports:
+        //
+        //   * tileSize is 1 m, not 2. A road here is 20 authored units = 2 game
+        //     metres, which at the circuit ports' 2 m tiles is a single tile
+        //     wide and loses its kerbs entirely. At 1 m the carriageway is two
+        //     tiles with a paved verge each side, which is what makes a grid
+        //     read as streets rather than as a runway diagram.
+        //   * There is NO spline. A town has no racing line, and BotPath picks
+        //     the spline with the most points — inventing one would hand a bot
+        //     a lap of a map that has no laps.
+        //
+        // Spawns: eight, scattered over the districts, order 0. That is not
+        // decoration — it is the whole of what makes free roam playable, since
+        // TrackRespawn falls back to the nearest free spawn when there is no
+        // racing line to put the car back on.
+
+        /// <summary>Blender heading (0 = +X) to the game's own item yaw
+        /// (0 = +Z). On the mesh axes a Blender +Y goes to game −Z, so a
+        /// heading rotates by a quarter turn rather than mirroring.</summary>
+        private static float DriveYaw(float headingDeg) => 90f + headingDeg;
+
+        /// <summary>
+        /// What grows on a verge or in a park. The source draws from FIVE tree
+        /// meshes — three oaks built under different seeds, a maple and a pine
+        /// — and the port has one mesh per id, so a literal copy of its bag
+        /// would be four-fifths oak. Spreading it over all four kinds keeps
+        /// more of the variety the source was after, and costs a third of the
+        /// triangles: an oak is 6 348 of them and there are some three hundred
+        /// trees in this town, which was 80 % of the whole map's geometry.
+        /// </summary>
+        private static readonly string[] TreeBag =
+        {
+            "city_tree_oak", "city_tree_maple", "city_tree_pine",
+            "city_tree_young", "city_tree_oak",
+        };
+
+        /// <summary>
+        /// Copies of one prop from a to b at an EXACT pitch, never fitted to
+        /// the span (tt_25_city_map.run). The fence, wall, hedge and pole
+        /// sections in this kit only line up at their own pitch; stretching a
+        /// run so it comes out even at both ends is exactly what leaves
+        /// daylight between fence panels and hangs wires that do not meet.
+        /// </summary>
+        private static void CityRun(MapLayout L, string id, Vector2 a, Vector2 b,
+            float pitch, float? rot = null)
+        {
+            Vector2 ab = b - a;
+            float len = ab.magnitude;
+            if (len < 1e-6f) return;
+            Vector2 u = ab / len;
+            float head = rot ?? Mathf.Atan2(u.y, u.x) * Mathf.Rad2Deg;
+            int n = Mathf.FloorToInt(len / pitch + 1e-6f);
+            for (int i = 0; i < n; i++)
+            {
+                Vector2 p = a + u * ((i + 0.5f) * pitch);
+                L.Prop(id, p.x, p.y, head);
+            }
+        }
+
+        /// <summary>
+        /// A row of buildings down one side of a street, every one facing it.
+        /// The kit's buildings face −Y, so which way a row turns is decided by
+        /// the STREET and not by the building: north of an east-west street is
+        /// rot 0 and south is 180, west of a north-south street is 90 and east
+        /// is 270. Get one row's rotation wrong and a whole terrace backs its
+        /// front doors into the gardens behind it.
+        /// </summary>
+        private static void CityFrontage(MapLayout L, string[] srcs, bool ew, float at,
+            int side, float t0, float t1, float pitch, float setback,
+            float scaleLo = 1f, float scaleHi = 1f, float jitter = 0f)
+        {
+            float rot = ew ? (side > 0 ? 0f : 180f) : (side > 0 ? 270f : 90f);
+            int i = 0;
+            for (float t = t0; t <= t1 + 1e-4f; t += pitch, i++)
+            {
+                string id = srcs.Length < 3 ? srcs[i % srcs.Length] : L.Choice(srcs);
+                float off = at + side * (setback + (jitter > 0f ? L.Uniform(-jitter, jitter) : 0f));
+                float bx = ew ? t : off;
+                float by = ew ? off : t;
+                L.Prop(id, bx, by, rot, L.Uniform(scaleLo, scaleHi));
+            }
+        }
+
+        /// <summary>
+        /// ★ Torque Falls — the city preview map (<c>tt_25_city_map.py</c>): a
+        /// ~530-unit town on a five-by-four street grid. Clock-tower plaza and
+        /// a thirteen-unit terrace in the middle, residential rows on most
+        /// block faces, three parks, an industrial corner round the water
+        /// tower, a motor strip carrying the garage / dealership / filling
+        /// station, and the arena on its own approach road to the south.
+        ///
+        /// Free-roam only: no finish line, no checkpoints, no spline.
+        /// </summary>
+        private static TrackDesign TorqueFalls()
+        {
+            // 66 x 66 at 1 m: the streets run out to ±268 authored and carry
+            // verge trees the whole way, so the outermost ITEM is at ±267 —
+            // ±33 m of map leaves about six metres of open ground past the
+            // last one on every side.
+            var d = New("Torque Falls", 66, 66, Grass);
+            d.tileSize = 1f;
+            d.ambience = MapAmbience.CityNoon;
+            // The source runs y from −346 (behind the arena) to +268 (the top
+            // of the grid); the midpoint is −39, and a TrackDesign is always
+            // centred on its origin. Measuring the shift off the buildings
+            // rather than off the roads put fifteen verge trees over the edge.
+            var L = new MapLayout(d, 20260731, shiftZ: 39f, meshAxes: true);
+
+            // Layout constants, verbatim from the source module.
+            const float roadW = 20f, half = 10f, walk = half + 2.6f, ext = 268f;
+            float[] nsX = { -210f, -105f, 0f, 105f, 210f };
+            float[] ewY = { -175f, -60f, 60f, 175f };
+            const float arenaY = -302f, arenaMouth = arenaY + 43.6f;
+            var clock = new Vector2(-56f, -18f);
+            var water = new Vector2(-186f, -96f);
+            var garage = new Vector2(48f, -92f);
+            var shop = new Vector2(128f, -92f);
+            var fuel = new Vector2(206f, -96f);
+
+            // The grid, plus the arena approach. The first nsX+ewY of these are
+            // the STREETS: utilities and verges key off those only, so the
+            // approach road does not get a second set of poles down a lane that
+            // already has them.
+            var streets = new List<Vector2[]>();
+            foreach (float x in nsX)
+                streets.Add(new[] { new Vector2(x, -ext), new Vector2(x, ext) });
+            foreach (float y in ewY)
+                streets.Add(new[] { new Vector2(-ext, y), new Vector2(ext, y) });
+            var roads = new List<Vector2[]>(streets)
+            {
+                new[] { new Vector2(0f, -ext), new Vector2(0f, arenaMouth - 2f) },
+            };
+
+            // Ground, then the footway band, then the carriageway on top of it.
+            // Painting the wide one first is what leaves a kerb showing.
+            L.Rect(-100f, arenaMouth, 100f, arenaMouth + 96f, Paving);   // arena car park
+            L.Rect(-46f, arenaY - 46f, 46f, arenaY + 46f, Paving);       // the arena apron
+            L.Roads(roads, (walk + 2.2f) * 2f, Paving);
+            L.Roads(roads, roadW, Asphalt);
+
+            CityDowntown(L, clock, walk);
+            CityResidential(L);
+            CityParks(L);
+            CityIndustry(L, water);
+            CityMotorStrip(L, garage, shop, fuel, walk);
+            CityArenaGrounds(L, arenaMouth);
+            CityUtilities(L, streets, ewY, walk, half);
+            CityVerges(L, streets, roads, walk, half);
+
+            // Eight places to start, and to be put back at. Yaw is the game's
+            // own convention here, not Blender's — only Prop() speaks rot_z.
+            var starts = new (float bx, float by, float head)[]
+            {
+                (6.5f, -30f, 90f),                 // the avenue, outside the plaza
+                (-6.5f, 24f, 270f),                // the avenue, northbound
+                (garage.x + 2.6f, -76.5f, 90f),    // the motor strip, on the bay line
+                (shop.x + 5.5f, -82f, 90f),        // the dealership forecourt
+                (-105f, 120f, 0f),                 // residential north
+                (-186f, -60f, 180f),               // the industrial corner
+                (150f, 118f, 180f),                // the park
+                (6.5f, arenaMouth + 46f, 270f),    // the arena approach
+                (-210f, 6.5f, 90f),                // the western avenue
+                (210f, -6.5f, 270f),               // the eastern avenue
+                (-60f, 168f, 0f),                  // the northern cross street
+                (60f, -168f, 180f),                // the southern cross street
+            };
+            foreach (var (bx, by, head) in starts)
+                d.items.Add(It("spawn", L.X(bx), L.Z(by), DriveYaw(head)));
+            return d;
+        }
+
+        /// <summary>The centre: the terrace, the shops, the walk-ups and the
+        /// clock-tower plaza (tt_25_city_map.downtown).</summary>
+        private static void CityDowntown(MapLayout L, Vector2 clock, float walk)
+        {
+            // The townhouses abut at exactly their own width, which is the one
+            // pitch in this kit that has to be exact rather than merely tidy.
+            CityRun(L, "city_townhouse", new Vector2(-96f, 39f), new Vector2(-24f, 39f), 5.4f, 180f);
+            CityFrontage(L, new[] { "city_apartment" }, true, 60f, -1, 26f, 88f, 34f, 28f);
+            CityFrontage(L, new[] { "city_store", "city_diner" }, true, -60f, 1, 26f, 96f, 38f, 27f);
+            CityFrontage(L, new[] { "city_store" }, true, -60f, 1, -84f, -84f, 40f, 27f);
+
+            L.Prop("city_clocktower", clock.x, clock.y);
+            foreach (float dx in new[] { -16f, 16f })
+            {
+                L.Prop("city_planter", clock.x + dx, clock.y - 12f);
+                L.Prop("city_bench", clock.x + dx * 0.55f, clock.y - 15f, 180f);
+            }
+            CityRun(L, "city_tree_young", new Vector2(clock.x - 26f, clock.y - 20f),
+                    new Vector2(clock.x + 26f, clock.y - 20f), 13f, 0f);
+
+            L.Prop("city_busstop", walk + 0.4f, -34f, 90f);
+            L.Prop("city_busstop", walk + 0.4f, 34f, 270f);
+            L.Prop("city_billboard", -walk - 9f, -120f, 8f);
+            L.Prop("city_billboard", walk + 11f, 118f, 186f);
+        }
+
+        /// <summary>
+        /// Every street face that gets a row of houses, as (east-west, street,
+        /// side, from, to). A table rather than a handful of calls because the
+        /// source's first build only had rows on its two northern streets, and
+        /// a grid with a tenth of its block faces built on does not read as a
+        /// small town — it reads as one new housing development next to a lot
+        /// of mown grass. The gaps are where a district that is not housing
+        /// already stands.
+        /// </summary>
+        private static readonly (bool ew, float at, int side, float t0, float t1)[] HouseRows =
+        {
+            (true, 175f, 1, -196f, 196f),
+            (true, 175f, -1, -196f, 196f),
+            (true, 60f, 1, -196f, -128f),
+            (true, 60f, 1, 128f, 196f),
+            (true, -175f, 1, -196f, -54f),
+            (true, -175f, 1, 54f, 196f),
+            (true, -175f, -1, -196f, -54f),
+            (true, -175f, -1, 54f, 196f),
+            (false, -105f, 1, 86f, 150f),
+            (false, -105f, -1, 86f, 150f),
+            (false, 105f, 1, 86f, 150f),
+            (false, -210f, 1, -46f, 46f),
+            (false, -105f, -1, -46f, 46f),
+            (false, 105f, 1, -46f, 46f),
+            (false, 210f, -1, -46f, 46f),
+            (false, -210f, 1, -155f, -86f),
+            (false, 210f, -1, -155f, -86f),
+            (false, -105f, -1, -155f, -122f),
+            (false, 105f, 1, -155f, -122f),
+        };
+
+        /// <summary>Housing on most block faces, and the boundaries between the
+        /// plots (tt_25_city_map.residential).</summary>
+        private static void CityResidential(MapLayout L)
+        {
+            // The source shuffles a bag of twelve house sources — three shapes
+            // rebuilt under four seeds each, so a street is not one repeated
+            // house. The game has ONE mesh per id, so the variety has to come
+            // from scale and placement instead; the bag keeps the shapes
+            // interleaved the same way.
+            var bag = new List<string>
+            {
+                "city_house_a", "city_house_b", "city_cottage",
+                "city_house_a", "city_house_b", "city_cottage",
+                "city_house_a", "city_house_b", "city_cottage",
+                "city_house_a", "city_house_b", "city_cottage",
+            };
+            L.Shuffle(bag);
+            var srcs = bag.ToArray();
+            foreach (var (ew, at, side, t0, t1) in HouseRows)
+                CityFrontage(L, srcs, ew, at, side, t0, t1, 24f, 32f, 0.94f, 1.06f, 1.6f);
+
+            // Placed at exactly FENCE_SPAN (4.0): the sections are modelled
+            // with their posts inset half a post width, so that pitch reads as
+            // the double post real panel fencing has rather than z-fighting one
+            // post through another.
+            foreach (float y in new[] { 151f, 84f })
+                foreach (var (x0, x1) in new[] { (-196f, -112f), (-84f, 84f), (112f, 196f) })
+                    CityRun(L, "city_fence_picket", new Vector2(x0, y), new Vector2(x1, y), 4f, 0f);
+            foreach (var (x0, x1) in new[] { (-196f, -112f), (112f, 196f) })
+                CityRun(L, "city_hedge", new Vector2(x0, 201f), new Vector2(x1, 201f), 4f, 0f);
+        }
+
+        /// <summary>Three green blocks: trees, a hedge along the front and
+        /// somewhere to sit (tt_25_city_map.park).</summary>
+        private static void CityParks(MapLayout L)
+        {
+            var parks = new[]
+            {
+                (x0: 122f, x1: 196f, y0: 78f, y1: 158f),
+                (x0: -96f, x1: -26f, y0: -164f, y1: -114f),
+                (x0: 24f, x1: 96f, y0: -164f, y1: -134f),
+            };
+            foreach (var (x0, x1, y0, y1) in parks)
+            {
+                int n = Mathf.Max(10, (int)((x1 - x0) * (y1 - y0) / 230f));
+                for (int i = 0; i < n; i++)
+                    L.Prop(L.Choice(TreeBag),
+                           L.Uniform(x0, x1), L.Uniform(y0, y1),
+                           L.Uniform(0f, 360f), L.Uniform(0.85f, 1.20f));
+                for (int i = 0; i < n / 2; i++)
+                    L.Prop("city_bush", L.Uniform(x0, x1), L.Uniform(y0, y1),
+                           L.Uniform(0f, 360f), L.Uniform(0.8f, 1.4f));
+                int seats = Mathf.Max(2, (int)((x1 - x0) / 20f));
+                for (int i = 0; i < seats; i++)
+                {
+                    L.Prop("city_bench", x0 + 8f + i * 18f, y0 - 2f, 0f);
+                    L.Prop("city_planter", x0 + 14f + i * 18f, y0 - 2f);
+                }
+                CityRun(L, "city_hedge", new Vector2(x0 - 2f, y0 - 6f),
+                        new Vector2(x1, y0 - 6f), 4f, 0f);
+            }
+        }
+
+        /// <summary>South-west: the warehouse, the water tower, the fire
+        /// station and chain link round it (tt_25_city_map.industry).</summary>
+        private static void CityIndustry(MapLayout L, Vector2 water)
+        {
+            L.Prop("city_warehouse", -158f, -96f);
+            L.Prop("city_watertower", water.x, water.y);
+            L.Prop("city_firehouse", -62f, -92f);
+            CityFrontage(L, new[] { "city_warehouse" }, true, -175f, 1, -196f, -196f, 40f, 30f);
+
+            CityRun(L, "city_fence_chain", new Vector2(-208f, -132f), new Vector2(-120f, -132f), 4f, 0f);
+            foreach (float x in new[] { -208f, -120f })
+                CityRun(L, "city_fence_chain", new Vector2(x, -132f), new Vector2(x, -76f), 4f, 90f);
+            for (int i = 0; i < 5; i++)
+                L.Prop("city_planter", -140f + i * 6f, -74f);
+        }
+
+        /// <summary>South-east: the three props you drive into, square to one
+        /// street (tt_25_city_map.motor_strip).</summary>
+        private static void CityMotorStrip(MapLayout L, Vector2 garage, Vector2 shop,
+            Vector2 fuel, float walk)
+        {
+            L.Prop("city_garage", garage.x, garage.y, 180f);
+            L.Prop("city_autoshop", shop.x, shop.y, 180f);
+            L.Prop("city_gas", fuel.x, fuel.y, 180f);
+            L.Prop("city_warehouse", 86f, -158f, 0f);   // so the strip reads as a trade
+            CityRun(L, "city_wall", new Vector2(24f, -125f), new Vector2(96f, -125f), 4f, 0f);
+            for (int i = 0; i < 6; i++)
+                L.Prop("city_tree_young", 30f + i * 20f, -walk - 62f);
+        }
+
+        /// <summary>The arena, its approach and its car park
+        /// (tt_25_city_map.arena_grounds).</summary>
+        private static void CityArenaGrounds(MapLayout L, float mouth)
+        {
+            // 87 x 57 with its tunnel on the local −X face, so it is turned a
+            // quarter turn to point that tunnel back up the avenue at the town.
+            L.Prop("city_arena", 0f, -302f, 270f);
+            foreach (int sx in new[] { -1, 1 })
+            {
+                L.Prop("city_billboard", sx * 26f, mouth + 34f, 180f + sx * 26f);
+                CityRun(L, "city_lamp", new Vector2(sx * 52f, mouth + 10f),
+                        new Vector2(sx * 52f, mouth + 90f), 34f, 90f);
+                CityRun(L, "city_fence_chain", new Vector2(sx * 74f, mouth),
+                        new Vector2(sx * 74f, mouth + 92f), 4f, 90f);
+                CityRun(L, "city_tree_pine", new Vector2(sx * 96f, mouth + 20f),
+                        new Vector2(sx * 96f, mouth + 96f), 16f, 0f);
+            }
+        }
+
+        /// <summary>
+        /// Poles, lamps, signals and the small stuff, all keyed off the footway
+        /// (tt_25_city_map.utilities). The poles are the reason POLE_PITCH
+        /// exists: at exactly 26 units each one's half span meets its
+        /// neighbour's with matching height AND matching slope, so a street of
+        /// them carries one continuous run of wire with no wire prop between.
+        /// </summary>
+        private static void CityUtilities(MapLayout L, List<Vector2[]> streets,
+            float[] ewY, float walk, float half)
+        {
+            // The garage's forecourt: the one place a street tree or a lamp
+            // column landing in front of a drive-through would spoil the only
+            // prop in the kit you are supposed to be able to drive into.
+            bool KeepOut(float x, float y) =>
+                new Vector2(x - 48f, y + 78f).magnitude < 27f;
+
+            float poleAt = walk + 3.4f;
+            for (int i = 0; i < streets.Count; i++)
+            {
+                int side = i % 2 == 0 ? 1 : -1;
+                foreach (var s in MapLayout.Along(streets[i], 26f, side * poleAt, 13f))
+                    L.Prop(L.Random01() < 0.22 ? "city_pole_t" : "city_pole", s.x, s.y, s.head);
+                foreach (var s in MapLayout.Along(streets[i], 44f, -side * (walk - 1.2f), 22f))
+                {
+                    if (KeepOut(s.x, s.y)) continue;
+                    L.Prop("city_lamp", s.x, s.y, s.head + (side > 0 ? 90f : -90f));
+                }
+            }
+
+            // Signals on the four junctions the avenue makes. The source builds
+            // a second red-lit variant for the cross street; here one prop
+            // cycles through all three lamps, so both corners take it.
+            foreach (float y in ewY)
+                foreach (var (sx, sy) in new[] { (-1f, -1f), (1f, 1f) })
+                    L.Prop("city_signal", sx * (half + 3f), y + sy * (half + 3f),
+                           sy < 0f ? 0f : 180f);
+
+            for (int i = 0; i < 26; i++)      // hydrants, signs, mailboxes
+            {
+                var line = streets[L.RandRange(0, streets.Count)];
+                var pts = MapLayout.Along(line, 60f,
+                    (L.Random01() < 0.5 ? -1f : 1f) * (walk + 1f), L.Uniform(0f, 60f));
+                if (pts.Count == 0) continue;
+                var p = pts[L.RandRange(0, pts.Count)];
+                L.Prop(L.Choice("city_hydrant", "city_sign", "city_mailbox", "city_hydrant"),
+                       p.x, p.y, p.head + (L.Random01() < 0.5 ? 90f : -90f));
+            }
+        }
+
+        /// <summary>Street trees down the verge behind the footway, off the
+        /// plots (tt_25_city_map.verges).</summary>
+        private static void CityVerges(MapLayout L, List<Vector2[]> streets,
+            List<Vector2[]> roads, float walk, float half)
+        {
+            foreach (var line in streets)
+                foreach (int side in new[] { -1, 1 })
+                    foreach (var s in MapLayout.Along(line, 26f, side * (walk + 4.2f), 13f))
+                    {
+                        // Keep the central junction and the garage forecourt
+                        // open, and stay off anything that is road.
+                        if (Mathf.Abs(s.x) < 46f && Mathf.Abs(s.y) < 46f) continue;
+                        if (new Vector2(s.x - 48f, s.y + 78f).magnitude < 27f) continue;
+                        if (MapLayout.RoadDist(new Vector2(s.x, s.y), roads) < half + 6f) continue;
+                        L.Prop(L.Choice(TreeBag), s.x, s.y,
+                               L.Uniform(0f, 360f), L.Uniform(0.82f, 1.10f));
+                    }
         }
 
         /// <summary>

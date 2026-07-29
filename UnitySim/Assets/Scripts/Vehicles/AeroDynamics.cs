@@ -50,6 +50,15 @@ namespace AIHWSim.Vehicles
                 case BodyShape.Coupe: return 0.48f;
                 case BodyShape.Baja: return 0.85f;
                 case BodyShape.Patrol: return 0.55f;
+                // The four Legendary cars, read off their silhouettes: a
+                // slab-sided wrecker with a boom in the airstream is the
+                // draggiest thing in the game; the two race cars are clean
+                // noses spoiled by exposed wings; the Autopia is a 1955 pontoon
+                // body with an upright wraparound screen and no roof.
+                case BodyShape.Rattle: return 0.95f;
+                case BodyShape.Redline: return 0.52f;
+                case BodyShape.Highwing: return 0.58f;
+                case BodyShape.Autopia: return 0.72f;
                 default: return 0.80f;
             }
         }
@@ -64,6 +73,11 @@ namespace AIHWSim.Vehicles
                 case BodyShape.LowRacer: return 0.006f;
                 case BodyShape.Coupe: return 0.004f;
                 case BodyShape.Patrol: return 0.003f;
+                // Both race cars carry their wing as authored geometry, which
+                // is the whole of their downforce; the wrecker and the ride car
+                // have none, like every other bluff shape here.
+                case BodyShape.Redline: return 0.007f;
+                case BodyShape.Highwing: return 0.008f;
                 default: return 0f;
             }
         }

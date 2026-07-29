@@ -56,7 +56,7 @@ namespace AIHWSim.Garage
             if (design == null || built.root == null) return;
 
             var car = built.root.transform;
-            Bounds body = BodyBounds(car);
+            Bounds body = BodyBounds(car, design);
 
             Fit(car, design.cosTopper, "cos_topper",
                 MountPoint(body, TopperFZ, TopperFY) + Vector3.down * TopperSink,
@@ -103,38 +103,64 @@ namespace AIHWSim.Garage
                                Mathf.Lerp(body.min.z, body.max.z, 0.15f));
         }
 
+        /// <summary>How far proud of the tyre's outer face the rim's own face
+        /// sits, as a fraction of the tyre's half-width — about 0.7 mm on a stock
+        /// 33 mm wheel. Enough to clear the sidewall at every viewing angle
+        /// without the rim reading as bolted on in front of the wheel.</summary>
+        private const float RimProudFrac = 0.05f;
+
         /// <summary>
         /// One rim per wheel, parented to the wheel's visual holder so it spins,
         /// steers and travels with the tyre for free. Scaled by
         /// radius/WheelAuthorRadius — the same factor BuildWheelViz applies to
         /// the tyre — and given the same half-turn on the axle side where the
         /// face would otherwise point inboard.
+        ///
+        /// Then SEATED on the tyre's outer face, which is the whole trick. The
+        /// pack authors a rim around the hub centre, and the hub centre is 1-5 mm
+        /// behind the tyre's outer face depending on wheel style; since these
+        /// rims are also narrower than the stock rim faces they replace (41 mm
+        /// against a 66 mm tyre) they drop straight into the tyre's aperture and
+        /// disappear behind the sidewall. Measuring the tyre and pushing the rim
+        /// out to meet it fixes every wheel style and size with one rule.
         /// </summary>
         private static void ApplyRims(VehicleFactory.Built built, VehicleDesign design)
         {
             if (string.IsNullOrEmpty(design.cosRim)) return;
             var car = built.car;
-            if (car == null || design.wheels == null) return;
+            if (car == null) return;
 
-            for (int i = 0; i < design.wheels.Count; i++)
+            // The car owns the wheel holders, so it decides how many there are;
+            // the design is consulted only for this wheel's size and side.
+            for (int i = 0; i < car.WheelCount; i++)
             {
                 var holder = car.GetWheelVisual(i);
                 if (holder == null) continue;
-                var w = design.wheels[i];
+                var w = design.wheels != null && i < design.wheels.Count ? design.wheels[i] : null;
+                float radius = Mathf.Max(0.01f, w?.radius ?? PartVisualFactory.WheelAuthorRadius);
 
+                float tyreHalf = PartVisualFactory.TyreHalfWidth(holder, radius);
                 PartVisualFactory.HideStockRim(holder);
 
                 var go = CosmeticCatalog.Build(holder, design.cosRim);
                 if (go == null) continue;
                 go.name = "cos_rim";
-                float s = Mathf.Max(0.01f, w.radius) / PartVisualFactory.WheelAuthorRadius;
-                go.transform.localScale = Vector3.one * s;
+                go.transform.localScale = Vector3.one * (radius / PartVisualFactory.WheelAuthorRadius);
                 // BuildWheelViz's rule, mirrored exactly: on the side where +X
                 // points inboard the wheel is spun half a turn, and the rim has
                 // to come with it or it ends up inside the car.
-                float inboardSign = w.localPos.x > 0.001f ? -1f : 1f;
+                float inboardSign = (w?.localPos.x ?? 0f) > 0.001f ? -1f : 1f;
                 if (inboardSign >= 0f)
                     go.transform.localRotation = Quaternion.Euler(0f, 180f, 0f);
+
+                // Outboard is whichever way the rim's face ended up pointing:
+                // -X once the half-turn is applied, +X otherwise.
+                float outSign = inboardSign >= 0f ? -1f : 1f;
+                var rb = PartVisualFactory.LocalRendererBounds(holder, go.transform);
+                if (rb.size.x <= 1e-6f) continue;   // nothing rendered: leave it alone
+                float rimFace = outSign > 0f ? rb.max.x : rb.min.x;
+                float target = outSign * (tyreHalf * (1f + RimProudFrac));
+                go.transform.localPosition += new Vector3(target - rimFace, 0f, 0f);
             }
         }
 
@@ -151,18 +177,41 @@ namespace AIHWSim.Garage
         }
 
         /// <summary>
+        /// Body pieces that are APPENDAGES, not shell: the Highwing's wing on
+        /// stalks (hwwhite), the Rattletrap's boom and hook (steel/gunmetal)
+        /// and the face rigs (teeth reach past the bumper). The Legendary
+        /// bodies fold everything they carry into the body FBX — no light or
+        /// antenna group — so their whole-subtree renderer bounds are
+        /// dominated by exactly these, and a mount fraction of that box puts
+        /// the hat in mid-air over the wing rather than on the roof. Matched
+        /// by token prefix, the same names AssignByName binds materials to.
+        /// </summary>
+        private static readonly string[] AppendageTokens =
+        {
+            "hwwhite", "steel", "gunmetal",
+            "tooth", "gum", "tongue", "maw", "sclera", "pupil", "iris", "em_spec",
+        };
+
+        private static bool HasFoldedAppendages(BodyShape s) =>
+            s == BodyShape.Rattle || s == BodyShape.Redline ||
+            s == BodyShape.Highwing || s == BodyShape.Autopia;
+
+        /// <summary>
         /// The body shell's extent in car-local space. Reads the renderers under
         /// CarVehicle's "BodyMesh" holder, which covers both the authored-FBX
         /// bodies and the primitive shapes, so a hand-built garage design gets a
         /// real box rather than the nominal one. Falls back to the design's
-        /// declared bodySize when the car has no visual at all.
+        /// declared bodySize when the car has no visual at all. The Legendary
+        /// shapes measure the SHELL only (see <see cref="AppendageTokens"/>);
+        /// every other body keeps the exact box it always had.
         /// </summary>
-        private static Bounds BodyBounds(Transform car)
+        private static Bounds BodyBounds(Transform car, VehicleDesign design)
         {
             var holder = car.Find("BodyMesh");
             if (holder != null)
             {
-                var b = LocalBounds(car, holder);
+                bool filtered = design != null && HasFoldedAppendages(design.bodyShape);
+                var b = filtered ? ShellBounds(car, holder) : LocalBounds(car, holder);
                 if (b.size.sqrMagnitude > 1e-8f) return b;
             }
             var cv = car.GetComponent<CarVehicle>();
@@ -170,29 +219,28 @@ namespace AIHWSim.Garage
             return new Bounds(Vector3.zero, size);
         }
 
-        /// <summary>World renderer bounds of a subtree, expressed in
-        /// <paramref name="frame"/>'s local space. The eight-corner walk is
-        /// needed because Renderer.bounds is a world AABB, not a local one.</summary>
-        private static Bounds LocalBounds(Transform frame, Transform subtree)
+        /// <summary>Renderer bounds over the body subtree, skipping appendage
+        /// pieces by name token.</summary>
+        private static Bounds ShellBounds(Transform car, Transform holder)
         {
-            var rends = subtree.GetComponentsInChildren<Renderer>(true);
             bool any = false;
             var result = new Bounds();
-            foreach (var r in rends)
+            foreach (var r in holder.GetComponentsInChildren<Renderer>(true))
             {
-                var wb = r.bounds;
-                for (int c = 0; c < 8; c++)
-                {
-                    var corner = new Vector3(
-                        (c & 1) == 0 ? wb.min.x : wb.max.x,
-                        (c & 2) == 0 ? wb.min.y : wb.max.y,
-                        (c & 4) == 0 ? wb.min.z : wb.max.z);
-                    var local = frame.InverseTransformPoint(corner);
-                    if (!any) { result = new Bounds(local, Vector3.zero); any = true; }
-                    else result.Encapsulate(local);
-                }
+                string n = r.gameObject.name.ToLowerInvariant();
+                bool skip = false;
+                foreach (var t in AppendageTokens)
+                    if (n.StartsWith(t)) { skip = true; break; }
+                if (skip) continue;
+                var b = PartVisualFactory.LocalRendererBounds(car, r.transform);
+                if (b.size.sqrMagnitude <= 0f) continue;
+                if (!any) { result = b; any = true; }
+                else result.Encapsulate(b);
             }
             return any ? result : new Bounds();
         }
+
+        private static Bounds LocalBounds(Transform frame, Transform subtree) =>
+            PartVisualFactory.LocalRendererBounds(frame, subtree);
     }
 }

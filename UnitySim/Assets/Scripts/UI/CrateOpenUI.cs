@@ -118,10 +118,8 @@ namespace AIHWSim.UI
         public int Draw()
         {
             int result = ResultNone;
-            float h = UIScale.H - 110f;
-
             // ---- left: the crates you hold ----
-            GUILayout.BeginArea(new Rect(10f, 54f, 250f, h), GUI.skin.box);
+            GUILayout.BeginArea(PanelLayout.LeftRect(250f), GUI.skin.box);
             GUILayout.Label("CRATES", GarageSkin.Title);
             GUILayout.Label($"Scrap: {Progression.Scrap}", GarageSkin.Header);
             GUILayout.Space(4);
@@ -151,7 +149,7 @@ namespace AIHWSim.UI
             GUILayout.EndArea();
 
             // ---- right: odds + the pull log ----
-            GUILayout.BeginArea(new Rect(UIScale.W - 270f, 54f, 260f, h), GUI.skin.box);
+            GUILayout.BeginArea(PanelLayout.RightRect(260f), GUI.skin.box);
             GUILayout.Label("ODDS", GarageSkin.Header);
             var odds = CrateSystem.TierOdds(def);
             var sizes = CrateSystem.PoolSizes(def);
@@ -199,8 +197,7 @@ namespace AIHWSim.UI
             }
 
             // ---- bottom bar ----
-            var bottom = new Rect((UIScale.W - 520f) * 0.5f, UIScale.H - 48f, 520f, 40f);
-            GUILayout.BeginArea(bottom, GUI.skin.box);
+            GUILayout.BeginArea(PanelLayout.BottomBarRect(), GUI.skin.box);
             GUILayout.BeginHorizontal();
             if (MenuNav.Button("← Back", GUILayout.Width(90f), GUILayout.Height(26f)))
                 result = ResultBack;

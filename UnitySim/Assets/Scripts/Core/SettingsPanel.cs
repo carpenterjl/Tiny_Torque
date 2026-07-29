@@ -101,6 +101,7 @@ namespace AIHWSim.Core
             moved |= MenuNav.Slider01("Stability", ref s.p1AssistStability);
             moved |= MenuNav.Slider01("Traction ctrl", ref s.p1AssistTraction);
             moved |= MenuNav.Slider01("ABS", ref s.p1AssistAbs);
+            moved |= MenuNav.Slider01("Launch ctrl", ref s.p1AssistLaunch);
 
             if (LocalHumans(rigs) > 1)
             {
@@ -110,6 +111,7 @@ namespace AIHWSim.Core
                 moved |= MenuNav.Slider01("Stability", ref s.p2AssistStability);
                 moved |= MenuNav.Slider01("Traction ctrl", ref s.p2AssistTraction);
                 moved |= MenuNav.Slider01("ABS", ref s.p2AssistAbs);
+                moved |= MenuNav.Slider01("Launch ctrl", ref s.p2AssistLaunch);
             }
             if (moved)
             {
@@ -117,14 +119,35 @@ namespace AIHWSim.Core
                 changed = true;
             }
 
-            // Arcade handling is READ-ONLY here: it is consumed once at rig build
-            // to set every car's grip baseline and assist floor, so a toggle would
-            // do nothing until the next session and read as broken.
-            if (SessionConfig.Arcade || !SessionConfig.ArcadeHandling)
+            // Arcade handling is LIVE now: every simulated rig carries a
+            // HandlingFloor that re-asserts the mode each frame, so the toggle
+            // is felt on the next physics step. In LAN the flag is a session
+            // parameter carried at join (and on the wire), so it stays a
+            // read-only label there rather than a control that only lies.
+            GUILayout.Space(4);
+            GUILayout.Label("HANDLING", GarageSkin.Header);
+            if (Net.NetSession.Instance != null)
+            {
                 GUILayout.Label(SessionConfig.ArcadeHandling
-                        ? "Handling: Arcade (set when the session started)."
-                        : "Handling: Sim (set when the session started).",
+                        ? "Handling: Arcade (session setting, set by the host)."
+                        : "Handling: Sim (session setting, set by the host).",
                     GarageSkin.StatLabel);
+            }
+            else
+            {
+                bool ah = MenuNav.Toggle(SessionConfig.ArcadeHandling,
+                    " Arcade handling (extra grip + driving assists)");
+                if (ah != SessionConfig.ArcadeHandling)
+                {
+                    SessionConfig.ArcadeHandling = ah;
+                    s.spArcadeHandling = ah;
+                    changed = true;
+                    // Off: hand humans their slider values back immediately.
+                    // The HandlingFloor restores only BOT assists on this
+                    // transition, precisely so this write is not stomped.
+                    if (!ah) AssistApplier.ApplyLive(rigs);
+                }
+            }
 
             // ---- bindings ----
             GUILayout.Space(4);
@@ -134,6 +157,12 @@ namespace AIHWSim.Core
                 _capturing = false;
             }
             if (_showKeysDraw) changed |= DrawKeys();
+
+            // ---- video ----
+            GUILayout.Space(4);
+            GUILayout.Label("VIDEO", GarageSkin.Header);
+            bool bl = MenuNav.Toggle(s.bloom, " Bloom (neon glow)");
+            if (bl != s.bloom) { s.bloom = bl; changed = true; }   // read live by CameraBloom
 
             // ---- telemetry ----
             GUILayout.Space(4);

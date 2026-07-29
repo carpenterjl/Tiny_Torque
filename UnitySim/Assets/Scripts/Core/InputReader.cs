@@ -132,6 +132,8 @@ namespace AIHWSim.Core
         public static bool UseItemKeyPressed() => KeyTable.Pressed(B.Key(DriveAction.UseItem));
         public static bool LookBackKeyHeld() => KeyTable.Held(B.Key(DriveAction.LookBack));
         public static bool HornKeyHeld() => KeyTable.Held(B.Key(DriveAction.Horn));
+        public static bool JumpKeyPressed() => KeyTable.Pressed(B.Key(DriveAction.Jump));
+        public static bool BoostKeyHeld() => KeyTable.Held(B.Key(DriveAction.Boost));
 
 #if ENABLE_INPUT_SYSTEM
         // ---- pad-only reads, for one specific pad (split-screen) ----
@@ -141,6 +143,8 @@ namespace AIHWSim.Core
         public static bool UseItemPadPressed(Gamepad gp) => PadTable.Pressed(gp, B.Pad(DriveAction.UseItem));
         public static bool LookBackPadHeld(Gamepad gp) => PadTable.Held(gp, B.Pad(DriveAction.LookBack));
         public static bool HornPadHeld(Gamepad gp) => PadTable.Held(gp, B.Pad(DriveAction.Horn));
+        public static bool JumpPadPressed(Gamepad gp) => PadTable.Pressed(gp, B.Pad(DriveAction.Jump));
+        public static bool BoostPadHeld(Gamepad gp) => PadTable.Held(gp, B.Pad(DriveAction.Boost));
 #endif
 
         // Foot brake in [0, 1].
@@ -165,6 +169,16 @@ namespace AIHWSim.Core
 
         public static bool LookBackHeld() =>
             LookBackKeyHeld() || PadTable.HeldAny(B.Pad(DriveAction.LookBack));
+
+        /// <summary>Edge: jump, double-jump or flip. An edge rather than a hold
+        /// because the second press inside the flip window is a different move,
+        /// and a held button cannot say "again".</summary>
+        public static bool JumpPressed() =>
+            JumpKeyPressed() || PadTable.PressedAny(B.Pad(DriveAction.Jump));
+
+        /// <summary>Held: burn the boost tank.</summary>
+        public static bool BoostHeld() =>
+            BoostKeyHeld() || PadTable.HeldAny(B.Pad(DriveAction.Boost));
 
         public static bool ModeTogglePressed() =>
             KeyTable.Pressed(B.Key(DriveAction.ModeToggle)) ||

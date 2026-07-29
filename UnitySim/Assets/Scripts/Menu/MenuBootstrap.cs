@@ -103,6 +103,7 @@ namespace AIHWSim.Menu
             cam.farClipPlane = 100f;
             cam.transform.position = new Vector3(0.5f, 0.28f, -0.65f);
             cam.transform.LookAt(new Vector3(0f, 0.05f, 0f));
+            Rendering.CameraBloom.Attach(cam);
         }
 
         private void Update()

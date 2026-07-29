@@ -47,6 +47,12 @@ namespace AIHWSim.Vehicles
             {
                 src = Resources.Load<GameObject>(path);
                 _cache[path] = src;
+                // Say so once. A miss is cached forever, so without this a
+                // mistyped or unshipped key is silent for the whole session and
+                // shows up only as a part that mysteriously is not there.
+                if (src == null)
+                    Debug.LogWarning($"[PartMeshLibrary] no mesh at Resources/{path} " +
+                                     "— falling back to primitives (or to nothing).");
             }
             return src;
         }

@@ -24,7 +24,7 @@ namespace AIHWSim.EditorTools
         public static void Report()
         {
             int fail = 0;
-            foreach (var (name, build) in TrackPresets.All)
+            foreach (var (name, kind, build) in TrackPresets.All)
             {
                 var problems = new List<string>();
                 TrackDesign d = null;
@@ -73,8 +73,40 @@ namespace AIHWSim.EditorTools
                 }
 
                 foreach (string u in unknown) problems.Add($"unknown item id '{u}'");
-                if (finish != 1) problems.Add($"finish count {finish} (want 1)");
-                if (spawn > 1) problems.Add($"spawn count {spawn} (want 0 or 1)");
+
+                // A map with no finish line and a RING of spawns is an arena for
+                // the mini-game modes, and the circuit rules below are the wrong
+                // question to ask it: there is nothing to lap, and the spawn ring
+                // is the load-bearing feature rather than a duplicate. A
+                // free-roam map looks the same from here and is not the same
+                // thing — it is one player wandering, so it needs spawns to be
+                // put back at but has no two sides to balance.
+                bool roam = kind == TrackPresets.TrackKind.FreeRoam;
+                bool arena = !roam && finish == 0 && spawn >= 2;
+                if (roam)
+                {
+                    // TrackRespawn falls back to the nearest free spawn when
+                    // there is no racing line, so a free-roam map with none is
+                    // one where the respawn key does nothing.
+                    if (spawn < 4) problems.Add($"free-roam spawn count {spawn} (want 4+)");
+                    if (finish > 0) problems.Add($"free-roam map has a finish line");
+                    if (cps.Count > 0) problems.Add($"free-roam map has {cps.Count} checkpoint(s)");
+                    if (d.splines.Count > 0)
+                        problems.Add($"free-roam map has {d.splines.Count} spline(s) — " +
+                                     "a town has no racing line and BotPath would follow it");
+                }
+                else if (arena)
+                {
+                    if (spawn < 4) problems.Add($"arena spawn count {spawn} (want 4+)");
+                    if (spawn % 2 != 0)
+                        problems.Add($"arena spawn count {spawn} is odd (a team mode needs even sides)");
+                    if (cps.Count > 0) problems.Add($"arena has {cps.Count} checkpoint(s)");
+                }
+                else
+                {
+                    if (finish != 1) problems.Add($"finish count {finish} (want 1)");
+                    if (spawn > 1) problems.Add($"spawn count {spawn} (want 0 or 1)");
+                }
                 if (outside > 0) problems.Add($"{outside} item(s) outside the map");
 
                 // A scale of 0 builds an invisible item and is what a map saved
@@ -104,10 +136,10 @@ namespace AIHWSim.EditorTools
                 for (int i = 0; i < cps.Count; i++)
                     if (cps[i] != i) { problems.Add($"checkpoint orders not dense 0..{cps.Count - 1}"); break; }
 
-                string line = $"{name}: {d.width}x{d.length}@{d.tileSize:0.#}m " +
+                string line = $"{name} [{kind}]: {d.width}x{d.length}@{d.tileSize:0.#}m " +
                               $"({d.WorldWidth:0}x{d.WorldLength:0}m) items={d.items.Count} " +
                               $"splines={d.splines.Count} cp={cps.Count} boxes={boxes} " +
-                              $"amb='{d.ambience}'";
+                              $"spawns={spawn} amb='{d.ambience}'";
                 if (problems.Count == 0) Debug.Log($"[TPV] PASS {line}");
                 else { Debug.LogError($"[TPV] FAIL {line} - {string.Join("; ", problems)}"); fail++; }
             }
@@ -115,6 +147,9 @@ namespace AIHWSim.EditorTools
             fail += CheckSplineGeometry();
             fail += CheckBuilds();
             fail += CheckPropAssets();
+            fail += CheckPropTokens();
+            fail += CheckDriveIns();
+            fail += CheckColliderCoverage();
 
             Debug.Log($"[TPV] RESULT {(fail == 0 ? "ALL PASS" : fail + " FAILED")} " +
                       $"({TrackPresets.All.Length} presets)");
@@ -140,7 +175,7 @@ namespace AIHWSim.EditorTools
             const float MinClearY = 0.35f;      // car + skirt fits under
             int fail = 0;
 
-            foreach (var (name, build) in TrackPresets.All)
+            foreach (var (name, kind, build) in TrackPresets.All)
             {
                 TrackDesign d;
                 try { d = build(); d.EnsureSplines(); } catch { continue; }
@@ -213,7 +248,7 @@ namespace AIHWSim.EditorTools
         private static int CheckBuilds()
         {
             int fail = 0;
-            foreach (var (name, build) in TrackPresets.All)
+            foreach (var (name, kind, build) in TrackPresets.All)
             {
                 TrackDesign d;
                 try { d = build(); }
@@ -235,7 +270,18 @@ namespace AIHWSim.EditorTools
                     // What the map actually costs to draw. The ported maps run
                     // 350-750 items of two to nine pieces each, and this is the
                     // number to watch if one of them ever hitches on load.
+                    // Triangles too, since Torque Falls: the town's item count
+                    // is only half its story — its trees carry 6 300 triangles
+                    // each and there are hundreds of them.
                     int renderers = built.root.GetComponentsInChildren<Renderer>(true).Length;
+                    long tris = 0;
+                    foreach (var mf in built.root.GetComponentsInChildren<MeshFilter>(true))
+                        if (mf.sharedMesh != null) tris += mf.sharedMesh.triangles.Length / 3;
+                    // Colliders too, since the mesh migration: cooking cost and
+                    // broadphase load are proportional to this, and the town is
+                    // the number to watch (cook time itself is logged by
+                    // TrackFactory.BuildItems).
+                    int colliders = built.root.GetComponentsInChildren<Collider>(true).Length;
 
                     if (d.splines.Count > 0 && ribbonColliders == 0)
                     {
@@ -244,6 +290,7 @@ namespace AIHWSim.EditorTools
                     }
                     else
                         Debug.Log($"[TPV] BUILD {name}: roots={items} renderers={renderers} " +
+                                  $"tris={tris} colliders={colliders} " +
                                   $"ribbonMesh={ribbonMeshes} ribbonCollider={ribbonColliders}");
                 }
                 catch (System.Exception e)
@@ -286,6 +333,253 @@ namespace AIHWSim.EditorTools
                 Debug.Log($"[TPV] PROP {def.id} [{def.theme}] parts={names.Count} :: {string.Join(",", names)}");
             }
             return fail;
+        }
+
+        /// <summary>
+        /// Every FBX child name must resolve to its OWN material token.
+        ///
+        /// PartMeshLibrary.AssignByName is a first-match SUBSTRING matcher, so a
+        /// token listed after one it contains is swallowed: brickpale takes
+        /// brick, siggreen takes green, trimdk takes trim. Nothing else can
+        /// catch it — the prop still loads, still passes its extent and its
+        /// triangle budget, and renders a plausible WRONG colour. The city pack
+        /// has fifty tokens with eight such containments in it, which is what
+        /// made this worth asserting rather than reading carefully.
+        /// </summary>
+        private static int CheckPropTokens()
+        {
+            int fail = 0;
+            foreach (var def in TrackCatalog.Items)
+            {
+                var table = TrackCatalog.TokensFor(def.theme);
+                if (table == null || table.Length == 0) continue;
+                var src = Resources.Load<GameObject>(PartMeshLibrary.PropRoot + def.id);
+                if (src == null) continue;      // already reported by CheckPropAssets
+
+                var seen = new HashSet<string>();
+                string why = "";
+                foreach (var mf in src.GetComponentsInChildren<MeshFilter>(true))
+                {
+                    string n = mf.gameObject.name.ToLowerInvariant();
+                    int cut = n.LastIndexOf('_');
+                    if (cut <= 0) continue;
+                    // Only <token>_<n> is a tokenised piece. A single-material
+                    // prop imports with the FBX ROOT carrying the mesh, named
+                    // after the file — so city_fence_chain would otherwise be
+                    // read as the token "city_fence" and reported missing.
+                    string tail = n.Substring(cut + 1);
+                    bool numeric = tail.Length > 0;
+                    foreach (char ch in tail) if (ch < '0' || ch > '9') { numeric = false; break; }
+                    if (!numeric) continue;
+                    string want = n.Substring(0, cut);
+                    if (!seen.Add(want)) continue;
+                    bool known = false;
+                    foreach (var (token, _) in table) if (token == want) { known = true; break; }
+                    if (!known) { why += $" '{want}' has no token"; continue; }
+                    string got = null;
+                    foreach (var (token, _) in table)
+                        if (n.Contains(token)) { got = token; break; }
+                    if (got != want) why += $" '{want}'->'{got}'";
+                }
+                if (why.Length > 0)
+                {
+                    Debug.LogError($"[TPV] FAIL tokens {def.id} [{def.theme}]:{why}");
+                    fail++;
+                }
+            }
+            return fail;
+        }
+
+        /// <summary>
+        /// The drive-in props must still be drivable through.
+        ///
+        /// The Blender kit asserts a 4.60 x 3.90 clearance on every aperture and
+        /// walks each finished mesh to refuse a building with something standing
+        /// in its doorway. Collision is now the mesh itself, so what this guards
+        /// against is an FBX RE-EXPORT growing a doorsill, a threshold or a
+        /// mis-welded skirt across an opening — which would brick up the one
+        /// prop the map was designed around while looking fine from anywhere
+        /// else. An exact box overlap along each corridor at car height, plus a
+        /// control probe that must find something solid so a query that finds
+        /// nothing at all cannot pass as a clear doorway.
+        ///
+        /// Since the mesh migration the control probe STRADDLES A WALL FACE
+        /// rather than sitting inside a wall's volume: a non-convex MeshCollider
+        /// is a hollow surface, and an overlap box fully inside it touching no
+        /// triangles reports nothing — the exact false-pass the control probe
+        /// exists to rule out.
+        /// </summary>
+        private static int CheckDriveIns()
+        {
+            // id, corridor centre + half extents (the prop's own local frame,
+            // at car height), and a point that MUST be solid (on a wall).
+            //
+            // Frame note: the FBX writer mirrors X (source-left lands on Unity
+            // +X — the same handedness flip every vehicle came through), so
+            // authored bay coordinates negate their X on the way here. The
+            // original corridors sat on the MIRRORED side — over the garage's
+            // closed roller-door bay and its interior tyre stacks — and only
+            // passed because the hand-authored hulls had been written to the
+            // same wrong assumption. Probing the real meshes is what exposed
+            // it: everything the probe hit (roller door, tyres, workbench) is
+            // the closed bay's furniture, exactly mirrored.
+            var cases = new (string id, Vector3 c, Vector3 half, Vector3 solid)[]
+            {
+                // Authored open bay x -4.9..-0.3 (blender) -> +0.03..+0.49
+                // here; open front AND back. Control on the closed bay's
+                // roller door.
+                ("city_garage",   new Vector3(0.26f, 0.07f, -0.09f), new Vector3(0.19f, 0.05f, 0.52f),
+                                  new Vector3(-0.30f, 0.07f, 0.42f)),
+                ("city_autoshop", new Vector3(-0.545f, 0.07f, -0.37f), new Vector3(0.20f, 0.05f, 0.52f),
+                                  new Vector3(0.375f, 0.07f, -0.41f)),
+                ("city_firehouse", new Vector3(0.31f, 0.07f, -0.21f), new Vector3(0.19f, 0.05f, 0.54f),
+                                  new Vector3(0f, 0.07f, -0.81f)),
+                ("city_arena",    new Vector3(3.65f, 0.07f, 0f), new Vector3(0.60f, 0.05f, 0.28f),
+                                  new Vector3(-4.35f, 0.07f, 0f)),
+                // The filling station's lane runs along X between the two pump
+                // islands (authored 4.9 wide, soffit at DRIVE_H + 0.70): the
+                // fifth drive-in the catalog names, untested until the mesh
+                // migration made its collision real. X-symmetric, so the
+                // mirror is moot. Control point on the kiosk's front wall.
+                ("city_gas",      new Vector3(0f, 0.07f, 0.245f), new Vector3(0.85f, 0.05f, 0.19f),
+                                  new Vector3(0f, 0.07f, -0.45f)),
+            };
+
+            int fail = 0;
+            foreach (var (id, c, half, solid) in cases)
+            {
+                var def = TrackCatalog.Item(id);
+                if (def == null) { Debug.LogError($"[TPV] FAIL drivein {id}: no such item"); fail++; continue; }
+
+                var root = new GameObject("DriveInProbe");
+                try
+                {
+                    TrackFactory.BuildItemVisual(def, root.transform);
+                    Physics.SyncTransforms();
+                    var mine = new HashSet<Collider>(root.GetComponentsInChildren<Collider>(true));
+
+                    int blocked = Count(c, half, mine);
+                    // 0.08 half-extent so the probe crosses BOTH faces of the
+                    // thinnest authored wall (0.04) wherever it stands.
+                    int control = Count(solid, Vector3.one * 0.08f, mine);
+                    if (control == 0)
+                    {
+                        Debug.LogError($"[TPV] FAIL drivein {id}: control point found nothing solid — " +
+                                       "the corridor test is not testing anything");
+                        fail++;
+                    }
+                    else if (blocked > 0)
+                    {
+                        Debug.LogError($"[TPV] FAIL drivein {id}: {blocked} hull(s) across the " +
+                                       $"{half.x * 2f:0.00} x {half.z * 2f:0.00} m opening");
+                        fail++;
+                    }
+                    else
+                    {
+                        Debug.Log($"[TPV] DRIVEIN {id}: clear ({half.x * 2f:0.00} x {half.z * 2f:0.00} m)");
+                    }
+                }
+                finally
+                {
+                    Object.DestroyImmediate(root);
+                }
+            }
+            return fail;
+        }
+
+        /// <summary>
+        /// Every static scenery item's collision must track its visual.
+        ///
+        /// This is the regression fence around the ghost-wall era: the old
+        /// primitive hulls shipped a 12.6 m volcano with a 5 m floating sphere,
+        /// an arena ring 0.42 m inside its stands, and ramps whose collision
+        /// feet hovered 4–19 cm off the ground — all invisible to every other
+        /// check, because the map loads and the prop LOOKS right. Combined
+        /// collider bounds must cover the combined renderer bounds to within
+        /// 5 cm per axis and overshoot them by no more than 10 cm. With
+        /// MeshColliders this holds by construction; what it actually catches
+        /// is the future prop that quietly opts back into an authored hull, or
+        /// a piece whose collider silently failed to cook.
+        /// </summary>
+        private static int CheckColliderCoverage()
+        {
+            const float MaxShortfall = 0.05f;
+            const float MaxOvershoot = 0.10f;
+            int fail = 0, covered = 0;
+
+            foreach (var def in TrackCatalog.Items)
+            {
+                if (def.category != ItemCategory.Scenery || def.dynamic) continue;
+
+                var root = new GameObject("CoverProbe");
+                try
+                {
+                    TrackFactory.BuildItemVisual(def, root.transform);
+                    Physics.SyncTransforms();   // Collider.bounds needs it (autosync off)
+
+                    Bounds? vis = null, col = null;
+                    bool anySolid = false, anyTrigger = false;
+                    foreach (var r in root.GetComponentsInChildren<Renderer>(true))
+                        vis = vis.HasValue ? Enclose(vis.Value, r.bounds) : r.bounds;
+                    foreach (var c in root.GetComponentsInChildren<Collider>(true))
+                    {
+                        if (c.isTrigger) { anyTrigger = true; continue; }
+                        anySolid = true;
+                        col = col.HasValue ? Enclose(col.Value, c.bounds) : c.bounds;
+                    }
+
+                    // Drive-through-by-design (haunt_ghost / haunt_wisp): all
+                    // collision is trigger, and that is the point of the prop.
+                    if (!anySolid && anyTrigger) continue;
+                    if (!vis.HasValue) continue;   // nothing rendered (probe-only defs)
+                    covered++;
+
+                    if (!col.HasValue)
+                    {
+                        Debug.LogError($"[TPV] FAIL cover {def.id}: renders but has NO collider");
+                        fail++;
+                        continue;
+                    }
+
+                    string why = "";
+                    for (int axis = 0; axis < 3; axis++)
+                    {
+                        // How far the collider falls SHORT of the visual on
+                        // each side (>0 = uncovered geometry, the ghost wall),
+                        // and how far it POKES PAST it (>0 = invisible wall).
+                        float shortLow = col.Value.min[axis] - vis.Value.min[axis];
+                        float shortHigh = vis.Value.max[axis] - col.Value.max[axis];
+                        float uncovered = Mathf.Max(shortLow, shortHigh);
+                        float overshoot = Mathf.Max(-shortLow, -shortHigh);
+                        if (uncovered > MaxShortfall)
+                            why += $" axis {axis}: visual uncovered by {uncovered:0.000} m";
+                        if (overshoot > MaxOvershoot)
+                            why += $" axis {axis}: collider overshoots by {overshoot:0.000} m";
+                    }
+                    if (why.Length > 0)
+                    {
+                        Debug.LogError($"[TPV] FAIL cover {def.id} [{def.theme}]:{why}");
+                        fail++;
+                    }
+                }
+                finally
+                {
+                    Object.DestroyImmediate(root);
+                }
+            }
+            if (fail == 0) Debug.Log($"[TPV] COVER {covered} static scenery items: colliders track renderers");
+            return fail;
+        }
+
+        private static Bounds Enclose(Bounds a, Bounds b) { a.Encapsulate(b); return a; }
+
+        private static int Count(Vector3 centre, Vector3 half, HashSet<Collider> mine)
+        {
+            int n = 0;
+            foreach (var col in Physics.OverlapBox(centre, half, Quaternion.identity,
+                                                   ~0, QueryTriggerInteraction.Ignore))
+                if (mine.Contains(col)) n++;
+            return n;
         }
     }
 }

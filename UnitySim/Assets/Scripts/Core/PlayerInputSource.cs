@@ -37,6 +37,11 @@ namespace AIHWSim.Core
         /// nobody else hears is pointless), so the network implementations
         /// latch it from the stream rather than returning false.</summary>
         bool HornHeld();
+        /// <summary>Edge: jump / double jump / flip. Only the soccer mode reads
+        /// it, and only there does CarVehicle act on it.</summary>
+        bool JumpPressed();
+        /// <summary>Held: burn the boost tank. Soccer only, same as jump.</summary>
+        bool BoostHeld();
         float MouseSteerDelta();
     }
 
@@ -199,6 +204,36 @@ namespace AIHWSim.Core
 #endif
                 default:
                     return InputReader.HornHeld();
+            }
+        }
+
+        public bool JumpPressed()
+        {
+            switch (_kind)
+            {
+#if ENABLE_INPUT_SYSTEM
+                case InputDeviceKind.Keyboard:
+                    return InputReader.JumpKeyPressed();
+                case InputDeviceKind.Gamepad:
+                    return InputReader.JumpPadPressed(Pad);
+#endif
+                default:
+                    return InputReader.JumpPressed();
+            }
+        }
+
+        public bool BoostHeld()
+        {
+            switch (_kind)
+            {
+#if ENABLE_INPUT_SYSTEM
+                case InputDeviceKind.Keyboard:
+                    return InputReader.BoostKeyHeld();
+                case InputDeviceKind.Gamepad:
+                    return InputReader.BoostPadHeld(Pad);
+#endif
+                default:
+                    return InputReader.BoostHeld();
             }
         }
 

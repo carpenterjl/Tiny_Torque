@@ -144,6 +144,7 @@ namespace AIHWSim.Menu
             }
             _cam.farClipPlane = Mathf.Max(500f, _orbitRadius * 4f);
             MapAmbience.ApplyCamera(_cam, _ambience, MenuBackdrop);
+            Rendering.CameraBloom.Attach(_cam);
             PositionCamera();
         }
 

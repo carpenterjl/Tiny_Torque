@@ -23,5 +23,9 @@ namespace AIHWSim.Core
         /// <summary>Arcade state, or null outside arcade sessions. The component
         /// itself lives on the car so a trigger can find it from a collider.</summary>
         public Arcade.ArcadeRacer arcade;
+
+        /// <summary>Mini-game state (health, team, score), or null in a race.
+        /// On the car for the same reason <see cref="arcade"/> is.</summary>
+        public Modes.MatchRacer match;
     }
 }

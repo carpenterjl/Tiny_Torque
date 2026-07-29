@@ -1,8 +1,13 @@
-"""Export the four TinyTorque_RC map prop packs into track props.
+"""Export the five TinyTorque_RC map prop packs into track props.
 
 Headless (Blender 5.2 -- the source blends are 5.x-era):
     "C:\\Program Files\\Blender Foundation\\Blender 5.2\\blender.exe" ^
-        --background --python build_map_props.py
+        --background --python build_map_props.py [-- <pack> ...]
+
+Naming one or more packs on the command line builds only those. With no
+arguments every pack is rebuilt, which is the honest default but also rewrites
+90-odd FBX (and their .meta guids) that did not change -- so a pass that adds
+one family should name it.
 
 Re-runnable; the source blends are opened and NEVER saved. Each blend is a
 showcase -- every prop is ONE multi-material mesh named P_* inside a PROPS
@@ -15,6 +20,9 @@ UnitySim/Assets/Resources/TrackProps/<key>.fbx:
     TinyTorque_toy_props.blend    -> toy_*     (Toy Room)
     TinyTorque_ench_props.blend   -> ench_*    (Enchanted Kingdom)
     TinyTorque_haunt_props.blend  -> haunt_*   (Haunted Hollow)
+    TinyTorque_city_props.blend   -> city_*    (Torque Falls; the source names
+                                    are ALREADY city_-prefixed, so this pack
+                                    adds nothing)
 
 Per prop: duplicate, bake S(0.1) @ T(-cx, -cy, -minz) (origin at the base
 contact point, centre in plan -- TrackFactory.ItemPose snaps roots onto the
@@ -30,10 +38,14 @@ shared FBX args map straight onto Unity +Z -- no rotation. Blender X/Y/Z ->
 Unity X/Z/Y. Scale is a uniform 0.1: 1 authored metre = 0.1 game metre, the
 exact 1/10-world fiction (hero landmarks stay enormous on purpose).
 
-Special case dt_traffic_light: M_Prop_SigOff covers BOTH dark lenses in one
-piece; it is split by loose parts and renamed sigred (top) / sigamber
-(middle) so SignalCycle can drive each lamp; the green lens is already its
-own material.
+Special case the traffic signals (dt_traffic_light, city_signal): the SigOff
+material covers EVERY dark lens in one piece, so it is split by loose parts,
+clustered by plan position (one cluster per lamp head) and renamed sigred
+(top of a head) / sigamber (below it) so SignalCycle can drive each lamp; the
+green lens is already its own material. Clustering rather than ranking is
+what makes the city signal work: it has two heads on a mast arm plus a
+pedestrian head, so five dark lenses whose heights interleave -- a straight
+sort by height would call the second head's red an amber.
 
 Per prop one JSON block is printed between PROPJSON>>> markers: key, scaled
 Unity-space size, token piece bounds, tri count, and a 12-station zmin/zmax
@@ -95,7 +107,30 @@ PACKS = {
                  "Ghost", "GhostDim", "Tar", "Glass", "Candle", "DeadWood",
                  "Clapboard", "Pumpkin", "Jack", "Stalk", "Bark"],
     },
+    # The daylight town. Twice any other pack's palette because it is the only
+    # kit with no theme to unify it: five clapboard colourways, two renders,
+    # two roof colours and three leaf tints all have to coexist in one street.
+    # Numbered names (Wall5, Leaf0, Flower2) are the source's own -- the map
+    # module builds extra colourways by rebuilding a prop under a different
+    # seed, and only the seeds these 35 showcase meshes used are in the blend.
+    "city": {
+        "blend": "TinyTorque_city_props.blend",
+        "prefix": "M_City_",
+        "mats": ["Alu", "Asphalt", "Bark", "BarkPine", "Black", "Blue",
+                 "Brick", "BrickPale", "Chrome", "Concrete", "ConcreteDk",
+                 "Cream", "Door", "Flower2", "Flower3", "Galv", "Glass",
+                 "GlassLit", "GlassShop", "Grass", "Green", "Interior",
+                 "Lamp", "Leaf0", "Leaf1", "Leaf2", "LeafHedge", "LeafPine",
+                 "NeonRed", "PaintWhite", "Red", "Render2", "Render3",
+                 "Roof0", "Roof1", "Rubber", "SigGreen", "SigOff", "SignLit",
+                 "Soil", "Steel", "Stucco", "Timber", "Trim", "TrimDk",
+                 "Tube", "Wall5", "Wall7", "Yellow"],
+    },
 }
+
+# Props whose SigOff piece has to be split into per-lamp lenses. Keyed by the
+# final export key, so a pack that renames its props cannot silently miss one.
+SIGNAL_KEYS = ("dt_traffic_light", "city_signal")
 
 
 # ---------------------------------------------------------------------------
@@ -227,20 +262,150 @@ def to_unity_point(v):
 
 
 def split_traffic_lenses(parts):
-    """The sigoff piece merges both dark lenses; split by loose parts and
-    rename by height so SignalCycle can address each lamp."""
+    """The sigoff piece merges every dark lens; split it into one object per
+    lamp so SignalCycle can address them.
+
+    Grouped by plan position first, THEN by height. A signal head stacks its
+    lenses on one vertical axis, so a cluster is a head; within a head the
+    dark lenses are red on top and amber under it. Ranking the whole prop by
+    height instead works only for a single-head signal -- the city's mast arm
+    carries two heads at the same heights plus a pedestrian lamp far below, so
+    a global sort would hand the second head's red to the amber list and light
+    two thirds of the prop wrong.
+    """
     src = [o for o in parts if o.name.startswith("sigoff")]
     if len(src) != 1:
         die("expected exactly one sigoff piece, got %d" % len(src))
     parts.remove(src[0])
     pieces = separate_loose(src)
-    if len(pieces) != 2:
-        die("expected 2 loose sigoff lenses, got %d" % len(pieces))
-    pieces.sort(key=lambda o: -(world_bbox([o])[0].z + world_bbox([o])[1].z))
-    pieces[0].name = "sigred_1"
-    pieces[1].name = "sigamber_1"
+    if len(pieces) < 2:
+        die("expected 2+ loose sigoff lenses, got %d" % len(pieces))
+
+    heads = {}
+    for o in pieces:
+        lo, hi = world_bbox([o])
+        key = (round((lo.x + hi.x) * 0.5, 1), round((lo.y + hi.y) * 0.5, 1))
+        heads.setdefault(key, []).append((lo.z + hi.z, o))
+
+    counts = {"sigred": 0, "sigamber": 0}
+    for key in sorted(heads):
+        stack = sorted(heads[key], key=lambda zo: -zo[0])
+        for i, (_, o) in enumerate(stack):
+            # A head with one dark lens is a pedestrian lamp, which is a red.
+            token = "sigamber" if i == 1 else "sigred"
+            counts[token] += 1
+            o.name = "%s_%d" % (token, counts[token])
     parts.extend(pieces)
     return parts
+
+
+# ---------------------------------------------------------------------------
+# material readout
+# ---------------------------------------------------------------------------
+
+def _upstream_constants(sock, want, seen):
+    """Every constant of type `want` ('RGBA' or 'VALUE') feeding a socket.
+
+    Procedural materials (brick, siding, shingle, leaf) drive Base Color from a
+    noise-and-ramp network, so there is no single authored colour to read --
+    the honest answer is the mean of the colours the network mixes between,
+    which is what a surface of that material averages to from any distance a
+    car ever sees it.
+
+    The socket-type filter is the whole of the correctness here. Without it the
+    walk also collects every Vector input it passes, and an unlinked Vector
+    defaults to (0, 0, 0) -- so a clapboard whose two authored colours average
+    to 0.404 came back as 0.101, a quarter of its real albedo, purely from
+    texture-coordinate sockets voting black.
+    """
+    out = []
+    if not sock.is_linked:
+        if sock.type != want:
+            return out
+        v = sock.default_value
+        try:
+            return [tuple(v)[:3]] if len(v) >= 3 else [(float(v),) * 3]
+        except TypeError:
+            return [(float(v),) * 3]
+    node = sock.links[0].from_node
+    if node.name in seen:
+        return out
+    seen.add(node.name)
+    if node.type == 'VALTORGB':                      # ColorRamp
+        if want == 'RGBA':
+            for e in node.color_ramp.elements:
+                out.append(tuple(e.color)[:3])
+        return out
+    if node.type == 'RGB' and want == 'RGBA':
+        return [tuple(node.outputs[0].default_value)[:3]]
+    if node.type == 'VALUE' and want == 'VALUE':
+        return [(float(node.outputs[0].default_value),) * 3]
+    for inp in node.inputs:
+        # A mix factor is a blend weight, not a colour -- averaging it in would
+        # drag every procedural material toward mid grey.
+        if inp.name in ("Fac", "Factor"):
+            continue
+        out += _upstream_constants(inp, want, seen)
+    return out
+
+
+def _read(sock, want='RGBA'):
+    vals = _upstream_constants(sock, want, set())
+    if not vals:
+        return None
+    n = len(vals)
+    return [round(sum(v[i] for v in vals) / n, 4) for i in range(3)]
+
+
+def srgb(c):
+    """Blender's linear albedo to the sRGB triple TrackCatalog.T() takes.
+
+    The four earlier packs were converted this way by hand -- M_Ench_Plaster's
+    authored 0.430/0.398/0.330 is ench_plaster's 0.68/0.66/0.60 to three
+    decimals, and Timber, Snow and Crimson match as exactly. Doing it here
+    makes the printed number the number that gets pasted, instead of a linear
+    value someone has to remember to encode.
+    """
+    return round(12.92 * c if c <= 0.0031308
+                 else 1.055 * (c ** (1.0 / 2.4)) - 0.055, 4)
+
+
+def dump_materials(pack, cfg, tokens):
+    """One JSON block of authored PBR per pack, between MATJSON markers.
+
+    The FBX carries geometry only, so every material is rebuilt in C# from
+    numbers -- and those numbers are printed here rather than sampled off a
+    render, for the same reason the vehicle exporter prints its own: Blender's
+    FBX writer drops emission strength and coat, and a colour picked off a
+    screenshot has the view transform baked into it.
+    """
+    out = {}
+    for name, token in sorted(tokens.items()):
+        m = bpy.data.materials.get(name)
+        if m is None or not m.use_nodes:
+            continue
+        bsdf = next((n for n in m.node_tree.nodes if n.type == 'BSDF_PRINCIPLED'),
+                    None)
+        if bsdf is None:
+            continue
+        base = _read(bsdf.inputs["Base Color"]) or [0.5, 0.5, 0.5]
+        rough = (_read(bsdf.inputs["Roughness"], 'VALUE') or [0.5])[0]
+        metal = (_read(bsdf.inputs["Metallic"], 'VALUE') or [0.0])[0]
+        emis = _read(bsdf.inputs["Emission Color"]) or [0.0, 0.0, 0.0]
+        strength = (_read(bsdf.inputs["Emission Strength"], 'VALUE') or [0.0])[0]
+        lit = [c * strength for c in emis]
+        out[token] = {
+            "color": [srgb(c) for c in base],     # paste this into T()
+            "linear": base,
+            "smooth": round(1.0 - rough, 4),      # Unity Standard _Glossiness
+            "metal": round(metal, 4),
+            # T()'s `glow` scales the sRGB colour, so the useful number is how
+            # many times its own albedo the surface emits.
+            "glow": round(sum(lit) / max(1e-6, sum(base)), 3),
+            "emission": [round(c, 4) for c in lit],
+        }
+    print("MATJSON>>>" + json.dumps({"pack": pack, "materials": out})
+          + "<<<MATJSON")
 
 
 def profile(parts):
@@ -289,6 +454,8 @@ def build_pack(pack, cfg):
     if not props:
         die("no P_* meshes in " + cfg["blend"])
 
+    dump_materials(pack, cfg, tokens)
+
     for src in props:
         name = src.name[2:]                       # strip "P_"
         key = ("dt_" + name) if pack == "dt" else name
@@ -299,7 +466,7 @@ def build_pack(pack, cfg):
         bake(dups, Matrix.Scale(SCALE, 4) @ Matrix.Translation(-base))
 
         parts = separate_and_tokenise(dups, tokens)
-        if key == "dt_traffic_light":
+        if key in SIGNAL_KEYS:
             parts = split_traffic_lenses(parts)
 
         plo, phi = world_bbox(parts)
@@ -327,8 +494,13 @@ def build_pack(pack, cfg):
 
 
 def main():
-    for pack, cfg in PACKS.items():
-        build_pack(pack, cfg)
+    argv = sys.argv[sys.argv.index("--") + 1:] if "--" in sys.argv else []
+    want = [a for a in argv if not a.startswith("-")]
+    for name in want:
+        if name not in PACKS:
+            die("unknown pack '%s' (have: %s)" % (name, ", ".join(PACKS)))
+    for pack in (want or list(PACKS)):
+        build_pack(pack, PACKS[pack])
     print("[build_map_props] done.")
 
 

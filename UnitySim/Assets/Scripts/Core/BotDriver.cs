@@ -105,6 +105,33 @@ namespace AIHWSim.Core
         // Smoke-cloud blindness, pushed in by ArcadeDirector.
         private float _blindLeft, _blindSteerRelease = 0.5f, _blindThrottle = 0.35f;
 
+        // Arena mode: a point to drive at instead of a line to drive along.
+        private Vector3 _chaseAt;
+        private float _chaseUntil = -1f;
+        private float _chaseSpeed = 1f;
+
+        /// <summary>
+        /// Drive at a world point rather than along the racing line, until
+        /// <paramref name="holdSeconds"/> elapses without another call.
+        ///
+        /// A settable seam in the <see cref="SetBlind"/> style, never a
+        /// constructor argument: an arena has no line, and the object that knows
+        /// where the ball or the flag is (the mode's director) lives in a layer
+        /// Core is not allowed to depend on. So the target arrives as an
+        /// argument and the bot stays ignorant of what it is chasing.
+        /// </summary>
+        public void SetChaseTarget(Vector3 worldPos, float speedScale = 1f, float holdSeconds = 0.5f)
+        {
+            _chaseAt = worldPos;
+            _chaseSpeed = Mathf.Clamp(speedScale, 0.2f, 1.6f);
+            _chaseUntil = Time.time + holdSeconds;
+        }
+
+        /// <summary>Stop chasing and go back to the line (if there is one).</summary>
+        public void ClearChaseTarget() => _chaseUntil = -1f;
+
+        private bool Chasing => Time.time <= _chaseUntil;
+
         /// <summary>
         /// This bot is inside (or has just left) a smoke cloud: for the next
         /// <paramref name="secondsLeft"/> it drives straight instead of following
@@ -206,6 +233,27 @@ namespace AIHWSim.Core
         public bool HornHeld() => false;          // bots have nothing to say
         public float MouseSteerDelta() => 0f;
 
+        /// <summary>Boost is a mode decision, not a driving one — the soccer
+        /// director latches it the same way ArcadeDirector latches item use.</summary>
+        public bool BoostRequested;
+
+        public bool BoostHeld() => BoostRequested;
+
+        /// <summary>Latched by the mode's bot policy, consumed on the next
+        /// poll — the RequestUseItem shape, for the same reason: a bot knows
+        /// nothing about the ball, and the director that does is not allowed to
+        /// reach into the driver's decision.</summary>
+        public void RequestJump() => _jumpLatch = true;
+
+        private bool _jumpLatch;
+
+        public bool JumpPressed()
+        {
+            if (!_jumpLatch) return false;
+            _jumpLatch = false;
+            return true;
+        }
+
         /// <summary>
         /// Arcade: fire the held item on the next poll. The DECISION is not made
         /// here — a bot knows nothing about items or the rest of the field, so
@@ -245,7 +293,22 @@ namespace AIHWSim.Core
 
         private void Compute(float dt)
         {
-            if (_car == null || _path.Count < 2)
+            if (_car == null)
+            {
+                _throttle = _steer = _brake = 0f;
+                return;
+            }
+
+            // Arena mode. Taken BEFORE the path check, because an arena has no
+            // path at all and the pure-pursuit core below needs one; what it
+            // does not need is a line, which is why the target is enough.
+            if (Chasing)
+            {
+                ComputeChase(dt);
+                return;
+            }
+
+            if (_path.Count < 2)
             {
                 _throttle = _steer = _brake = 0f;
                 return;
@@ -468,5 +531,99 @@ namespace AIHWSim.Core
         }
 
         private static Vector3 Flat(Vector3 v) { v.y = 0f; return v; }
+
+        // --- Arena chase ------------------------------------------------------
+
+        /// <summary>Whisker length, in metres, for the wall check.</summary>
+        private const float WhiskerLen = 1.1f;
+
+        /// <summary>
+        /// Pure pursuit to a point, with whiskers instead of a corridor.
+        ///
+        /// The steering core is the same one the racing line uses — aim, signed
+        /// angle, clamp — because that part was never about the line. What
+        /// changes is where the aim comes from and how the car avoids scenery:
+        /// an arena has walls in arbitrary places, so three raycasts ahead say
+        /// which way is clear and bend the aim rather than a precomputed
+        /// corridor half-width.
+        /// </summary>
+        private void ComputeChase(float dt)
+        {
+            if (_car.Frozen)
+            {
+                _throttle = _steer = _brake = 0f;
+                _stuckTimer = 0f;
+                return;
+            }
+
+            Vector3 pos = _car.transform.position;
+            Vector3 fwd = Flat(_car.transform.forward);
+            Vector3 toTarget = Flat(_chaseAt - pos);
+            float dist = toTarget.magnitude;
+
+            float steer = 0f;
+            if (dist > 0.05f && fwd.sqrMagnitude > 1e-5f)
+            {
+                float signed = Vector3.SignedAngle(fwd, toTarget, Vector3.up);
+                steer = Mathf.Clamp(signed / _p.lockDeg, -1f, 1f);
+            }
+
+            // Whiskers: nose, and 35 degrees either side. A blocked side pushes
+            // the wheel the other way, proportional to how close the wall is.
+            float avoid = 0f;
+            avoid -= Probe(pos, Quaternion.Euler(0f, -35f, 0f) * fwd);
+            avoid += Probe(pos, Quaternion.Euler(0f, 35f, 0f) * fwd);
+            float ahead = Probe(pos, fwd);
+            if (ahead > 0.6f && Mathf.Abs(avoid) < 0.05f)
+                avoid = 1f;   // wall dead ahead and both sides equal: commit one way
+            steer = Mathf.Clamp(steer + avoid, -1f, 1f);
+
+            // Speed: full tilt at range, easing in as the target gets close so a
+            // bot does not simply shunt straight past whatever it is chasing.
+            float target = _p.baseSpeed * _chaseSpeed * Mathf.Clamp01(0.35f + dist * 0.35f);
+            float err = target - _car.ForwardSpeed;
+            _throttle = Mathf.Clamp01(err * 0.8f);
+            _brake = err < -1.5f ? Mathf.Clamp01(-err * 0.25f) : 0f;
+            // A hard turn wants less throttle, or the car understeers past.
+            _throttle *= Mathf.Lerp(1f, 0.55f, Mathf.Abs(steer));
+            _steer = steer;
+
+            StuckRecovery(dt);
+        }
+
+        /// <summary>0 (clear) to 1 (about to hit) along a direction.</summary>
+        private float Probe(Vector3 from, Vector3 dir)
+        {
+            var origin = from + Vector3.up * 0.05f;
+            if (!Physics.Raycast(origin, dir.normalized, out var hit, WhiskerLen,
+                    ~0, QueryTriggerInteraction.Ignore))
+                return 0f;
+            if (hit.collider.GetComponentInParent<CarVehicle>() != null) return 0f;
+            return 1f - Mathf.Clamp01(hit.distance / WhiskerLen);
+        }
+
+        /// <summary>Wedged-against-a-wall recovery, the arena's cut-down version
+        /// of the racing-line one: back up rather than respawn, because in a
+        /// derby a free teleport out of a corner is worth more than the corner.</summary>
+        private void StuckRecovery(float dt)
+        {
+            bool slow = Mathf.Abs(_car.ForwardSpeed) < 0.35f && _throttle > 0.2f;
+            _stuckTimer = slow ? _stuckTimer + dt : 0f;
+
+            if (_reversing)
+            {
+                _reverseTimer -= dt;
+                _throttle = -0.7f;
+                _steer = -_steer;
+                _brake = 0f;
+                if (_reverseTimer <= 0f) { _reversing = false; _stuckTimer = 0f; }
+                return;
+            }
+            if (_stuckTimer < 1.2f) return;
+            _reversing = true;
+            _reverseTimer = 0.8f;
+            _stuckTimer = 0f;
+        }
+
     }
 }

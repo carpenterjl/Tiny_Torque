@@ -51,7 +51,24 @@ namespace AIHWSim.Garage
         private LightSpec _pendingLight;
         private int _dragTwinIndex = -1;
 
-        private Rect _leftRect, _rightRect, _topRect, _loadRect, _statsRect;
+        private Rect _leftRect, _rightRect, _barRect, _loadRect, _statsRect;
+
+        // ---- Layout-pass snapshots -----------------------------------------
+        //
+        // What CONTROLS EXIST must not change between a Layout pass and the
+        // Repaint that follows it, and every field below decides exactly that:
+        // _showLoad gates a whole area + scrollview + N buttons, _leftTab picks
+        // between three trees with wildly different control counts, and the
+        // selection picks which of six inspectors draws. All three are written
+        // from inside OnGUI (a button press, a toolbar change, a list click), so
+        // the draw path reads these copies instead — the same rule MenuUI uses
+        // for _pageDraw. Without it, adding MenuNav's control census to this
+        // screen would start throwing on the first click.
+        private bool _showLoadDraw;
+        private int _leftTabDraw;
+        private int _selDraw = -1;
+        private PartType _selTypeDraw = PartType.Wheel;
+
         private VehicleDesign D => bootstrap.Design;
 
         private bool WheelSelected => _selType == PartType.Wheel && _sel >= 0 && _sel < D.wheels.Count;
@@ -60,6 +77,14 @@ namespace AIHWSim.Garage
         private bool BatterySelected => _selType == PartType.Battery && _sel >= 0 && _sel < D.batteries.Count;
         private bool AntennaSelected => _selType == PartType.Antenna && _sel >= 0 && _sel < D.antennas.Count;
         private bool LightSelected => _selType == PartType.Light && _sel >= 0 && _sel < D.lights.Count;
+
+        /// <summary>The same test against the Layout snapshot, for the inspector
+        /// switch. A list click changes the live selection MID-pass, so the draw
+        /// path has to keep answering with the selection Layout saw — otherwise
+        /// Repaint offers a different inspector than Layout registered, and the
+        /// stale index can point past the end of the newly chosen list.</summary>
+        private bool SelectedDraw(PartType type, int count) =>
+            _selTypeDraw == type && _selDraw >= 0 && _selDraw < count;
 
         // Palette grouped into sub-categories; each entry carries a one-line
         // description surfaced by the hover tooltip.
@@ -139,6 +164,10 @@ namespace AIHWSim.Garage
 
             if (_drag == DragState.Idle)
             {
+                // Escape only cancelled a part drag before, which meant that in
+                // the normal idle state it did nothing at all and there was no
+                // way out of this scene short of starting a drive.
+                if (InputReader.CancelPressed()) { GoBack(); return; }
                 if (InputReader.UndoPressed()) { if (bootstrap.TryUndo()) AfterHistory(); return; }
                 if (InputReader.RedoPressed()) { if (bootstrap.TryRedo()) AfterHistory(); return; }
                 if (InputReader.MirrorTogglePressed()) _mirrorMode = !_mirrorMode;
@@ -189,10 +218,18 @@ namespace AIHWSim.Garage
             if (_drag != DragState.Idle) { EndPadStroke(); return; }
 
             if (PadTable.PressedAny(PadButton.South)) CyclePadSelection();
-            if (PadTable.PressedAny(PadButton.East) && _sel >= 0)
+            // East is both "deselect" and "back", and it has to stay one button:
+            // MenuNav's own back reads the same physical control, so consuming it
+            // there too would deselect a part AND leave the Garage on one press.
+            // Deselect first; only an already-empty selection walks out.
+            if (PadTable.PressedAny(PadButton.East))
             {
-                _sel = -1;
-                bootstrap.SetHighlight(_selType, -1);
+                if (_sel >= 0)
+                {
+                    _sel = -1;
+                    bootstrap.SetHighlight(_selType, -1);
+                }
+                else GoBack();
             }
             if (PadTable.PressedAny(PadButton.West)) _mirrorMode = !_mirrorMode;
             if (PadTable.PressedAny(PadButton.North)) FocusSelection();
@@ -1022,15 +1059,39 @@ namespace AIHWSim.Garage
             if (bootstrap == null) return;
             GUI.skin = GarageSkin.Skin;
             UI.UIScale.Begin();
+            UI.MenuNav.BeginFrame("garage");
+            _stats = VehicleStats.Compute(D);
+            if (Event.current.type == EventType.Layout)
+            {
+                _showLoadDraw = _showLoad;
+                _leftTabDraw = _leftTab;
+                _selDraw = _sel;
+                _selTypeDraw = _selType;
+            }
             if (Event.current.type == EventType.Repaint) _hoverKey = null;
-            DrawTopBar();
             DrawLeftPanel();
             DrawRightPanel();
             DrawStatsPanel();
-            if (_showLoad) DrawLoadList();
+            DrawBottomBar();
+            if (_showLoadDraw) DrawLoadList();
             if (_drag != DragState.Idle) DrawDragHint();
             DrawHoverTooltip();
+            UI.MenuNav.EndFrame();
             UI.UIScale.End();
+        }
+
+        /// <summary>
+        /// Leave the Garage. Auto-saves on the way out, following DoDrive's
+        /// precedent: this screen has no dirty flag and no save prompt, so the
+        /// only alternative would be silently discarding an afternoon's work.
+        /// </summary>
+        private void GoBack()
+        {
+            DoSave();
+            if (Application.CanStreamedLevelBeLoaded(GameFlow.MenuSceneName))
+                UI.ScreenFade.To(GameFlow.LoadMenu);
+            else
+                _status = $"Scene '{GameFlow.MenuSceneName}' missing — cannot return.";
         }
 
         // Floating tooltip (drawn topmost): palette icons get name + description +
@@ -1117,35 +1178,59 @@ namespace AIHWSim.Garage
             GUI.Box(r, "Placing… click body to drop • scroll rotate • Esc cancel", st);
         }
 
-        private void DrawTopBar()
+        /// <summary>
+        /// Every verb this screen has, in the Showroom's bottom bar — so Back
+        /// sits in the same place it does on every other full-screen page, and a
+        /// gamepad can reach it. Only these controls are MenuNav-wrapped: the
+        /// palette and the inspectors stay mouse-driven, because the pad already
+        /// owns the car itself (see the gamepad part-manipulation layer).
+        /// </summary>
+        private void DrawBottomBar()
         {
-            float w = 600f, h = 34f;
-            _topRect = new Rect((UI.UIScale.W - w) * 0.5f, 6f, w, h);
-            GUILayout.BeginArea(_topRect, GUI.skin.box);
+            _barRect = UI.PanelLayout.BottomBarRect(720f, 40f);
+            GUILayout.BeginArea(_barRect, GUI.skin.box);
             GUILayout.BeginHorizontal();
+            if (UI.MenuNav.Button("← Back", GUILayout.Width(80f), GUILayout.Height(26f)))
+                GoBack();   // starts a fade; the rest of the bar still draws out
             GUILayout.Label("Name:", GUILayout.Width(42));
-            _nameField = GUILayout.TextField(_nameField, GUILayout.Width(170));
-            if (GUILayout.Button("Save", GUILayout.Width(56))) DoSave();
-            if (GUILayout.Button(_showLoad ? "Load ▲" : "Load ▼", GUILayout.Width(64))) _showLoad = !_showLoad;
-            if (GUILayout.Button("New", GUILayout.Width(48))) DoNew();
+            _nameField = GUILayout.TextField(_nameField, GUILayout.Width(150));
+            if (UI.MenuNav.Button("Save", GUILayout.Width(56f), GUILayout.Height(26f))) DoSave();
+            if (UI.MenuNav.Button(_showLoadDraw ? "Load ▲" : "Load ▼",
+                    GUILayout.Width(64f), GUILayout.Height(26f)))
+                _showLoad = !_showLoad;
+            if (UI.MenuNav.Button("New", GUILayout.Width(48f), GUILayout.Height(26f))) DoNew();
             GUI.enabled = bootstrap.CanUndo;
-            if (GUILayout.Button("↶", GUILayout.Width(28)) && bootstrap.TryUndo()) AfterHistory();
+            if (UI.MenuNav.Button("↶", GUILayout.Width(28f), GUILayout.Height(26f))
+                && bootstrap.TryUndo()) AfterHistory();
             GUI.enabled = bootstrap.CanRedo;
-            if (GUILayout.Button("↷", GUILayout.Width(28)) && bootstrap.TryRedo()) AfterHistory();
+            if (UI.MenuNav.Button("↷", GUILayout.Width(28f), GUILayout.Height(26f))
+                && bootstrap.TryRedo()) AfterHistory();
             GUI.enabled = true;
             GUILayout.FlexibleSpace();
-            if (GUILayout.Button("Drive ▶", GUILayout.Width(80))) DoDrive();
+            if (UI.MenuNav.Button("Drive ▶", GUILayout.Width(90f), GUILayout.Height(26f))) DoDrive();
             GUILayout.EndHorizontal();
             GUILayout.EndArea();
         }
 
+        // Stats drive the left column's split, so they are computed once per
+        // OnGUI pass rather than by each of the two panels that needs them.
+        private StatsResult _stats;
+
+        /// <summary>Height the stats box takes at the foot of the left column —
+        /// it grows with the composite-mass and aero rows.</summary>
+        private float StatsHeight =>
+            (D.useCompositeMass ? 230f : 190f) + (_stats.hasAeroParts ? 18f : 0f);
+
         private void DrawLeftPanel()
         {
-            float w = 250f, h = UI.UIScale.H - 100f - 130f;
-            _leftRect = new Rect(8f, 50f, w, h);
+            // The left column is the Showroom's left panel split in two: the
+            // build tabs on top, the stats readout parked at its foot.
+            var column = UI.PanelLayout.LeftRect(250f);
+            _leftRect = new Rect(column.x, column.y, column.width,
+                                 Mathf.Max(120f, column.height - StatsHeight - 6f));
             GUILayout.BeginArea(_leftRect, GUI.skin.box);
 
-            int newTab = GUILayout.Toolbar(_leftTab, new[] { "BODY", "PARTS", "PAINT" });
+            int newTab = GUILayout.Toolbar(_leftTabDraw, new[] { "BODY", "PARTS", "PAINT" });
             if (newTab != _leftTab)
             {
                 if (newTab == 2)
@@ -1170,7 +1255,7 @@ namespace AIHWSim.Garage
 
             // Scroll so small game views (editor) never clip the tab content.
             _leftScroll = GUILayout.BeginScrollView(_leftScroll);
-            switch (_leftTab)
+            switch (_leftTabDraw)
             {
                 case 0: DrawBodyTab(); break;
                 case 1: DrawPartsTab(); break;
@@ -1345,8 +1430,7 @@ namespace AIHWSim.Garage
 
         private void DrawRightPanel()
         {
-            float w = 270f, h = UI.UIScale.H - 100f;
-            _rightRect = new Rect(UI.UIScale.W - w - 8f, 50f, w, h);
+            _rightRect = UI.PanelLayout.RightRect(270f);
             GUILayout.BeginArea(_rightRect, GUI.skin.box);
             Header("PARTS");
 
@@ -1405,12 +1489,14 @@ namespace AIHWSim.Garage
 
             // The inspector scrolls too — motor/aero inspectors outgrow small views.
             _inspectorScroll = GUILayout.BeginScrollView(_inspectorScroll);
-            if (WheelSelected) DrawWheelInspector(D.wheels[_sel]);
-            else if (SensorSelected) DrawSensorInspector(D.sensors[_sel]);
-            else if (AeroSelected) DrawAeroInspector(D.aero[_sel]);
-            else if (BatterySelected) DrawBatteryInspector(D.batteries[_sel]);
-            else if (AntennaSelected) DrawAntennaInspector(D.antennas[_sel]);
-            else if (LightSelected) DrawLightInspector(D.lights[_sel]);
+            // Snapshot, not live state: a click in the list above changes the
+            // selection mid-pass, and which inspector exists must not.
+            if (SelectedDraw(PartType.Wheel, D.wheels.Count)) DrawWheelInspector(D.wheels[_selDraw]);
+            else if (SelectedDraw(PartType.Sensor, D.sensors.Count)) DrawSensorInspector(D.sensors[_selDraw]);
+            else if (SelectedDraw(PartType.Aero, D.aero.Count)) DrawAeroInspector(D.aero[_selDraw]);
+            else if (SelectedDraw(PartType.Battery, D.batteries.Count)) DrawBatteryInspector(D.batteries[_selDraw]);
+            else if (SelectedDraw(PartType.Antenna, D.antennas.Count)) DrawAntennaInspector(D.antennas[_selDraw]);
+            else if (SelectedDraw(PartType.Light, D.lights.Count)) DrawLightInspector(D.lights[_selDraw]);
             else GUILayout.Label("Select a part (list or click its marker).\nDrag a marker to move it; grab a palette\nicon to add one.");
             GUILayout.EndScrollView();
 
@@ -1430,12 +1516,24 @@ namespace AIHWSim.Garage
             w.yaw = Slider("Heading°", w.yaw, -180f, 180f);
             w.radius = Slider("Radius", w.radius, 0.02f, 0.07f);
 
-            string[] styleNames = { "Slick", "Knobby", "Rally", "Coupe", "Baja", "Steelie" };
+            // The button cycles a LIST of styles, not a range: 6-8 are showroom
+            // FINISHES over the slick rather than meshes, so the garage skips
+            // them, while 9-12 (the Legendary cars' own wheels) belong here.
+            // A style the list does not carry — a design saved with a finish —
+            // still displays, and the first press moves it into the list.
+            int[] offered = { 0, 1, 2, 3, 4, 5, 9, 10, 11, 12 };
+            string[] styleNames =
+            {
+                "Slick", "Knobby", "Rally", "Coupe", "Baja", "Steelie",
+                "Chrome", "Gold", "Neon",
+                "Rusted", "Race gold", "Five-spoke", "Whitewall",
+            };
             int st = Mathf.Clamp(w.wheelStyle, 0, styleNames.Length - 1);
             if (GUILayout.Button("Tyre style: " + styleNames[st]))
             {
                 bootstrap.PushUndo("tyre");
-                w.wheelStyle = (st + 1) % styleNames.Length;
+                int at = System.Array.IndexOf(offered, st);
+                w.wheelStyle = offered[(at + 1) % offered.Length];
                 bootstrap.RequestRebuild();
             }
 
@@ -1807,9 +1905,10 @@ namespace AIHWSim.Garage
 
         private void DrawStatsPanel()
         {
-            var s = VehicleStats.Compute(D);
-            float w = 250f, h = (D.useCompositeMass ? 230f : 190f) + (s.hasAeroParts ? 18f : 0f);
-            _statsRect = new Rect(8f, UI.UIScale.H - h - 8f, w, h);
+            var s = _stats;
+            // Foot of the left column, directly under the build tabs.
+            var column = UI.PanelLayout.LeftRect(250f);
+            _statsRect = new Rect(column.x, column.yMax - StatsHeight, column.width, StatsHeight);
             GUILayout.BeginArea(_statsRect, GUI.skin.box);
             GUILayout.Label("STATS", GarageSkin.Header);
             GUILayout.Label($"Mass: {s.totalMass:0.00} kg", GarageSkin.StatLabel);
@@ -1831,8 +1930,9 @@ namespace AIHWSim.Garage
 
         private void DrawLoadList()
         {
+            // Pops UP from the bottom bar now that the verbs live down there.
             float w = 220f, h = 260f;
-            _loadRect = new Rect(_topRect.x, _topRect.yMax + 4f, w, h);
+            _loadRect = new Rect(_barRect.x + 90f, _barRect.y - h - 4f, w, h);
             GUILayout.BeginArea(_loadRect, GUI.skin.box);
             _loadScroll = GUILayout.BeginScrollView(_loadScroll);
             // Built-in presets (read-only): clicking clones one to edit.
@@ -2013,7 +2113,8 @@ namespace AIHWSim.Garage
             // same way before testing — GUI.matrix only transforms IMGUI's own
             // events, not this hand-rolled test.
             Vector2 g = UI.UIScale.GuiPointer();
-            if (_leftRect.Contains(g) || _rightRect.Contains(g) || _topRect.Contains(g) || _statsRect.Contains(g)) return true;
+            if (_leftRect.Contains(g) || _rightRect.Contains(g) ||
+                _barRect.Contains(g) || _statsRect.Contains(g)) return true;
             if (_showLoad && _loadRect.Contains(g)) return true;
             return false;
         }

@@ -92,6 +92,7 @@ namespace AIHWSim.Garage
             Cam.clearFlags = CameraClearFlags.SolidColor;
             Cam.backgroundColor = new Color(0.12f, 0.13f, 0.16f);
             Cam.farClipPlane = 200f;
+            Rendering.CameraBloom.Attach(Cam);
             Orbit = Cam.gameObject.GetComponent<OrbitCamera>() ?? Cam.gameObject.AddComponent<OrbitCamera>();
         }
 

@@ -51,7 +51,11 @@ namespace AIHWSim.Core
         /// <summary>Half road width at each _botPath node (null on LAN paths,
         /// which never run bots). Lets BotDriver size its wander to the road.</summary>
         private List<float> _botHalfWidths;
-        private bool _splitScreen;                   // 2+ local humans (not a bot race)
+        private bool _splitScreen;                      // 2+ local humans (not a bot race)
+
+        /// <summary>How many local humans share the screen — the divisor the
+        /// viewport table needs, and 1 in every LAN session.</summary>
+        private int _localHumans = 1;
         private PlayerRig _humanRig;
         private readonly List<BotDriver> _bots = new List<BotDriver>();
 
@@ -73,6 +77,7 @@ namespace AIHWSim.Core
             // NOT trigger split-screen composition.
             int localHumans = 0;
             foreach (var s in slots) if (!s.isBot && s.isLocal) localHumans++;
+            _localHumans = localHumans;
             _splitScreen = localHumans > 1;
 
             if (GameFlow.ActiveTrack != null) BuildCustomEnvironment();
@@ -83,6 +88,9 @@ namespace AIHWSim.Core
                 _spawnPos, _spawnRot * Vector3.forward, out _botPathClosed,
                 out _botHalfWidths);
             TrackRespawn.SetTrack(_built, _botPath, _botPathClosed);
+            // The arena's answer to the racing line — spawn ring, floor bounds
+            // and centre. Harmless on a circuit: nothing consults it there.
+            Modes.ArenaNav.SetTrack(_built);
 
             for (int i = 0; i < slots.Count; i++)
                 _rigs.Add(BuildPlayerRig(slots[i], i, slots.Count, _splitScreen));
@@ -107,34 +115,11 @@ namespace AIHWSim.Core
             HookLapRecords();
             ConsumePendingSnapshot();
 
-            // Race mode (first to N laps) when configured and the map can time laps.
-            RaceDirector race = null;
-            if (SessionConfig.TargetLaps > 0 && _lapTimer != null)
-            {
-                race = new GameObject("RaceDirector").AddComponent<RaceDirector>();
-                race.targetLaps = SessionConfig.TargetLaps;
-                race.timer = _lapTimer;
-                race.players = _rigs;
-                race.bots = _bots;                          // rubber-band targets
-                race.rubberBand = SessionConfig.RubberBand;
-                race.countdownSeconds = SessionConfig.CountdownSeconds;
-                // Hold the grid immediately so nothing rolls before RaceDirector.Start.
-                if (SessionConfig.CountdownSeconds > 0)
-                    foreach (var rig in _rigs) rig.car.Frozen = true;
-
-                // Progression: a human win against at least one opponent rolls
-                // a Scrap Crate for finishing and a Chrome Case for a podium,
-                // plus XP for the level badge. The award itself is UI-layer
-                // state — RaceDirector's results overlay draws the reveal, and
-                // the crates wait in the Showroom until the player opens them.
-                if (SessionConfig.Players.Count > 1)
-                    race.PlayerFinished += (rig, place) =>
-                    {
-                        if (rig?.slot == null || rig.slot.isBot) return;
-                        Persistence.Progression.OnRaceFinished(
-                            place, SessionConfig.Players.Count - 1);
-                    };
-            }
+            // The session's rules. Race is the only one that needs a finish line;
+            // the arena modes need a spawn ring instead, and both refuse to
+            // compose on a map that cannot support them rather than half-running.
+            var match = BuildMatchDirector();
+            var race = match as RaceDirector;
 
             // Arcade layer, gated exactly like the race above: item boxes and
             // positions both need a finish line, and power-ups in a free-drive
@@ -163,6 +148,103 @@ namespace AIHWSim.Core
             }
         }
 
+        /// <summary>
+        /// Compose the rules object for <see cref="SessionConfig.Match"/>, or
+        /// null for a free drive. One method per mode, called from every scene
+        /// composition path, so adding a mode never means finding three places.
+        /// </summary>
+        private Track.MatchDirector BuildMatchDirector()
+        {
+            switch (SessionConfig.Match)
+            {
+                case MatchMode.Derby:
+                case MatchMode.Ctf:
+                case MatchMode.Soccer:
+                    return BuildArenaDirector();
+                case MatchMode.FreeRoam:
+                    // The town IS the mode: no countdown, no clock, no results
+                    // screen. Stated as its own case rather than left to fall
+                    // through BuildRaceDirector's `TargetLaps <= 0` early-out,
+                    // because a lap count surviving from a previous race would
+                    // otherwise compose a RaceDirector on a map that has no
+                    // finish line for it to time.
+                    return null;
+                default:
+                    return BuildRaceDirector();
+            }
+        }
+
+        /// <summary>
+        /// The arena modes. All three need a spawn ring rather than a finish
+        /// line, so an arena mode chosen on a race circuit composes nothing and
+        /// leaves a free drive — the same way a race on a finish-less tile map
+        /// already does.
+        /// </summary>
+        private Track.MatchDirector BuildArenaDirector()
+        {
+            if (!Modes.ArenaNav.Available)
+            {
+                Debug.LogWarning($"[TrackBootstrap] {SessionConfig.Match} needs a map with " +
+                                 "spawn points; falling back to free drive.");
+                return null;
+            }
+
+            Track.MatchDirector match = SessionConfig.Match switch
+            {
+                MatchMode.Derby => new GameObject("DerbyDirector").AddComponent<Modes.DerbyDirector>(),
+                MatchMode.Ctf => new GameObject("CtfDirector").AddComponent<Modes.CtfDirector>(),
+                _ => new GameObject("SoccerDirector").AddComponent<Modes.SoccerDirector>(),
+            };
+            match.players = _rigs;
+            match.countdownSeconds = SessionConfig.CountdownSeconds;
+            HoldGrid();
+            HookCratePayout(match);
+            return match;
+        }
+
+        private Track.MatchDirector BuildRaceDirector()
+        {
+            // Race mode (first to N laps) when configured and the map can time laps.
+            if (SessionConfig.TargetLaps <= 0 || _lapTimer == null) return null;
+
+            var race = new GameObject("RaceDirector").AddComponent<RaceDirector>();
+            race.targetLaps = SessionConfig.TargetLaps;
+            race.timer = _lapTimer;
+            race.players = _rigs;
+            race.bots = _bots;                          // rubber-band targets
+            race.rubberBand = SessionConfig.RubberBand;
+            race.countdownSeconds = SessionConfig.CountdownSeconds;
+            HoldGrid();
+            HookCratePayout(race);
+            return race;
+        }
+
+        /// <summary>Hold the grid immediately so nothing rolls before the
+        /// director's own Start runs.</summary>
+        private void HoldGrid()
+        {
+            if (SessionConfig.CountdownSeconds <= 0) return;
+            foreach (var rig in _rigs) rig.car.Frozen = true;
+        }
+
+        /// <summary>
+        /// Progression: a human placing against at least one opponent rolls a
+        /// Scrap Crate for finishing and a Chrome Case for a podium, plus XP for
+        /// the level badge. The award itself is UI-layer state — the results
+        /// overlay draws the reveal, and the crates wait in the Showroom until
+        /// the player opens them. Every mode pays the same way, because every
+        /// mode raises the same event.
+        /// </summary>
+        private void HookCratePayout(Track.MatchDirector match)
+        {
+            if (SessionConfig.Players.Count <= 1) return;
+            match.PlayerFinished += (rig, place) =>
+            {
+                if (rig?.slot == null || rig.slot.isBot) return;
+                Persistence.Progression.OnRaceFinished(place, SessionConfig.Players.Count - 1);
+            };
+        }
+
         /// <summary>Create the arcade director and give every rig arcade state.
         /// Firmware rigs are refused inside Register.</summary>
         private void BuildArcade(bool authority)
@@ -172,50 +254,31 @@ namespace AIHWSim.Core
             _arcade.trackLimits = SessionConfig.TrackLimits;
             _arcade.lapTimer = _lapTimer;
             _arcade.SetTrack(_built, _botPath, _botPathClosed);
-            foreach (var rig in _rigs)
-            {
-                var racer = _arcade.Register(rig);
-                // The handling floor is a physics change, so it belongs on
-                // machines that actually simulate the car: every rig on the
-                // host, and on a client the one car it owns. The rest of a
-                // client's cars are ghosts posed from the stream — there is no
-                // grip or drive on them to raise.
-                if (authority || rig == _ownRig) ApplyArcadeHandling(racer);
-            }
+            // The handling floor itself is no longer applied here: every rig
+            // this machine simulates carries a HandlingFloor component (see
+            // AttachHandlingFloor), which steers the racer's bases per frame —
+            // so the Arcade/Sim toggle works mid-session and in modes that
+            // never build a director at all. Ghost/follower rigs have no
+            // component and keep bases of 1, which on a kinematic car is moot.
+            foreach (var rig in _rigs) _arcade.Register(rig);
         }
 
         /// <summary>
-        /// Raise one arcade car to the handling floor.
-        ///
-        /// Applied here — after every rig exists — rather than where the menu
-        /// builds its slots, because the slot path is not the only way a session
-        /// starts: a snapshot resume rebuilds the roster without ever visiting
-        /// the menu, and bots are constructed with a zeroed AssistSettings by
-        /// design. One call site covers humans, bots, split-screen and the LAN
-        /// host alike.
-        ///
-        /// Assists are a per-channel MAX, so a player who dialled in higher
-        /// values in Options keeps them. Firmware rigs never reach here — Register
-        /// refuses them — so C controllers still face the raw physics they are
-        /// meant to be validated against.
+        /// Attach the mode-independent handling floor to a rig this machine
+        /// simulates. One call site per rig builder covers humans, bots,
+        /// split-screen and both LAN roles alike — a snapshot resume rebuilds
+        /// the roster without visiting the menu, so a menu-side write would
+        /// simply not happen for that session. Firmware rigs are excluded for
+        /// the same reason ArcadeDirector.Register refuses them: C controllers
+        /// face the raw physics they are validated against.
         /// </summary>
-        private void ApplyArcadeHandling(Arcade.ArcadeRacer racer)
+        private static void AttachHandlingFloor(PlayerRig rig)
         {
-            if (racer == null || racer.car == null) return;
-            if (!SessionConfig.ArcadeHandling) return;   // Sim handling: leave it alone
-
-            var floor = Arcade.ArcadeConfig.HandlingAssists;
-            var a = racer.car.assists;
-            a.steer = Mathf.Max(a.steer, floor.steer);
-            a.stability = Mathf.Max(a.stability, floor.stability);
-            a.traction = Mathf.Max(a.traction, floor.traction);
-            a.abs = Mathf.Max(a.abs, floor.abs);
-            racer.car.assists = a;
-
-            racer.gripBase = Arcade.ArcadeConfig.HandlingGripBonus;
-            racer.driveBase = Arcade.ArcadeConfig.HandlingDriveScale;
-            racer.stabilityBase = Arcade.ArcadeConfig.HandlingStabilityBoost;
-            racer.RestoreCar();   // push the new baselines onto the car immediately
+            if (rig == null || rig.car == null) return;
+            if (rig.slot != null && rig.slot.control == DriveControl.Firmware) return;
+            var floor = rig.car.gameObject.AddComponent<HandlingFloor>();
+            floor.car = rig.car;
+            floor.rig = rig;
         }
 
         // ================= LAN (host simulates everyone; clients render ghosts) ===
@@ -257,6 +320,9 @@ namespace AIHWSim.Core
             _botPath = BotPath.Build(GameFlow.ActiveTrack, _lapTimer, _ovalPath,
                 _spawnPos, _spawnRot * Vector3.forward, out _botPathClosed);
             TrackRespawn.SetTrack(_built, _botPath, _botPathClosed);
+            // The arena's answer to the racing line — spawn ring, floor bounds
+            // and centre. Harmless on a circuit: nothing consults it there.
+            Modes.ArenaNav.SetTrack(_built);
 
             foreach (var p in session.Roster)
                 _rigs.Add(p.slot == session.LocalSlot ? BuildLanRig(p) : BuildLanFollower(p));
@@ -361,7 +427,7 @@ namespace AIHWSim.Core
             runner.logLabel = $"s{p.slot}";
             runner.actuationDelayTicks = Persistence.SettingsStore.Current.actuationDelayTicks;
 
-            return new PlayerRig
+            var rig = new PlayerRig
             {
                 slot = new PlayerSlot
                 {
@@ -378,6 +444,10 @@ namespace AIHWSim.Core
                 lapTimer = _lapTimer,
                 netSlot = p.slot,
             };
+            // BuildLanRig only ever builds the car this machine owns and
+            // simulates — the rest of the roster becomes followers/ghosts.
+            AttachHandlingFloor(rig);
+            return rig;
         }
 
         /// <summary>
@@ -447,6 +517,7 @@ namespace AIHWSim.Core
             // horizon colour come from the map's ambience.
             TrackEd.MapAmbience.ApplyCamera(cam, AmbienceKey(), SkyBlue);
             cam.rect = new Rect(0f, 0f, 1f, 1f);
+            AIHWSim.Rendering.CameraBloom.Attach(cam);
             var follow = cam.gameObject.GetComponent<ChaseCamera>() ?? cam.gameObject.AddComponent<ChaseCamera>();
             follow.target = target;
             follow.offset = new Vector3(0f, 1.1f, -2.2f);
@@ -599,6 +670,9 @@ namespace AIHWSim.Core
             // A client owns its own car, so its respawn key is its own business —
             // it needs the line locally even though lap timing is the host's.
             TrackRespawn.SetTrack(_built, _botPath, _botPathClosed);
+            // The arena's answer to the racing line — spawn ring, floor bounds
+            // and centre. Harmless on a circuit: nothing consults it there.
+            Modes.ArenaNav.SetTrack(_built);
 
             // Lap timing is host-authoritative: destroy (not disable — physics
             // callbacks fire on disabled behaviours) the trigger components so
@@ -898,7 +972,7 @@ namespace AIHWSim.Core
                 mission.runner = runner;
             }
 
-            return new PlayerRig
+            var rig = new PlayerRig
             {
                 slot = slot,
                 car = built.car,
@@ -908,6 +982,8 @@ namespace AIHWSim.Core
                 camera = cam,
                 lapTimer = _lapTimer,
             };
+            AttachHandlingFloor(rig);
+            return rig;
         }
 
         /// <summary>
@@ -916,6 +992,25 @@ namespace AIHWSim.Core
         /// </summary>
         private (Vector3, Quaternion) SpawnPose(int index, int count)
         {
+            // An arena authors a ring of spawns instead of a start line, and in a
+            // team mode each one belongs to an end. Falls through to the grid
+            // below when the map has no ring — which is what happens if someone
+            // starts a derby on a race circuit.
+            if (SessionConfig.IsArenaMatch && Modes.ArenaNav.Available)
+            {
+                int team = TeamOf(index);
+                // Index WITHIN the team, so two teams do not both take spawn 0.
+                int within = index;
+                if (team >= 0)
+                {
+                    within = 0;
+                    for (int i = 0; i < index && i < SessionConfig.Players.Count; i++)
+                        if (TeamOf(i) == team) within++;
+                }
+                if (Modes.ArenaNav.TrySpawn(team, within, out var apos, out var arot))
+                    return (apos, arot);
+            }
+
             if (count <= 1 || index < 0) return (_spawnPos, _spawnRot);
 
             Vector3 right = _spawnRot * Vector3.right;
@@ -928,7 +1023,36 @@ namespace AIHWSim.Core
             return (_spawnPos + offset, _spawnRot);
         }
 
-        /// <summary>Split-screen cameras: P1 keeps Camera.main (and the only AudioListener), top half; P2 bottom half.</summary>
+        /// <summary>The roster's team for a slot index, or -1 in a free-for-all.
+        /// Reads the roster rather than the rigs, because spawn poses are needed
+        /// while the rigs are still being built.</summary>
+        private static int TeamOf(int index)
+        {
+            if (!SessionConfig.IsTeamMatch) return -1;
+            if (index < 0 || index >= SessionConfig.Players.Count) return -1;
+            return SessionConfig.Players[index].team;
+        }
+
+        /// <summary>
+        /// Viewport for local player <paramref name="index"/> of
+        /// <paramref name="count"/>: full screen alone, stacked halves for two,
+        /// quadrants for three or four. Three players get a quadrant each and
+        /// leave the fourth cell empty rather than stretching one of them, which
+        /// keeps every player's field of view identical — the thing that
+        /// actually matters when they are competing.
+        /// </summary>
+        private static Rect ViewportFor(int index, int count)
+        {
+            if (count <= 1) return new Rect(0f, 0f, 1f, 1f);
+            if (count == 2)
+                return index == 0 ? new Rect(0f, 0.5f, 1f, 0.5f) : new Rect(0f, 0f, 1f, 0.5f);
+
+            // Reading order: top-left, top-right, bottom-left, bottom-right.
+            int col = index % 2, row = index / 2;
+            return new Rect(col * 0.5f, row == 0 ? 0.5f : 0f, 0.5f, 0.5f);
+        }
+
+        /// <summary>Split-screen cameras: P1 keeps Camera.main (and the only AudioListener).</summary>
         private Camera BuildPlayerCamera(int index, Transform target)
         {
             Camera cam;
@@ -950,7 +1074,10 @@ namespace AIHWSim.Core
 
             cam.farClipPlane = 800f;
             TrackEd.MapAmbience.ApplyCamera(cam, AmbienceKey(), SkyBlue);
-            cam.rect = index == 0 ? new Rect(0f, 0.5f, 1f, 0.5f) : new Rect(0f, 0f, 1f, 0.5f);
+            cam.rect = ViewportFor(index, _localHumans);
+            // Per-viewport bloom: OnRenderImage runs on each camera's own
+            // viewport-sized RT, so splits cannot bleed into each other.
+            AIHWSim.Rendering.CameraBloom.Attach(cam);
 
             var follow = cam.gameObject.GetComponent<ChaseCamera>() ?? cam.gameObject.AddComponent<ChaseCamera>();
             follow.target = target;
@@ -1206,6 +1333,7 @@ namespace AIHWSim.Core
             }
             cam.farClipPlane = 800f;
             TrackEd.MapAmbience.ApplyCamera(cam, AmbienceKey(), SkyBlue);
+            AIHWSim.Rendering.CameraBloom.Attach(cam);
 
             var follow = cam.gameObject.GetComponent<ChaseCamera>() ?? cam.gameObject.AddComponent<ChaseCamera>();
             follow.target = target;

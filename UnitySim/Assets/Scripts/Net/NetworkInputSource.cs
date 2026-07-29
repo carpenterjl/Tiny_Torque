@@ -18,6 +18,7 @@ namespace AIHWSim.Net
         private float _receivedAt = -999f;
         private bool _respawnLatch;
         private bool _useItemLatch;
+        private bool _jumpLatch;
 
         public void Receive(in InputState s)
         {
@@ -25,6 +26,7 @@ namespace AIHWSim.Net
             _receivedAt = Time.unscaledTime;
             if (s.respawnEdge) _respawnLatch = true;
             if (s.useItemEdge) _useItemLatch = true;
+            if (s.jumpEdge) _jumpLatch = true;
         }
 
         private bool Live =>
@@ -41,6 +43,10 @@ namespace AIHWSim.Net
         /// <summary>Held-state from the stream (unlike look-back, the horn IS
         /// on the wire — everyone should hear it).</summary>
         public bool HornHeld() => Live && _last.hornHeld;
+        /// <summary>Both aerial actions ride the input stream, because unlike
+        /// look-back they move the car and the host simulates nothing without
+        /// them.</summary>
+        public bool BoostHeld() => Live && _last.boostHeld;
         public float MouseSteerDelta() => 0f;
 
         public bool RespawnPressed()
@@ -56,6 +62,14 @@ namespace AIHWSim.Net
             if (!_useItemLatch || (NetSession.Instance != null && NetSession.Instance.InputsFrozen))
                 return false;
             _useItemLatch = false;
+            return true;
+        }
+
+        public bool JumpPressed()
+        {
+            if (!_jumpLatch || (NetSession.Instance != null && NetSession.Instance.InputsFrozen))
+                return false;
+            _jumpLatch = false;
             return true;
         }
     }
@@ -84,6 +98,8 @@ namespace AIHWSim.Net
         // ungated for the same reason — honking on the grid is half the fun.
         public bool LookBackHeld() => _inner.LookBackHeld();
         public bool HornHeld() => _inner.HornHeld();
+        public bool JumpPressed() => !Frozen && _inner.JumpPressed();
+        public bool BoostHeld() => !Frozen && _inner.BoostHeld();
         public float MouseSteerDelta() => Frozen ? 0f : _inner.MouseSteerDelta();
     }
 }

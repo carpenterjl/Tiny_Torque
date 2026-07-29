@@ -55,6 +55,31 @@ namespace AIHWSim.Vehicles
         /// <summary>Slip range over which the release reaches full authority.</summary>
         public const float AbsBand = 0.4f;
 
+        // ---- launch control ----
+        // A voltage-side governor for standing starts (see
+        // CarVehicle.UpdateLaunchControl). TC composes with it: TC is per-wheel
+        // and stateless, this is global and integrating.
+
+        /// <summary>Slip ratio the governor holds the worst powered wheel at:
+        /// 1.2 × TyreModel.KappaPeak (0.10), i.e. just PAST the force peak — a
+        /// governed launch leaves at maximum force, and converging from the
+        /// spin side keeps the integrator from hunting across the peak.</summary>
+        public const float LaunchSlipTarget = 0.12f;
+        /// <summary>Integrator gain: voltage-scale units per second per unit of
+        /// excess slip. At a floored-launch excess of ~0.5 this cuts ~2/s, so
+        /// the governor bites in a couple of tenths.</summary>
+        public const float LaunchGain = 4f;
+        /// <summary>The governor never cuts below this — a launch should feel
+        /// managed, not confiscated.</summary>
+        public const float LaunchFloor = 0.30f;
+        /// <summary>Below this speed (m/s) the governor is armed.</summary>
+        public const float LaunchEngageSpeed = 3.0f;
+        /// <summary>Above this speed the scale is handed back at 4× the release
+        /// rate — the launch is over, the motor belongs to the driver.</summary>
+        public const float LaunchReleaseSpeed = 4.0f;
+        /// <summary>Recovery rate (scale units per second) while not cutting.</summary>
+        public const float LaunchReleaseRate = 2f;
+
         // ================= the top end =================
         //
         // Governing rule for everything below:

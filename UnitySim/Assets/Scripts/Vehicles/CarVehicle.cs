@@ -9,7 +9,11 @@ namespace AIHWSim.Vehicles
     /// <summary>Preset body silhouettes selectable in the garage (append-only —
     /// the enum value is persisted in design JSON). Each carries its own drag
     /// coefficient in <see cref="AeroDynamics.BodyCd"/>.</summary>
-    public enum BodyShape { Box, Wedge, Buggy, Shell, LowRacer, Coupe, Baja, Patrol }
+    public enum BodyShape
+    {
+        Box, Wedge, Buggy, Shell, LowRacer, Coupe, Baja, Patrol,
+        Rattle, Redline, Highwing, Autopia,
+    }
 
     /// <summary>
     /// Per-player arcade driving assists, each 0 (off — the pure physics model)
@@ -24,6 +28,7 @@ namespace AIHWSim.Vehicles
         [Range(0f, 1f)] public float stability;  // ESC-style yaw damping toward intent
         [Range(0f, 1f)] public float traction;   // torque cut on drive-wheel slip
         [Range(0f, 1f)] public float abs;        // brake release on lockup
+        [Range(0f, 1f)] public float launch;     // standing-start wheelspin governor
     }
 
     /// <summary>
@@ -111,6 +116,69 @@ namespace AIHWSim.Vehicles
         /// <summary>Yaw torque (N·m) applied while spun out by a hit.</summary>
         public float arcadeYawTorque;
 
+        /// <summary>
+        /// Master switch for the aerial moves (jump, double jump, flip, air
+        /// roll) the soccer mode needs. OFF everywhere else, and the methods
+        /// below refuse to do anything while it is off — so a race car, a LAN
+        /// peer and the headless Opus rig behave exactly as they did before
+        /// aerials existed. That claim is what the Opus regression checks.
+        /// </summary>
+        public bool arcadeAerial;
+
+        /// <summary>Any wheel touching the ground, from last step's contact
+        /// state. The aerial moves are gated on the opposite of this and
+        /// nothing else reads it, so it costs a loop over four bools.</summary>
+        public bool Grounded
+        {
+            get
+            {
+                foreach (var w in _wheels) if (w.grounded) return true;
+                return false;
+            }
+        }
+
+        /// <summary>
+        /// Straight up out of the chassis. Through the centre of mass on
+        /// purpose: a vertical impulse on a vertical lever arm has a zero cross
+        /// product, which is the one case where the positioned overload and this
+        /// one agree — and the one the drift hop already relies on.
+        /// </summary>
+        public void AerialJump(float impulse)
+        {
+            if (!arcadeAerial || _body == null) return;
+            // Kill any residual downward velocity first, so a jump off a dip
+            // gives the same height as a jump off the flat.
+            var v = _body.linearVelocity;
+            if (v.y < 0f) { v.y = 0f; _body.linearVelocity = v; }
+            _body.AddForce(Vector3.up * impulse, ForceMode.Impulse);
+        }
+
+        /// <summary>
+        /// The dodge: a flat impulse along <paramref name="worldDir"/> plus the
+        /// roll that makes it read as a flip rather than a shove. The linear
+        /// half MUST go through the CoM (see <see cref="ArcadeImpulse(Vector3)"/>
+        /// for why); the rotation is asked for explicitly instead.
+        /// </summary>
+        public void AerialFlip(Vector3 worldDir, float impulse, float torque)
+        {
+            if (!arcadeAerial || _body == null) return;
+            worldDir.y = 0f;
+            if (worldDir.sqrMagnitude < 1e-4f) return;
+            worldDir.Normalize();
+            _body.AddForce(worldDir * impulse, ForceMode.Impulse);
+            // Roll about the axis perpendicular to the travel, so a side dodge
+            // barrel-rolls and a forward dodge front-flips.
+            _body.AddTorque(Vector3.Cross(Vector3.up, worldDir) * torque, ForceMode.Impulse);
+        }
+
+        /// <summary>Sustained air-control torque while airborne. Refused on the
+        /// ground, where the tyres own the car's attitude.</summary>
+        public void AerialTorque(Vector3 torque)
+        {
+            if (!arcadeAerial || _body == null || Grounded) return;
+            _body.AddTorque(torque, ForceMode.Force);
+        }
+
         /// <summary>Drive-torque scale while an arcade effect suppresses the
         /// motors (spun out, wrecked). MUST default to 1. Deliberately separate
         /// from <see cref="Frozen"/>, which also slams the brakes on and is owned
@@ -177,6 +245,22 @@ namespace AIHWSim.Vehicles
         /// erase all three.
         /// </summary>
         public float arcadeStabilityMult = 1f;
+
+        /// <summary>
+        /// Arcade "heaviness": extra downward force in newtons per (m/s)² of
+        /// forward speed, applied at the centre of mass. MUST default to 0 — the
+        /// application site is branch-skipped at 0, so every non-arcade session
+        /// and the Opus mission stay bit-identical.
+        ///
+        /// Exists because honest RC-scale aero is negligible by design
+        /// (AeroDynamics: ~3.5 % of weight at 10 m/s) and the arcade car reads
+        /// as floaty at speed. Speed-squared load is the physically honest way
+        /// to plant it without touching low-speed µ. Owned by HandlingFloor —
+        /// NOT by ArcadeDirector's ApplyEffects, which re-asserts every channel
+        /// it owns each frame; this one is deliberately outside that set, and
+        /// its doc is the enumeration ApplyEffects' comment defers to.
+        /// </summary>
+        public float arcadeDownforce;
 
         [Header("Composite mass (factory-set)")]
         public bool useCompositeMass = false;
@@ -706,6 +790,10 @@ namespace AIHWSim.Vehicles
             BodyShape.Coupe    => "body_coupe",
             BodyShape.Baja     => "body_baja",
             BodyShape.Patrol   => "body_patrol",
+            BodyShape.Rattle   => "body_rattle",
+            BodyShape.Redline  => "body_redline",
+            BodyShape.Highwing => "body_highwing",
+            BodyShape.Autopia  => "body_autopia",
             _                  => null,
         };
 
@@ -717,7 +805,9 @@ namespace AIHWSim.Vehicles
         /// everything path, bit for bit.
         /// </summary>
         private static bool HasAccentTokens(BodyShape s) =>
-            s == BodyShape.Coupe || s == BodyShape.Baja || s == BodyShape.Patrol;
+            s == BodyShape.Coupe || s == BodyShape.Baja || s == BodyShape.Patrol ||
+            s == BodyShape.Rattle || s == BodyShape.Redline ||
+            s == BodyShape.Highwing || s == BodyShape.Autopia;
 
         /// <summary>
         /// Bind renderers of an accent-token body by object-name token: "paint"
@@ -757,6 +847,20 @@ namespace AIHWSim.Vehicles
         /// </summary>
         public static bool HasPaintableBody(BodyShape s)
         {
+            // The three TinyTorque show cars joined Rattletrap in the baked
+            // camp: their authored liveries (candy crimson + stripes, acid
+            // lime + bands, the police black-and-white) are procedural in the
+            // source and now ship as textures. A baked shell has no tintable
+            // panel — the livery IS the finish — so paint mode stands down for
+            // them exactly as it does for the Rattletrap.
+            if (s == BodyShape.Coupe || s == BodyShape.Baja || s == BodyShape.Patrol)
+                return false;
+            // Rattletrap has a shell and good UVs, but not one tintable panel:
+            // its paint is the baked rust texture (see PartVisualFactory
+            // .RustPaint), so every renderer binds an accent and PaintRenderers
+            // comes back empty. Offering paint mode there would be a mode that
+            // silently does nothing.
+            if (s == BodyShape.Rattle) return false;
             string key = BodyMeshKey(s);
             return key != null && PartMeshLibrary.Has(key);
         }
@@ -1043,6 +1147,7 @@ namespace AIHWSim.Vehicles
             // clear the latch rather than making the player wait it out.
             _padStallTime = 0f;
             _padPinned = false;
+            _launchScale = 1f;   // fresh launch, fresh governor
 
             foreach (var w in _wheels)
             {
@@ -1161,6 +1266,7 @@ namespace AIHWSim.Vehicles
                 int idx = m.ActuatorIndex;
                 float volts = Frozen ? 0f : ((idx >= 0 && idx < _cmd.Length) ? _cmd[idx] : 0f);
                 volts *= arcadeDriveMult;                      // 1 outside arcade
+                volts *= _launchScale;                         // 1 unless launch control is cutting
                 if (batteryNominalV > 0f)
                     volts = Mathf.Clamp(volts, -vTerm, vTerm); // sagging rail caps the command
                 m.SetVoltage(volts);
@@ -1509,6 +1615,15 @@ namespace AIHWSim.Vehicles
 
             ApplyAerodynamics();
 
+            // Arcade downforce (see the channel's doc). Applied at the CoM so it
+            // adds tyre load without a pitch moment; branch-skipped at 0 so
+            // non-arcade sessions are bit-identical.
+            if (arcadeDownforce > 0f)
+            {
+                float fwd2 = ForwardSpeed * ForwardSpeed;
+                _body.AddForce(-transform.up * (arcadeDownforce * fwd2), ForceMode.Force);
+            }
+
             // Stability (ESC): damp the yaw-rate error against what the current
             // speed + steering angle intend (bicycle-model yaw intent).
             if (a.stability > 0f && _wheelbaseEst > 0.01f)
@@ -1535,7 +1650,59 @@ namespace AIHWSim.Vehicles
 
             foreach (var w in _wheels) UpdateVisual(w);
 
+            UpdateLaunchControl(a, dt);
             UpdateSlipReadout();
+        }
+
+        // Launch control's voltage scale, 1 = hands off. Computed at the END of
+        // a physics step from that step's fresh slip ratios and applied to the
+        // motor command at the START of the next — a one-step-latency governor,
+        // which at 400 Hz is as good as instantaneous and keeps the whole thing
+        // out of the wheel loop.
+        private float _launchScale = 1f;
+
+        /// <summary>
+        /// Standing-start wheelspin governor (the "launch control" assist).
+        ///
+        /// Distinct from traction control on three axes: TC is per-wheel,
+        /// torque-side and stateless; this is global, voltage-side and
+        /// integrating. It holds the WORST powered wheel's slip at
+        /// <see cref="AssistTuning.LaunchSlipTarget"/> — just past the force
+        /// peak — so a floored launch leaves at maximum force instead of
+        /// lighting the tyres, and TC only has per-wheel transients left to
+        /// trim. Armed below <see cref="AssistTuning.LaunchEngageSpeed"/>;
+        /// above <see cref="AssistTuning.LaunchReleaseSpeed"/> the scale ramps
+        /// back to 1 quickly and the driver has the whole motor again.
+        ///
+        /// At <c>launch == 0</c> the scale is pinned at 1 and the voltage
+        /// multiply is exact, so firmware runs (assists zeroed) and Sim
+        /// sessions with the slider down are bit-identical. Slip ratios come
+        /// from the brush-path integrator; on the legacy PhysX path they stay
+        /// 0 and the governor simply never engages.
+        /// </summary>
+        private void UpdateLaunchControl(in AssistSettings a, float dt)
+        {
+            if (a.launch <= 0f) { _launchScale = 1f; return; }
+
+            float speed = Mathf.Abs(ForwardSpeed);
+            float worst = 0f;
+            foreach (var w in _wheels)
+                if (w.cfg.powered && w.grounded && w.slipRatio > worst)
+                    worst = w.slipRatio;
+
+            if (speed < AssistTuning.LaunchEngageSpeed &&
+                worst > AssistTuning.LaunchSlipTarget)
+            {
+                _launchScale -= a.launch * AssistTuning.LaunchGain *
+                                (worst - AssistTuning.LaunchSlipTarget) * dt;
+            }
+            else
+            {
+                float rate = AssistTuning.LaunchReleaseRate;
+                if (speed > AssistTuning.LaunchReleaseSpeed) rate *= 4f;
+                _launchScale += rate * dt;
+            }
+            _launchScale = Mathf.Clamp(_launchScale, AssistTuning.LaunchFloor, 1f);
         }
 
         /// <summary>

@@ -552,34 +552,131 @@ namespace AIHWSim.Menu
             if (MenuButton("Quit")) Quit();
         }
 
+        /// <summary>Mode picker labels, in MatchMode order.</summary>
+        private static readonly string[] ModeNames =
+            { "Race", "Demolition", "Capture the Flag", "Soccer", "Free Roam" };
+
+        /// <summary>The arena each mode is built for. Picking a mode moves the
+        /// track selection there, because a derby on a race circuit has no spawn
+        /// ring and quietly falls back to a free drive. Free Roam is blank: its
+        /// map is not in the picker at all — it cannot be raced on, so it is not
+        /// offered as somewhere to race.</summary>
+        private static readonly string[] ModeArena =
+            { "", "Scrapyard Bowl", "Cargo Yard", "Torque Dome", "" };
+
+        private int _spMode;         // SessionConfig.MatchMode
+        private int _spModeDraw;     // Layout snapshot — see DrawSinglePlayer
+        private int _spScore = 3;    // captures / goals to win
+
+        /// <summary>Point the track picker at this mode's arena.</summary>
+        private void SelectArenaFor(int mode)
+        {
+            string want = ModeArena[Mathf.Clamp(mode, 0, ModeArena.Length - 1)];
+            if (string.IsNullOrEmpty(want)) return;
+            int found = _tracks.IndexOf(TrackPresets.Prefix + want);
+            if (found < 0) found = _tracks.IndexOf(want);
+            if (found >= 0) _trackIdx = found;
+        }
+
+        /// <summary>Write the chosen mode's rules into SessionConfig, and split
+        /// the roster into two sides when the mode has teams. Called by every
+        /// start path, so a mode never half-starts.</summary>
+        private void ApplyMatchRules()
+        {
+            var mode = (MatchMode)Mathf.Clamp(_spMode, 0, (int)MatchMode.FreeRoam);
+            SessionConfig.Match = mode;
+            SessionConfig.TargetScore = Mathf.Max(1, _spScore);
+            if (mode == MatchMode.Race) return;
+
+            // Neither an arena match nor a free roam has laps; leaving them set
+            // would compose a RaceDirector's countdown against a mode that
+            // never counts one.
+            SessionConfig.TargetLaps = 0;
+            if (!SessionConfig.IsTeamMatch)
+            {
+                foreach (var slot in SessionConfig.Players) slot.team = -1;
+                return;
+            }
+            // Alternate sides down the roster: with one human and three bots
+            // that is 1v1 plus a bot each, which is the fairest split available
+            // without asking the player to assign teams by hand.
+            for (int i = 0; i < SessionConfig.Players.Count; i++)
+                SessionConfig.Players[i].team = i % 2;
+        }
+
         private void DrawSinglePlayer()
         {
             GUILayout.Label("SINGLE PLAYER", GarageSkin.Header);
             GUILayout.Space(6);
 
+            int wasMode = _spMode;
+            _spMode = MenuNav.Cycle("Mode", Mathf.Clamp(_spMode, 0, ModeNames.Length - 1),
+                ModeNames.Length, k => ModeNames[k], 60f);
+            if (_spMode != wasMode) SelectArenaFor(_spMode);
+            // Which controls exist below depends on the mode, so the mode has to
+            // be snapshotted on Layout: a click that changes it mid-pass would
+            // otherwise offer Repaint a different set of controls than Layout
+            // registered, which is the IMGUI error this whole UI avoids.
+            if (Event.current.type == EventType.Layout) _spModeDraw = _spMode;
+            bool roam = _spModeDraw == (int)MatchMode.FreeRoam;
+            bool arena = !roam && _spModeDraw != (int)MatchMode.Race;
+
             _vehicleIdx = CyclePicker("Vehicle", _vehicles, _vehicleIdx, v => v == "" ? "Stock Default" : v);
             if (MenuNav.Button("Showroom — preview & customize ▶"))
                 OpenShowroom(Page.SinglePlayer);
-            _trackIdx = CyclePicker("Track", _tracks, _trackIdx, t => t == "" ? "Classic Oval" : t);
-
-            // AI opponents.
-            _spBots = MenuNav.Stepper("Opponents", _spBots, 0, 7,
-                v => v == 0 ? "None" : $"{v} bots");
-
-            if (_spBots > 0)
+            if (roam)
             {
-                _spDiff = CyclePicker("Difficulty", DiffNames, _spDiff, x => x);
-                _spRubber = MenuNav.Toggle(_spRubber, " Rubber-band (keep the pack close)");
+                // No track picker at all. The town is the only free-roam map and
+                // it is the only map free roam runs on — offering a choice of
+                // one, on a list that deliberately excludes it, would be a
+                // control that does nothing.
+                GUILayout.Label($"   Map: ★ {TrackPresets.FreeRoamName} — a town to drive around.\n" +
+                                "   No laps, no clock, no opponents. R puts you back on a street.",
+                                GarageSkin.StatLabel);
+            }
+            else
+            {
+                _trackIdx = CyclePicker("Track", _tracks, _trackIdx, t => t == "" ? "Classic Oval" : t);
+                if (arena)
+                    GUILayout.Label($"   {ModeNames[_spModeDraw]} needs an arena — " +
+                                    $"★ {ModeArena[_spModeDraw]} is the one built for it.",
+                                    GarageSkin.StatLabel);
+            }
+
+            // AI opponents. Not in free roam: with no racing line and no arena
+            // policy to hunt anything, a bot dropped into the town would sit at
+            // its spawn — an opponent that does nothing is worse than none.
+            if (!roam)
+            {
+                _spBots = MenuNav.Stepper("Opponents", _spBots, 0, 7,
+                    v => v == 0 ? "None" : $"{v} bots");
+
+                if (_spBots > 0)
+                {
+                    _spDiff = CyclePicker("Difficulty", DiffNames, _spDiff, x => x);
+                    _spRubber = MenuNav.Toggle(_spRubber, " Rubber-band (keep the pack close)");
+                }
             }
 
             // How the player's own car is driven.
             _spControl = CyclePicker("Driving", ControlNames, _spControl, x => x);
 
-            // Race distance.
-            _spLaps = MenuNav.Stepper("Race laps", _spLaps, 0, 50,
-                v => v == 0 ? "Free drive" : $"{v} laps");
+            // Race distance, or the score that ends an arena match.
+            if (arena)
+            {
+                if (_spModeDraw != (int)MatchMode.Derby)
+                    _spScore = MenuNav.Stepper("Score to win", _spScore, 1, 15,
+                        v => _spModeDraw == (int)MatchMode.Soccer ? $"{v} goals" : $"{v} captures");
+                else
+                    GUILayout.Label("   Last car still running wins.", GarageSkin.StatLabel);
+            }
+            else if (!roam)
+            {
+                _spLaps = MenuNav.Stepper("Race laps", _spLaps, 0, 50,
+                    v => v == 0 ? "Free drive" : $"{v} laps");
+            }
 
-            if (_spBots > 0 || _spLaps > 0)
+            if (!roam && (_spBots > 0 || _spLaps > 0 || arena))
                 _spCountdown = MenuNav.Stepper("Countdown", _spCountdown, 0, 60,
                     v => v == 0 ? "None" : $"{v} s");
 
@@ -590,27 +687,42 @@ namespace AIHWSim.Menu
             // doing nothing. It must never run on a firmware session: a boost or
             // a spin-out would corrupt the controller-validation run.
             bool firmware = _spControl == 1;
-            GUI.enabled = !firmware;
+            // Arcade items belong to a race: they need a finish line for their
+            // boxes and their positions. The arena modes bring their own, and
+            // free roam has no finish line to hang either from.
+            GUI.enabled = !firmware && !arena && !roam;
+            if (arena || roam) _spArcade = false;
             bool wantArcade = MenuNav.Toggle(_spArcade && !firmware, " Arcade mode (power-ups & weapons)");
             if (wantArcade && !_spArcade && _spLaps == 0) _spLaps = 3;   // arcade needs a race
             _spArcade = wantArcade && !firmware;
             if (_spArcade)
             {
                 _spTrackLimits = MenuNav.Toggle(_spTrackLimits, "    Track limits (off-track penalty)");
-                _spArcadeHandling = MenuNav.Toggle(_spArcadeHandling,
-                    "    Arcade handling (extra grip + driving assists)");
                 GUILayout.Label("    Item boxes on track · use with Left Shift / gamepad X.\n" +
-                                "    Built for the ★ themed circuits; works on any map with a finish line.\n" +
-                                (_spArcadeHandling
-                                    ? "    Handling: ARCADE — everyone, bots included, gets grip and assists."
-                                    : "    Handling: SIM — raw brush-tyre physics. The circuits bite."),
+                                "    Built for the ★ themed circuits; works on any map with a finish line.",
                                 GarageSkin.StatLabel);
             }
             GUI.enabled = true;
             if (firmware) GUILayout.Label("Arcade is off in firmware sessions.", GarageSkin.StatLabel);
+
+            // The handling mode is its own row, OUTSIDE the arcade-items nest:
+            // free roam and the arena modes have no item boxes but very much
+            // have physics, and burying the physics choice under a weapons
+            // toggle made it unreachable exactly where the car felt worst.
+            // Firmware sessions face raw physics regardless (no HandlingFloor),
+            // so the control is disabled rather than lying.
+            GUI.enabled = !firmware;
+            _spArcadeHandling = MenuNav.Toggle(_spArcadeHandling,
+                " Arcade handling (extra grip + driving assists)");
+            GUILayout.Label(_spArcadeHandling
+                    ? "    ARCADE — everyone, bots included, gets grip, stability and assists."
+                    : "    SIM — raw brush-tyre physics, no assist floor. The circuits bite.",
+                GarageSkin.StatLabel);
+            GUI.enabled = true;
             GUILayout.Space(10);
 
-            string go = (_spBots > 0 || _spLaps > 0) ? "Race ▶" : "Drive ▶";
+            string go = (arena || roam) ? $"{ModeNames[_spModeDraw]} ▶"
+                      : (_spBots > 0 || _spLaps > 0) ? "Race ▶" : "Drive ▶";
             if (MenuButton(go)) StartSinglePlayer();
             if (MenuButton("Garage")) LoadIfBuilt(GameFlow.GarageSceneName, GameFlow.LoadGarage);
             if (MenuButton("Track Builder")) LoadIfBuilt(GameFlow.TrackBuilderSceneName, GameFlow.LoadTrackBuilder);
@@ -620,20 +732,26 @@ namespace AIHWSim.Menu
 
         private void StartSinglePlayer()
         {
+            bool roam = _spMode == (int)MatchMode.FreeRoam;
             string vehicle = _vehicles[_vehicleIdx];
             string track = _tracks[_trackIdx];
+            int bots = roam ? 0 : _spBots;
             var s = SettingsStore.Current;
 
             SessionConfig.SetSinglePlayer();                 // clears roster + rubber-band
-            SessionConfig.TargetLaps = _spLaps;
-            SessionConfig.RubberBand = _spBots > 0 && _spRubber;
-            SessionConfig.CountdownSeconds = (_spBots > 0 || _spLaps > 0) ? _spCountdown : 0;
+            SessionConfig.TargetLaps = roam ? 0 : _spLaps;
+            SessionConfig.RubberBand = bots > 0 && _spRubber;
+            SessionConfig.CountdownSeconds = (bots > 0 || _spLaps > 0) && !roam ? _spCountdown : 0;
             // Assigned AFTER SetSinglePlayer, which clears them.
-            SessionConfig.Arcade = _spArcade && _spLaps > 0 && _spControl != 1;
+            SessionConfig.Arcade = _spArcade && _spLaps > 0 && _spControl != 1 && !roam;
             SessionConfig.TrackLimits = SessionConfig.Arcade && _spTrackLimits;
             SessionConfig.ArcadeHandling = _spArcadeHandling;
             GameFlow.ActiveDesign = ResolveVehicle(vehicle);
-            GameFlow.ActiveTrack = ResolveTrack(track);
+            // Free roam owns its map: the town is not in the track picker at
+            // all, so it is resolved by name here rather than selected.
+            GameFlow.ActiveTrack = roam
+                ? TrackPresets.Resolve(TrackPresets.FreeRoamName)
+                : ResolveTrack(track);
 
             // Slot 0 = the human; slots 1..N = AI opponents.
             string pname = string.IsNullOrWhiteSpace(s.player1Name) ? "Player" : s.player1Name;
@@ -647,8 +765,11 @@ namespace AIHWSim.Menu
                 isBot = false,
                 control = (DriveControl)Mathf.Clamp(_spControl, 0, 2),
             });
-            for (int k = 1; k <= _spBots; k++)
+            for (int k = 1; k <= bots; k++)
                 SessionConfig.Players.Add(MakeBotSlot(k, _spDiff));
+
+            // After the roster exists: a team mode has to split it.
+            ApplyMatchRules();
 
             s.lastVehicle = vehicle;
             s.lastTrack = track;
@@ -838,11 +959,12 @@ namespace AIHWSim.Menu
             if (_spArcade)
             {
                 _spTrackLimits = MenuNav.Toggle(_spTrackLimits, "    Track limits (off-track penalty)");
-                _spArcadeHandling = MenuNav.Toggle(_spArcadeHandling,
-                    "    Arcade handling (extra grip + driving assists)");
                 GUILayout.Label("    Both players pick up independently; one shared board.",
                                 GarageSkin.StatLabel);
             }
+            // Physics choice stands on its own — see the single-player page.
+            _spArcadeHandling = MenuNav.Toggle(_spArcadeHandling,
+                " Arcade handling (extra grip + driving assists)");
             GUILayout.Space(6);
 
             string problem = ValidateDevices();
@@ -905,6 +1027,11 @@ namespace AIHWSim.Menu
             string track = _tracks[Mathf.Clamp(_mpTrackIdx, 0, _tracks.Count - 1)];
 
             SessionConfig.Mode = SessionMode.SplitScreen;
+            // Split-screen has no mode picker, so it races — said explicitly
+            // because the single-player page leaves its own choice in
+            // SessionConfig, and coming here straight from a soccer match or a
+            // free roam would otherwise carry those rules onto a race circuit.
+            SessionConfig.Match = MatchMode.Race;
             SessionConfig.TargetLaps = _mpLaps;
             SessionConfig.CountdownSeconds = 0; // split-screen has no countdown control (yet)
             SessionConfig.Arcade = _spArcade && _mpLaps > 0;
@@ -1050,11 +1177,13 @@ namespace AIHWSim.Menu
             if (_spArcade)
             {
                 _spTrackLimits = MenuNav.Toggle(_spTrackLimits, "    Track limits (off-track penalty)");
-                _spArcadeHandling = MenuNav.Toggle(_spArcadeHandling,
-                    "    Arcade handling (extra grip + driving assists)");
                 GUILayout.Label("    Item boxes are live in free roam too, so there is\n" +
                                 "    something to do between races.", GarageSkin.StatLabel);
             }
+            // Physics choice stands on its own; it crosses the wire in the
+            // welcome, so the whole lobby drives one handling mode.
+            _spArcadeHandling = MenuNav.Toggle(_spArcadeHandling,
+                " Arcade handling (extra grip + driving assists)");
 
             GUILayout.Space(4);
             GUILayout.Label("Players join into free roam; you start races and\nchange maps from the in-game Esc menu.",
@@ -1229,6 +1358,8 @@ namespace AIHWSim.Menu
             if (fs != s.fullscreen) { s.fullscreen = fs; changed = true; }
             bool vs = MenuNav.Toggle(s.vSync, " VSync");
             if (vs != s.vSync) { s.vSync = vs; changed = true; }
+            bool bl = MenuNav.Toggle(s.bloom, " Bloom (neon glow)");
+            if (bl != s.bloom) { s.bloom = bl; changed = true; }
             bool ms = MenuNav.Toggle(s.mouseSteer, " Mouse steering (single player)");
             if (ms != s.mouseSteer) { s.mouseSteer = ms; changed = true; }
 
@@ -1272,12 +1403,14 @@ namespace AIHWSim.Menu
             sliderMoved |= AssistSlider("Stability", ref s.p1AssistStability);
             sliderMoved |= AssistSlider("Traction ctrl", ref s.p1AssistTraction);
             sliderMoved |= AssistSlider("ABS", ref s.p1AssistAbs);
+            sliderMoved |= AssistSlider("Launch ctrl", ref s.p1AssistLaunch);
             GUILayout.Space(4);
             GUILayout.Label("ASSISTS — P2 (split-screen)", GarageSkin.Header);
             sliderMoved |= AssistSlider("Steering help", ref s.p2AssistSteer);
             sliderMoved |= AssistSlider("Stability", ref s.p2AssistStability);
             sliderMoved |= AssistSlider("Traction ctrl", ref s.p2AssistTraction);
             sliderMoved |= AssistSlider("ABS", ref s.p2AssistAbs);
+            sliderMoved |= AssistSlider("Launch ctrl", ref s.p2AssistLaunch);
             if (sliderMoved)
             {
                 s.assistPreset = (int)SessionConfig.AssistPreset.Custom;

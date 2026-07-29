@@ -59,6 +59,7 @@ namespace AIHWSim.UI
             _cam.fieldOfView = 34f;
             _cam.nearClipPlane = 0.005f;
             _cam.farClipPlane = 50f;
+            Rendering.CameraBloom.Attach(_cam);
         }
 
         /// <summary>Show a crate or an item by its mesh key. Reframes the camera

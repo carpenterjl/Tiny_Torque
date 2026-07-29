@@ -29,6 +29,8 @@ namespace AIHWSim.Net
         private float _throttle, _steer, _brake;
         private bool _handbrake;
         private bool _hornHeld;
+        private bool _jumpLatch;
+        private bool _boostHeld;
 
         private void Awake()
         {
@@ -42,12 +44,14 @@ namespace AIHWSim.Net
 
             if (_source.RespawnPressed()) _respawnLatch = true;
             if (_source.UseItemPressed()) _useItemLatch = true;
+            if (_source.JumpPressed()) _jumpLatch = true;
 
             _throttle = _source.Throttle();
             _steer = _source.Steer();
             _brake = _source.Brake();
             _handbrake = _source.Handbrake();
             _hornHeld = _source.HornHeld();
+            _boostHeld = _source.BoostHeld();
 
             _accum += Time.unscaledDeltaTime;
             if (_accum < Interval) return;
@@ -64,9 +68,12 @@ namespace AIHWSim.Net
                 respawnEdge = _respawnLatch,
                 useItemEdge = _useItemLatch,
                 hornHeld = _hornHeld,
+                jumpEdge = _jumpLatch,
+                boostHeld = _boostHeld,
             });
             _respawnLatch = false;
             _useItemLatch = false;
+            _jumpLatch = false;
         }
     }
 }

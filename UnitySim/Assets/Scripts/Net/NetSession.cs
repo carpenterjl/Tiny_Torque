@@ -88,8 +88,22 @@ namespace AIHWSim.Net
         // would silently drop half of what the other screen is showing, and a
         // LAN race where the cars do not match is worse than one that refuses
         // to start.
-        public const int ProtocolVersion = 11;
-        public const int MaxPlayers = 4;
+        // v13 is the four Legendary cars. The wire format is untouched — the
+        // body shape and wheel style are ints inside the design JSON, exactly
+        // like every shape before them — but a v12 build ships none of the new
+        // FBX, so it would draw four fallback boxes where the other screen has
+        // a wrecker, two race cars and a 1955 ride car.
+        // v14 is the Torque Falls city pack: 35 new track props, a new floor
+        // surface and a fifth MatchMode. The map itself crosses the wire as
+        // JSON, so a v13 client handed a town it has no meshes for would draw
+        // eleven hundred fallback boxes — and the floor id it has never heard
+        // of would index past the end of its own catalog.
+        public const int ProtocolVersion = 14;
+
+        /// <summary>Raised from 4 for 3v3 soccer. The slot goes on the wire as a
+        /// byte and every MaxPlayers-sized array simply grows, so the only cost
+        /// is the roster UI having two more rows to draw.</summary>
+        public const int MaxPlayers = 6;
         public const ushort DefaultPort = 7777;
 
         public enum LanState { FreeRoam, Countdown, Racing, Results }
@@ -561,6 +575,9 @@ namespace AIHWSim.Net
                 arcade = Arcade,
                 trackLimits = TrackLimits,
                 arcadeHandling = ArcadeHandling,
+                match = (int)SessionConfig.Match,
+                targetScore = SessionConfig.TargetScore,
+                timeLimitSec = SessionConfig.TimeLimitSec,
             }, NetworkDelivery.ReliableFragmentedSequenced);
             BroadcastRoster();
             Debug.Log($"[NetSession] {p.name} joined (slot {slot})");
@@ -575,6 +592,7 @@ namespace AIHWSim.Net
             TargetLaps = msg.targetLaps;
             ApplyRoster(msg.roster);
             ApplyArcadeRules(msg.arcade, msg.trackLimits, msg.arcadeHandling);
+            ApplyMatchRules(msg.match, msg.targetScore, msg.timeLimitSec);
 
             GameFlow.ActiveTrack = string.IsNullOrEmpty(msg.trackJson)
                 ? null : JsonUtility.FromJson<TrackDesign>(msg.trackJson);
@@ -906,6 +924,9 @@ namespace AIHWSim.Net
                     arcade = Arcade,
                     trackLimits = TrackLimits,
                     arcadeHandling = ArcadeHandling,
+                    match = (int)SessionConfig.Match,
+                    targetScore = SessionConfig.TargetScore,
+                    timeLimitSec = SessionConfig.TimeLimitSec,
                 });
         }
 
@@ -916,6 +937,7 @@ namespace AIHWSim.Net
             State = (LanState)m.state;
             TargetLaps = m.targetLaps;
             ApplyArcadeRules(m.arcade, m.trackLimits, m.arcadeHandling);
+            ApplyMatchRules(m.match, m.targetScore, m.timeLimitSec);
             if (State == LanState.Countdown)
                 CountdownEndTime = Time.unscaledTime + m.countdownRemaining;
         }
@@ -923,6 +945,19 @@ namespace AIHWSim.Net
         /// <summary>Client: adopt the host's arcade rules. Mirrored into
         /// SessionConfig as well, because a map change reloads the scene and
         /// TrackBootstrap composes from there.</summary>
+        /// <summary>
+        /// The host's RULES, adopted verbatim by a joiner. Same contract as
+        /// ApplyArcadeRules and for the same reason: a client composes its scene
+        /// from these, and a client that thinks it is racing while everyone else
+        /// plays soccer has no way to recover.
+        /// </summary>
+        private void ApplyMatchRules(int match, int targetScore, int timeLimitSec)
+        {
+            SessionConfig.Match = (MatchMode)Mathf.Clamp(match, 0, (int)MatchMode.FreeRoam);
+            SessionConfig.TargetScore = Mathf.Max(1, targetScore);
+            SessionConfig.TimeLimitSec = Mathf.Max(0, timeLimitSec);
+        }
+
         private void ApplyArcadeRules(bool arcade, bool limits, bool handling)
         {
             Arcade = arcade;

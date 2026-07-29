@@ -18,6 +18,8 @@ namespace AIHWSim.Core
         ModeToggle = 9,
         Pause = 10,
         Horn = 11,
+        Jump = 12,
+        Boost = 13,
     }
 
     /// <summary>Named starting points. Custom is what any hand-edited binding becomes.</summary>
@@ -59,6 +61,12 @@ namespace AIHWSim.Core
         public int modeToggle = (int)KeyCode.M;
         public int pause = (int)KeyCode.Escape;
         public int horn = (int)KeyCode.H;
+        // Aerial moves; only the soccer mode enables them. Space and LeftShift
+        // would be the natural pair, but handbrake and use-item already hold
+        // them and a duplicate default would read as a broken binding table —
+        // so these take the two free keys nearest WASD and stay rebindable.
+        public int jump = (int)KeyCode.E;
+        public int boost = (int)KeyCode.Q;
 
         // ---- gamepad (digital actions only; see PadTable) ----
         public int padBrake = (int)PadButton.East;
@@ -69,6 +77,10 @@ namespace AIHWSim.Core
         public int padModeToggle = (int)PadButton.Select;
         // L3 — the one face-adjacent button still free (R3 is look-back).
         public int padHorn = (int)PadButton.LeftStickPress;
+        // The face buttons are all spoken for, so the aerials take the two free
+        // shoulders — which is also where a driving game usually puts them.
+        public int padJump = (int)PadButton.LeftShoulder;
+        public int padBoost = (int)PadButton.RightShoulder;
 
         /// <summary>The live bindings. Lives inside <see cref="Persistence.GameSettings"/>
         /// so it is saved, loaded and reset by the machinery that already exists
@@ -101,6 +113,8 @@ namespace AIHWSim.Core
                 case DriveAction.ModeToggle: return (KeyCode)modeToggle;
                 case DriveAction.Pause: return (KeyCode)pause;
                 case DriveAction.Horn: return (KeyCode)horn;
+                case DriveAction.Jump: return (KeyCode)jump;
+                case DriveAction.Boost: return (KeyCode)boost;
                 default: return KeyCode.None;
             }
         }
@@ -154,6 +168,8 @@ namespace AIHWSim.Core
                     case DriveAction.ModeToggle: modeToggle = v; break;
                     case DriveAction.Pause: pause = v; break;
                     case DriveAction.Horn: horn = v; break;
+                    case DriveAction.Jump: jump = v; break;
+                    case DriveAction.Boost: boost = v; break;
                     default: return;
                 }
             }
@@ -171,6 +187,8 @@ namespace AIHWSim.Core
                 case DriveAction.LookBack: return (PadButton)padLookBack;
                 case DriveAction.ModeToggle: return (PadButton)padModeToggle;
                 case DriveAction.Horn: return (PadButton)padHorn;
+                case DriveAction.Jump: return (PadButton)padJump;
+                case DriveAction.Boost: return (PadButton)padBoost;
                 default: return PadButton.None;
             }
         }
@@ -181,7 +199,7 @@ namespace AIHWSim.Core
         {
             DriveAction.Brake, DriveAction.Handbrake, DriveAction.Respawn,
             DriveAction.UseItem, DriveAction.LookBack, DriveAction.ModeToggle,
-            DriveAction.Horn,
+            DriveAction.Horn, DriveAction.Jump, DriveAction.Boost,
         };
 
         public void SetPad(DriveAction a, PadButton b)
@@ -196,6 +214,8 @@ namespace AIHWSim.Core
                 case DriveAction.LookBack: padLookBack = v; break;
                 case DriveAction.ModeToggle: padModeToggle = v; break;
                 case DriveAction.Horn: padHorn = v; break;
+                case DriveAction.Jump: padJump = v; break;
+                case DriveAction.Boost: padBoost = v; break;
                 default: return;
             }
             layout = (int)KeyLayout.Custom;

@@ -36,7 +36,8 @@ namespace AIHWSim.Menu
         private static readonly string[] HornNames =
             { "Standard", "Police siren", "Air horn", "Musical", "Clown" };
         private static readonly string[] WheelNames =
-            { "Slick", "Knobby", "Rally", "Coupe", "Baja", "Steelie", "Chrome", "Gold", "Neon" };
+            { "Slick", "Knobby", "Rally", "Coupe", "Baja", "Steelie", "Chrome", "Gold", "Neon",
+              "Rusted", "Race gold", "Five-spoke", "Whitewall" };
         private static readonly string[] TopperNames =
             { "As designed", "Light bar", "Off-road pods", "Flag antenna", "Twin whips", "Whip", "Clean deck" };
         private static readonly string[] AeroNames =
@@ -142,9 +143,7 @@ namespace AIHWSim.Menu
             int result = ResultNone;
 
             // ---- left: the car list ----
-            float h = UIScale.H - 110f;
-            var left = new Rect(10f, 54f, 230f, h);
-            GUILayout.BeginArea(left, GUI.skin.box);
+            GUILayout.BeginArea(PanelLayout.LeftRect(230f), GUI.skin.box);
             GUILayout.Label("SHOWROOM", GarageSkin.Title);
             _listScroll = GUILayout.BeginScrollView(_listScroll);
             for (int i = 0; i < _all.Count; i++)
@@ -167,8 +166,7 @@ namespace AIHWSim.Menu
             GUILayout.EndArea();
 
             // ---- right: stats + customize ----
-            var right = new Rect(UIScale.W - 280f, 54f, 270f, h);
-            GUILayout.BeginArea(right, GUI.skin.box);
+            GUILayout.BeginArea(PanelLayout.RightRect(270f), GUI.skin.box);
             _rightScroll = GUILayout.BeginScrollView(_rightScroll);
             DrawStats();
             GUILayout.Space(8);
@@ -179,8 +177,7 @@ namespace AIHWSim.Menu
             GUILayout.EndArea();
 
             // ---- bottom bar ----
-            var bottom = new Rect((UIScale.W - 520f) * 0.5f, UIScale.H - 48f, 520f, 40f);
-            GUILayout.BeginArea(bottom, GUI.skin.box);
+            GUILayout.BeginArea(PanelLayout.BottomBarRect(), GUI.skin.box);
             GUILayout.BeginHorizontal();
             if (MenuNav.Button("← Back", GUILayout.Width(90f), GUILayout.Height(26f)))
                 result = ResultBack;
@@ -199,15 +196,14 @@ namespace AIHWSim.Menu
 
             if (locked)
             {
-                var hint = new Rect((UIScale.W - 460f) * 0.5f, UIScale.H - 84f, 460f, 24f);
                 var st = new GUIStyle(GarageSkin.StatLabel) { alignment = TextAnchor.MiddleCenter };
-                GUI.Label(hint, "Locked — win races to unlock it (or know the magic word…)", st);
+                GUI.Label(PanelLayout.HintRect(),
+                    "Locked — win races to unlock it (or know the magic word…)", st);
             }
             if (!string.IsNullOrEmpty(_note))
             {
-                var note = new Rect((UIScale.W - 460f) * 0.5f, 58f, 460f, 24f);
                 var st = new GUIStyle(GarageSkin.StatLabel) { alignment = TextAnchor.MiddleCenter };
-                GUI.Label(note, _note, st);
+                GUI.Label(PanelLayout.NoteRect(), _note, st);
             }
 
             return result;
@@ -265,6 +261,10 @@ namespace AIHWSim.Menu
             "★ TT Coupe" => "Slipstream Star (coming soon)",
             "★ Opus Vector" => "Precision Ghost (coming soon)",
             "★ Real Twin 1/10" => "Calibrated (coming soon)",
+            "★ TT Rattletrap" => "Wrecking Ball (coming soon)",
+            "★ TT Redline" => "Slipstream Seven (coming soon)",
+            "★ TT Highwing" => "Clean Air (coming soon)",
+            "★ TT Autopia" => "Grand Circuit (coming soon)",
             _ => "???",
         };
 

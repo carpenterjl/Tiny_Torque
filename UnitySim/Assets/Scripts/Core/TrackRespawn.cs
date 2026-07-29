@@ -32,8 +32,9 @@ namespace AIHWSim.Core
         /// rather than starting the frame intersecting the ribbon.</summary>
         private const float RideHeight = 0.10f;
 
-        /// <summary>Is there a racing line to respawn onto?</summary>
-        public static bool Available => _spine != null;
+        /// <summary>Is there anywhere to respawn onto — a racing line, or an
+        /// arena's spawn ring?</summary>
+        public static bool Available => _spine != null || Modes.ArenaNav.Available;
 
         /// <summary>Called once per scene build, with whatever the bot path came
         /// out as. A null path disables the whole feature rather than guessing.</summary>
@@ -47,6 +48,7 @@ namespace AIHWSim.Core
         {
             _spine = null;
             _built = null;
+            Modes.ArenaNav.Clear();
         }
 
         /// <summary>
@@ -65,6 +67,20 @@ namespace AIHWSim.Core
         {
             pos = from;
             rot = Quaternion.identity;
+
+            // An arena has no line to project onto, so the question becomes
+            // "which spawn is nearest and free" instead. Same contract: a pose
+            // that faces somewhere useful, which here is the middle of the fight.
+            if (_spine == null && Modes.ArenaNav.Available)
+            {
+                if (!Modes.ArenaNav.TryNearestFree(from, 0.45f, out pos, out _)) return false;
+                var toCentre = Modes.ArenaNav.Centre - pos;
+                toCentre.y = 0f;
+                rot = toCentre.sqrMagnitude > 1e-4f
+                    ? Quaternion.LookRotation(toCentre, Vector3.up)
+                    : Quaternion.identity;
+                return true;
+            }
             if (_spine == null) return false;
 
             float s = _spine.Project(from, ref hint);

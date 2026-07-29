@@ -1,3 +1,4 @@
+using UnityEditor;
 using UnityEngine;
 
 namespace AIHWSim.EditorTools
@@ -84,6 +85,18 @@ namespace AIHWSim.EditorTools
             new Spec("wheel_coupe",   null,   0.066f, 0.066f, 6000),
             new Spec("wheel_baja",    null,   0.066f, 0.066f, 6000),
             new Spec("wheel_patrol",  null,   0.066f, 0.066f, 6000),
+            // The Legendary four. Same construction, so length is pinned the
+            // same way — but these carry the face rig (two 1360-vertex lid
+            // shells per eye, a full tooth row, gums and a tongue), which is
+            // most of the difference between their budgets and the show cars'.
+            new Spec("body_rattle",   null,   null,   0.420f, 25000),
+            new Spec("body_redline",  null,   null,   0.420f, 26000),
+            new Spec("body_highwing", null,   null,   0.420f, 28000),
+            new Spec("body_autopia",  null,   null,   0.420f, 15500),
+            new Spec("wheel_rattle",  null,   0.066f, 0.066f, 6000),
+            new Spec("wheel_redline", null,   0.066f, 0.066f, 6000),
+            new Spec("wheel_highwing", null,  0.066f, 0.066f, 6000),
+            new Spec("wheel_autopia", null,   0.066f, 0.066f, 6000),
             // Cosmetic parts render at authored size, like antenna_stub.
             new Spec("light_bar",     null,   null,   null,  2500),
             new Spec("light_pods",    null,   null,   null,  2500),
@@ -147,6 +160,47 @@ namespace AIHWSim.EditorTools
             new Spec("dt_street_lamp",     0.90f,  1000),
             new Spec("dt_traffic_light",   0.63f,  1500),
             new Spec("dt_volcano",        13.91f,  3000),
+            // Torque Falls — the daylight town. Two rows are far past the prop
+            // norm on purpose: the arena is a backdrop landmark at full
+            // 1/10-world scale, and the telephone poles are 2.6 m across
+            // because each carries half a span of wire either side so two of
+            // them at that pitch join into one catenary with no wire prop
+            // between. city_sign's 3 280 triangles are its lettering.
+            new Spec("city_apartment",     1.84f,  7500),
+            new Spec("city_arena",         9.77f,  6500),
+            new Spec("city_autoshop",      2.68f,  2500),
+            new Spec("city_bench",         0.31f,   600),
+            new Spec("city_billboard",     1.09f,   400),
+            new Spec("city_bush",          0.19f,   500),
+            new Spec("city_busstop",       0.60f,   300),
+            new Spec("city_clocktower",    2.49f,  2800),
+            new Spec("city_cottage",       1.32f,  1000),
+            new Spec("city_diner",         1.80f,  3000),
+            new Spec("city_fence_chain",   0.45f,   800),
+            new Spec("city_fence_picket",  0.45f,   800),
+            new Spec("city_firehouse",     1.89f,  2100),
+            new Spec("city_garage",        1.94f,  2500),
+            new Spec("city_gas",           2.20f,  1000),
+            new Spec("city_hedge",         0.45f,   700),
+            new Spec("city_house_a",       1.65f,  2000),
+            new Spec("city_house_b",       1.76f,  2900),
+            new Spec("city_hydrant",       0.12f,   700),
+            new Spec("city_lamp",          0.82f,   700),
+            new Spec("city_mailbox",       0.20f,   300),
+            new Spec("city_planter",       0.16f,   900),
+            new Spec("city_pole",          2.86f,  2400),
+            new Spec("city_pole_t",        2.86f,  2600),
+            new Spec("city_sign",          0.31f,  3500),
+            new Spec("city_signal",        0.62f,  1200),
+            new Spec("city_store",         1.59f,  1800),
+            new Spec("city_townhouse",     1.27f,  1500),
+            new Spec("city_tree_maple",    1.42f,  6500),
+            new Spec("city_tree_oak",      1.04f,  6500),
+            new Spec("city_tree_pine",     1.09f,  1100),
+            new Spec("city_tree_young",    0.55f,   400),
+            new Spec("city_wall",          0.45f,   500),
+            new Spec("city_warehouse",     2.25f,  1800),
+            new Spec("city_watertower",    2.24f,  3100),
             // Toy Room
             new Spec("toy_ball",           0.96f,  1000),
             new Spec("toy_bed",            5.53f,  4500),
@@ -260,6 +314,54 @@ namespace AIHWSim.EditorTools
             new Spec("vault", 0.5454f, 0.6666f, 4100),
         };
 
+        /// <summary>
+        /// Check that every object in a build_vehicles.py export binds the
+        /// material its name asks for.
+        ///
+        /// The runtime binds by FIRST-MATCH SUBSTRING, so a token listed after
+        /// one it contains is silently swallowed — "redgold" eaten by "gold",
+        /// "hwwhite" by "white", "redtrim" by "rim". Nothing else catches it:
+        /// the table compiles either way, the mesh loads, the extents and tri
+        /// count are right, and the car renders in a plausible WRONG colour.
+        /// Both of those examples are real; they shipped broken for the length
+        /// of one build.
+        ///
+        /// Exports name every object "&lt;token&gt;_&lt;n&gt;", so the name up to the last
+        /// underscore IS the intended answer, and the check is just: does the
+        /// table's first match equal it? Names that carry no table token at all
+        /// are fine — "paint" panels are claimed earlier, by prefix, and a
+        /// legacy mesh's "Cylinder" is meant to take the fallback.
+        /// </summary>
+        private static string TokenTrouble(string key, Renderer[] rs)
+        {
+            var table = key.StartsWith("wheel_")
+                ? AIHWSim.Vehicles.PartVisualFactory.WheelTokens
+                : AIHWSim.Vehicles.PartVisualFactory.AccentTokens;
+
+            var seen = new System.Collections.Generic.HashSet<string>();
+            string why = "";
+            foreach (var r in rs)
+            {
+                string n = r.gameObject.name.ToLowerInvariant();
+                int cut = n.LastIndexOf('_');
+                if (cut <= 0) continue;
+                string want = n.Substring(0, cut);
+                if (!seen.Add(want)) continue;
+
+                string got = null;
+                foreach (var (token, _) in table)
+                    if (n.Contains(token)) { got = token; break; }
+
+                // Not a token at all (legacy names, the paint channel): fine.
+                bool known = false;
+                foreach (var (token, _) in table) if (token == want) { known = true; break; }
+                if (!known) continue;
+
+                if (got != want) why += $" token '{want}'->'{got}'";
+            }
+            return why;
+        }
+
         public static void Report()
         {
             int fail = 0;
@@ -301,6 +403,7 @@ namespace AIHWSim.EditorTools
                     if (ext < floor) why += $" extent={ext:0.0000}<{floor:0.0000}";
                 }
                 if (tris > s.MaxTris) why += $" tris={tris}>{s.MaxTris}";
+                why += TokenTrouble(s.Key, rs);
 
                 string line = $"{s.Key}: parts={rs.Length} tris={tris} " +
                               $"size=({b.size.x:0.000},{b.size.y:0.000},{b.size.z:0.000}) " +
@@ -310,8 +413,40 @@ namespace AIHWSim.EditorTools
 
                 Object.DestroyImmediate(inst);
             }
+            fail += CheckPropReadability();
+
             Debug.Log($"[PMV] RESULT {(fail == 0 ? "ALL PASS" : fail + " FAILED")} " +
                       $"({Specs.Length} assets)");
+        }
+
+        /// <summary>
+        /// Every TrackProps FBX must import CPU-readable: TrackCatalog cooks
+        /// non-convex MeshColliders from them at map build, and runtime cooking
+        /// on a non-readable mesh works in the editor (which always keeps the
+        /// CPU copy) and then fails in the player build — the one failure mode
+        /// no headless suite would otherwise see. Guards the
+        /// PartModelPostprocessor rule against a future refactor.
+        /// </summary>
+        private static int CheckPropReadability()
+        {
+            int fail = 0;
+            int n = 0;
+            foreach (string guid in AssetDatabase.FindAssets("t:Model",
+                         new[] { "Assets/Resources/TrackProps" }))
+            {
+                string path = AssetDatabase.GUIDToAssetPath(guid);
+                var mi = AssetImporter.GetAtPath(path) as ModelImporter;
+                if (mi == null) continue;
+                n++;
+                if (!mi.isReadable)
+                {
+                    Debug.LogError($"[PMV] FAIL readable {path}: isReadable is off — " +
+                                   "MeshCollider cooking would fail in a player build");
+                    fail++;
+                }
+            }
+            if (fail == 0) Debug.Log($"[PMV] READABLE all {n} TrackProps FBX CPU-readable");
+            return fail;
         }
 
         private static bool Off(float actual, float? expected) =>

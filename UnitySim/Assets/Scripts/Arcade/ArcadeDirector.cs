@@ -1180,7 +1180,12 @@ namespace AIHWSim.Arcade
 
                 UpdateShieldViz(r, dt);
                 UpdateBoostViz(r);
-                UpdateDrift(r, car, dt, wrecked || spun);
+                // Sim handling also stands the drift latch down: a scripted
+                // slide that cuts grip 30 % and assists to 20 % is an arcade
+                // mechanic, and it used to fire even with Sim handling picked.
+                // The disabled path is the wreck path, so a held drift ends
+                // cleanly when the toggle flips mid-slide.
+                UpdateDrift(r, car, dt, wrecked || spun || !SessionConfig.ArcadeHandling);
 
                 // Slipstream, maxed into the same channel the item boost uses
                 // rather than added: drafting should close a gap, not stack on

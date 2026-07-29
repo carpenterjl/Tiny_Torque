@@ -72,6 +72,7 @@ namespace AIHWSim.Net
         public string name = "";
         public string vehicleJson = "";
         public int level = 1;             // v10: shown as "Lv N" in the roster
+        public int team = -1;             // v12: -1 free-for-all, else 0/1
     }
 
     [Serializable]
@@ -94,6 +95,12 @@ namespace AIHWSim.Net
         public bool arcade;
         public bool trackLimits;
         public bool arcadeHandling = true;
+        // v12: which RULES the session runs. A joiner has to know before it
+        // composes its scene, for the same reason the arcade flags are here —
+        // the mode decides which director (if any) it builds.
+        public int match;                 // SessionConfig.MatchMode
+        public int targetScore = 3;
+        public int timeLimitSec;
     }
 
     [Serializable]
@@ -154,6 +161,11 @@ namespace AIHWSim.Net
         public bool arcade;
         public bool trackLimits;
         public bool arcadeHandling = true;
+        // v12: the live rules, so a mid-session mode change reaches every
+        // client the same way a lap-count change already does.
+        public int match;
+        public int targetScore = 3;
+        public int timeLimitSec;
     }
 
     /// <summary>
@@ -270,6 +282,8 @@ namespace AIHWSim.Net
         public bool respawnEdge;
         public bool useItemEdge;   // arcade: fire the held power-up
         public bool hornHeld;      // v10: hold-to-sound, mirrored on the host rig
+        public bool jumpEdge;      // v12: aerial jump / double jump / flip
+        public bool boostHeld;     // v12: burning the boost tank
     }
 
     /// <summary>
@@ -359,6 +373,12 @@ namespace AIHWSim.Net
         // a hazard the host is still catching it with.
         public const int ProjSmoke = 3;
         public const int ProjSlick = 4;
+        // v12: the mini-game modes' shared objects. Same argument as the
+        // hazards — a ball's POSITION is state, not a happening, so streaming
+        // it self-heals a dropped packet and a late join for free.
+        public const int ProjBall = 5;
+        public const int ProjFlag = 6;
+        public const int ProjPickup = 7;
 
         /// <summary>Seconds → the wire's 20ths-of-a-second byte (0 … 12.75 s).</summary>
         public static byte PackDs(float seconds) =>
@@ -374,7 +394,9 @@ namespace AIHWSim.Net
             byte flags = (byte)((s.handbrake ? 1 : 0) |
                                 (s.respawnEdge ? 2 : 0) |
                                 (s.useItemEdge ? 4 : 0) |
-                                (s.hornHeld ? 8 : 0));
+                                (s.hornHeld ? 8 : 0) |
+                                (s.jumpEdge ? 16 : 0) |
+                                (s.boostHeld ? 32 : 0));
             w.WriteValueSafe(flags);
         }
 
@@ -389,6 +411,8 @@ namespace AIHWSim.Net
             s.respawnEdge = (flags & 2) != 0;
             s.useItemEdge = (flags & 4) != 0;
             s.hornHeld = (flags & 8) != 0;
+            s.jumpEdge = (flags & 16) != 0;
+            s.boostHeld = (flags & 32) != 0;
             return s;
         }
 

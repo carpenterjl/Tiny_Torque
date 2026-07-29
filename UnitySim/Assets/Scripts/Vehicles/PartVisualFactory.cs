@@ -91,19 +91,163 @@ namespace AIHWSim.Vehicles
         internal static Material BlueStrobe => Em(ref _emBlue, new Color(0.02f, 0.07f, 0.72f), new Color(0.08f, 0.28f, 2.9f));
         internal static Material BarWhite  => Em(ref _barWhite, new Color(0.86f, 0.90f, 1f), new Color(1.3f, 1.35f, 1.5f));
 
+        // ---- TinyTorque Legendary cars (rattle/redline/highwing/autopia) ----
+        // Same deal one pass later: every number below is the authored
+        // Principled value out of the source blend, with smoothness = 1 −
+        // roughness. Materials whose authored numbers land close enough to an
+        // existing token to be indistinguishable in game were mapped onto that
+        // token in the exporter instead of appearing here — M_Toon_Gun onto
+        // "gunmetal", M_Toon_Red and M_Auto_Red onto "em_tail" — so this list
+        // is only the looks that are genuinely new.
+        private static Material _steel, _rust, _rustPaint,
+            _coupePaint, _bajaPaint, _patrolPaint, _emLamp, _emAutoLamp,
+            _redGold, _redTrim, _hwWhite, _hwTrim,
+            _autoGlass, _seat, _hubcap, _whitewall,
+            _sclera, _pupil, _emSpec, _tooth, _gum, _tongue, _maw,
+            _irisRattle, _irisRedline, _irisHighwing;
+
+        internal static Material Steel     => Mat(ref _steel,     new Color(0.640f, 0.652f, 0.672f), 0.66f, 1.00f);
+        internal static Material Rust      => Mat(ref _rust,      new Color(0.230f, 0.086f, 0.040f), 0.13f, 0.25f);
+        internal static Material RedGold   => Mat(ref _redGold,   new Color(0.735f, 0.560f, 0.145f), 0.74f, 0.90f);
+        internal static Material RedTrim   => Mat(ref _redTrim,   new Color(0.100f, 0.100f, 0.110f), 0.72f, 0.20f);
+        internal static Material HwWhite   => Mat(ref _hwWhite,   new Color(0.880f, 0.888f, 0.905f), 0.74f, 0.00f);
+        internal static Material HwTrim    => Mat(ref _hwTrim,    new Color(0.620f, 0.640f, 0.680f), 0.72f, 1.00f);
+        // The Autopia's wraparound screen is authored OPAQUE (alpha 1, no
+        // transmission) — a pale toon windscreen, not glass. Imported as it is
+        // modelled; turning it transparent here would be a redesign.
+        internal static Material AutoGlass => Mat(ref _autoGlass, new Color(0.820f, 0.870f, 0.885f), 0.96f, 0.00f);
+        internal static Material Seat      => Mat(ref _seat,      new Color(0.115f, 0.120f, 0.135f), 0.48f, 0.00f);
+        internal static Material Hubcap    => Mat(ref _hubcap,    new Color(0.880f, 0.888f, 0.902f), 0.70f, 0.82f);
+        internal static Material Whitewall => Mat(ref _whitewall, new Color(0.880f, 0.876f, 0.855f), 0.56f, 0.00f);
+        internal static Material EmLamp     => Em(ref _emLamp,     new Color(0.870f, 0.878f, 0.845f), new Color(0.850f, 0.816f, 0.748f));
+        internal static Material EmAutoLamp => Em(ref _emAutoLamp, new Color(0.940f, 0.940f, 0.900f), new Color(3.200f, 3.072f, 2.752f));
+
+        // Face rig. One set serves all three character cars — only the iris
+        // colour differs between them, which is why it is the only per-car one.
+        internal static Material Sclera => Mat(ref _sclera, new Color(0.940f, 0.940f, 0.920f), 0.66f, 0f);
+        internal static Material Pupil  => Mat(ref _pupil,  new Color(0.020f, 0.020f, 0.026f), 0.78f, 0f);
+        internal static Material Tooth  => Mat(ref _tooth,  new Color(0.930f, 0.905f, 0.830f), 0.70f, 0f);
+        internal static Material Gum    => Mat(ref _gum,    new Color(0.330f, 0.086f, 0.098f), 0.48f, 0f);
+        internal static Material Tongue => Mat(ref _tongue, new Color(0.560f, 0.170f, 0.190f), 0.56f, 0f);
+        internal static Material Maw    => Mat(ref _maw,    new Color(0.028f, 0.020f, 0.022f), 0.22f, 0f);
+        internal static Material EmSpec => Em(ref _emSpec, Color.white, new Color(2.2f, 2.2f, 2.2f));
+        internal static Material IrisRattle   => Mat(ref _irisRattle,   new Color(0.340f, 0.500f, 0.260f), 0.80f, 0f);
+        internal static Material IrisRedline  => Mat(ref _irisRedline,  new Color(0.140f, 0.440f, 0.800f), 0.80f, 0f);
+        internal static Material IrisHighwing => Mat(ref _irisHighwing, new Color(0.300f, 0.460f, 0.300f), 0.80f, 0f);
+
+        /// <summary>
+        /// Rattletrap's paint — the one authored material in the project that
+        /// is not a set of constants. It is an object-space noise multiplied by
+        /// a height ramp, blending faded teal into oxide, so build_vehicles.py
+        /// bakes its colour to <c>body_rattle_paint.png</c> and ships that
+        /// beside the FBX. Smoothness and metallic are the measured means of
+        /// the same mask (roughness 0.6086 → smoothness 0.3914, metallic
+        /// 0.1357), printed by the exporter's bake pass.
+        ///
+        /// This is deliberately NOT the tintable "paint" channel: the body
+        /// material carries the livery texture, and one mainTexture cannot be
+        /// both. Rattletrap therefore has no repaintable panels — its finish is
+        /// the character.
+        /// </summary>
+        private static Material RustPaint =>
+            BakedPaint(ref _rustPaint, "body_rattle_paint", 0.3914f, 0.1357f);
+
+        // The three TinyTorque liveries, Rattletrap-class since the fidelity
+        // pass: procedural in the source (candy crimson + graphite stripe +
+        // gold pinstripes; acid lime + graphite bands + orange pinstripes; the
+        // police black/white with navy flash and gold pinstripe), flattened to
+        // 0.8 grey for four passes because the exporter mislabelled them as
+        // constants. Baked by build_vehicles.py; smoothness = 1 − the bake's
+        // measured mean roughness, metallic the mask-weighted mean noted at
+        // each car's exporter config. Like the Rattletrap, these bodies have
+        // no tintable panel (CarVehicle.HasPaintableBody).
+        private static Material CoupePaint =>
+            BakedPaint(ref _coupePaint, "body_coupe_paint", 0.8083f, 0.60f);
+        private static Material BajaPaint =>
+            BakedPaint(ref _bajaPaint, "body_baja_paint", 0.6894f, 0.15f);
+        private static Material PatrolPaint =>
+            BakedPaint(ref _patrolPaint, "body_patrol_paint", 0.7905f, 0.20f);
+
+        private static Material BakedPaint(ref Material slot, string texName,
+            float smooth, float metal)
+        {
+            if (slot == null)
+            {
+                slot = new Material(Shader.Find("Standard")) { color = Color.white };
+                slot.SetFloat("_Glossiness", smooth);
+                slot.SetFloat("_Metallic", metal);
+                var tex = Resources.Load<Texture2D>("PartModels/" + texName);
+                if (tex != null) slot.mainTexture = tex;
+                else Debug.LogWarning($"[PartVisualFactory] {texName} texture " +
+                                      "missing — the body will render flat white.");
+            }
+            return slot;
+        }
+
         /// <summary>
         /// The full token→material table for build_vehicles.py exports.
-        /// ORDER MATTERS — AssignByName is first-match substring, so "barwhite"
-        /// must precede "white", and the emissive tokens precede plain trims.
+        /// ORDER MATTERS, and it is the one thing here nothing else can catch —
+        /// AssignByName is first-match substring, the compiler sees a valid
+        /// table either way, and a swallowed token renders as a plausible wrong
+        /// material rather than as an error. Every COMPOUND token therefore
+        /// precedes the token it contains:
+        ///
+        ///   barwhite / whitewall / hwwhite  before  white
+        ///   redgold                          before  gold
+        ///   rustpaint                        before  rust
+        ///   autoglass                        before  glass
+        ///   em_autolamp                      before  em_lamp
+        ///
+        /// "redgold" and "hwwhite" really were the wrong way round first time:
+        /// the Redline's flank flash came out the Coupe's gold and the
+        /// Highwing's wing came out generic white trim.
         /// </summary>
-        internal static (string, Material)[] AccentTokens => new (string, Material)[]
+        public static (string, Material)[] AccentTokens => new (string, Material)[]
         {
+            ("em_autolamp", EmAutoLamp), ("em_lamp", EmLamp), ("em_spec", EmSpec),
             ("em_head", HeadLight), ("em_tail", TailLight), ("em_amber", Amber),
             ("em_red", RedStrobe), ("em_blue", BlueStrobe),
-            ("barwhite", BarWhite), ("white", WhiteTrim),
-            ("gunmetal", Gunmetal), ("chrome", Chrome), ("gold", Gold),
-            ("glass", Glass()), ("carbon", Carbon), ("tube", Tube),
-            ("orange", OrangeAccent), ("decal", Decal), ("dark", DarkTrim),
+            ("barwhite", BarWhite), ("whitewall", Whitewall), ("hwwhite", HwWhite),
+            ("white", WhiteTrim),
+            ("rustpaint", RustPaint), ("rust", Rust),
+            // The baked liveries. They contain "paint", but the tintable paint
+            // channel is matched by StartsWith BEFORE this table runs and no
+            // token here is a substring of them, so order is free.
+            ("coupepaint", CoupePaint), ("bajapaint", BajaPaint),
+            ("patrolpaint", PatrolPaint),
+            ("redgold", RedGold), ("gold", Gold),
+            ("autoglass", AutoGlass), ("glass", Glass()),
+            ("gunmetal", Gunmetal), ("chrome", Chrome),
+            ("carbon", Carbon), ("tube", Tube),
+            ("orange", OrangeAccent), ("decal", Decal),
+            ("redtrim", RedTrim), ("hwtrim", HwTrim),
+            ("steel", Steel), ("hubcap", Hubcap), ("seat", Seat),
+            ("irisrattle", IrisRattle), ("irisredline", IrisRedline),
+            ("irishighwing", IrisHighwing),
+            ("sclera", Sclera), ("pupil", Pupil), ("tooth", Tooth),
+            ("tongue", Tongue), ("gum", Gum), ("maw", Maw),
+            ("dark", DarkTrim),
+        };
+
+        /// <summary>
+        /// The token→material table for wheel meshes — separate from
+        /// <see cref="AccentTokens"/> because a wheel has pieces a body never
+        /// does (tyre, brake disc, studs) and because "rim" and "hub" are far
+        /// too greedy to live in the body table.
+        ///
+        /// Ordered by the same rule, and it matters just as much here:
+        /// "redtrim" and "hwtrim" both CONTAIN "rim", and "hubcap" contains
+        /// "hub". Named rather than inlined so PartModelValidator can check
+        /// that ordering against the shipped FBX.
+        /// </summary>
+        public static (string, Material)[] WheelTokens => new (string, Material)[]
+        {
+            ("gold", Gold), ("orange", OrangeAccent), ("chrome", Chrome),
+            ("whitewall", Whitewall), ("redtrim", RedTrim), ("hwtrim", HwTrim),
+            ("hubcap", Hubcap), ("steel", Steel),
+            ("dark", DarkTrim), ("brake", Hub),
+            ("tire", Tire), ("tyre", Tire), ("rim", Rim), ("hub", Hub),
+            ("stud", Stud),
         };
 
         // ---- primitive helper ----
@@ -143,6 +287,10 @@ namespace AIHWSim.Vehicles
             6 => "slick",     // chrome finish (unlockable)
             7 => "slick",     // gold finish (unlockable)
             8 => "slick",     // neon finish (unlockable)
+            9 => "rattle",    // rusted steelie
+            10 => "redline",  // gold-faced race wheel
+            11 => "highwing", // polished five-spoke
+            12 => "autopia",  // whitewall on a chrome hubcap
             _ => "slick",
         };
 
@@ -164,6 +312,13 @@ namespace AIHWSim.Vehicles
         ///
         /// Scoped to the imported mesh instance so the motor can — a sibling
         /// primitive under the same holder — keeps turning up on powered wheels.
+        ///
+        /// The primitive fallback needs the other half: its pieces are all called
+        /// "Cylinder" (<see cref="Piece"/> never renames), so the name test above
+        /// matches nothing and the stock rim discs, studs and hub would stay lit
+        /// underneath the cosmetic. They are identified by shared material
+        /// instead — the same trick <see cref="ApplyWheelFinish"/> uses — which
+        /// leaves the motor can (material <c>Can</c>) alone.
         /// </summary>
         public static void HideStockRim(Transform holder)
         {
@@ -171,14 +326,89 @@ namespace AIHWSim.Vehicles
             for (int i = 0; i < holder.childCount; i++)
             {
                 var child = holder.GetChild(i);
-                if (!child.name.StartsWith("wheel_")) continue;
-                foreach (var r in child.GetComponentsInChildren<Renderer>(true))
+                if (child.name.StartsWith("wheel_"))
                 {
-                    string n = r.gameObject.name.ToLowerInvariant();
-                    bool keep = n.Contains("tire") || n.Contains("tyre") || n.Contains("brake");
-                    if (!keep) r.enabled = false;
+                    foreach (var r in child.GetComponentsInChildren<Renderer>(true))
+                    {
+                        string n = r.gameObject.name.ToLowerInvariant();
+                        // "whitewall" joined the keep list when the Autopia
+                        // shipped: its cream sidewall band is part of the TYRE
+                        // (split off only because it is its own material), and
+                        // the 3-token list was switching it off with the
+                        // hubcap — any cosmetic rim left the car on plain
+                        // black tyres with a groove where the wall had been.
+                        // CosmeticProbe now hard-FAILs any hidden renderer
+                        // whose name reads as tyre-family, so the next
+                        // tyre-side material split cannot regress this way.
+                        bool keep = n.Contains("tire") || n.Contains("tyre") ||
+                                    n.Contains("brake") || n.Contains("whitewall");
+                        if (!keep) r.enabled = false;
+                    }
+                    continue;
+                }
+
+                // Primitive fallback: match the rim family by material.
+                var pr = child.GetComponent<Renderer>();
+                if (pr == null) continue;
+                var m = pr.sharedMaterial;
+                if (m == Rim || m == Stud) pr.enabled = false;
+            }
+        }
+
+        /// <summary>
+        /// Half the tyre's width along the holder's axle (local X), measured from
+        /// the built wheel rather than assumed, so a cosmetic rim can be seated
+        /// on the tyre's outer face on any wheel style or size.
+        ///
+        /// The authored meshes are 27-29 mm wide at the 33 mm author radius and
+        /// each style differs, so this reads the instantiated mesh's own bounds.
+        /// The primitive fallback has no mesh to read and is built to an exact
+        /// proportion (see BuildWheelViz), so that constant is returned instead.
+        /// Deliberately ignores everything outside the wheel mesh: the motor can
+        /// is a sibling under the same holder and sticks out three times as far.
+        /// </summary>
+        public static float TyreHalfWidth(Transform holder, float radius)
+        {
+            const float PrimitiveHalfFrac = 0.4f;   // BuildWheelViz's halfWidth
+            if (holder == null) return radius * PrimitiveHalfFrac;
+
+            for (int i = 0; i < holder.childCount; i++)
+            {
+                var child = holder.GetChild(i);
+                if (!child.name.StartsWith("wheel_")) continue;
+                var b = LocalRendererBounds(holder, child);
+                if (b.size.x > 1e-6f) return Mathf.Max(Mathf.Abs(b.min.x), Mathf.Abs(b.max.x));
+            }
+            return radius * PrimitiveHalfFrac;
+        }
+
+        /// <summary>
+        /// A subtree's renderer bounds expressed in <paramref name="frame"/>'s
+        /// local space. The eight-corner walk is needed because Renderer.bounds
+        /// is a world AABB, not a local one — projecting only its centre and
+        /// extents would be wrong the moment the frame is rotated.
+        /// </summary>
+        public static Bounds LocalRendererBounds(Transform frame, Transform subtree)
+        {
+            bool any = false;
+            var result = new Bounds();
+            if (frame == null || subtree == null) return result;
+
+            foreach (var r in subtree.GetComponentsInChildren<Renderer>(true))
+            {
+                var wb = r.bounds;
+                for (int c = 0; c < 8; c++)
+                {
+                    var corner = new Vector3(
+                        (c & 1) == 0 ? wb.min.x : wb.max.x,
+                        (c & 2) == 0 ? wb.min.y : wb.max.y,
+                        (c & 4) == 0 ? wb.min.z : wb.max.z);
+                    var local = frame.InverseTransformPoint(corner);
+                    if (!any) { result = new Bounds(local, Vector3.zero); any = true; }
+                    else result.Encapsulate(local);
                 }
             }
+            return result;
         }
 
         /// <summary>Swap the rim-family materials for a finish (styles 6-8).
@@ -186,7 +416,11 @@ namespace AIHWSim.Vehicles
         /// primitive fallback (shared Rim/Hub/Stud materials).</summary>
         private static void ApplyWheelFinish(GameObject root, int style)
         {
-            if (style < 6) return;
+            // 6-8 are FINISHES over the slick. 9-12 are their own authored
+            // meshes with their own authored materials, and must fall through
+            // untouched — a bare "style < 6" would have painted all four
+            // Legendary wheels neon pink.
+            if (style < 6 || style > 8) return;
             Material finish = style == 6 ? Chrome : style == 7 ? Gold : NeonRim;
             foreach (var r in root.GetComponentsInChildren<Renderer>())
             {
@@ -232,13 +466,12 @@ namespace AIHWSim.Vehicles
                 if (inboardSign >= 0f)
                     mesh.transform.localRotation = Quaternion.Euler(0f, 180f, 0f);
 
-                // TinyTorque tokens (gold/orange/chrome/dark) ahead of the
-                // legacy set; both wheel families bind from this one call.
-                PartMeshLibrary.AssignByName(mesh, Tire,
-                    ("gold", Gold), ("orange", OrangeAccent), ("chrome", Chrome),
-                    ("dark", DarkTrim), ("brake", Hub),
-                    ("tire", Tire), ("tyre", Tire), ("rim", Rim), ("hub", Hub),
-                    ("stud", Stud));
+                // TinyTorque tokens ahead of the legacy set; all three wheel
+                // families bind from this one call. "redtrim", "hwtrim" and
+                // "whitewall" MUST come before "rim"/"white", and "hubcap"
+                // before "hub" — first-match substring, and "redtrim" really
+                // does contain "rim".
+                PartMeshLibrary.AssignByName(mesh, Tire, WheelTokens);
                 ApplyWheelFinish(mesh, style);
                 if (powered) BuildMotorCan(holder, radius, inboardSign);
                 return;

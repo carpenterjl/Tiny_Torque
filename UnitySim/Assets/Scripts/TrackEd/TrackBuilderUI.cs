@@ -109,6 +109,10 @@ namespace AIHWSim.TrackEd
 
             EnsureSplineHandles();
 
+            // Escape already cancels an in-progress placement or spline; from
+            // idle it now backs out of the scene instead of doing nothing.
+            if (_state == EditState.Idle && InputReader.CancelPressed()) { GoBack(); return; }
+
             switch (_state)
             {
                 case EditState.Idle: UpdateIdle(overUI); break;
@@ -927,6 +931,11 @@ namespace AIHWSim.TrackEd
             GUILayout.BeginArea(_topRect, GUI.skin.box);
             GUILayout.BeginHorizontal();
 
+            // Same hole the Garage had: without this the only way out of the
+            // builder scene is to start a drive. Saves on the way out, like
+            // DoDrive does, because there is no dirty flag to prompt from.
+            if (GUILayout.Button("← Back", GUILayout.Width(70))) GoBack();
+
             GUILayout.Label("Track", GUILayout.Width(40));
             D.name = GUILayout.TextField(D.name, GUILayout.Width(180));
 
@@ -968,6 +977,16 @@ namespace AIHWSim.TrackEd
             SessionConfig.SetSinglePlayer(); // builder Drive is always a solo session
             GameFlow.ActiveTrack = D.Clone();
             GameFlow.LoadTrack();
+        }
+
+        /// <summary>Leave the builder for the main menu, saving first.</summary>
+        private void GoBack()
+        {
+            TrackLibrary.Save(D);
+            if (Application.CanStreamedLevelBeLoaded(GameFlow.MenuSceneName))
+                UI.ScreenFade.To(GameFlow.LoadMenu);
+            else
+                _status = $"Scene '{GameFlow.MenuSceneName}' missing — cannot return.";
         }
 
         private void DrawLeftPanel()
@@ -1422,9 +1441,11 @@ namespace AIHWSim.TrackEd
             GUILayout.BeginArea(_loadRect, GUI.skin.box);
             GUILayout.Label("SAVED TRACKS", GarageSkin.Header);
             _loadScroll = GUILayout.BeginScrollView(_loadScroll);
-            // Built-in presets (read-only): clicking clones one to edit.
+            // Built-in presets (read-only): clicking clones one to edit. The
+            // free-roam town is included here and nowhere else — it is not a
+            // map you can race on, but it is very much a map you can open.
             GUILayout.Label("Presets:", GarageSkin.StatLabel);
-            foreach (var pname in TrackPresets.DisplayNames())
+            foreach (var pname in TrackPresets.DisplayNames(raceable: false))
                 if (GUILayout.Button(pname))
                 {
                     var d = TrackPresets.Resolve(pname);

@@ -76,6 +76,7 @@ namespace AIHWSim.Menu
             _cam.backgroundColor = new Color(0.045f, 0.06f, 0.11f);
             _cam.nearClipPlane = 0.02f;
             _cam.farClipPlane = 50f;
+            Rendering.CameraBloom.Attach(_cam);
 
             var revGo = new GameObject("rev");
             revGo.transform.SetParent(transform, false);

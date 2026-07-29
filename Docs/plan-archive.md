@@ -8,8 +8,477 @@ describe is documented in [README.md](../README.md).
 Active work lives in the session plan file, not here; a plan moves into this archive
 once its milestones are done.
 
-Covering the project bootstrap through the preview-render fixes (516992 chars, 37 plans).
-Last updated 2026-07-28.
+Covering the project bootstrap through the mini-game modes pass (551059 chars, 39 plans).
+Last updated 2026-07-29.
+
+---
+
+# Two UI fixes, then three mini-game modes — Demolition, CTF, Soccer (2026-07-28)
+
+**Archived with two milestones still open** — #251 `Modes/ModeNetLink.cs` (stream ball/flag pose + per-car health to LAN clients) and #252 (split-screen menu rows 3–4 + per-viewport MatchHud) are carried as pending tasks, and the user play-test was undriven at archive time.
+
+
+## Context
+
+Two things are broken or missing in screens the last pass touched, and then the
+game gets its first non-racing rules.
+
+**The bugs.** In the Showroom, picking a cosmetic **rim** either does nothing at
+all or puts something visibly wrong on the wheel — the other four cosmetic slots
+work. And the **Garage has no way out**: `DrawTopBar` (GarageUI.cs:1120) offers
+Name/Save/Load/New/Undo/Redo/Drive and nothing else, no `GameFlow.LoadMenu` call
+exists anywhere under `Scripts/Garage/`, the Garage scene has no `PauseMenu`, and
+Escape is only consumed mid-part-drag (GarageUI.cs:491). The only exit is to
+start a drive. The user also wants the Garage re-dressed in the Showroom's
+layout language while we are in there.
+
+**The feature.** Three multiplayer mini-games — a demolition derby, capture the
+flag, and a Rocket-League-style soccer mode — playable against **bots**, in
+**4-way split-screen**, and over **LAN**, with the **full aerial** driving model
+(jump, double jump, flips, air roll) for soccer. All three ship in this pass.
+
+The reconnaissance that shapes the design:
+
+- **There is no game-mode concept at all.** `SessionMode` (SessionConfig.cs:9)
+  describes *who plays*, never *what the rules are*. Rules are four booleans and
+  an int on a static class, and the composition is hard-coded in
+  `TrackBootstrap.Awake` behind `if (SessionConfig.TargetLaps > 0 && _lapTimer != null)`.
+- **But `ArcadeDirector` is already a working second rules object** — 1741 lines
+  that never touch `RaceDirector`: `Instance` + `IsAuthority` + `Register(rig) →
+  per-car state bag` + an `Update()` authority loop + a typed event stream + one
+  `ArcadeNetLink` that is the only thing knowing both arcade and network. **The
+  three modes are built as siblings of `ArcadeDirector`, not of `RaceDirector`.**
+- **The single biggest obstacle is the implicit "every session has a racing
+  line".** `TrackSpine`/`BotPath` is load-bearing for five systems that are not
+  about laps: bot steering, `TrackRespawn` (`Available => _spine != null`),
+  arcade box placement, missile targeting and wreck recovery. An arena has no
+  line, so simply "not building a RaceDirector" silently disables respawn and bot
+  navigation too. An arena analogue must exist before any mode is playable.
+- **No teams anywhere** (`grep -rni "\bteam\b"` over `Assets/Scripts` → zero
+  hits), and **one spawn point per map** (`TrackFactory.ResolveSpawn` takes the
+  *first* `ItemBehavior.Spawn`; everything else is a 2-wide grid derived from it).
+- **No health, damage or impact concept anywhere** — and exactly one
+  `OnCollisionEnter` in the codebase, `VehicleAudio.cs:292`, whose own comment
+  ("needs no cooperation from CarVehicle") is the recipe for derby damage.
+- **No aerial anything.** There is a drift hop (`ArcadeConfig.DriftHopImpulse`)
+  and three boost sources, but no airborne state, no air torque, no flip. This is
+  genuine new vehicle code and it touches the physics the Opus regression guards.
+- **Networked non-car objects already work**: the `ArcProjState` projectile
+  stream carries four kinds, host-authoritative, with clients rebuilding
+  *visual-only* copies that "must never be able to detonate anything". A ball, a
+  flag, a health pack and a mine are four more kinds.
+- Ceilings today: **2 local players** (`BuildPlayerCamera` splits top/bottom for
+  index 0/1 only; the menu hard-codes two rows) and **4 over LAN**
+  (`NetSession.MaxPlayers`). 3v3 needs 6.
+
+Non-negotiables carried from the codebase: only the UI layer may consult
+`Progression`; `VehiclePresets.Resolve`, `VehicleLibrary`, `VehicleFactory`,
+`SessionConfig` and `NetSession` stay progression-blind. IMGUI stays pass-safe
+(snapshot on Layout, never `ExitGUI` at runtime). Anything new on the wire bumps
+the protocol, which is checked with strict equality on Hello.
+
+---
+
+## Milestone 0 — plan housekeeping
+
+- [x] Spliced into `Docs/plan-archive.md` as entry 38 (525 124 chars), headings
+      promoted a level, titled with the date and flagged play-test-undriven;
+      header coverage line and the `plan-archive` memory updated; the Appendix
+      deleted from this file. Script: `scratchpad/archive_splice4.py`.
+
+---
+
+# Part 1 — the two fixes
+
+## Milestone 1 — Showroom rims
+
+**DONE — and the probe named the cause.** Every rim mounted correctly all along:
+right scale (`norm 0.0409` on all 60 car×rim combinations), renderers enabled,
+`hid 3` proving `HideStockRim` worked. But **every rim sat 0.9–4.9 mm INSIDE the
+tyre's outer face.** These rims are narrower than the stock rim faces they
+replace (41 mm disc against a 66 mm tyre), so seated at the hub plane they drop
+into the tyre's aperture and hide behind the sidewall — which reads as "nothing
+changed" on a stock wheel and "something's wrong" on a wider one. Seating them
+on the measured tyre face fixes it: now `proud 0.7 mm` (stock), `1.0 mm`
+(coupe), `1.1 mm` (baja), `[COS] RESULT ALL PASS`.
+
+**Deviation:** the load-failure warning went only into `PartMeshLibrary.Load`,
+not also into `CosmeticCatalog.Build`. Load caches misses, so warning there
+fires exactly once per key; warning in Build would fire on every call for every
+wheel, every rebuild.
+
+Ruled out along the way, so nobody re-checks them: the FBX orientation (Unity
+extent `[0.0227, 0.0409, 0.0409]` — thin on the axle, disc on Y/Z), the scale
+factor, `ApplyRims`' left/right half-turn (byte-identical to `BuildWheelViz`'s),
+the mount timing (`root.SetActive(true)` at VehicleFactory.cs:198 runs `Awake` →
+`BuildWheels` synchronously, 13 lines before the cosmetics), `ApplyCosmetics`'
+write of `d.cosRim`, and the material tokens.
+
+- [x] `Assets/Editor/CosmeticProbe.cs` — a play-mode validator (the editor does
+      not run `Awake` in edit mode, and `CarVehicle.Awake` is what builds the
+      wheel holders, so an edit-mode probe would measure a car with no wheels).
+      Builds all 6 designs × 10 rims and reports per wheel: renderers on/off,
+      stock renderers hidden, disc size normalised to the author radius, and the
+      rim face against the tyre face.
+- [x] `HideStockRim` gained its primitive-fallback arm (match the rim family by
+      shared material, leaving the motor can's `Can` material alone). The probe
+      shows the mesh path was already hiding 3 renderers per wheel, so this was
+      latent, not the live fault — but it is real.
+- [x] `ApplyRims` iterates `car.WheelCount`, reading the design only for radius
+      and side.
+- [x] **The fix:** new `PartVisualFactory.TyreHalfWidth(holder, radius)` measures
+      the wheel mesh's own half-width along the axle — deliberately ignoring the
+      motor can, a holder sibling that sticks out three times as far — and
+      `ApplyRims` offsets the rim so its face lands `RimProudFrac` (5 %) past it.
+      Falls back to `BuildWheelViz`'s exact `radius * 0.4` on the primitive path.
+- [x] `PartMeshLibrary.Load` warns once per missing key. `LocalRendererBounds`
+      was promoted to a shared `PartVisualFactory` helper; `CosmeticMounts` and
+      `CosmeticProbe` both use it instead of each keeping a private copy of the
+      eight-corner walk.
+- [x] `!RECESSED` is now a hard FAIL in the probe, so this exact defect cannot
+      come back silently.
+
+## Milestone 2 — Garage: a way out, in the Showroom's clothes
+
+The Showroom's back is a *page* change inside one scene (`ResultBack` →
+`CloseShowroom` → `GoTo` → `ScreenFade.Dip`). The Garage is a *separate scene*,
+so it uses the scene-level equivalent — `ScreenFade.To(GameFlow.LoadMenu)`, the
+same call `RaceDirector.cs:357` and `PauseMenu.cs:260` already make.
+`UiRuntime`/`ScreenFade` are already alive in the Garage scene via
+`[RuntimeInitializeOnLoadMethod]`, so this needs no setup. **Converting the
+Garage into a `Page.Garage` is explicitly not in scope** — `GarageBootstrap`
+builds its own floor, lights and `Camera.main`, all of which would fight
+`MenuAttract`.
+
+- [x] Layout snapshots added (`_showLoadDraw`, `_leftTabDraw`, `_selDraw`,
+      `_selTypeDraw`) and read by everything that decides which controls exist:
+      the load popup, the BODY/PARTS/PAINT switch, and the inspector switch —
+      the last through a new `SelectedDraw(type, count)`, so a list click that
+      changes the selection mid-pass can no longer offer Repaint a different
+      inspector than Layout registered, nor index the new list with the old
+      index.
+- [x] `Assets/Scripts/UI/PanelLayout.cs` — `LeftRect`, `RightRect`,
+      `BottomBarRect`, `HintRect`, `NoteRect`, reproducing the Showroom's exact
+      geometry so nothing moves. `ShowroomUI` and `CrateOpenUI` now use it too.
+- [x] `GarageUI` re-dressed: the top bar is gone and every verb moved to a
+      Showroom-shaped bottom bar (`← Back`, name, Save, Load, New, undo, redo,
+      `Drive ▶`); the left column is the build tabs with the stats box at its
+      foot; the right column is the parts list + inspector. The Load popup now
+      opens upward from the bar, and `_barRect` replaced `_topRect` in
+      `PointerOverUI` so clicks still do not fall through to the orbit camera.
+- [x] `MenuNav.BeginFrame("garage")` / `EndFrame()` wired, with only the bottom
+      bar's controls wrapped — the pad already owns the car through the
+      part-manipulation layer, so the palette and inspectors stay mouse-driven.
+      Pad East deselects a part when one is selected and backs out when none is,
+      which is the only way to keep one button doing both without a single press
+      doing both at once.
+- [x] Back auto-saves (DoDrive's precedent — no dirty flag exists to prompt
+      from), then `ScreenFade.To(GameFlow.LoadMenu)`. Escape from the idle state
+      does the same; it previously only cancelled an in-progress part drag.
+- [x] `TrackBuilderUI` got the same escape hatch: `← Back` at the head of its
+      existing top bar, plus Escape-from-idle. **Deviation:** it keeps its top
+      bar rather than gaining a bottom one — the user asked for the Garage to be
+      re-laid out, and half-re-laying-out the builder would leave the two
+      editors looking less alike, not more.
+
+---
+
+# Part 2 — the mini-game modes
+
+**Status: playable solo and in split-screen; LAN is partly done.** Everything
+below is built and compiles clean, and the verification suite is green. Two
+pieces are NOT finished and are listed under "Left undone" at the end — read that
+before play-testing LAN.
+
+## Milestone 3 — mode foundation — DONE
+
+- [x] `MatchMode` enum lives in `Core/SessionConfig.cs` beside `SessionMode` and
+      `DriveControl`, **not** in `AIHWSim.Modes`: SessionConfig has to name it,
+      and Core must not depend on the layers above it. `SessionConfig` gained
+      `Match`, `TargetScore`, `TimeLimitSec`, `IsArenaMatch`, `IsTeamMatch`;
+      `PlayerSlot` gained `team`.
+- [x] `Track/MatchDirector.cs` — the shared base (countdown, `FreezeCars`,
+      `PlayerFinished`, the one-way `EnterResults`, the results frame,
+      `RestartMatch`/`ResetMatch`). `RaceDirector` is now a subclass and its lap
+      rules did not move. Lives in `Track/` rather than `Modes/` so the
+      dependency runs one way: Modes → Track → Core.
+- [x] `Modes/ArenaNav.cs` — spawn ring, floor bounds, centre, radius,
+      `TrySpawn(team, index)`, `TryNearestFree`, `Drop`. `TrackRespawn` gained an
+      arena branch, so the R key and bot unsticking keep working with no line.
+- [x] Multi-spawn with no new schema: `BuiltTrack.spawns` is every `Spawn` item
+      with `PlacedItem.order` carried through as the team. The single-spawn
+      answer a race uses is untouched.
+- [x] `TrackBootstrap.Awake`'s rules tail is now `BuildMatchDirector()` — one
+      method per mode, plus `HoldGrid` and `HookCratePayout` shared by all of
+      them. `ArenaNav.SetTrack` is wired into all three composition paths.
+
+## Milestone 4 — impact, health, death — DONE
+
+- [x] `Modes/CarImpact.cs` classifies every collision into ram / side / wall from
+      `relativeVelocity` and the contact normal, on the car's own GameObject and
+      with no cooperation from `CarVehicle` — VehicleAudio's trick.
+- [x] `Modes/MatchRacer.cs` (health, alive, team, score, place, carrying,
+      heldMines) + `PlayerRig.match`. `Modes/ModeConfig.cs` holds every tunable.
+- [x] Death reuses the arcade wreck's punt+tumble, then `Spectate` freezes and
+      hides the car rather than destroying it — its camera is still a viewport.
+
+## Milestone 5 — pickups — DONE
+
+- [x] `Modes/ArenaPickup.cs` (repair cross / bomb crate) off the `ArcadeItemBox`
+      template, including the LAN rule that a client destroys the collider at
+      Awake. **Deviation:** one component with a `Kind` rather than two files —
+      the spin, the respawn clock and the LAN rule are the whole of both.
+- [x] `Modes/Landmine.cs` off the `Banana` template, with an area blast and
+      falloff instead of a single-car spin.
+- [x] Visuals are `TrackBuilder` primitives. **Noted deviation** from the Blender
+      pipeline, the same way the arcade props started.
+
+## Milestones 6, 7, 9 — the three modes — DONE
+
+- [x] `DerbyDirector` — ram damage, side/wall damage to both, pickups on two
+      rings, mine drop on the use-item button, elimination from the bottom of the
+      places, last standing wins.
+- [x] `CtfDirector` + `Modes/Flag.cs` — bases derived from each team's spawn
+      centroid, polled containment (never triggers — see the note in `Flag`),
+      carry/drop/return/score, 20 s auto-return.
+- [x] `SoccerDirector` + `Modes/SoccerBall.cs` + goal volumes — authority-only
+      dynamic ball, celebration freeze, kick-off reset, aerials enabled here and
+      nowhere else.
+
+## Milestone 8 — aerial driving — DONE
+
+- [x] `CarVehicle` gained `arcadeAerial` (off by default), `Grounded`,
+      `AerialJump`, `AerialFlip`, `AerialTorque` — in the style of the seven
+      `arcade*` channels, and the linear half of the flip goes through the centre
+      of mass exactly as `ArcadeImpulse(Vector3)`'s comment demands.
+- [x] `Modes/AerialControl.cs` owns the state machine (jump → double jump →
+      directional flip inside the window → free air roll) and the boost tank, in
+      FixedUpdate so a jump's height does not depend on frame rate.
+- [x] `DriveAction.Jump` / `.Boost` through the whole seam: `KeyBindings`,
+      `InputReader`, `IDriverInputSource` and all four implementations,
+      `InputState` on the wire, `ClientInputSender`. **Deviation:** the defaults
+      are E and Q, not Space and Shift — those are handbrake and use-item, and a
+      duplicate default reads as a broken binding table.
+- [x] **Opus mission returns numbers IDENTICAL to the pre-change baseline**
+      (leg A −13.6156 mm, turn +0.1874°, leg B +15.8038 mm, total +58.1455 mm),
+      which is the proof the channel is genuinely inert.
+
+## Milestone 10 — arena bots — DONE
+
+- [x] `BotDriver.SetChaseTarget(worldPos, speedScale, holdSeconds)` — a push-in
+      seam in `SetBlind`'s style, plus an arena steering mode that keeps the
+      pure-pursuit core and swaps the corridor for three whisker raycasts and a
+      back-up recovery.
+- [x] `Modes/BotPolicy.cs` — derby hunts the weakest reachable car, CTF picks
+      between running home / rescuing its own flag / chasing the carrier /
+      taking theirs, soccer drives at the point behind the ball on the goal side
+      and boosts only when lined up and far out.
+
+## Milestone 11 — LAN — PARTLY DONE
+
+- [x] `ProtocolVersion` 11 → **12**, `MaxPlayers` 4 → **6**.
+- [x] Mode, target score and time limit on `WelcomeMsg` AND `SessionStateMsg`
+      (a mid-session rules change has to reach a client the way a lap-count
+      change already does), applied through a new `ApplyMatchRules`.
+      `RosterEntry.team`. Jump/boost bits in the input flags.
+- [x] `NetPack.ProjBall / ProjFlag / ProjPickup` kinds reserved on the
+      projectile stream.
+- [ ] **`Modes/ModeNetLink.cs` is NOT written.** See "Left undone".
+
+## Milestone 12 — split-screen, menu, HUD — PARTLY DONE
+
+- [x] `TrackBootstrap.ViewportFor(index, count)` — quadrants for 3-4 local
+      players, stacked halves for 2, full screen for 1.
+- [x] `MenuUI`: a **Mode** picker at the top of Single Player that moves the
+      track selection to that mode's arena, a score-to-win stepper for CTF and
+      soccer, laps hidden in an arena, arcade items disabled in an arena, and
+      `ApplyMatchRules()` splitting the roster into two sides after it is built.
+- [ ] Split-screen menu rows 3 and 4, and the per-viewport `MatchHud`. See
+      "Left undone".
+
+## Milestone 13 — arenas — DONE
+
+- [x] **Scrapyard Bowl** (derby, 40×40, walled ring, 8 spawns), **Cargo Yard**
+      (CTF, 44×52, mirrored ends, 4+4 spawns), **Torque Dome** (soccer, 40×56,
+      goal mouths, wing boost pads, corner ramps, 3+3 spawns) — all authored as
+      `TrackPresets` functions with the existing helpers.
+- [x] `TrackPresetValidator` taught what an arena is (no finish + a spawn ring),
+      and checks them on their own terms: 4+ spawns, an even number so a team
+      mode has two equal sides, and no checkpoints.
+
+## Milestone 14 — verify — GREEN
+
+- [x] Headless compile: **0 `error CS`**.
+- [x] `[PMV] RESULT ALL PASS (161 assets)`.
+- [x] `[TPV] RESULT ALL PASS (11 presets)` — the three arenas included.
+- [x] `[COS] RESULT ALL PASS` — the M1 rim probe.
+- [x] **Opus mission `completed: true, fault: 0`**, numbers bit-identical to the
+      baseline.
+- [x] `[BuildMenu] Release build succeeded`.
+- [x] `README.md`: a "Mini-game modes" section and the protocol table at v12.
+- [ ] User play-test.
+
+## Left undone — read before play-testing
+
+1. **LAN arena matches are host-only in practice.** The rules, the roster, the
+    teams and the aerial inputs all cross the wire, so a LAN *race* is unaffected
+    and a LAN arena match runs correctly ON THE HOST. But nothing yet streams the
+    ball's or the flag's pose, or per-car health, to a client: `SoccerBall`
+    already builds itself kinematic on a client and exposes `ApplyRemote`, and
+    the `ProjBall`/`ProjFlag` kinds are reserved — what is missing is the
+    `ModeNetLink` component that publishes them on the host and applies them on
+    the client, modelled on `ArcadeNetLink`. Until that exists a client will see
+    a ball that never moves.
+2. **The split-screen menu still offers two local players**, though the
+    viewports handle four. `MenuUI.DrawMultiplayer` hard-codes `DrawPlayerRow(1)`
+    and `(2)`; rows 3 and 4 plus the device-conflict check are the remaining
+    work.
+3. **No per-viewport health bars.** Each director draws a centred live banner
+    (health, score, who is carrying what) which works in solo and is readable in
+    split-screen, but the planned `MatchHud` drawn per viewport through the
+    `ArcadeFeedback.Draw(Rect, …)` seam was not built.
+4. Mode furniture — flag, ball, goals, pickups, mines — is procedural
+    `TrackBuilder` geometry, not authored Blender props.
+
+---
+
+# TinyTorque cosmetics: 47 unlockables, 4 crates, championship + scrap economy (2026-07-28)
+
+**Archived with the user play-test still UNDRIVEN** — every milestone shipped and verified headlessly (compile, PMV, TPV, Opus, release build), but nobody had looked at a cosmetic in the running game when the next pass started.
+
+## Context
+
+`E:\EE Projects\AI_3D_Modeling\TinyTorque_RC` shipped a cosmetics pack the game
+had never seen: **47 unlockable decorations** in five slots (topper, rim,
+ornament, bobble, wing), themed across arcade/toybox/enchanted/haunted, plus
+**4 crate models**. `models/TinyTorque_cosmetics.json` is the catalogue (slots,
+rarities, mount frames, per-box weights/floor/pity, dupe values, direct costs);
+`models/cosmetics_fbx/` holds 51 FBX (one merged object each, ≤5 material slots,
+**39 distinct `M_Cos_*` materials**); the `materials()` table in
+`scripts/tt_20_cosmetics.py` carries the authored PBR — base colour, metallic,
+roughness, coat, sheen, **emission colour + strength**, and two Fresnel-alpha
+ghost shaders.
+
+The old unlock system was a placeholder: `UnlockCatalog` listed 20 items,
+`Progression.OnWin()` granted one at random from whatever was still locked, and
+cheat codes short-circuited the lot. No currency, no crates, no championship —
+the Showroom's "Special:" row still read *coming soon*.
+
+Built, per four decisions taken with the user:
+
+1. **Everything goes into the crates.** The 20 legacy items got rarity tiers and
+   joined the 47 cosmetics; the random-item-on-win grant was deleted. Principled
+   rather than a fudge: the manifest's per-item `odds` are exactly
+   `weight[rarity] / |pool[rarity]|`, so *weights + uniform-within-rarity*
+   reproduces the authored table bit-for-bit and extends cleanly as the pool
+   grows. Authored `weights`, `floor` and `pity` implemented verbatim.
+2. **A real championship mode**, so the Gold Vault's "win a championship event"
+   and the Cursed Casket's "seasonal" both have honest triggers. Duplicates
+   recycle into **Scrap**; Scrap buys from a rotating shop.
+3. **Locked cosmetics are previewable**: clicking one fits it to the Showroom
+   turntable car, never written to the saved loadout.
+4. **Cosmetics ride into races and over LAN** as fields on `VehicleDesign`
+   (protocol v10 → v11), **purely visual** — no mass, no aero, no collider — so
+   `MassProperties`, the bots and the Opus regression were untouched.
+
+Colour fidelity was a hard user requirement. The project has no `.mat` assets
+and imports FBX with `materialImportMode: None`, so the Blender values were
+**exported as data, never hand-transcribed**, exactly as `build_vehicles.py`
+already prints its numbers for pasting into `VehiclePresets`.
+
+## Milestone 1 — Blender export (`Blender/build_cosmetics.py`, new)
+
+**DONE.** `s_item = 0.092278` (0.420 / measured body 4.55145), `s_rim = 0.069500`
+(0.033 / measured tyre 0.474817), 51 FBX, 39 materials, 82 964 tris total (max
+4 268 on rim_cog). Unity imported all 51 with `materialImportMode: 0`,
+`useFileScale: 0`, `globalScale: 1`. **One deviation:** the export flags are
+`build_vehicles.py`'s (`apply_unit_scale=False, global_scale=0.01,
+axis_forward='-Z', axis_up='Y', bake_space_transform=True,
+mesh_smooth_type='EDGE'`), NOT the RC pack's own — the game's importer contract
+is set by `PartModelPostprocessor`, and matching the pack would have imported
+everything at 100x. Each of the 51 `C_*`/`B_*` objects is separated by material
+into children named `<matkey>_<n>` so `PartMeshLibrary.AssignByName` binds them;
+rims keep their own frame (axis +Y, origin at the hub) and their own measured
+scale. `PartModelPostprocessor.IsPartModel` extended with `Resources/Cosmetics/`.
+
+## Milestone 2 — `Garage/CosmeticCatalog.cs`
+
+**DONE.** 39 materials built lazily from the M1 JSON via `TrackBuilder.StandardMat`
+(`_Color`, `_Metallic`, `_Glossiness = 1 − roughness`, emission → `_EMISSION` +
+colour × strength, `alpha < 1` → Fade). 47 `CosmeticItem` rows and 4 `CrateDef`
+rows transcribed from the manifest. The token array is emitted **longest-first**
+(`glow_gold` before `gold`), which is load-bearing for a first-match substring
+matcher. **One entry point, not two:** a crate id is just another mesh key, so
+the planned separate `BuildCrate` would have been the same three lines twice.
+
+## Milestone 3 — mounting
+
+**DONE.** `VehicleDesign` gained five string fields; JsonUtility back-compat is
+automatic and they ride the design into races, split-screen, snapshots and LAN
+with no extra plumbing. Mount frames are **derived from the design**, not from
+the manifest's coupe-relative numbers: re-expressed as fractions of the
+authoring car's body box, exact on the coupe and sane on anything else. The
+bobble reads the built antenna's own bounds. Rims parent to the wheel viz holder
+and hide the stock face. All geometry on `VizLayer`; zero physics.
+`NetSession.ProtocolVersion` 10 → 11.
+
+## Milestone 4 — economy
+
+**DONE.** `PlayerProgress` v2 (`scrap`, unopened `crates`, per-box `pity`,
+championship state; a v1 file migrates additively). `UnlockCatalog` gained
+rarities and the 47 cosmetics as `UnlockKind.Cosmetic` — one catalog, one save
+key space, cheat codes preserved. `CrateSystem.Open` honours weights, theme
+filtering, `floor` and `pity`. The random-item-on-win grant is gone; wins award
+crates.
+
+## Milestone 5 — championship
+
+**DONE.** Three series × 4 rounds over the existing circuits (Rookie Cup, Torque
+Trophy, Midnight Series), points 10/8/6/5/4/3/2/1, roster pinned for the series,
+standings in `progress.json`. `RaceDirector.DrawResults` grew "Next round ▶" and
+a final standings screen. Payouts: Scrap Crate = finish any race · Chrome Case =
+podium with ≥2 opponents · Gold Vault = win a championship · Cursed Casket = win
+the Midnight Series.
+
+## Milestones 6-8 — crate opening, Showroom cosmetics, scrap shop
+
+**DONE.** `CrateRig` (a lit turntable parked far from the scene, own camera),
+`CrateOpenUI` (inventory → pick → open → one reveal per pull on the item's real
+3D model, with "DUPLICATE +N scrap"), `AwardReveal` recast as the crate-earned
+notice on both results screens. The Showroom gained a slot strip over a
+`PartIconFactory` icon grid; locked entries show a padlock, rarity, description
+and a **Buy for N scrap** button, and fit to the turntable when clicked without
+touching the saved loadout. The legacy "Topper" cycle was renamed **"Roof kit"**
+to free the slot name. `Page.Shop`: 6 offers reseeded daily from the local date,
+plus the four crates.
+
+## Milestone 9 — verify
+
+**ALL GREEN.** Compile 0 `error CS`; `[PMV] RESULT ALL PASS (161 assets)` with
+the 51 cosmetics added as ±10 % extent windows; `[TPV] RESULT ALL PASS
+(8 presets)`; Opus mission `completed: true, fault: 0` (leg A −13.6 mm, turn
++0.19°, total +58 mm) — the proof that "purely visual" held; release build
+succeeded. Note for next time: the **Opus runner takes no `-quit`** (play mode
+has to keep the process alive; with `-quit` it exits before the mission writes
+its result).
+
+**Deviations recorded during M4–M8:**
+- `CrateSystem` draws from the FULL pool per tier, not the locked-only pool the
+  plan described. Locked-only would have changed the authored per-item odds the
+  moment anything was owned; drawing from everything and paying `dupe_value` on
+  a repeat is what the manifest's own `duplicates` rule says, and it reproduces
+  the `odds` table exactly.
+- Crate prices are not in the manifest (crates are earned there, not sold), so
+  the shop derives them: expected duplicate value × pull count × 4. Buying a
+  crate is deliberately a worse deal than earning one.
+- The crate room is reached from the ROOT menu, not from inside the Showroom —
+  it needs the whole screen for its own rig, exactly like the Showroom does, and
+  nesting one full-screen 3D page inside another would have fought the fade.
+
+**Left undriven when archived:** the user play-test — every cosmetic reads with
+its authored colours and glow; locked items preview but never equip; crates open
+at the right odds; a championship runs end to end and pays a Gold Vault; and
+cosmetics show in-race and on a LAN peer.
 
 ---
 

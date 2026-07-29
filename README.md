@@ -136,8 +136,9 @@ quadcopter and hardware-in-the-loop over serial are planned follow-ons.
 
 - **Progression**: winning a race (against at least one opponent, local or LAN)
   opens a **mystery item** on the results screen — one random unlock from a
-  20-item pool of preset cars (TT Patrol, TT Baja, Real Twin, Opus Vector — the
-  TT Coupe is the starter and always yours), horns, wheel finishes, toppers,
+  24-item pool of preset cars (TT Patrol, TT Baja, Real Twin, Opus Vector and
+  the four Legendary cars — the TT Coupe is the starter and always yours),
+  horns, wheel finishes, toppers,
   aero kits and premium paints. When the pool runs dry, wins pay **XP** toward a
   player level (shown as `Lv N` in LAN rosters); podium finishes bank smaller
   grants. One global local profile (`Saves/progress.json`), shared by
@@ -291,9 +292,42 @@ their tintable paint panels:
 - **TT Patrol** — RWD sedan: push bar, chrome steelies, grille strobes, twin
   trunk whips, and a roof light bar that strobes red/blue.
 
-plus **Real Twin 1/10** (the calibration baseline) and **Opus Vector** (the
-autonomous mission platform). Their bodies, wheels, light clusters and antenna
-styles are also individual garage parts, usable on any design.
+…then four **Legendary** cars, imported the same way and all four crate-only:
+
+- **TT Rattletrap** — rusted-out wrecker: boom, hook and pulley on a plank deck,
+  faded teal burning through to oxide, gap-toothed grin. Heaviest and draggiest
+  car in the game, and the only one whose paint is a *baked texture* rather than
+  a tintable panel (see below).
+- **TT Redline** — #7 number car: gold flank flash, roundels, swan-neck rear
+  wing, blue eyes. Light, stiff, quickest to turn in.
+- **TT Highwing** — aero-era veteran in deep navy, #12, wing up on stalks in the
+  clean air over the tail, chrome pipes and bumper. The most downforce of the
+  four.
+- **TT Autopia** — the 1955 Autopia Mark I ride car: pontoon flanks, oval grille
+  with chrome bars, wraparound screen, bench seat, whitewalls on chrome
+  hubcaps. Soft, slow-witted, and the only car with a musical horn as standard.
+
+The first three carry the Blender **face rig** — eyes, lids, brows, teeth, gums
+and a tongue, each with its own authored material and a per-car iris colour.
+It imports as static geometry in a neutral expression: the FBX export is meshes
+only, so the rig's driver empties do not come across and nothing blinks yet.
+
+**One material could not come across as numbers.** Every other authored material
+in this project is a set of constants, which is why the pipeline exports numbers
+and rebuilds the material in C#. Rattletrap's paint is an object-space noise
+multiplied by a height ramp, blending faded teal into oxide and dragging
+roughness and metallic along with it — so `build_vehicles.py` bakes its colour to
+`body_rattle_paint.png` (1024², smart-projected atlas) and ships it beside the
+FBX, with the smoothness and metallic taken as the *measured* means of the same
+mask. That texture is bound as its own accent token rather than through the
+tintable paint channel, because the body material carries the livery texture and
+one `mainTexture` cannot be both. Rattletrap therefore has no repaintable
+panels, and the garage does not offer paint mode on it — its finish is the
+character. The other three paint normally.
+
+Also here: **Real Twin 1/10** (the calibration baseline) and **Opus Vector** (the
+autonomous mission platform). Every car's body, wheels, light clusters and
+antenna styles are also individual garage parts, usable on any design.
 
 The **preset maps** are three race circuits (**Boost Speedway**, **Dust Devil
 Rally**, **Neon Vortex**), the four TinyTorque themed circuits (**Downtown
@@ -451,10 +485,13 @@ original code-built primitives whenever an asset is missing — so the game runs
 unchanged without the meshes, and every pre-existing design keeps working. The
 meshes are purely cosmetic (colliders stripped, physics untouched):
 
-- **Wheels** come in six selectable styles per wheel — *slick*, *knobby*,
-  *rally*, plus the TinyTorque *coupe* (gold rim), *baja* (balloon tyre, orange
-  rim) and *steelie* (chrome police rim) (garage → wheel inspector → *Tyre
-  style*). Each is a multi-object assembly: tyre, rim, hub/barrel, studs or nut
+- **Wheels** come in ten selectable styles per wheel — *slick*, *knobby*,
+  *rally*, the TinyTorque *coupe* (gold rim), *baja* (balloon tyre, orange rim)
+  and *steelie* (chrome police rim), plus the four Legendary wheels: *rusted*,
+  *race gold*, *five-spoke* and *whitewall* (garage → wheel inspector → *Tyre
+  style*). Styles 6-8 are not in that cycle because they are *finishes* over the
+  slick — chrome, gold and neon, applied in the showroom. Each mesh is a
+  multi-object assembly: tyre, rim, hub/barrel, studs or nut
   and a brake disc visible through the spokes. All hold an outer radius of
   exactly 33 mm so the runtime's `radius / WheelAuthorRadius` scaling is 1.0 at
   stock size.
@@ -732,9 +769,28 @@ and the incoming warning be one implementation instead of two. The one thing a
 client genuinely cannot derive is whether a missile is locked onto it — it owns
 no missiles, only their poses — so that arrives as a flag.
 
-This is **protocol v11**. Every machine in a session must run the same build; the
+This is **protocol v14**. Every machine in a session must run the same build; the
 exact version check at connection approval rejects a mismatch cleanly rather than
 letting it half-work.
+
+v14 is the Torque Falls city pack. Also not a message-layout change — but a map
+crosses the wire as JSON, so a v13 client handed a town it has no meshes for
+would draw eleven hundred fallback boxes, and the paving surface it has never
+heard of is a floor id past the end of its own catalog.
+
+v13 is the four Legendary cars. It is NOT a message-layout change — a body shape
+and a wheel style are ints inside the design JSON, exactly like every shape
+before them — but a v12 build ships none of the new FBX, so it would draw four
+fallback boxes where the other screen has a wrecker, two race cars and a 1955
+ride car.
+
+v12 is the mini-game modes. It IS a wire change on three counts: the input flags
+gained two bits (jump edge, boost held) so the aerials reach the host that
+simulates them; `WelcomeMsg` and `SessionStateMsg` carry the match mode, target
+score and time limit, because a joiner composes its scene from those and a client
+that thinks it is racing while everyone else plays soccer cannot recover; and
+`RosterEntry` carries a team. `MaxPlayers` also went 4 → 6 for 3v3 soccer — the
+slot is a byte on the wire, so that costs nothing but two more roster rows.
 
 v11 is the unlockable cosmetics. It is NOT a message-layout change — the five
 cosmetic ids ride each car's design JSON, the same way `hornStyle` and
@@ -831,12 +887,46 @@ out-rotate anything helping you), so none of those is retuned by it. Lap time in
 arcade is meant to come from the racing line and the item luck, never from
 catching slides.
 
-Untick **Arcade handling** to race the same circuits on the raw brush-tyre model
-instead. That is what the mode shipped as, and it is genuinely hard on a keyboard
-— which is the point of making it a choice rather than a decision. The Options
-assist preset still governs sim sessions; in arcade it is simply maxed. C
-firmware is never touched either way: `ArcadeDirector.Register` refuses firmware
-rigs outright, so a controller under validation always faces the honest physics.
+**Arcade handling is now a first-class physics mode, not an arcade-race perk.**
+It used to be applied only by the ArcadeDirector — which only exists in an
+arcade lap race — so free roam, the derby, CTF and soccer all silently ran raw
+sim physics with whatever assist preset was saved, on maps whose verges are
+0.85-friction grass. That is exactly "the car slips way too much". Every rig a
+machine simulates now carries a `HandlingFloor` component that re-asserts the
+mode every frame, so:
+
+* the **Handling: Arcade / Simulation** toggle sits on its own row in Single
+  Player, Split-Screen and LAN Host — outside the arcade-items nest — and works
+  in every mode including free roam;
+* it is **live mid-session** from the Esc settings panel (solo/split; in LAN it
+  is a session parameter set by the host);
+* the deliberate-drift latch stands down under Sim handling — a scripted slide
+  that cuts grip 30 % is an arcade mechanic and used to fire regardless.
+
+Untick it to drive the raw brush-tyre model. That is what the mode shipped as,
+and it is genuinely hard on a keyboard — which is the point of making it a
+choice rather than a decision. The Options assist preset still governs sim
+sessions; under arcade handling it is floored to full. C firmware is never
+touched either way — firmware rigs never get a `HandlingFloor` — so a
+controller under validation always faces the honest physics, which the Opus
+regression re-proved bit-identical after this change.
+
+The floor itself grew three teeth on user feedback ("slips too much, feels
+light"):
+
+* **grip 1.45 → 1.60** (`HandlingGripBonus`) — even the free-roam lawn lands at
+  0.85 × 1.60 ≈ 1.36 effective µ;
+* **launch control** — a new fifth assist channel (`launch`, its own Options
+  slider, Standard preset 0.5): a voltage-side governor that holds the worst
+  powered wheel's slip just past the tyre model's force peak below 3 m/s, so a
+  floored standing start leaves at maximum force instead of lighting the rears.
+  It composes with traction control rather than fighting it — TC is per-wheel,
+  torque-side and stateless; this is global and integrating;
+* **speed-squared downforce** (`HandlingDownforce`, 0.10 N/(m/s)²) — ≈36 % of
+  the car's weight in extra tyre load at 8 m/s, applied at the centre of mass.
+  Honest RC-scale aero is ~3.5 % of weight by design, which is why the arcade
+  car read as floaty; load that grows with speed is the physically honest way
+  to plant it without touching parking-speed handling.
 
 Arcade handling also drops the drive command to 85 %, which takes the cars from
 about 10 m/s to about 8.5. Top speed here is set purely by motor back-EMF —
@@ -851,6 +941,53 @@ it used to keep accelerating the car well past anything the drivetrain could
 reach — which is what made boosting feel skittish rather than fast. Surface boost
 **pads** are maxed in separately and are deliberately not capped, so a level's
 authored pads behave exactly as they did.
+
+## Rendering: bloom, baked liveries, posters
+
+Three fidelity gaps closed in one pass, each a different root cause:
+
+**Bloom.** The project runs Built-in RP in Gamma space with no post stack, where
+an emissive material above 1.0 just clips to a flat bright patch — the Blender
+source sells its neon at 5–19× albedo through AgX plus a compositor glare, and
+the game had neither, which is why "the neon city lost its glow". The stand-in
+is dependency-free, in keeping with the synth audio and procedural music:
+`Shaders/AIHWSimBloom.shader` (bright-pass with a soft knee, three-level blur
+chain, additive composite) driven by `Rendering/CameraBloom.cs` on every display
+camera, each of which now renders HDR so authored >1 emission survives into the
+pass. Never on the on-car `CameraSensor` — firmware eyes stay honest — nor the
+icon/preview RTs or the builder. Split viewports bloom their own RT, IMGUI draws
+after all cameras so the UI never smears, and **Options → Bloom** switches it
+off live. With the glare in place the emissive multipliers were raised from
+their LDR-era clamps to roughly authored × 0.5 (the authored ratio is commented
+beside every value in `TrackCatalog`).
+
+**The three TinyTorque liveries were procedural all along.** `M_Paint`,
+`M_Buggy_Paint` and `M_Police_Paint` are banded masks in the source — candy
+crimson with a graphite stripe and gold pinstripes; acid lime with graphite
+bands; the police black-and-white with a navy flash — but the exporter labelled
+them "authored 0.8 grey" and mapped them onto the flat tintable channel, so all
+three cars rendered uniform grey and the police car's (always-present, correct)
+navy 3D lettering was invisible against it. They are Rattletrap-class now:
+`build_vehicles.py` bakes each to a 1024² texture (`body_<car>_paint.png`) with
+a measured mean roughness, bound under its own token. The trade, stated
+plainly: **the Coupe, Baja and Patrol no longer take garage repaint** — the
+authored livery is the finish, exactly as the Rattletrap's rust already was.
+
+**Billboards get in-game ads.** The kit authors its billboard faces blank —
+that one was faithful, not broken — so `BillboardPoster` draws a poster at
+runtime (procedural texture, chunky 3×5 pixel font, four seeded variants keyed
+off world position so LAN peers agree which corner advertises the soda) onto a
+double-sided quad seated on the measured face plate. Downtown's blank rooftop
+sign face stays as authored; under bloom it now reads as the lit gold sign it
+is.
+
+Two smaller rim/cosmetic fixes travelled with this: `HideStockRim` no longer
+switches off the Autopia's whitewall (it is part of the tyre, and the probe now
+hard-fails any hidden tyre-family renderer), and the cosmetic topper/ornament
+mounts measure the Legendary bodies' SHELL rather than their whole renderer
+bounds — the Highwing's wing-on-stalks and the Rattletrap's boom were inflating
+the box and floating the hats in mid-air, which the probe now proves against
+the mesh with a ray check.
 
 ## Sound
 
@@ -959,13 +1096,25 @@ world, so the scale is the joke rather than a problem to hide.
 
 Two rules separate a track prop from a vehicle part. First, `PartMeshLibrary`
 strips every collider on import, which is right for cosmetic vehicle geometry but
-leaves a wall you can drive through — so a mesh prop is always a pair, the
-imported shell plus an **invisible primitive hull authored in `TrackCatalog`**.
-The hull is deliberately coarse: it is what the car, the ToF sensors and the
-builder's selection ray all hit, and a box beats a 2k-tri mesh collider for every
-one of them. Gates (tape arch, rock arch, light gate) get three hulls, not one,
-so the opening stays open. Second, props stay on the default layer rather than
-the viz layer, so the on-car camera sensor can actually see the scenery.
+leaves a wall you can drive through — so `TrackCatalog.MeshProp` cooks a
+**non-convex MeshCollider per imported piece**: a static prop collides with
+exactly the geometry you see. This replaced the hand-authored primitive hulls of
+the first four passes, which an audit showed were the invisible-wall era in
+disguise — 87 of 113 props were a single box or capsule, every house and hangar
+was sealed solid porch-and-all, ramp hulls parked their feet 4–19 cm off the
+ground, and Unity's "cylinder" primitive is a capsule that degenerates to a
+*sphere* when it is wider than it is tall, which is how a 12.6 m volcano shipped
+with a 5 m floating ball for collision. Cooking is per unique mesh and cached
+(the 1 243-item town cooks in ~200 ms, logged at every build), the prop FBX
+import CPU-readable so the cook also works in a player build (asserted by the
+validator — the one failure mode the editor can never reproduce), and
+`TrackPresetValidator.CheckColliderCoverage` now holds every static prop's
+collider bounds to its renderer bounds within centimetres so the ghost-wall
+class of defect stays dead. The two spirits keep their authored trigger hulls —
+a concave MeshCollider cannot be a trigger, and you are meant to drive through a
+ghost. Second, props stay on the default layer rather than the viz layer, so the
+on-car camera sensor can actually see the scenery — and the ToF sensors now
+range against true prop geometry too.
 
 Props sit on the ground plane with their **origin at the base contact point**,
 because `TrackFactory` drops each item onto the surface it was placed on. The two
@@ -973,16 +1122,19 @@ exceptions are documented in the build script: the tape arch and the light hoop
 are deliberately part-buried, because a ring standing on its rim holds its bore
 70–110 mm off the deck and a 100 mm car noses straight into it.
 
-## TinyTorque map packs (63 props, four themed circuits)
+## TinyTorque map packs (98 props, four themed circuits and a town)
 
-The second prop generation came the other way around: four finished Blender
-showcase files in the TinyTorque_RC modelling project, re-exported for the game
-by `Blender/build_map_props.py` (re-runnable, never saves the sources). The
+The second prop generation came the other way around: finished Blender showcase
+files in the TinyTorque_RC modelling project, re-exported for the game by
+`Blender/build_map_props.py` (re-runnable, never saves the sources; name a pack
+on the command line to rebuild just that one). Four themed packs are below; the
+fifth, the daylight city, has its own section further down. The
 script splits every showcase prop by material, renames the pieces to the token
 names `AssignByName` binds materials to, re-origins each prop at its base
 contact point, scales by exactly 0.1 (1 authored metre = 0.1 game metre — the
 1/10 fiction, precisely), and prints per-prop JSON — bounds, token lists, tri
-counts, slope profiles — that the C# hulls and validator rows are pasted from.
+counts, slope profiles — that the validator rows are pasted from (collision is
+the mesh itself now, so nothing else needs the numbers).
 
 | Theme | Props (14–17 each) |
 |---|---|
@@ -1015,6 +1167,17 @@ sit exactly where the renders put them:
 | ★ Playroom Raceway | `tt_16_toy_map` | 48×44 @ 2 m | 96×88 m | 98 m | furniture skyline against the north wall, the bed, the dining table's forest of legs, the toybox yard, the rug circuit |
 | ★ Enchanted Ascent | `tt_17_ench_map` | 56×56 @ 2 m | 112×112 m | 169 m | castle closing the axis, village ring, formal gardens, enchanted wood, tournament ground, two peaks for the horizon |
 | ★ Graveyard Shift | `tt_18_haunt_map` | 54×52 @ 2 m | 108×104 m | 160 m | mansion at the head of the drive, four fenced grave blocks, chapel ruin, barrow field, pumpkin patch, dead wood, spirits |
+
+**The four circuits now run in their true Blender orientation.** The original
+ports used a layout convention that contradicted the FBX export — every prop
+arrived flipped front-to-back inside an otherwise self-consistent mirror of the
+plan, which never showed on rocks and towers but was the root of "some geometry
+is wrong". Each map was re-ported with `meshAxes: true` (the convention the
+town proved out), its spline roll arrays negated (the corners turn the other
+way) and its hand-typed headings mirrored — so building fronts, gates and signs
+now face the way the source renders show, and each circuit is the mirror image
+of what shipped before. Lap records keep their names; the times on them were
+set on the mirrored layouts.
 
 That is 365–710 placed items per map against the ~30 the first pass shipped,
 which is why ground tiles are **2 m** here: 112 m of enchanted vale is 56 tiles
@@ -1243,6 +1406,182 @@ Showroom → **Cosmetics** equips them: a slot strip, a cycle a gamepad can driv
 and an icon grid a mouse can, both writing the same value. Locked entries are
 shown, not hidden — clicking one **fits it to the turntable car** so it can be
 spun and inspected, without ever being written to the saved loadout.
+
+## Mini-game modes (demolition · capture the flag · soccer)
+
+Three sets of rules that are not a race, selected from the **Mode** picker on the
+Single Player page. Each ships with the arena it was built for, and picking a
+mode moves the track selection there.
+
+| Mode | Arena | Ends when |
+|---|---|---|
+| **Demolition** | ★ Scrapyard Bowl | one car is still running |
+| **Capture the Flag** | ★ Cargo Yard | a team reaches the capture target |
+| **Soccer** | ★ Torque Dome | a team reaches the goal target |
+
+**Demolition.** Ram people. A square nose-on hit damages the car you hit, scaled
+by closing speed; a side-swipe or a wall costs *both* cars a little, which is
+what stops the whole thing being a game of chicken. Repair crosses sit on an
+outer ring and bomb crates on an inner one, so healing means leaving the fight
+and arming a mine means going where it is. A mine drops behind you on the
+use-item button and blasts everything inside about a metre. Being wrecked punts
+and tumbles the car — the arcade layer's own wreck — and then parks it as a
+spectator rather than deleting it, because its camera is still somebody's
+viewport.
+
+**Capture the flag.** Two teams, two plinths. Drive into the other side's flag to
+carry it, drive it back to your own base to score — and your own flag has to be
+home for it to count. A hard enough hit from an opponent knocks it loose where
+you stand; a team-mate driving through a loose flag sends it home, an opponent
+picks it up and carries on. A flag nobody rescues returns itself after 20 s so a
+punt into a corner cannot deadlock the match.
+
+**Soccer.** A ball, two goal mouths, boost pads on the wings and corner ramps.
+This is the only mode that turns the **aerials** on: jump, double jump, a
+directional flip inside the window after the first jump, free air roll while
+airborne (steering and throttle become roll and pitch — there is nothing else
+for them to do off the ground), and a boost tank that pads and kick-offs refill.
+Default keys **E** jump / **Q** boost, pad **LB** / **RB**, both rebindable.
+
+**Bots** play all three. The bot AI was a strict racing-line follower and an
+arena has no line, so it gained one push-in seam — `SetChaseTarget(worldPos)` —
+and an arena steering mode that keeps the same pure-pursuit core and swaps the
+precomputed corridor for three whisker raycasts. What it chases is the mode's
+decision, not the driver's: hunt the weakest car, run the flag home, get behind
+the ball on the goal side.
+
+**Split-screen** now goes to four: full screen alone, stacked halves for two,
+quadrants for three or four. Three players get a quadrant each and leave the
+fourth empty rather than stretching one of them, so everybody's field of view is
+identical.
+
+### How a mode is put together
+
+`MatchDirector` (in `Track/`) owns what every set of rules needs and none of them
+should re-implement: the start countdown that holds the grid, the
+`PlayerFinished` event the crate payout hangs off, the one-way door into the
+results overlay, and the overlay's frame. `RaceDirector` is now a subclass of it
+and kept every lap rule it had. `ModeDirector` (in `Modes/`) adds everything that
+assumes an ARENA — a roster of `MatchRacer` state bags, an authority flag, a
+match clock, collision plumbing, spectate and respawn — and the three modes are
+subclasses of that. The shape is `ArcadeDirector`'s on purpose, because that
+shape is already proven here against LAN, bots and split-screen.
+
+`ArenaNav` is what a racing line is to a circuit. Five systems in this codebase
+quietly assume every session has an ordered centreline — bot steering, the
+respawn key, item-box placement, missile targeting, wreck recovery — and an arena
+has none. It is deliberately not a nav mesh: the floor slab plus the authored
+spawn ring answer both questions those systems were really asking ("where can a
+car be" and "where do I put this car"), and bots avoid walls by looking at them.
+
+An arena is authored like any other map — `TrackPresets`, the same helpers, the
+same `TrackFactory.Build` the editor previews — and is recognised by having **no
+finish line and a ring of spawns**. `PlacedItem.order` carries the team, which is
+the field checkpoints already use for their index. The track validator knows the
+difference and checks arenas on their own terms (4+ spawns, an even number so a
+team mode has two equal sides, no checkpoints).
+
+**Physics is untouched.** The aerial moves live behind `CarVehicle.arcadeAerial`,
+off by default, in the style of the seven `arcade*` channels that came before
+them — so a race car, a LAN peer and the headless Opus rig behave exactly as they
+did. The Opus mission regression is the proof, and it returns numbers identical
+to the pre-change baseline.
+
+## Free roam: Torque Falls (35 city props, one town)
+
+A fifth **Mode** on the Single Player page, and the only one whose map is not in
+any track picker. `★ Torque Falls` is a 66 × 66 m town — a port of
+`tt_25_city_map.py` from the modelling project — with no finish line, no
+checkpoints and no racing line. There is nothing there to race, so it is not
+offered as somewhere to race: `TrackPresets.TrackKind.FreeRoam` keeps it out of
+the single-player, championship, split-screen and LAN lists in one place instead
+of four, and the mode resolves it by name. The Track Builder still lists it, and
+still opens it — it is not a map you can race on, but it is very much a map you
+can edit.
+
+Picking Free Roam hides the track picker, the lap and score steppers, the
+countdown and the opponents; **R** puts the car back at the nearest of twelve
+street-corner spawns, which is what `TrackRespawn` falls back to when a map has
+no racing line to project onto.
+
+### The kit
+
+`Blender/build_map_props.py -- city` exports the fifth pack, 35 props, the same
+way as the four before it: split by material, tokenised, re-origined at the base
+contact point, scaled by exactly 0.1.
+
+| Group | Props |
+|---|---|
+| **houses** | bungalow, two-storey clapboard, cottage, brick terrace unit, four-storey walk-up |
+| **drive into** | **garage** (open front *and* back), **dealership** (showroom + service bay), **fire station**, **filling station**, **arena** (bowl, tunnel, floodlights) |
+| **other buildings** | corner shop, streamline diner, warehouse, water tower, clock tower |
+| **street furniture** | telephone pole, transformer pole, street lamp, traffic signal, hydrant, mailbox, bench, billboard, bus shelter, stop sign |
+| **boundaries** | picket fence, chain-link fence, brick garden wall, hedge |
+| **planting** | oak, maple, pine, street sapling, shrub, planter |
+
+Two things about this pack are new, and both are pipeline rather than content:
+
+**Materials are now measured, not read off the source by eye.** The exporter
+prints a `MATJSON` block per pack with every material's authored albedo —
+sRGB-encoded, the conversion the four earlier packs were given by hand — plus
+smoothness as 1 − roughness and how many times its own albedo an emissive
+surface emits. Seventeen of the city's forty-nine materials are procedural
+(brick, clapboard, shingle, leaf, bark) with no single authored colour to read,
+so the walk averages the colours their node network mixes between; the check
+that it works is that `M_City_Wall5` comes back as its authored colour times
+0.86, which is exactly what `mat_siding` mixes. The emission multipliers sit
+between the two worlds: authored for Cycles they run 2.5–19×, sold there by a
+compositor glare the game now has a stand-in for (the bloom pass), so they run
+at roughly authored × 0.5 with each authored ratio in a comment beside it.
+
+**Five props are hollow on purpose — and since the mesh-collider migration you
+really can drive into all five.** The kit asserts a 4.60 × 3.90 clearance on
+every aperture; collision is now the exported mesh itself, so the garage is a
+genuine drive-through (open front *and* back, with its closed second bay full
+of tyre stacks you can bump), the dealership's service wing, the fire station's
+appliance bay and the filling station's pump lane all take a car, and the arena
+tunnel is exactly as wide as it looks. `TrackPresetValidator` probes each
+corridor with an exact box overlap at car height — all five now, the pump lane
+included — plus a control probe straddling a wall face, so a re-export that
+grows a doorsill fails the build instead of quietly bricking up the one prop
+the map was designed around. Probing the real meshes also settled which bay is
+which: the old hand-authored hulls had the garage's open corridor on the
+mirrored side, over the roller door and the tyres.
+
+### The town
+
+`★ Torque Falls`: a five-by-four street grid with a clock-tower plaza and a
+thirteen-unit terrace in the middle, housing on nineteen block faces, three
+parks, an industrial corner round the water tower, a motor strip carrying the
+garage / dealership / filling station, and the arena on its own approach road.
+1 243 items over 35 meshes, 2.28 M triangles — three to four times the heaviest
+themed circuit, which is what a whole town at 1:10 costs.
+
+Two things scale differently from the four circuit ports. **Tiles are 1 m, not
+2**: a road here is 20 authored units = 2 game metres, which at 2 m tiles is a
+single tile wide and loses its kerbs entirely, and the new **Paving** surface is
+what makes a grid read as streets rather than as a runway diagram. And **there is
+no spline** — a town has no racing line, and `BotPath` follows the spline with
+the most points, so inventing one would hand a bot a lap of a map that has no
+laps. That is also why free roam offers no opponents: a bot dropped into the
+town with no line and no arena policy would sit at its spawn.
+
+### The axis convention, which was wrong
+
+`MapLayout` maps Blender +Y to game +Z and negates `rot_z`; the FBX exporter maps
+Blender +Y to game **−Z**. Those cannot both be right, and composed they leave
+every prop flipped front-to-back inside an otherwise correct world. On the four
+maps that shipped before this it never showed — their props are rocks, towers and
+symmetric blocks. On a town where a hundred and twelve houses face their own
+streets it is the difference between a street and a row of back gardens.
+
+The layout takes a `meshAxes` flag that negates Z and leaves the heading alone,
+which composes with the export into one consistent transform. The town shipped
+with it first; the fidelity pass then re-ported the four circuits onto the same
+convention (see the map-packs section), so all five ports now agree and the
+flag's default only exists to make a future port read this paragraph. The
+measurement behind it is on the imported asset: `city_house_a`'s door piece
+sits at z = +0.214, so a prop's front is on **+Z**.
 
 ## Layout
 

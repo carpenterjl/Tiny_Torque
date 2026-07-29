@@ -14,6 +14,25 @@ namespace AIHWSim.Core
         LanClient = 3,    // this machine renders ghosts and streams its inputs
     }
 
+    /// <summary>
+    /// What the rules of the next session ARE, as distinct from
+    /// <see cref="SessionMode"/>, which says who is playing and on whose machine.
+    ///
+    /// Lives here rather than in AIHWSim.Modes for the same reason
+    /// <see cref="DriveControl"/> does: SessionConfig has to name it, and Core
+    /// must not depend on the layers built on top of it.
+    ///
+    /// APPEND-ONLY — the value goes on the wire in the LAN welcome.
+    /// </summary>
+    public enum MatchMode
+    {
+        Race = 0,     // first to N laps; the only mode before this existed
+        Derby = 1,    // last car standing in a walled arena
+        Ctf = 2,      // two teams, two flags
+        Soccer = 3,   // two teams, one ball, two goals
+        FreeRoam = 4, // no rules at all: a town, and a car
+    }
+
     /// <summary>What drives a slot's car.</summary>
     public enum DriveControl
     {
@@ -38,6 +57,10 @@ namespace AIHWSim.Core
         public bool isBot = false;            // AI opponent: no camera/HUD/CSV, no profile records
         public DriveControl control = DriveControl.Human;
         public int botDifficulty = 1;         // 0 Easy / 1 Medium / 2 Hard (BotAI only)
+
+        /// <summary>Team index in a team mode; -1 = free-for-all, which is what
+        /// a race and a demolition derby both are.</summary>
+        public int team = -1;
     }
 
     /// <summary>
@@ -83,6 +106,26 @@ namespace AIHWSim.Core
         /// </summary>
         public static bool ArcadeHandling = true;
 
+        /// <summary>What rules the next session runs. Race keeps every legacy
+        /// entry path behaving exactly as it did.</summary>
+        public static MatchMode Match = MatchMode.Race;
+
+        /// <summary>Score that ends a CTF or soccer match (captures / goals).</summary>
+        public static int TargetScore = 3;
+
+        /// <summary>Match clock in seconds; 0 = no time limit.</summary>
+        public static int TimeLimitSec;
+
+        /// <summary>Is the next session one of the arena mini-games? Every one of
+        /// them wants the arena composition path and none of them wants laps.
+        /// Free roam is deliberately NOT one: it has spawn points, but no
+        /// director, no scoreboard and nothing to win.</summary>
+        public static bool IsArenaMatch =>
+            Match == MatchMode.Derby || Match == MatchMode.Ctf || Match == MatchMode.Soccer;
+
+        /// <summary>Do the rules split the grid into two sides?</summary>
+        public static bool IsTeamMatch => Match == MatchMode.Ctf || Match == MatchMode.Soccer;
+
         /// <summary>Reset to a plain single-player session (legacy entry paths).</summary>
         public static void SetSinglePlayer()
         {
@@ -98,6 +141,9 @@ namespace AIHWSim.Core
             TrackLimits = false;
             ArcadeHandling = true;   // the default the menu offers next time
             ChampionshipRound = false;
+            Match = MatchMode.Race;
+            TargetScore = 3;
+            TimeLimitSec = 0;
         }
 
         /// <summary>The roster TrackBootstrap builds from — always at least one slot.</summary>
@@ -138,14 +184,14 @@ namespace AIHWSim.Core
         public static Vehicles.AssistSettings PresetValues(AssistPreset p) => p switch
         {
             AssistPreset.Standard => new Vehicles.AssistSettings
-            { steer = 0.45f, stability = 0.50f, traction = 0.60f, abs = 0.60f },
+            { steer = 0.45f, stability = 0.50f, traction = 0.60f, abs = 0.60f, launch = 0.50f },
             // Full sits deliberately ABOVE each ramp's floor (steer .80 /
             // stability .70 / traction .90 / abs .90 — see AssistTuning), because
             // a preset that landed exactly on them would get none of the extra
             // authority those ramps exist to provide and would feel identical to
             // Arcade handling.
             AssistPreset.Full => new Vehicles.AssistSettings
-            { steer = 0.90f, stability = 0.90f, traction = 0.95f, abs = 0.95f },
+            { steer = 0.90f, stability = 0.90f, traction = 0.95f, abs = 0.95f, launch = 1f },
             _ => default,     // Off, and Custom (whose caller reads the sliders)
         };
 
@@ -165,6 +211,7 @@ namespace AIHWSim.Core
             {
                 steer = s.p1AssistSteer, stability = s.p1AssistStability,
                 traction = s.p1AssistTraction, abs = s.p1AssistAbs,
+                launch = s.p1AssistLaunch,
             };
         }
 
@@ -176,6 +223,7 @@ namespace AIHWSim.Core
             {
                 steer = s.p2AssistSteer, stability = s.p2AssistStability,
                 traction = s.p2AssistTraction, abs = s.p2AssistAbs,
+                launch = s.p2AssistLaunch,
             };
         }
     }

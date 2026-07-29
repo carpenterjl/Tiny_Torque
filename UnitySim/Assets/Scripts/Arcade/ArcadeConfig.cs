@@ -368,7 +368,7 @@ namespace AIHWSim.Arcade
         public static readonly Vehicles.AssistSettings HandlingAssists =
             new Vehicles.AssistSettings
             {
-                steer = 1f, stability = 1f, traction = 1f, abs = 1f,
+                steer = 1f, stability = 1f, traction = 1f, abs = 1f, launch = 1f,
             };
 
         /// <summary>Tyre grip baseline in arcade. Rides the existing
@@ -377,8 +377,10 @@ namespace AIHWSim.Arcade
         /// physics code and no new friction-write site. Raised 1.25 → 1.45 in
         /// the anti-spin pass: the extra lateral headroom is what lets a car
         /// take a boost pad mid-corner, and the extra longitudinal grip is most
-        /// of the full-throttle-launch fix.</summary>
-        public const float HandlingGripBonus = 1.45f;
+        /// of the full-throttle-launch fix. Raised again 1.45 → 1.60 on user
+        /// feedback ("slips way too much" — free roam's grass verges sit at
+        /// 0.85 µ, and 0.85 × 1.60 ≈ 1.36 keeps even the lawn planted).</summary>
+        public const float HandlingGripBonus = 1.60f;
 
         /// <summary>
         /// Multiplier on the stability assist's gain and torque clamp in arcade
@@ -409,6 +411,18 @@ namespace AIHWSim.Arcade
         /// every frame and would otherwise stomp it.
         /// </summary>
         public const float HandlingDriveScale = 0.85f;
+
+        /// <summary>
+        /// Arcade downforce, N per (m/s)² of forward speed — the "car should
+        /// feel heavier" knob. Rides <c>CarVehicle.arcadeDownforce</c>, owned
+        /// by HandlingFloor (not ApplyEffects). At 0.10 an 8 m/s car carries
+        /// an extra 6.4 N — ≈36 % of a 1.8 kg car's 17.7 N weight — so tyre
+        /// load (and with it grip) grows with speed the way a planted car's
+        /// does, while parking-speed handling is untouched. Honest aero at
+        /// this scale is ~0.6 N (AeroDynamics' own doc), which is why this is
+        /// an arcade channel and not a wing coefficient.
+        /// </summary>
+        public const float HandlingDownforce = 0.10f;
 
         // ---- positions / scoring ----
         public const float PositionUpdateHz = 5f;

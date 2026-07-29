@@ -182,6 +182,15 @@ namespace AIHWSim.TrackEd
                 makeTexture = () => TrackBuilder.NoiseTexture(new Color(0.12f, 0.11f, 0.14f), new Color(0.08f, 0.07f, 0.10f), 64, 0.3f) },
             new FloorTypeDef { id = "metalgrate", label = "Grate",  frictionMult = 1.10f, bumpAmp = 0.03f,
                 makeTexture = () => TrackBuilder.CheckerTexture(12, 6) },
+
+            // ---- Torque Falls ----------------------------------------------
+            // A footway. The town's streets are asphalt with a pale paved verge
+            // on each side, and until this existed there was no light grey in
+            // the table at all — the nearest surfaces were sand and ice, which
+            // are the two lowest-grip entries in the catalog and would have
+            // turned every kerb into a patch you slide off.
+            new FloorTypeDef { id = "paving",  label = "Paving",  frictionMult = 1.12f, roughAmp = 0.015f, roughLen = 0.09f,
+                makeTexture = () => TrackBuilder.NoiseTexture(new Color(0.52f, 0.52f, 0.51f), new Color(0.45f, 0.45f, 0.44f), 64, 0.35f) },
         };
 
         // ---- local-space primitive helpers (parent assumed at origin) ----
@@ -195,30 +204,50 @@ namespace AIHWSim.TrackEd
 
         // ---- mesh-backed props ----------------------------------------------
         // Imported meshes arrive stripped of colliders (PartMeshLibrary.Sanitise),
-        // which is right for vehicle parts but leaves a track prop non-solid. So a
-        // mesh prop is always a pair: the authored visual shell plus an invisible
-        // primitive collision hull authored here. Hulls are deliberately coarse —
-        // they are what the car, the ToF sensors and the builder's selection
-        // raycast actually hit, and a convex box/capsule beats a 3k-tri mesh
-        // collider for all three.
+        // which is right for vehicle parts but leaves a track prop non-solid. A
+        // STATIC mesh prop now collides with its own geometry: MeshProp cooks a
+        // non-convex MeshCollider per imported piece (legal on anything without
+        // a Rigidbody; cooking is per unique sharedMesh, so a map full of one
+        // tree cooks that tree once). The hand-authored primitive hulls this
+        // replaced sealed every doorway, walled off ramp feet and left ghost
+        // bands — 87 of 113 props were a single box or capsule, and Unity's
+        // "cylinder" primitive is a CAPSULE that degenerates to a SPHERE when
+        // h < 2r, which is how a 12.6 m volcano shipped with a 5 m floating
+        // ball for collision. TrackPresetValidator.CheckColliderCoverage now
+        // asserts collider bounds track renderer bounds so that class of defect
+        // stays dead. A non-null hull lambda is the OPT-OUT: it suppresses the
+        // auto colliders for the two drive-through trigger props (a concave
+        // MeshCollider cannot be a trigger). Requires the TrackProps FBX to be
+        // CPU-readable (PartModelPostprocessor) — runtime cooking in a player
+        // build fails on a stripped mesh while working fine in the editor.
 
         /// <summary>Invisible collision box (collider only, no renderer).</summary>
         private static GameObject HullBox(Transform parent, Vector3 pos, Vector3 size, Vector3 euler = default)
             => Hull(PrimitiveType.Cube, parent, pos, size, euler);
 
-        /// <summary>Invisible collision cylinder (collider only, no renderer).</summary>
-        private static GameObject HullCyl(Transform parent, Vector3 pos, Vector3 scale, Vector3 euler = default)
-            => Hull(PrimitiveType.Cylinder, parent, pos, scale, euler);
+        // (HullCyl and HullOval died with the primitive-hull era: every static
+        // prop now collides with its own mesh, and the sole surviving hulls are
+        // the two drive-through trigger boxes below.)
 
         private static GameObject Hull(PrimitiveType type, Transform parent,
             Vector3 pos, Vector3 scale, Vector3 euler)
         {
             var go = GameObject.CreatePrimitive(type);
             go.name = "Hull";
+            // DestroyImmediate outside play mode: the editor validators build
+            // items in edit mode, where deferred Destroy only logs an error.
             var mr = go.GetComponent<MeshRenderer>();
-            if (mr != null) UnityEngine.Object.Destroy(mr);
+            if (mr != null)
+            {
+                if (Application.isPlaying) UnityEngine.Object.Destroy(mr);
+                else UnityEngine.Object.DestroyImmediate(mr);
+            }
             var mf = go.GetComponent<MeshFilter>();
-            if (mf != null) UnityEngine.Object.Destroy(mf);
+            if (mf != null)
+            {
+                if (Application.isPlaying) UnityEngine.Object.Destroy(mf);
+                else UnityEngine.Object.DestroyImmediate(mf);
+            }
             go.transform.SetParent(parent, false);
             go.transform.localPosition = pos;
             go.transform.localRotation = Quaternion.Euler(euler);
@@ -246,10 +275,36 @@ namespace AIHWSim.TrackEd
                 return null;
             }
             if (tokens != null && tokens.Length > 0) PartMeshLibrary.AssignByName(mesh, fallback, tokens);
-            hull?.Invoke(p);
+            if (hull != null) hull(p);            // opt-out: authored hull instead
+            else AddMeshColliders(mesh);          // default: collide with the geometry
             // Returned so cosmetic scripts (SignalCycle, GhostBob) can attach to
             // the mesh instance; every existing caller ignores it.
             return mesh;
+        }
+
+        /// <summary>
+        /// Non-convex MeshCollider on every imported piece (BodyPainter's
+        /// pattern). sharedMaterial stays null — the same PhysX default
+        /// friction (0.6/0.6) the primitive hulls had, so surface feel is
+        /// unchanged. The isReadable guard means a mis-imported mesh degrades
+        /// to "that piece is a ghost" with a loud log, never to a player-build
+        /// cook exception mid-load.
+        /// </summary>
+        private static void AddMeshColliders(GameObject meshRoot)
+        {
+            foreach (var mf in meshRoot.GetComponentsInChildren<MeshFilter>(true))
+            {
+                if (mf.sharedMesh == null) continue;
+                if (!mf.sharedMesh.isReadable)
+                {
+                    Debug.LogWarning($"[TrackCatalog] '{mf.gameObject.name}' mesh is not " +
+                                     "CPU-readable; no collider cooked (check " +
+                                     "PartModelPostprocessor's TrackProps rule).");
+                    continue;
+                }
+                var mc = mf.gameObject.AddComponent<MeshCollider>();
+                mc.sharedMesh = mf.sharedMesh;
+            }
         }
 
         /// <summary>
@@ -434,7 +489,7 @@ namespace AIHWSim.TrackEd
                 theme = ToyWorkshop, snap = SnapMode.TileEdge,
                 build = p => MeshProp(p, "tw_book_stack", TwCover,
                     new[] { ("cover", TwCover), ("pages", TwPages) },
-                    h => HullBox(h, new Vector3(0, 0.064f, 0), new Vector3(0.268f, 0.128f, 0.209f)),
+                    null,
                     f => LBox("Books", f, TwCover, new Vector3(0, 0.064f, 0), Vector3.zero,
                              new Vector3(0.268f, 0.128f, 0.209f))) },
 
@@ -444,15 +499,14 @@ namespace AIHWSim.TrackEd
                     new[] { ("wood", TwWood), ("ruler", TwSteel), ("tick", TwGraphite), ("rail", TwSteel) },
                     // A thin slab rotated to the slope: the car drives its top
                     // face, which is the only surface that has to be right.
-                    h => HullBox(h, new Vector3(0, 0.029f, 0), new Vector3(0.245f, 0.030f, 0.325f),
-                                 new Vector3(-14f, 0, 0)),
+                    null,
                     f => TrackBuilder.Ramp("Ramp", Vector3.zero, 0f, 0.312f, 0.245f, 0.03f, 14f, TwWood, f)) },
 
             new ItemDef { id = "tw_brick_wall", label = "Toy brick", category = ItemCategory.Scenery,
                 theme = ToyWorkshop, snap = SnapMode.TileEdge,
                 build = p => MeshProp(p, "tw_brick_wall", TwBrick,
                     new[] { ("brick", TwBrick), ("stud", TwBrick), ("plate", TwPlate) },
-                    h => HullBox(h, new Vector3(0, 0.054f, 0), new Vector3(0.344f, 0.108f, 0.184f)),
+                    null,
                     f => LBox("Brick", f, TwBrick, new Vector3(0, 0.054f, 0), Vector3.zero,
                              new Vector3(0.344f, 0.108f, 0.184f))) },
 
@@ -478,7 +532,7 @@ namespace AIHWSim.TrackEd
                 theme = ToyWorkshop,
                 build = p => MeshProp(p, "tw_mug", TwCeramic,
                     new[] { ("mug", TwCeramic), ("coffee", TwCoffee) },
-                    h => HullCyl(h, new Vector3(0, 0.05f, 0), new Vector3(0.090f, 0.050f, 0.090f)),
+                    null,
                     f => LCyl("Mug", f, TwCeramic, new Vector3(0, 0.05f, 0), Vector3.zero,
                               new Vector3(0.090f, 0.050f, 0.090f))) },
 
@@ -486,13 +540,7 @@ namespace AIHWSim.TrackEd
                 theme = ToyWorkshop,
                 build = p => MeshProp(p, "tw_tape_arch", TwTape,
                     new[] { ("tape", TwTape), ("core", TwCore) },
-                    h =>
-                    {
-                        // Three hulls, not one box: the bore is the gate.
-                        HullBox(h, new Vector3(-0.225f, 0.170f, 0), new Vector3(0.11f, 0.34f, 0.10f));
-                        HullBox(h, new Vector3(0.225f, 0.170f, 0), new Vector3(0.11f, 0.34f, 0.10f));
-                        HullBox(h, new Vector3(0, 0.395f, 0), new Vector3(0.34f, 0.11f, 0.10f));
-                    },
+                    null,
                     f =>
                     {
                         LBox("SideL", f, TwTape, new Vector3(-0.225f, 0.17f, 0), Vector3.zero, new Vector3(0.11f, 0.34f, 0.09f));
@@ -505,7 +553,7 @@ namespace AIHWSim.TrackEd
                 theme = NeonGrid,
                 build = p => MeshProp(p, "ng_pylon", NgFrame,
                     new[] { ("pylon", NgFrame), ("glow", NgGlow), ("base", NgPanel) },
-                    h => HullCyl(h, new Vector3(0, 0.16f, 0), new Vector3(0.130f, 0.160f, 0.130f)),
+                    null,
                     f => LCyl("Pylon", f, NgFrame, new Vector3(0, 0.16f, 0), Vector3.zero,
                               new Vector3(0.130f, 0.160f, 0.130f))) },
 
@@ -513,12 +561,7 @@ namespace AIHWSim.TrackEd
                 theme = NeonGrid,
                 build = p => MeshProp(p, "ng_arch_gate", NgFrame,
                     new[] { ("frame", NgFrame), ("glow", NgGlow), ("panel", NgPanel), ("base", NgPanel) },
-                    h =>
-                    {
-                        HullBox(h, new Vector3(-0.390f, 0.250f, 0), new Vector3(0.13f, 0.50f, 0.12f));
-                        HullBox(h, new Vector3(0.390f, 0.250f, 0), new Vector3(0.13f, 0.50f, 0.12f));
-                        HullBox(h, new Vector3(0, 0.560f, 0), new Vector3(0.91f, 0.15f, 0.12f));
-                    },
+                    null,
                     f =>
                     {
                         LBox("LegL", f, NgFrame, new Vector3(-0.39f, 0.25f, 0), Vector3.zero, new Vector3(0.08f, 0.50f, 0.07f));
@@ -530,12 +573,7 @@ namespace AIHWSim.TrackEd
                 theme = NeonGrid,
                 build = p => MeshProp(p, "ng_ring_float", NgFrame,
                     new[] { ("ring", NgFrame), ("glow", NgGlow), ("foot", NgPanel) },
-                    h =>
-                    {
-                        HullBox(h, new Vector3(-0.222f, 0.200f, 0), new Vector3(0.05f, 0.40f, 0.10f));
-                        HullBox(h, new Vector3(0.222f, 0.200f, 0), new Vector3(0.05f, 0.40f, 0.10f));
-                        HullBox(h, new Vector3(0, 0.425f, 0), new Vector3(0.40f, 0.05f, 0.10f));
-                    },
+                    null,
                     f =>
                     {
                         LBox("SideL", f, NgGlow, new Vector3(-0.222f, 0.20f, 0), Vector3.zero, new Vector3(0.05f, 0.40f, 0.05f));
@@ -547,7 +585,7 @@ namespace AIHWSim.TrackEd
                 theme = NeonGrid, snap = SnapMode.TileEdge,
                 build = p => MeshProp(p, "ng_barrier_glow", NgFrame,
                     new[] { ("barrier", NgFrame), ("glow", NgGlow), ("cap", NgPanel), ("foot", NgPanel) },
-                    h => HullBox(h, new Vector3(0, 0.070f, 0), new Vector3(0.530f, 0.140f, 0.090f)),
+                    null,
                     f => LBox("Barrier", f, NgFrame, new Vector3(0, 0.07f, 0), Vector3.zero,
                              new Vector3(0.530f, 0.140f, 0.090f))) },
 
@@ -555,7 +593,7 @@ namespace AIHWSim.TrackEd
                 theme = NeonGrid,
                 build = p => MeshProp(p, "ng_data_cube", NgPanel,
                     new[] { ("cube", NgPanel), ("glow", NgGlow), ("base", NgFrame) },
-                    h => HullBox(h, new Vector3(0, 0.099f, 0), new Vector3(0.185f, 0.198f, 0.185f)),
+                    null,
                     f => LBox("Stack", f, NgPanel, new Vector3(0, 0.099f, 0), Vector3.zero,
                              new Vector3(0.185f, 0.198f, 0.185f))) },
 
@@ -563,7 +601,7 @@ namespace AIHWSim.TrackEd
                 theme = NeonGrid,
                 build = p => MeshProp(p, "ng_spire", NgFrame,
                     new[] { ("spire", NgFrame), ("glow", NgGlow), ("base", NgPanel) },
-                    h => HullCyl(h, new Vector3(0, 0.300f, 0), new Vector3(0.160f, 0.300f, 0.160f)),
+                    null,
                     f => LCyl("Spire", f, NgFrame, new Vector3(0, 0.30f, 0), Vector3.zero,
                               new Vector3(0.160f, 0.300f, 0.160f))) },
 
@@ -572,8 +610,7 @@ namespace AIHWSim.TrackEd
                 theme = BeachBoardwalk,
                 build = p => MeshProp(p, "bb_palm", BbTrunk,
                     new[] { ("trunk", BbTrunk), ("crown", BbTrunk), ("frond", BbFrond), ("coconut", BbCoconut) },
-                    // Trunk only — fronds are 0.5 m up and nothing can reach them.
-                    h => HullCyl(h, new Vector3(0, 0.280f, 0), new Vector3(0.080f, 0.280f, 0.080f)),
+                    null,
                     f =>
                     {
                         LCyl("Trunk", f, BbTrunk, new Vector3(0, 0.28f, 0), Vector3.zero, new Vector3(0.06f, 0.28f, 0.06f));
@@ -584,15 +621,14 @@ namespace AIHWSim.TrackEd
                 theme = BeachBoardwalk,
                 build = p => MeshProp(p, "bb_surfboard_ramp", BbSand,
                     new[] { ("sand", BbSand), ("board", BbBoard), ("stripe", BbStripe), ("fin", BbStripe) },
-                    h => HullBox(h, new Vector3(0, 0.045f, 0), new Vector3(0.255f, 0.030f, 0.440f),
-                                 new Vector3(-12.75f, 0, 0)),
+                    null,
                     f => TrackBuilder.Ramp("Ramp", Vector3.zero, 0f, 0.42f, 0.255f, 0.03f, 12.75f, BbSand, f)) },
 
             new ItemDef { id = "bb_plank_wall", label = "Boardwalk rail", category = ItemCategory.Scenery,
                 theme = BeachBoardwalk, snap = SnapMode.TileEdge,
                 build = p => MeshProp(p, "bb_plank_wall", BbPlank,
                     new[] { ("post", BbPlank), ("cap", BbPlank), ("rail", BbBoard), ("plank", BbPlank) },
-                    h => HullBox(h, new Vector3(0, 0.089f, 0), new Vector3(0.620f, 0.178f, 0.100f)),
+                    null,
                     f => LBox("Rail", f, BbPlank, new Vector3(0, 0.089f, 0), Vector3.zero,
                              new Vector3(0.620f, 0.178f, 0.060f))) },
 
@@ -601,7 +637,7 @@ namespace AIHWSim.TrackEd
                 build = p => MeshProp(p, "bb_tiki_torch", BbTrunk,
                     new[] { ("pole", BbTrunk), ("node", BbTrunk), ("bowl", VfRock),
                             ("flame", BbFlame), ("base", VfRock) },
-                    h => HullCyl(h, new Vector3(0, 0.220f, 0), new Vector3(0.050f, 0.220f, 0.050f)),
+                    null,
                     f => LCyl("Pole", f, BbTrunk, new Vector3(0, 0.22f, 0), Vector3.zero,
                               new Vector3(0.05f, 0.22f, 0.05f))) },
 
@@ -623,7 +659,7 @@ namespace AIHWSim.TrackEd
                 build = p => MeshProp(p, "bb_sandcastle", BbSand,
                     new[] { ("sand", BbSand), ("tower", BbSand), ("merlon", BbSand),
                             ("wall", BbSand), ("keep", BbSand), ("flag", BbStripe) },
-                    h => HullBox(h, new Vector3(0, 0.130f, 0), new Vector3(0.300f, 0.260f, 0.300f)),
+                    null,
                     f => LBox("Castle", f, BbSand, new Vector3(0, 0.13f, 0), Vector3.zero,
                              new Vector3(0.30f, 0.26f, 0.30f))) },
 
@@ -632,12 +668,7 @@ namespace AIHWSim.TrackEd
                 theme = VolcanoFoundry,
                 build = p => MeshProp(p, "vf_rock_arch", VfRock,
                     new[] { ("rock", VfRock), ("lava", VfLava) },
-                    h =>
-                    {
-                        HullBox(h, new Vector3(-0.300f, 0.200f, 0), new Vector3(0.21f, 0.40f, 0.21f));
-                        HullBox(h, new Vector3(0.300f, 0.200f, 0), new Vector3(0.21f, 0.40f, 0.21f));
-                        HullBox(h, new Vector3(0, 0.600f, 0), new Vector3(0.70f, 0.20f, 0.21f));
-                    },
+                    null,
                     f =>
                     {
                         LBox("LegL", f, VfRock, new Vector3(-0.30f, 0.20f, 0), Vector3.zero, new Vector3(0.20f, 0.40f, 0.20f));
@@ -649,7 +680,7 @@ namespace AIHWSim.TrackEd
                 theme = VolcanoFoundry, snap = SnapMode.TileEdge,
                 build = p => MeshProp(p, "vf_obsidian_block", VfObsidian,
                     new[] { ("obsidian", VfObsidian), ("shard", VfObsidian), ("glow", VfLava) },
-                    h => HullBox(h, new Vector3(0, 0.092f, 0), new Vector3(0.360f, 0.185f, 0.170f)),
+                    null,
                     f => LBox("Block", f, VfObsidian, new Vector3(0, 0.092f, 0), Vector3.zero,
                              new Vector3(0.360f, 0.185f, 0.170f))) },
 
@@ -657,7 +688,7 @@ namespace AIHWSim.TrackEd
                 theme = VolcanoFoundry,
                 build = p => MeshProp(p, "vf_steam_vent", VfSteel,
                     new[] { ("vent", VfSteel), ("grate", VfSteel), ("lava", VfLava), ("rock", VfRock) },
-                    h => HullCyl(h, new Vector3(0, 0.034f, 0), new Vector3(0.260f, 0.034f, 0.260f)),
+                    null,
                     f => LCyl("Vent", f, VfSteel, new Vector3(0, 0.034f, 0), Vector3.zero,
                               new Vector3(0.260f, 0.034f, 0.260f))) },
 
@@ -680,70 +711,59 @@ namespace AIHWSim.TrackEd
                 theme = VolcanoFoundry,
                 build = p => MeshProp(p, "vf_grate_ramp", VfSteel,
                     new[] { ("ramp", VfSteel), ("slat", VfSteel), ("rail", VfBarrel), ("strut", VfSteel) },
-                    h => HullBox(h, new Vector3(0, 0.048f, 0), new Vector3(0.260f, 0.030f, 0.455f),
-                                 new Vector3(-12.8f, 0, 0)),
+                    null,
                     f => TrackBuilder.Ramp("Ramp", Vector3.zero, 0f, 0.44f, 0.26f, 0.03f, 12.8f, VfSteel, f)) },
 
             new ItemDef { id = "vf_crag_spire", label = "Crag spire", category = ItemCategory.Scenery,
                 theme = VolcanoFoundry,
                 build = p => MeshProp(p, "vf_crag_spire", VfRock,
                     new[] { ("crag", VfRock), ("spike", VfObsidian), ("lava", VfLava) },
-                    h => HullCyl(h, new Vector3(0, 0.300f, 0), new Vector3(0.200f, 0.300f, 0.200f)),
+                    null,
                     f => LCyl("Crag", f, VfRock, new Vector3(0, 0.30f, 0), Vector3.zero,
                               new Vector3(0.200f, 0.300f, 0.200f))) },
 
-            // Scenery — TinyTorque map packs (build_map_props.py). Hull numbers
-            // come from the exporter's printed JSON (bounds + slope profiles),
-            // never eyeballed. The authored ramps slope along local X (the
-            // showcase axis) — place them with yaw 90 to face the racing line.
-            // Landmarks (volcano, peak, barrow, castle, towers, furniture) are
-            // full 1/10-world backdrop pieces; their hulls are the full bounds.
+            // Scenery — TinyTorque map packs (build_map_props.py). Collision
+            // is the mesh itself (MeshProp cooks a MeshCollider per piece), so
+            // ramps climb from their true feet, arches clear at their true
+            // lintels and landmarks are solid exactly where they look solid.
+            // The authored ramps slope along local X (the showcase axis) —
+            // place them with yaw 90 to face the racing line.
 
             // Scenery — Downtown -------------------------------------------
             new ItemDef { id = "dt_arch_gate", label = "City gate", category = ItemCategory.Scenery,
                 theme = Downtown,
                 build = p => MeshProp(p, "dt_arch_gate", DtConcrete, DtTokens,
-                    h =>
-                    {
-                        HullBox(h, new Vector3(-1.19f, 0.85f, 0), new Vector3(0.80f, 1.70f, 0.58f));
-                        HullBox(h, new Vector3(1.19f, 0.85f, 0), new Vector3(0.80f, 1.70f, 0.58f));
-                        HullBox(h, new Vector3(0, 1.26f, 0), new Vector3(3.18f, 0.71f, 0.58f));
-                    },
+                    null,
                     BoxFallback(DtConcrete, 3.18f, 1.70f, 0.58f)) },
 
             new ItemDef { id = "dt_arch_rock", label = "Rock arch", category = ItemCategory.Scenery,
                 theme = Downtown,
                 build = p => MeshProp(p, "dt_arch_rock", DtRock, DtTokens,
-                    h =>
-                    {
-                        HullBox(h, new Vector3(-1.56f, 1.15f, 0), new Vector3(1.56f, 2.30f, 1.08f));
-                        HullBox(h, new Vector3(1.56f, 1.15f, 0), new Vector3(1.56f, 2.30f, 1.08f));
-                        HullBox(h, new Vector3(0, 2.08f, 0), new Vector3(4.67f, 1.06f, 1.08f));
-                    },
+                    null,
                     BoxFallback(DtRock, 4.67f, 2.61f, 1.08f)) },
 
             new ItemDef { id = "dt_barrier", label = "Jersey barrier", category = ItemCategory.Scenery,
                 theme = Downtown, snap = SnapMode.TileEdge,
                 build = p => MeshProp(p, "dt_barrier", DtConcreteLt, DtTokens,
-                    h => HullBox(h, new Vector3(0, 0.04f, 0), new Vector3(0.302f, 0.08f, 0.068f)),
+                    null,
                     BoxFallback(DtConcreteLt, 0.302f, 0.08f, 0.068f)) },
 
             new ItemDef { id = "dt_bld_block", label = "City block", category = ItemCategory.Scenery,
                 theme = Downtown,
                 build = p => MeshProp(p, "dt_bld_block", DtConcrete, DtTokens,
-                    h => HullBox(h, new Vector3(0, 1.55f, 0), new Vector3(2.36f, 3.09f, 1.56f)),
+                    null,
                     BoxFallback(DtConcrete, 2.36f, 3.09f, 1.56f)) },
 
             new ItemDef { id = "dt_bld_hangar", label = "Hangar", category = ItemCategory.Scenery,
                 theme = Downtown,
                 build = p => MeshProp(p, "dt_bld_hangar", DtConcrete, DtTokens,
-                    h => HullBox(h, new Vector3(0, 0.62f, 0), new Vector3(1.98f, 1.25f, 2.93f)),
+                    null,
                     BoxFallback(DtConcrete, 1.98f, 1.25f, 2.93f)) },
 
             new ItemDef { id = "dt_bld_tower", label = "Neon tower", category = ItemCategory.Scenery,
                 theme = Downtown,
                 build = p => MeshProp(p, "dt_bld_tower", DtConcrete, DtTokens,
-                    h => HullBox(h, new Vector3(0, 4.41f, 0), new Vector3(1.65f, 8.82f, 1.65f)),
+                    null,
                     BoxFallback(DtConcrete, 1.65f, 8.81f, 1.65f)) },
 
             new ItemDef { id = "dt_cone", label = "Traffic cone", category = ItemCategory.Scenery,
@@ -760,38 +780,32 @@ namespace AIHWSim.TrackEd
             new ItemDef { id = "dt_ramp_jump", label = "Jump ramp", category = ItemCategory.Scenery,
                 theme = Downtown,
                 build = p => MeshProp(p, "dt_ramp_jump", DtConcrete, DtTokens,
-                    h =>
-                    {
-                        // Up-over-down along X: 20° faces either side, flat deck on top.
-                        HullBox(h, new Vector3(-0.74f, 0.20f, 0), new Vector3(0.80f, 0.03f, 1.06f), new Vector3(0, 0, 20f));
-                        HullBox(h, new Vector3(0.74f, 0.20f, 0), new Vector3(0.80f, 0.03f, 1.06f), new Vector3(0, 0, -20f));
-                        HullBox(h, new Vector3(0, 0.33f, 0), new Vector3(0.85f, 0.03f, 1.06f));
-                    },
+                    null,
                     f => TrackBuilder.Ramp("Ramp", Vector3.zero, 0f, 1.0f, 1.06f, 0.03f, 20f, DtConcrete, f)) },
 
             new ItemDef { id = "dt_ramp_kicker", label = "Kicker", category = ItemCategory.Scenery,
                 theme = Downtown,
                 build = p => MeshProp(p, "dt_ramp_kicker", DtConcrete, DtTokens,
-                    h => HullBox(h, new Vector3(0, 0.20f, 0), new Vector3(1.46f, 0.03f, 0.96f), new Vector3(0, 0, 14f)),
+                    null,
                     f => TrackBuilder.Ramp("Ramp", Vector3.zero, 0f, 1.4f, 0.96f, 0.03f, 14f, DtConcrete, f)) },
 
             new ItemDef { id = "dt_rock_large", label = "Boulder", category = ItemCategory.Scenery,
                 theme = Downtown,
                 build = p => MeshProp(p, "dt_rock_large", DtRock, DtTokens,
-                    h => HullBox(h, new Vector3(0, 0.27f, 0), new Vector3(0.72f, 0.54f, 0.87f)),
+                    null,
                     BoxFallback(DtRock, 0.72f, 0.54f, 0.87f)) },
 
             new ItemDef { id = "dt_rock_small", label = "Rock", category = ItemCategory.Scenery,
                 theme = Downtown,
                 build = p => MeshProp(p, "dt_rock_small", DtRock, DtTokens,
-                    h => HullBox(h, new Vector3(0, 0.06f, 0), new Vector3(0.19f, 0.12f, 0.19f)),
+                    null,
                     BoxFallback(DtRock, 0.19f, 0.12f, 0.19f)) },
 
             new ItemDef { id = "dt_street_lamp", label = "Street lamp", category = ItemCategory.Scenery,
                 theme = Downtown, behavior = ItemBehavior.Light,
                 lightPos = new Vector3(0f, 0.75f, 0f),
                 build = p => MeshProp(p, "dt_street_lamp", DtSteel, DtTokens,
-                    h => HullCyl(h, new Vector3(0, 0.40f, 0), new Vector3(0.06f, 0.40f, 0.06f)),
+                    null,
                     f => LCyl("Pole", f, DtSteel, new Vector3(0, 0.40f, 0), Vector3.zero,
                               new Vector3(0.06f, 0.40f, 0.06f))) },
 
@@ -800,11 +814,7 @@ namespace AIHWSim.TrackEd
                 build = p =>
                 {
                     var m = MeshProp(p, "dt_traffic_light", DtSteel, DtTokens,
-                        h =>
-                        {
-                            HullBox(h, new Vector3(0, 0.29f, 0), new Vector3(0.10f, 0.58f, 0.08f));
-                            HullBox(h, new Vector3(0, 0.47f, 0), new Vector3(0.384f, 0.20f, 0.08f));
-                        },
+                        null,
                         BoxFallback(DtSteel, 0.384f, 0.57f, 0.08f));
                     if (m != null) m.AddComponent<SignalCycle>();
                 } },
@@ -812,7 +822,7 @@ namespace AIHWSim.TrackEd
             new ItemDef { id = "dt_volcano", label = "Volcano", category = ItemCategory.Scenery,
                 theme = Downtown,
                 build = p => MeshProp(p, "dt_volcano", DtBasalt, DtTokens,
-                    h => HullCyl(h, new Vector3(0, 2.30f, 0), new Vector3(5.0f, 2.30f, 5.0f)),
+                    null,
                     BoxFallback(DtBasalt, 12.6f, 4.6f, 12.6f)) },
 
             // Scenery — Toy Room -------------------------------------------
@@ -831,25 +841,25 @@ namespace AIHWSim.TrackEd
             new ItemDef { id = "toy_bed", label = "Bed", category = ItemCategory.Scenery,
                 theme = ToyRoom,
                 build = p => MeshProp(p, "toy_bed", ToyWalnut, ToyTokens,
-                    h => HullBox(h, new Vector3(0, 1.34f, 0), new Vector3(3.62f, 2.68f, 5.03f)),
+                    null,
                     BoxFallback(ToyWalnut, 3.62f, 2.67f, 5.03f)) },
 
             new ItemDef { id = "toy_block_tower", label = "Block tower", category = ItemCategory.Scenery,
                 theme = ToyRoom,
                 build = p => MeshProp(p, "toy_block_tower", ToyRed, ToyTokens,
-                    h => HullBox(h, new Vector3(0, 0.67f, 0), new Vector3(0.23f, 1.34f, 0.23f)),
+                    null,
                     BoxFallback(ToyRed, 0.22f, 1.34f, 0.23f)) },
 
             new ItemDef { id = "toy_bookcase", label = "Bookcase", category = ItemCategory.Scenery,
                 theme = ToyRoom, snap = SnapMode.TileEdge,
                 build = p => MeshProp(p, "toy_bookcase", ToyWalnut, ToyTokens,
-                    h => HullBox(h, new Vector3(0, 2.28f, 0), new Vector3(1.99f, 4.56f, 0.77f)),
+                    null,
                     BoxFallback(ToyWalnut, 1.99f, 4.56f, 0.77f)) },
 
             new ItemDef { id = "toy_box", label = "Toy box", category = ItemCategory.Scenery,
                 theme = ToyRoom,
                 build = p => MeshProp(p, "toy_box", ToyCard, ToyTokens,
-                    h => HullBox(h, new Vector3(0, 0.76f, 0), new Vector3(1.08f, 1.52f, 1.60f)),
+                    null,
                     BoxFallback(ToyCard, 1.08f, 1.52f, 1.60f)) },
 
             new ItemDef { id = "toy_brick", label = "Toy brick", category = ItemCategory.Scenery,
@@ -867,15 +877,7 @@ namespace AIHWSim.TrackEd
             new ItemDef { id = "toy_chair", label = "Chair", category = ItemCategory.Scenery,
                 theme = ToyRoom,
                 build = p => MeshProp(p, "toy_chair", ToyWalnut, ToyTokens,
-                    h =>
-                    {
-                        // Legs only below seat height — the lap threads between them.
-                        HullBox(h, new Vector3(-0.44f, 0.50f, -0.46f), new Vector3(0.12f, 1.00f, 0.12f));
-                        HullBox(h, new Vector3(0.44f, 0.50f, -0.46f), new Vector3(0.12f, 1.00f, 0.12f));
-                        HullBox(h, new Vector3(-0.44f, 0.50f, 0.46f), new Vector3(0.12f, 1.00f, 0.12f));
-                        HullBox(h, new Vector3(0.44f, 0.50f, 0.46f), new Vector3(0.12f, 1.00f, 0.12f));
-                        HullBox(h, new Vector3(0, 1.60f, 0), new Vector3(1.01f, 1.12f, 1.06f));
-                    },
+                    null,
                     BoxFallback(ToyWalnut, 1.01f, 2.16f, 1.06f)) },
 
             new ItemDef { id = "toy_crayon", label = "Crayon", category = ItemCategory.Scenery,
@@ -906,132 +908,96 @@ namespace AIHWSim.TrackEd
             new ItemDef { id = "toy_dresser", label = "Dresser", category = ItemCategory.Scenery,
                 theme = ToyRoom,
                 build = p => MeshProp(p, "toy_dresser", ToyPine, ToyTokens,
-                    h => HullBox(h, new Vector3(0, 1.53f, 0), new Vector3(2.76f, 3.07f, 1.56f)),
+                    null,
                     BoxFallback(ToyPine, 2.76f, 3.07f, 1.56f)) },
 
             new ItemDef { id = "toy_floor_lamp", label = "Floor lamp", category = ItemCategory.Scenery,
                 theme = ToyRoom, behavior = ItemBehavior.Light,
                 lightPos = new Vector3(0f, 3.36f, 0f),
                 build = p => MeshProp(p, "toy_floor_lamp", ToyBrass, ToyTokens,
-                    h => HullCyl(h, new Vector3(0, 1.70f, 0), new Vector3(0.09f, 1.70f, 0.09f)),
+                    null,
                     f => LCyl("Pole", f, ToyBrass, new Vector3(0, 1.70f, 0), Vector3.zero,
                               new Vector3(0.09f, 1.70f, 0.09f))) },
 
             new ItemDef { id = "toy_gate", label = "Toy gate", category = ItemCategory.Scenery,
                 theme = ToyRoom,
                 build = p => MeshProp(p, "toy_gate", ToyPly, ToyTokens,
-                    h =>
-                    {
-                        HullBox(h, new Vector3(-1.32f, 0.82f, 0), new Vector3(0.30f, 1.64f, 0.22f));
-                        HullBox(h, new Vector3(1.32f, 0.82f, 0), new Vector3(0.30f, 1.64f, 0.22f));
-                        HullBox(h, new Vector3(0, 1.46f, 0), new Vector3(2.88f, 0.37f, 0.22f));
-                    },
+                    null,
                     BoxFallback(ToyPly, 2.88f, 1.64f, 0.22f)) },
 
             new ItemDef { id = "toy_hoop", label = "Hoop", category = ItemCategory.Scenery,
                 theme = ToyRoom,
                 build = p => MeshProp(p, "toy_hoop", ToyYellow, ToyTokens,
-                    h =>
-                    {
-                        // Four segments around the ring; the bore is the gate.
-                        HullBox(h, new Vector3(0, 0.11f, 0), new Vector3(1.60f, 0.22f, 0.38f));
-                        HullBox(h, new Vector3(0, 2.11f, 0), new Vector3(1.60f, 0.23f, 0.38f));
-                        HullBox(h, new Vector3(-0.95f, 1.11f, 0), new Vector3(0.35f, 1.60f, 0.38f));
-                        HullBox(h, new Vector3(0.95f, 1.11f, 0), new Vector3(0.35f, 1.60f, 0.38f));
-                    },
+                    null,
                     BoxFallback(ToyYellow, 2.23f, 2.23f, 0.38f)) },
 
             new ItemDef { id = "toy_lamp", label = "Desk lamp", category = ItemCategory.Scenery,
                 theme = ToyRoom, behavior = ItemBehavior.Light,
                 lightPos = new Vector3(0.26f, 0.89f, 0f),
                 build = p => MeshProp(p, "toy_lamp", ToyRed, ToyTokens,
-                    h => HullBox(h, new Vector3(0, 0.58f, 0), new Vector3(0.65f, 1.17f, 0.44f)),
+                    null,
                     BoxFallback(ToyRed, 0.65f, 1.17f, 0.44f)) },
 
             new ItemDef { id = "toy_ramp_bridge", label = "Card bridge", category = ItemCategory.Scenery,
                 theme = ToyRoom,
                 build = p => MeshProp(p, "toy_ramp_bridge", ToyPly, ToyTokens,
-                    h =>
-                    {
-                        HullBox(h, new Vector3(0, 0.59f, 0), new Vector3(2.70f, 0.06f, 0.77f));
-                        HullBox(h, new Vector3(-1.35f, 0.28f, 0), new Vector3(0.12f, 0.56f, 0.77f));
-                        HullBox(h, new Vector3(1.35f, 0.28f, 0), new Vector3(0.12f, 0.56f, 0.77f));
-                        HullBox(h, new Vector3(-1.87f, 0.07f, 0), new Vector3(0.60f, 0.03f, 0.77f), new Vector3(0, 0, 16f));
-                        HullBox(h, new Vector3(1.87f, 0.07f, 0), new Vector3(0.60f, 0.03f, 0.77f), new Vector3(0, 0, -16f));
-                    },
+                    null,
                     BoxFallback(ToyPly, 4.29f, 0.62f, 0.77f)) },
 
             new ItemDef { id = "toy_ramp_plank", label = "Plank ramp", category = ItemCategory.Scenery,
                 theme = ToyRoom,
                 build = p => MeshProp(p, "toy_ramp_plank", ToyPly, ToyTokens,
-                    h => HullBox(h, new Vector3(0, 0.40f, 0), new Vector3(1.97f, 0.04f, 0.73f), new Vector3(0, 0, 18f)),
+                    null,
                     f => TrackBuilder.Ramp("Ramp", Vector3.zero, 0f, 1.9f, 0.73f, 0.03f, 18f, ToyPly, f)) },
 
             new ItemDef { id = "toy_table", label = "Table", category = ItemCategory.Scenery,
                 theme = ToyRoom,
                 build = p => MeshProp(p, "toy_table", ToyPine, ToyTokens,
-                    h =>
-                    {
-                        HullBox(h, new Vector3(-1.30f, 0.90f, -0.75f), new Vector3(0.15f, 1.80f, 0.15f));
-                        HullBox(h, new Vector3(1.30f, 0.90f, -0.75f), new Vector3(0.15f, 1.80f, 0.15f));
-                        HullBox(h, new Vector3(-1.30f, 0.90f, 0.75f), new Vector3(0.15f, 1.80f, 0.15f));
-                        HullBox(h, new Vector3(1.30f, 0.90f, 0.75f), new Vector3(0.15f, 1.80f, 0.15f));
-                        HullBox(h, new Vector3(0, 1.90f, 0), new Vector3(2.88f, 0.21f, 1.80f));
-                    },
+                    null,
                     BoxFallback(ToyPine, 2.88f, 2.01f, 1.80f)) },
 
             // Scenery — Enchanted Kingdom ----------------------------------
             new ItemDef { id = "ench_arch_vine", label = "Vine arch", category = ItemCategory.Scenery,
                 theme = EnchantedKingdom,
                 build = p => MeshProp(p, "ench_arch_vine", EnIron, EnchTokens,
-                    h =>
-                    {
-                        HullBox(h, new Vector3(-0.73f, 0.50f, 0), new Vector3(0.28f, 1.00f, 0.49f));
-                        HullBox(h, new Vector3(0.73f, 0.50f, 0), new Vector3(0.28f, 1.00f, 0.49f));
-                        HullBox(h, new Vector3(0, 0.90f, 0), new Vector3(1.60f, 0.30f, 0.49f));
-                    },
+                    null,
                     BoxFallback(EnIron, 1.60f, 1.05f, 0.49f)) },
 
             new ItemDef { id = "ench_boulder", label = "Mossy boulder", category = ItemCategory.Scenery,
                 theme = EnchantedKingdom,
                 build = p => MeshProp(p, "ench_boulder", EnRock, EnchTokens,
-                    h => HullBox(h, new Vector3(0, 0.18f, 0), new Vector3(0.52f, 0.35f, 0.45f)),
+                    null,
                     BoxFallback(EnRock, 0.52f, 0.35f, 0.45f)) },
 
             new ItemDef { id = "ench_castle", label = "Castle", category = ItemCategory.Scenery,
                 theme = EnchantedKingdom,
                 build = p => MeshProp(p, "ench_castle", EnStonePale, EnchTokens,
-                    h => HullBox(h, new Vector3(0, 4.37f, 0), new Vector3(6.58f, 8.73f, 7.20f)),
+                    null,
                     BoxFallback(EnStonePale, 6.58f, 8.73f, 7.20f)) },
 
             new ItemDef { id = "ench_cottage", label = "Cottage", category = ItemCategory.Scenery,
                 theme = EnchantedKingdom,
                 build = p => MeshProp(p, "ench_cottage", EnPlaster, EnchTokens,
-                    h => HullBox(h, new Vector3(0, 0.81f, 0), new Vector3(1.25f, 1.62f, 1.03f)),
+                    null,
                     BoxFallback(EnPlaster, 1.25f, 1.62f, 1.03f)) },
 
             new ItemDef { id = "ench_crystal", label = "Crystal", category = ItemCategory.Scenery,
                 theme = EnchantedKingdom,
                 build = p => MeshProp(p, "ench_crystal", EnCrystal, EnchTokens,
-                    h => HullBox(h, new Vector3(0, 0.46f, 0), new Vector3(0.56f, 0.92f, 0.61f)),
+                    null,
                     BoxFallback(EnCrystal, 0.56f, 0.92f, 0.61f)) },
 
             new ItemDef { id = "ench_fountain", label = "Fountain", category = ItemCategory.Scenery,
                 theme = EnchantedKingdom,
                 build = p => MeshProp(p, "ench_fountain", EnStonePale, EnchTokens,
-                    h => HullCyl(h, new Vector3(0, 0.48f, 0), new Vector3(0.60f, 0.48f, 0.60f)),
+                    null,
                     f => LCyl("Fountain", f, EnStonePale, new Vector3(0, 0.48f, 0), Vector3.zero,
                               new Vector3(0.60f, 0.48f, 0.60f))) },
 
             new ItemDef { id = "ench_gate", label = "Castle gate", category = ItemCategory.Scenery,
                 theme = EnchantedKingdom,
                 build = p => MeshProp(p, "ench_gate", EnStonePale, EnchTokens,
-                    h =>
-                    {
-                        HullBox(h, new Vector3(-1.20f, 1.19f, 0), new Vector3(0.82f, 2.38f, 0.62f));
-                        HullBox(h, new Vector3(1.20f, 1.19f, 0), new Vector3(0.82f, 2.38f, 0.62f));
-                        HullBox(h, new Vector3(0, 1.38f, 0), new Vector3(3.22f, 1.05f, 0.62f));
-                    },
+                    null,
                     BoxFallback(EnStonePale, 3.22f, 2.38f, 0.62f)) },
 
             new ItemDef { id = "ench_gatehouse", label = "Gatehouse", category = ItemCategory.Scenery,
@@ -1039,38 +1005,33 @@ namespace AIHWSim.TrackEd
                 // Solid: the authored portcullis reaches the ground (profile
                 // zmin is 0 across the span), so there is no drive-through.
                 build = p => MeshProp(p, "ench_gatehouse", EnStonePale, EnchTokens,
-                    h => HullBox(h, new Vector3(0, 1.51f, 0), new Vector3(2.29f, 3.02f, 0.84f)),
+                    null,
                     BoxFallback(EnStonePale, 2.29f, 3.02f, 0.84f)) },
 
             new ItemDef { id = "ench_hedge", label = "Hedge", category = ItemCategory.Scenery,
                 theme = EnchantedKingdom, snap = SnapMode.TileEdge,
                 build = p => MeshProp(p, "ench_hedge", EnHedge, EnchTokens,
-                    h => HullBox(h, new Vector3(0, 0.135f, 0), new Vector3(0.50f, 0.27f, 0.15f)),
+                    null,
                     BoxFallback(EnHedge, 0.50f, 0.27f, 0.15f)) },
 
             new ItemDef { id = "ench_lamp", label = "Fairy lamp", category = ItemCategory.Scenery,
                 theme = EnchantedKingdom, behavior = ItemBehavior.Light,
                 lightPos = new Vector3(0f, 0.60f, 0f),
                 build = p => MeshProp(p, "ench_lamp", EnIron, EnchTokens,
-                    h => HullCyl(h, new Vector3(0, 0.40f, 0), new Vector3(0.05f, 0.40f, 0.05f)),
+                    null,
                     f => LCyl("Pole", f, EnIron, new Vector3(0, 0.40f, 0), Vector3.zero,
                               new Vector3(0.05f, 0.40f, 0.05f))) },
 
             new ItemDef { id = "ench_peak", label = "Mountain peak", category = ItemCategory.Scenery,
                 theme = EnchantedKingdom,
                 build = p => MeshProp(p, "ench_peak", EnRock, EnchTokens,
-                    h => HullCyl(h, new Vector3(0, 5.90f, 0), new Vector3(6.5f, 5.90f, 6.5f)),
+                    null,
                     BoxFallback(EnRock, 15.0f, 11.8f, 15.2f)) },
 
             new ItemDef { id = "ench_ramp_bridge", label = "Stone bridge", category = ItemCategory.Scenery,
                 theme = EnchantedKingdom,
                 build = p => MeshProp(p, "ench_ramp_bridge", EnStonePale, EnchTokens,
-                    h =>
-                    {
-                        HullBox(h, new Vector3(0, 0.37f, 0), new Vector3(1.86f, 0.04f, 1.08f), new Vector3(0, 0, 12.5f));
-                        // Understructure reaches the ground along the span.
-                        HullBox(h, new Vector3(0, 0.15f, 0), new Vector3(1.70f, 0.30f, 1.00f));
-                    },
+                    null,
                     f => TrackBuilder.Ramp("Ramp", Vector3.zero, 0f, 1.8f, 1.08f, 0.03f, 12.5f, EnStonePale, f)) },
 
             new ItemDef { id = "ench_ramp_terrace", label = "Terrace ramp", category = ItemCategory.Scenery,
@@ -1078,26 +1039,25 @@ namespace AIHWSim.TrackEd
                 // Unlike its siblings this one climbs along local Z (its X
                 // profile is a symmetric plateau) — rising toward the back.
                 build = p => MeshProp(p, "ench_ramp_terrace", EnStonePale, EnchTokens,
-                    h => HullBox(h, new Vector3(0, 0.23f, 0), new Vector3(2.50f, 0.04f, 1.33f), new Vector3(16.5f, 0, 0)),
+                    null,
                     f => TrackBuilder.Ramp("Ramp", Vector3.zero, 0f, 1.3f, 2.5f, 0.03f, 16.5f, EnStonePale, f)) },
 
             new ItemDef { id = "ench_topiary", label = "Topiary", category = ItemCategory.Scenery,
                 theme = EnchantedKingdom,
                 build = p => MeshProp(p, "ench_topiary", EnHedge, EnchTokens,
-                    h => HullBox(h, new Vector3(0, 0.22f, 0), new Vector3(0.19f, 0.44f, 0.20f)),
+                    null,
                     BoxFallback(EnHedge, 0.19f, 0.44f, 0.20f)) },
 
             new ItemDef { id = "ench_tower", label = "Wizard tower", category = ItemCategory.Scenery,
                 theme = EnchantedKingdom,
                 build = p => MeshProp(p, "ench_tower", EnStone, EnchTokens,
-                    h => HullCyl(h, new Vector3(0, 2.79f, 0), new Vector3(0.75f, 2.79f, 0.75f)),
+                    null,
                     BoxFallback(EnStone, 1.46f, 5.57f, 1.46f)) },
 
             new ItemDef { id = "ench_tree", label = "Blossom tree", category = ItemCategory.Scenery,
                 theme = EnchantedKingdom,
                 build = p => MeshProp(p, "ench_tree", EnBark, EnchTokens,
-                    // Trunk only — the canopy is 1 m up and nothing reaches it.
-                    h => HullCyl(h, new Vector3(0, 0.50f, 0), new Vector3(0.20f, 0.50f, 0.20f)),
+                    null,
                     f => LCyl("Trunk", f, EnBark, new Vector3(0, 0.50f, 0), Vector3.zero,
                               new Vector3(0.20f, 0.50f, 0.20f))) },
 
@@ -1105,57 +1065,45 @@ namespace AIHWSim.TrackEd
             new ItemDef { id = "haunt_arch_ruin", label = "Ruined arch", category = ItemCategory.Scenery,
                 theme = HauntedHollow,
                 build = p => MeshProp(p, "haunt_arch_ruin", HaGrime, HauntTokens,
-                    h =>
-                    {
-                        HullBox(h, new Vector3(-1.00f, 0.53f, 0), new Vector3(0.36f, 1.06f, 0.56f));
-                        HullBox(h, new Vector3(1.00f, 0.53f, 0), new Vector3(0.36f, 1.06f, 0.56f));
-                        HullBox(h, new Vector3(0, 1.05f, 0), new Vector3(2.30f, 0.26f, 0.56f));
-                        // Rubble strewn through the opening — an honest bump.
-                        HullBox(h, new Vector3(0, 0.05f, 0), new Vector3(1.30f, 0.10f, 0.56f));
-                    },
+                    null,
                     BoxFallback(HaGrime, 2.30f, 1.18f, 0.56f)) },
 
             new ItemDef { id = "haunt_barrow", label = "Barrow", category = ItemCategory.Scenery,
                 theme = HauntedHollow,
                 build = p => MeshProp(p, "haunt_barrow", HaEarth, HauntTokens,
-                    h => HullCyl(h, new Vector3(0, 1.64f, 0), new Vector3(5.0f, 1.64f, 5.0f)),
+                    null,
                     BoxFallback(HaEarth, 11.3f, 3.28f, 11.2f)) },
 
             new ItemDef { id = "haunt_chapel", label = "Chapel", category = ItemCategory.Scenery,
                 theme = HauntedHollow,
                 build = p => MeshProp(p, "haunt_chapel", HaGrime, HauntTokens,
-                    h => HullBox(h, new Vector3(0, 1.24f, 0), new Vector3(2.21f, 2.48f, 1.95f)),
+                    null,
                     BoxFallback(HaGrime, 2.21f, 2.48f, 1.95f)) },
 
             new ItemDef { id = "haunt_crypt", label = "Crypt", category = ItemCategory.Scenery,
                 theme = HauntedHollow,
                 build = p => MeshProp(p, "haunt_crypt", HaGrime, HauntTokens,
-                    h => HullBox(h, new Vector3(0, 0.46f, 0), new Vector3(0.78f, 0.91f, 0.90f)),
+                    null,
                     BoxFallback(HaGrime, 0.78f, 0.91f, 0.90f)) },
 
             new ItemDef { id = "haunt_fence", label = "Iron fence", category = ItemCategory.Scenery,
                 theme = HauntedHollow, snap = SnapMode.TileEdge,
                 build = p => MeshProp(p, "haunt_fence", HaIron, HauntTokens,
-                    h => HullBox(h, new Vector3(0, 0.13f, 0), new Vector3(0.57f, 0.27f, 0.10f)),
+                    null,
                     BoxFallback(HaIron, 0.57f, 0.27f, 0.10f)) },
 
             new ItemDef { id = "haunt_gaslamp", label = "Gas lamp", category = ItemCategory.Scenery,
                 theme = HauntedHollow, behavior = ItemBehavior.Light,
                 lightPos = new Vector3(0f, 0.60f, 0f),
                 build = p => MeshProp(p, "haunt_gaslamp", HaIron, HauntTokens,
-                    h => HullCyl(h, new Vector3(0, 0.40f, 0), new Vector3(0.05f, 0.40f, 0.05f)),
+                    null,
                     f => LCyl("Pole", f, HaIron, new Vector3(0, 0.40f, 0), Vector3.zero,
                               new Vector3(0.05f, 0.40f, 0.05f))) },
 
             new ItemDef { id = "haunt_gate", label = "Cemetery gate", category = ItemCategory.Scenery,
                 theme = HauntedHollow,
                 build = p => MeshProp(p, "haunt_gate", HaGrime, HauntTokens,
-                    h =>
-                    {
-                        HullBox(h, new Vector3(-1.20f, 0.79f, 0), new Vector3(0.80f, 1.58f, 0.84f));
-                        HullBox(h, new Vector3(1.20f, 0.79f, 0), new Vector3(0.80f, 1.58f, 0.84f));
-                        HullBox(h, new Vector3(0, 1.43f, 0), new Vector3(3.20f, 0.31f, 0.84f));
-                    },
+                    null,
                     BoxFallback(HaGrime, 3.20f, 1.58f, 0.84f)) },
 
             new ItemDef { id = "haunt_ghost", label = "Ghost", category = ItemCategory.Scenery,
@@ -1172,19 +1120,19 @@ namespace AIHWSim.TrackEd
             new ItemDef { id = "haunt_gravestone", label = "Gravestone", category = ItemCategory.Scenery,
                 theme = HauntedHollow,
                 build = p => MeshProp(p, "haunt_gravestone", HaGrime, HauntTokens,
-                    h => HullBox(h, new Vector3(0, 0.155f, 0), new Vector3(0.195f, 0.31f, 0.14f)),
+                    null,
                     BoxFallback(HaGrime, 0.195f, 0.31f, 0.14f)) },
 
             new ItemDef { id = "haunt_hearse", label = "Hearse", category = ItemCategory.Scenery,
                 theme = HauntedHollow,
                 build = p => MeshProp(p, "haunt_hearse", HaTar, HauntTokens,
-                    h => HullBox(h, new Vector3(0, 0.27f, 0), new Vector3(0.47f, 0.53f, 0.94f)),
+                    null,
                     BoxFallback(HaTar, 0.47f, 0.53f, 0.94f)) },
 
             new ItemDef { id = "haunt_mansion", label = "Mansion", category = ItemCategory.Scenery,
                 theme = HauntedHollow,
                 build = p => MeshProp(p, "haunt_mansion", HaClapboard, HauntTokens,
-                    h => HullBox(h, new Vector3(0, 1.83f, 0), new Vector3(2.74f, 3.65f, 2.72f)),
+                    null,
                     BoxFallback(HaClapboard, 2.74f, 3.65f, 2.72f)) },
 
             new ItemDef { id = "haunt_pumpkin", label = "Pumpkin", category = ItemCategory.Scenery,
@@ -1202,28 +1150,19 @@ namespace AIHWSim.TrackEd
             new ItemDef { id = "haunt_ramp_slab", label = "Slab ramp", category = ItemCategory.Scenery,
                 theme = HauntedHollow,
                 build = p => MeshProp(p, "haunt_ramp_slab", HaGrime, HauntTokens,
-                    h =>
-                    {
-                        HullBox(h, new Vector3(0, 0.32f, 0), new Vector3(1.70f, 0.04f, 1.10f), new Vector3(0, 0, 10f));
-                        HullBox(h, new Vector3(0, 0.12f, 0), new Vector3(1.50f, 0.24f, 1.00f));
-                    },
+                    null,
                     f => TrackBuilder.Ramp("Ramp", Vector3.zero, 0f, 1.7f, 1.10f, 0.03f, 10f, HaGrime, f)) },
 
             new ItemDef { id = "haunt_ramp_tomb", label = "Tomb ramp", category = ItemCategory.Scenery,
                 theme = HauntedHollow,
                 build = p => MeshProp(p, "haunt_ramp_tomb", HaStoneDark, HauntTokens,
-                    h =>
-                    {
-                        HullBox(h, new Vector3(-0.65f, 0.22f, 0), new Vector3(0.95f, 0.03f, 1.14f), new Vector3(0, 0, 24f));
-                        HullBox(h, new Vector3(0.65f, 0.22f, 0), new Vector3(0.95f, 0.03f, 1.14f), new Vector3(0, 0, -24f));
-                        HullBox(h, new Vector3(0, 0.42f, 0), new Vector3(0.90f, 0.04f, 1.14f));
-                    },
+                    null,
                     f => TrackBuilder.Ramp("Ramp", Vector3.zero, 0f, 1.2f, 1.14f, 0.03f, 24f, HaStoneDark, f)) },
 
             new ItemDef { id = "haunt_tree", label = "Dead tree", category = ItemCategory.Scenery,
                 theme = HauntedHollow,
                 build = p => MeshProp(p, "haunt_tree", HaBark, HauntTokens,
-                    h => HullCyl(h, new Vector3(0, 0.50f, 0), new Vector3(0.15f, 0.50f, 0.15f)),
+                    null,
                     f => LCyl("Trunk", f, HaBark, new Vector3(0, 0.50f, 0), Vector3.zero,
                               new Vector3(0.15f, 0.50f, 0.15f))) },
 
@@ -1246,6 +1185,273 @@ namespace AIHWSim.TrackEd
                     // the centre it bobs about rather than something it fights.
                     m.AddComponent<GhostBob>();
                 } },
+
+            // Scenery — Torque Falls (the daylight town) --------------------
+            //
+            // Collision is the exported mesh itself. That retires a whole class
+            // of approximation this section used to carry (measured sub-boxes,
+            // doorway rings) — a car can now drive into every aperture the kit
+            // asserts a 0.46 x 0.39 clearance on, park inside the buildings
+            // that have interiors, and thread the water tower's legs, because
+            // the collider IS the geometry. TrackPresetValidator still probes
+            // each drive-in corridor (garage, filling station, dealership,
+            // fire station, arena) so an FBX re-export that grows a doorsill
+            // fails the build instead of quietly bricking up the one prop the
+            // map was designed around.
+
+            new ItemDef { id = "city_house_a", label = "Bungalow", category = ItemCategory.Scenery,
+                theme = TorqueFalls,
+                build = p => MeshProp(p, "city_house_a", CyWall5, CityTokens,
+                    null,
+                    BoxFallback(CyWall5, 0.980f, 0.662f, 0.940f)) },
+
+            new ItemDef { id = "city_house_b", label = "Two-storey house", category = ItemCategory.Scenery,
+                theme = TorqueFalls,
+                build = p => MeshProp(p, "city_house_b", CyWall7, CityTokens,
+                    null,
+                    BoxFallback(CyWall7, 0.940f, 0.967f, 1.080f)) },
+
+            new ItemDef { id = "city_cottage", label = "Cottage", category = ItemCategory.Scenery,
+                theme = TorqueFalls,
+                build = p => MeshProp(p, "city_cottage", CyRender3, CityTokens,
+                    null,
+                    BoxFallback(CyRender3, 0.660f, 0.692f, 0.640f)) },
+
+            new ItemDef { id = "city_townhouse", label = "Terrace unit", category = ItemCategory.Scenery,
+                theme = TorqueFalls,
+                build = p => MeshProp(p, "city_townhouse", CyBrick, CityTokens,
+                    null,
+                    BoxFallback(CyBrick, 0.540f, 1.020f, 1.120f)) },
+
+            new ItemDef { id = "city_apartment", label = "Walk-up", category = ItemCategory.Scenery,
+                theme = TorqueFalls,
+                build = p => MeshProp(p, "city_apartment", CyRender2, CityTokens,
+                    null,
+                    BoxFallback(CyRender2, 1.420f, 1.665f, 1.320f)) },
+
+            new ItemDef { id = "city_store", label = "Corner shop", category = ItemCategory.Scenery,
+                theme = TorqueFalls,
+                build = p => MeshProp(p, "city_store", CyBrickPale, CityTokens,
+                    null,
+                    BoxFallback(CyBrickPale, 1.020f, 0.657f, 0.960f)) },
+
+            new ItemDef { id = "city_diner", label = "Diner", category = ItemCategory.Scenery,
+                theme = TorqueFalls,
+                build = p => MeshProp(p, "city_diner", CyCream, CityTokens,
+                    null,
+                    BoxFallback(CyCream, 1.500f, 0.637f, 0.820f)) },
+
+            new ItemDef { id = "city_warehouse", label = "Warehouse", category = ItemCategory.Scenery,
+                theme = TorqueFalls,
+                build = p => MeshProp(p, "city_warehouse", CyConcrete, CityTokens,
+                    null,
+                    BoxFallback(CyConcrete, 2.020f, 0.755f, 2.020f)) },
+
+            new ItemDef { id = "city_clocktower", label = "Clock tower", category = ItemCategory.Scenery,
+                theme = TorqueFalls,
+                build = p => MeshProp(p, "city_clocktower", CyBrick, CityTokens,
+                    null,
+                    BoxFallback(CyBrick, 1.020f, 2.260f, 1.040f)) },
+
+            new ItemDef { id = "city_watertower", label = "Water tower", category = ItemCategory.Scenery,
+                theme = TorqueFalls,
+                // Four legs, not a box: the tank is 1.2 m up and a car is meant
+                // to be able to drive under it between the legs.
+                build = p => MeshProp(p, "city_watertower", CyGalv, CityTokens,
+                    null,
+                    BoxFallback(CyGalv, 0.835f, 2.035f, 0.835f)) },
+
+            // --- the three you drive into --------------------------------
+
+            new ItemDef { id = "city_garage", label = "Garage (drive-through)", category = ItemCategory.Scenery,
+                theme = TorqueFalls,
+                build = p => MeshProp(p, "city_garage", CyStucco, CityTokens,
+                    null,
+                    BoxFallback(CyStucco, 1.360f, 0.640f, 1.760f)) },
+
+            new ItemDef { id = "city_gas", label = "Filling station", category = ItemCategory.Scenery,
+                theme = TorqueFalls,
+                build = p => MeshProp(p, "city_gas", CyPaintWhite, CityTokens,
+                    null,
+                    BoxFallback(CyPaintWhite, 2.000f, 0.701f, 1.990f)) },
+
+            new ItemDef { id = "city_autoshop", label = "Dealership", category = ItemCategory.Scenery,
+                theme = TorqueFalls,
+                build = p => MeshProp(p, "city_autoshop", CyRender3, CityTokens,
+                    null,
+                    BoxFallback(CyRender3, 2.430f, 0.850f, 1.985f)) },
+
+            new ItemDef { id = "city_firehouse", label = "Fire station", category = ItemCategory.Scenery,
+                theme = TorqueFalls,
+                build = p => MeshProp(p, "city_firehouse", CyBrick, CityTokens,
+                    null,
+                    BoxFallback(CyBrick, 1.500f, 1.363f, 1.713f)) },
+
+            new ItemDef { id = "city_arena", label = "Arena", category = ItemCategory.Scenery,
+                theme = TorqueFalls,
+                build = p => MeshProp(p, "city_arena", CyConcrete, CityTokens,
+                    null,
+                    BoxFallback(CyConcrete, 8.878f, 2.040f, 6.537f)) },
+
+            // --- street furniture ----------------------------------------
+
+            new ItemDef { id = "city_pole", label = "Telephone pole", category = ItemCategory.Scenery,
+                theme = TorqueFalls,
+                // 2.6 m across because it carries half a span of wire each
+                // side, arriving at the end with zero slope: two poles placed
+                // at 2.6 m join into one catenary with no wire prop between.
+                build = p => MeshProp(p, "city_pole", CyTimber, CityTokens,
+                    null,
+                    f => LCyl("Pole", f, CyTimber, new Vector3(0f, 0.48f, 0f), Vector3.zero,
+                              new Vector3(0.045f, 0.48f, 0.045f))) },
+
+            new ItemDef { id = "city_pole_t", label = "Transformer pole", category = ItemCategory.Scenery,
+                theme = TorqueFalls,
+                // Same span, but the pole itself stands 0.365 off the mesh
+                // centre because the transformer bank hangs to one side.
+                build = p => MeshProp(p, "city_pole_t", CyTimber, CityTokens,
+                    null,
+                    f => LCyl("Pole", f, CyTimber, new Vector3(0f, 0.48f, -0.365f), Vector3.zero,
+                              new Vector3(0.045f, 0.48f, 0.045f))) },
+
+            new ItemDef { id = "city_lamp", label = "Street lamp", category = ItemCategory.Scenery,
+                theme = TorqueFalls,
+                // No ItemBehavior.Light, unlike dt_street_lamp: the town places
+                // ~110 of these and it is a midday map, so a point light each
+                // would be 110 real-time lights buying nothing. The head keeps
+                // its emissive material and reads as lit.
+                build = p => MeshProp(p, "city_lamp", CyAlu, CityTokens,
+                    null,
+                    f => LCyl("Column", f, CyAlu, new Vector3(-0.147f, 0.37f, 0f), Vector3.zero,
+                              new Vector3(0.062f, 0.37f, 0.062f))) },
+
+            new ItemDef { id = "city_signal", label = "Traffic signal", category = ItemCategory.Scenery,
+                theme = TorqueFalls, animated = true,
+                build = p =>
+                {
+                    var m = MeshProp(p, "city_signal", CyAlu, CityTokens,
+                        null,
+                        BoxFallback(CyAlu, 0.475f, 0.560f, 0.081f));
+                    // Two heads on the mast arm plus a pedestrian lamp, all
+                    // driven together — the exporter split the dark lenses per
+                    // head so each one has its own red and amber renderer.
+                    if (m != null) m.AddComponent<SignalCycle>();
+                } },
+
+            new ItemDef { id = "city_sign", label = "Stop sign", category = ItemCategory.Scenery,
+                theme = TorqueFalls,
+                build = p => MeshProp(p, "city_sign", CyGalv, CityTokens,
+                    null,
+                    f => LCyl("Post", f, CyGalv, new Vector3(0f, 0.14f, 0f), Vector3.zero,
+                              new Vector3(0.030f, 0.14f, 0.030f))) },
+
+            new ItemDef { id = "city_hydrant", label = "Hydrant", category = ItemCategory.Scenery,
+                theme = TorqueFalls,
+                build = p => MeshProp(p, "city_hydrant", CyRed, CityTokens,
+                    null,
+                    f => LCyl("Hydrant", f, CyRed, new Vector3(0f, 0.047f, 0f), Vector3.zero,
+                              new Vector3(0.055f, 0.047f, 0.055f))) },
+
+            new ItemDef { id = "city_mailbox", label = "Mailbox", category = ItemCategory.Scenery,
+                theme = TorqueFalls,
+                build = p => MeshProp(p, "city_mailbox", CyBlue, CityTokens,
+                    null,
+                    BoxFallback(CyBlue, 0.140f, 0.175f, 0.060f)) },
+
+            new ItemDef { id = "city_bench", label = "Bench", category = ItemCategory.Scenery,
+                theme = TorqueFalls,
+                build = p => MeshProp(p, "city_bench", CyTimber, CityTokens,
+                    null,
+                    BoxFallback(CyTimber, 0.260f, 0.110f, 0.060f)) },
+
+            new ItemDef { id = "city_busstop", label = "Bus shelter", category = ItemCategory.Scenery,
+                theme = TorqueFalls,
+                build = p => MeshProp(p, "city_busstop", CyGalv, CityTokens,
+                    null,
+                    BoxFallback(CyGalv, 0.480f, 0.315f, 0.160f)) },
+
+            new ItemDef { id = "city_billboard", label = "Billboard", category = ItemCategory.Scenery,
+                theme = TorqueFalls,
+                build = p =>
+                {
+                    var m = MeshProp(p, "city_billboard", CyGalv, CityTokens,
+                        null,
+                        BoxFallback(CyGalv, 0.580f, 0.795f, 0.060f));
+                    // The face is authored BLANK (a cream slab under three
+                    // floodlights); the poster component draws the ad —
+                    // deliberate new authoring, chosen over re-authoring the
+                    // Blender kit.
+                    if (m != null) m.AddComponent<BillboardPoster>();
+                } },
+
+            // --- boundaries (tile at their own 0.40 m pitch) --------------
+
+            new ItemDef { id = "city_fence_picket", label = "Picket fence", category = ItemCategory.Scenery,
+                theme = TorqueFalls, snap = SnapMode.TileEdge,
+                build = p => MeshProp(p, "city_fence_picket", CyTrim, CityTokens,
+                    null,
+                    BoxFallback(CyTrim, 0.420f, 0.126f, 0.020f)) },
+
+            new ItemDef { id = "city_fence_chain", label = "Chain-link fence", category = ItemCategory.Scenery,
+                theme = TorqueFalls, snap = SnapMode.TileEdge,
+                build = p => MeshProp(p, "city_fence_chain", CyGalv, CityTokens,
+                    null,
+                    BoxFallback(CyGalv, 0.380f, 0.206f, 0.020f)) },
+
+            new ItemDef { id = "city_wall", label = "Garden wall", category = ItemCategory.Scenery,
+                theme = TorqueFalls, snap = SnapMode.TileEdge,
+                build = p => MeshProp(p, "city_wall", CyBrick, CityTokens,
+                    null,
+                    BoxFallback(CyBrick, 0.420f, 0.154f, 0.060f)) },
+
+            new ItemDef { id = "city_hedge", label = "Hedge", category = ItemCategory.Scenery,
+                theme = TorqueFalls, snap = SnapMode.TileEdge,
+                build = p => MeshProp(p, "city_hedge", CyLeafHedge, CityTokens,
+                    null,
+                    BoxFallback(CyLeafHedge, 0.420f, 0.170f, 0.100f)) },
+
+            // --- planting -------------------------------------------------
+
+            new ItemDef { id = "city_tree_oak", label = "Oak", category = ItemCategory.Scenery,
+                theme = TorqueFalls,
+                build = p => MeshProp(p, "city_tree_oak", CyBark, CityTokens,
+                    null,
+                    f => LCyl("Trunk", f, CyBark, new Vector3(0f, 0.35f, 0f), Vector3.zero,
+                              new Vector3(0.10f, 0.35f, 0.10f))) },
+
+            new ItemDef { id = "city_tree_maple", label = "Maple", category = ItemCategory.Scenery,
+                theme = TorqueFalls,
+                build = p => MeshProp(p, "city_tree_maple", CyBark, CityTokens,
+                    null,
+                    f => LCyl("Trunk", f, CyBark, new Vector3(0f, 0.45f, 0f), Vector3.zero,
+                              new Vector3(0.06f, 0.45f, 0.06f))) },
+
+            new ItemDef { id = "city_tree_pine", label = "Pine", category = ItemCategory.Scenery,
+                theme = TorqueFalls,
+                build = p => MeshProp(p, "city_tree_pine", CyBarkPine, CityTokens,
+                    null,
+                    f => LCyl("Trunk", f, CyBarkPine, new Vector3(0f, 0.20f, 0f), Vector3.zero,
+                              new Vector3(0.07f, 0.20f, 0.07f))) },
+
+            new ItemDef { id = "city_tree_young", label = "Street sapling", category = ItemCategory.Scenery,
+                theme = TorqueFalls,
+                build = p => MeshProp(p, "city_tree_young", CyBark, CityTokens,
+                    null,
+                    f => LCyl("Trunk", f, CyBark, new Vector3(0f, 0.18f, 0f), Vector3.zero,
+                              new Vector3(0.06f, 0.18f, 0.06f))) },
+
+            new ItemDef { id = "city_bush", label = "Shrub", category = ItemCategory.Scenery,
+                theme = TorqueFalls,
+                build = p => MeshProp(p, "city_bush", CyLeafHedge, CityTokens,
+                    null,
+                    BoxFallback(CyLeafHedge, 0.180f, 0.138f, 0.180f)) },
+
+            new ItemDef { id = "city_planter", label = "Planter", category = ItemCategory.Scenery,
+                theme = TorqueFalls,
+                build = p => MeshProp(p, "city_planter", CyConcrete, CityTokens,
+                    null,
+                    f => LCyl("Planter", f, CyConcrete, new Vector3(0f, 0.043f, 0f), Vector3.zero,
+                              new Vector3(0.136f, 0.043f, 0.136f))) },
         };
 
         // ---- theme names (palette group headers; also ItemDef.theme values) ----
@@ -1258,11 +1464,30 @@ namespace AIHWSim.TrackEd
         public const string ToyRoom          = "Toy Room";
         public const string EnchantedKingdom = "Enchanted Kingdom";
         public const string HauntedHollow    = "Haunted Hollow";
+        public const string TorqueFalls      = "Torque Falls";
 
         /// <summary>Theme headers in palette order.</summary>
         public static readonly string[] Themes =
             { ToyWorkshop, NeonGrid, BeachBoardwalk, VolcanoFoundry,
-              Downtown, ToyRoom, EnchantedKingdom, HauntedHollow };
+              Downtown, ToyRoom, EnchantedKingdom, HauntedHollow, TorqueFalls };
+
+        /// <summary>
+        /// The material token table a theme's props are bound with. Public only
+        /// so <c>TrackPresetValidator</c> can resolve each FBX child's name
+        /// against it: <see cref="Vehicles.PartMeshLibrary.AssignByName"/> is a
+        /// first-match SUBSTRING matcher, so a token listed after one it
+        /// contains is silently swallowed — the prop still loads, still passes
+        /// its extent and budget, and renders a plausible WRONG colour.
+        /// </summary>
+        public static (string, Material)[] TokensFor(string theme)
+        {
+            if (theme == Downtown) return DtTokens;
+            if (theme == ToyRoom) return ToyTokens;
+            if (theme == EnchantedKingdom) return EnchTokens;
+            if (theme == HauntedHollow) return HauntTokens;
+            if (theme == TorqueFalls) return CityTokens;
+            return null;
+        }
 
         // ---- theme prop materials ----
         private static Material TwCover    => T("tw_cover", 0.58f, 0.16f, 0.14f);
@@ -1280,7 +1505,7 @@ namespace AIHWSim.TrackEd
         private static Material TwEraser   => T("tw_eraser", 0.96f, 0.60f, 0.60f, 0.15f);
 
         private static Material NgFrame => T("ng_frame", 0.18f, 0.20f, 0.26f, 0.70f);
-        private static Material NgGlow  => T("ng_glow", 0.25f, 0.95f, 1.00f, 0.85f, 1.6f);
+        private static Material NgGlow  => T("ng_glow", 0.25f, 0.95f, 1.00f, 0.85f, 3.0f);
         private static Material NgPanel => T("ng_panel", 0.10f, 0.12f, 0.17f, 0.55f);
 
         private static Material BbTrunk   => T("bb_trunk", 0.46f, 0.33f, 0.20f, 0.20f);
@@ -1290,13 +1515,13 @@ namespace AIHWSim.TrackEd
         private static Material BbStripe  => T("bb_stripe", 0.95f, 0.34f, 0.22f, 0.60f);
         private static Material BbPlank   => T("bb_plank", 0.64f, 0.50f, 0.34f, 0.20f);
         private static Material BbSand    => T("bb_sand", 0.86f, 0.77f, 0.56f, 0.15f);
-        private static Material BbFlame   => T("bb_flame", 1.00f, 0.56f, 0.14f, 0.60f, 1.8f);
+        private static Material BbFlame   => T("bb_flame", 1.00f, 0.56f, 0.14f, 0.60f, 2.6f);
         private static Material BbBall    => T("bb_ball", 0.96f, 0.96f, 0.96f, 0.65f);
         private static Material BbPanelA  => T("bb_panel", 0.92f, 0.22f, 0.24f, 0.65f);
 
         private static Material VfRock     => T("vf_rock", 0.29f, 0.26f, 0.25f, 0.15f);
         private static Material VfObsidian => T("vf_obsidian", 0.09f, 0.08f, 0.11f, 0.85f);
-        private static Material VfLava     => T("vf_lava", 1.00f, 0.34f, 0.06f, 0.50f, 2.0f);
+        private static Material VfLava     => T("vf_lava", 1.00f, 0.34f, 0.06f, 0.50f, 3.0f);
         private static Material VfSteel    => T("vf_steel", 0.44f, 0.45f, 0.48f, 0.70f);
         private static Material VfBarrel   => T("vf_barrel", 0.72f, 0.46f, 0.12f, 0.55f);
 
@@ -1310,13 +1535,13 @@ namespace AIHWSim.TrackEd
         private static Material DtConcrete   => T("dt_concrete", 0.25f, 0.26f, 0.28f, 0.30f);
         private static Material DtConcreteLt => T("dt_concretelt", 0.39f, 0.39f, 0.41f, 0.38f);
         private static Material DtGold       => T("dt_gold", 1.00f, 0.84f, 0.45f, 0.84f);
-        private static Material DtNeonCyan   => T("dt_neoncyan", 0.25f, 0.80f, 1.00f, 0.80f, 1.8f);
-        private static Material DtNeonGold   => T("dt_neongold", 1.00f, 0.75f, 0.28f, 0.80f, 1.7f);
-        private static Material DtNeonCrim   => T("dt_neoncrimson", 1.00f, 0.15f, 0.10f, 0.80f, 1.7f);
-        private static Material DtNeonOrange => T("dt_neonorange", 1.00f, 0.42f, 0.08f, 0.80f, 1.6f);
+        private static Material DtNeonCyan   => T("dt_neoncyan", 0.25f, 0.80f, 1.00f, 0.80f, 3.0f);    // authored 6.0
+        private static Material DtNeonGold   => T("dt_neongold", 1.00f, 0.75f, 0.28f, 0.80f, 2.5f);    // authored 5.0
+        private static Material DtNeonCrim   => T("dt_neoncrimson", 1.00f, 0.15f, 0.10f, 0.80f, 3.5f); // authored 7.0
+        private static Material DtNeonOrange => T("dt_neonorange", 1.00f, 0.42f, 0.08f, 0.80f, 2.8f);
         private static Material DtPanel      => T("dt_panel", 0.15f, 0.16f, 0.18f, 0.67f);
         private static Material DtSteel      => T("dt_steel", 0.51f, 0.52f, 0.55f, 0.69f);
-        private static Material DtLampHead   => T("dt_lamp", 0.98f, 0.93f, 0.78f, 0.90f, 1.8f);
+        private static Material DtLampHead   => T("dt_lamp", 0.98f, 0.93f, 0.78f, 0.90f, 3.5f);        // authored 9.0
         private static Material DtRock       => T("dt_rock", 0.30f, 0.29f, 0.30f, 0.20f);
         private static Material DtRockTop    => T("dt_rocktop", 0.42f, 0.40f, 0.38f, 0.14f);
         private static Material DtCrimson    => T("dt_crimson", 0.75f, 0.23f, 0.20f, 0.72f);
@@ -1329,9 +1554,9 @@ namespace AIHWSim.TrackEd
         // so SignalCycle can drive them through MaterialPropertyBlocks.
         private static Material DtSigRed     => T("dt_sigred", 0.90f, 0.12f, 0.06f, 0.85f, 0.3f);
         private static Material DtSigAmber   => T("dt_sigamber", 0.95f, 0.55f, 0.10f, 0.85f, 0.3f);
-        private static Material DtSigGreen   => T("dt_siggreen", 0.25f, 0.95f, 0.45f, 0.85f, 1.8f);
+        private static Material DtSigGreen   => T("dt_siggreen", 0.25f, 0.95f, 0.45f, 0.85f, 2.5f);
         private static Material DtBasalt     => T("dt_basalt", 0.23f, 0.21f, 0.21f, 0.22f);
-        private static Material DtLava       => T("dt_lava", 0.97f, 0.45f, 0.12f, 0.50f, 2.0f);
+        private static Material DtLava       => T("dt_lava", 0.97f, 0.45f, 0.12f, 0.50f, 3.0f);
 
         // Toy Room
         private static Material ToyRed    => T("toy_red", 0.80f, 0.27f, 0.23f, 0.80f);
@@ -1352,7 +1577,7 @@ namespace AIHWSim.TrackEd
         private static Material ToyCotton => T("toy_cotton", 0.73f, 0.74f, 0.76f, 0.16f);
         private static Material ToyBrass  => T("toy_brass", 0.90f, 0.77f, 0.50f, 0.78f);
         private static Material ToyShade  => T("toy_shade", 0.76f, 0.69f, 0.58f, 0.30f);
-        private static Material ToyBulb   => T("toy_bulb", 0.98f, 0.95f, 0.85f, 0.88f, 1.7f);
+        private static Material ToyBulb   => T("toy_bulb", 0.98f, 0.95f, 0.85f, 0.88f, 2.6f);
         private static Material ToyBook0  => T("toy_book0", 0.57f, 0.23f, 0.20f, 0.42f);
         private static Material ToyBook1  => T("toy_book1", 0.20f, 0.34f, 0.51f, 0.42f);
         private static Material ToyBook2  => T("toy_book2", 0.60f, 0.46f, 0.20f, 0.42f);
@@ -1375,7 +1600,7 @@ namespace AIHWSim.TrackEd
         private static Material EnSlateTeal => T("ench_slateteal", 0.25f, 0.44f, 0.46f, 0.50f);
         private static Material EnSlatePlum => T("ench_slateplum", 0.40f, 0.28f, 0.44f, 0.50f);
         private static Material EnGold      => T("ench_gold", 1.00f, 0.84f, 0.45f, 0.84f);
-        private static Material EnWindow    => T("ench_window", 0.71f, 0.55f, 0.29f, 0.80f, 1.5f);
+        private static Material EnWindow    => T("ench_window", 0.71f, 0.55f, 0.29f, 0.80f, 2.2f);
         private static Material EnCrimson   => T("ench_crimson", 0.63f, 0.21f, 0.23f, 0.54f);
         private static Material EnPlaster   => T("ench_plaster", 0.68f, 0.66f, 0.60f, 0.26f);
         private static Material EnTimber    => T("ench_timber", 0.24f, 0.19f, 0.15f, 0.34f);
@@ -1383,7 +1608,7 @@ namespace AIHWSim.TrackEd
         private static Material EnCrystal   => T("ench_crystalrose", 0.46f, 0.34f, 0.55f, 0.91f, 0.8f);
         private static Material EnWater     => T("ench_water", 0.20f, 0.40f, 0.53f, 0.94f, 1.2f);
         private static Material EnSpray     => T("ench_spray", 0.60f, 0.75f, 0.85f, 0.88f, 1.3f);
-        private static Material EnFlame     => T("ench_flame", 0.80f, 0.66f, 0.42f, 0.70f, 1.9f);
+        private static Material EnFlame     => T("ench_flame", 0.80f, 0.66f, 0.42f, 0.70f, 2.8f);
         private static Material EnHedge     => T("ench_hedge", 0.30f, 0.52f, 0.26f, 0.28f);
         private static Material EnSnow      => T("ench_snow", 0.82f, 0.85f, 0.90f, 0.58f);
         private static Material EnAzure     => T("ench_azure", 0.20f, 0.34f, 0.58f, 0.54f);
@@ -1395,24 +1620,96 @@ namespace AIHWSim.TrackEd
         private static Material HaRubble    => T("haunt_rubble", 0.35f, 0.34f, 0.32f, 0.16f);
         private static Material HaEarth     => T("haunt_earth", 0.25f, 0.22f, 0.18f, 0.12f);
         private static Material HaMoss      => T("haunt_moss", 0.20f, 0.28f, 0.18f, 0.14f);
-        private static Material HaFlame     => T("haunt_flame", 0.44f, 0.68f, 0.50f, 0.72f, 1.9f);
+        private static Material HaFlame     => T("haunt_flame", 0.44f, 0.68f, 0.50f, 0.72f, 2.8f);
         private static Material HaIron      => T("haunt_iron", 0.19f, 0.19f, 0.21f, 0.48f);
         private static Material HaShingle   => T("haunt_shingle", 0.30f, 0.29f, 0.31f, 0.50f);
         private static Material HaVerdigris => T("haunt_verdigris", 0.31f, 0.47f, 0.42f, 0.42f);
-        private static Material HaWindow    => T("haunt_window", 0.34f, 0.56f, 0.42f, 0.78f, 1.5f);
+        private static Material HaWindow    => T("haunt_window", 0.34f, 0.56f, 0.42f, 0.78f, 2.2f);
         private static Material HaMarble    => T("haunt_marble", 0.72f, 0.71f, 0.68f, 0.48f);
         private static Material HaStoneDark => T("haunt_stonedark", 0.33f, 0.32f, 0.34f, 0.26f);
         private static Material HaGhost     => T("haunt_ghost", 0.45f, 0.63f, 0.56f, 0.66f, 0.7f);
         private static Material HaGhostDim  => T("haunt_ghostdim", 0.49f, 0.61f, 0.55f, 0.66f, 0.4f);
         private static Material HaTar       => T("haunt_tar", 0.15f, 0.15f, 0.16f, 0.56f);
         private static Material HaGlass     => T("haunt_glass", 0.13f, 0.16f, 0.15f, 0.84f);
-        private static Material HaCandle    => T("haunt_candle", 0.74f, 0.60f, 0.38f, 0.70f, 1.6f);
+        private static Material HaCandle    => T("haunt_candle", 0.74f, 0.60f, 0.38f, 0.70f, 2.4f);
         private static Material HaDeadWood  => T("haunt_deadwood", 0.42f, 0.38f, 0.33f, 0.20f);
         private static Material HaClapboard => T("haunt_clapboard", 0.36f, 0.35f, 0.34f, 0.32f);
         private static Material HaPumpkin   => T("haunt_pumpkin", 0.75f, 0.40f, 0.13f, 0.66f);
-        private static Material HaJack      => T("haunt_jack", 0.80f, 0.52f, 0.19f, 0.70f, 1.7f);
+        private static Material HaJack      => T("haunt_jack", 0.80f, 0.52f, 0.19f, 0.70f, 2.6f);
         private static Material HaStalk     => T("haunt_stalk", 0.31f, 0.32f, 0.19f, 0.28f);
         private static Material HaBark      => T("haunt_bark", 0.24f, 0.20f, 0.17f, 0.14f);
+
+        // Torque Falls — the only pack whose numbers were MEASURED rather than
+        // read off the source by eye: build_map_props.py prints a MATJSON block
+        // per pack with each material's authored albedo (sRGB-encoded, the same
+        // conversion the four packs above were given by hand), smoothness as
+        // 1 − roughness, and `glow` as the multiple of its own albedo the
+        // surface emits. Colours and smoothness below are that output verbatim.
+        //
+        // The glow figures sit between the two worlds. Authored for Cycles they
+        // run 2.5–19x — sold there by AgX plus a compositor glare. The game now
+        // has the glare's stand-in (CameraBloom, HDR camera), so these were
+        // raised from the LDR-era "still lit at noon" clamps to roughly
+        // authored x 0.5 (capped ~4 — a midday town is not a night render),
+        // with the authored ratio noted beside each so the trade stays visible.
+        // The two dark signal lenses stay at 0.3 on purpose: SignalCycle drives
+        // the lit state, and the resting value is the OFF lamp.
+        private static Material CyAlu        => T("city_alu", 0.774f, 0.780f, 0.789f, 0.72f);
+        private static Material CyAsphalt    => T("city_asphalt", 0.215f, 0.218f, 0.229f, 0.22f);
+        private static Material CyBark       => T("city_bark", 0.322f, 0.283f, 0.246f, 0.12f);
+        private static Material CyBarkPine   => T("city_barkpine", 0.293f, 0.235f, 0.202f, 0.12f);
+        private static Material CyBlack      => T("city_black", 0.152f, 0.152f, 0.164f, 0.64f);
+        private static Material CyBlue       => T("city_blue", 0.206f, 0.373f, 0.665f, 0.70f);
+        private static Material CyBrick      => T("city_brick", 0.519f, 0.415f, 0.382f, 0.18f);
+        private static Material CyBrickPale  => T("city_brickpale", 0.634f, 0.594f, 0.555f, 0.18f);
+        private static Material CyChrome     => T("city_chrome", 0.941f, 0.945f, 0.957f, 0.89f);
+        private static Material CyConcrete   => T("city_concrete", 0.522f, 0.525f, 0.527f, 0.20f);
+        private static Material CyConcreteDk => T("city_concretedk", 0.373f, 0.378f, 0.384f, 0.18f);
+        private static Material CyCream      => T("city_cream", 0.798f, 0.774f, 0.715f, 0.64f);
+        private static Material CyDoor       => T("city_door", 0.461f, 0.276f, 0.243f, 0.70f);
+        private static Material CyFlower2    => T("city_flower2", 0.748f, 0.396f, 0.680f, 0.45f);
+        private static Material CyFlower3    => T("city_flower3", 0.865f, 0.821f, 0.410f, 0.45f);
+        private static Material CyGalv       => T("city_galv", 0.680f, 0.687f, 0.698f, 0.52f);
+        private static Material CyGlass      => T("city_glass", 0.260f, 0.309f, 0.346f, 0.92f);
+        private static Material CyGlassLit   => T("city_glasslit", 0.461f, 0.490f, 0.512f, 0.94f, 1.6f);   // authored 2.47
+        private static Material CyGlassShop  => T("city_glassshop", 0.357f, 0.403f, 0.430f, 0.94f);
+        private static Material CyGrass      => T("city_grass", 0.283f, 0.397f, 0.212f, 0.10f);
+        private static Material CyGreen      => T("city_green", 0.235f, 0.527f, 0.357f, 0.70f);
+        private static Material CyInterior   => T("city_interior", 0.584f, 0.584f, 0.588f, 0.28f);
+        private static Material CyLamp       => T("city_lamp", 0.955f, 0.936f, 0.865f, 0.90f, 2.4f);       // authored 4.23
+        private static Material CyLeaf0      => T("city_leaf0", 0.298f, 0.464f, 0.245f, 0.28f);
+        private static Material CyLeaf1      => T("city_leaf1", 0.347f, 0.441f, 0.229f, 0.28f);
+        private static Material CyLeaf2      => T("city_leaf2", 0.262f, 0.415f, 0.258f, 0.28f);
+        private static Material CyLeafHedge  => T("city_leafhedge", 0.248f, 0.392f, 0.206f, 0.28f);
+        private static Material CyLeafPine   => T("city_leafpine", 0.200f, 0.335f, 0.237f, 0.20f);
+        private static Material CyNeonRed    => T("city_neonred", 0.665f, 0.221f, 0.190f, 0.80f, 4.0f);    // authored 8.31
+        private static Material CyPaintWhite => T("city_paintwhite", 0.774f, 0.777f, 0.774f, 0.38f);
+        private static Material CyRed        => T("city_red", 0.722f, 0.215f, 0.183f, 0.70f);
+        private static Material CyRender2    => T("city_render2", 0.710f, 0.631f, 0.578f, 0.22f);
+        private static Material CyRender3    => T("city_render3", 0.578f, 0.631f, 0.679f, 0.22f);
+        private static Material CyRoof0      => T("city_roof0", 0.346f, 0.335f, 0.335f, 0.14f);
+        private static Material CyRoof1      => T("city_roof1", 0.447f, 0.299f, 0.244f, 0.14f);
+        private static Material CyRubber     => T("city_rubber", 0.133f, 0.138f, 0.147f, 0.32f);
+        private static Material CySignLit    => T("city_signlit", 0.748f, 0.748f, 0.735f, 0.70f, 2.2f);    // authored 3.32
+        private static Material CySoil       => T("city_soil", 0.243f, 0.200f, 0.160f, 0.10f);
+        private static Material CySteel      => T("city_steel", 0.584f, 0.593f, 0.610f, 0.64f);
+        private static Material CyStucco     => T("city_stucco", 0.726f, 0.704f, 0.659f, 0.22f);
+        private static Material CyTimber     => T("city_timber", 0.501f, 0.410f, 0.303f, 0.38f);
+        private static Material CyTrim       => T("city_trim", 0.865f, 0.862f, 0.854f, 0.62f);
+        private static Material CyTrimDk     => T("city_trimdk", 0.323f, 0.313f, 0.303f, 0.58f);
+        private static Material CyTube       => T("city_tube", 0.896f, 0.901f, 0.906f, 0.80f, 2.0f);       // authored 3.19
+        private static Material CyWall5      => T("city_wall5", 0.668f, 0.569f, 0.545f, 0.38f);
+        private static Material CyWall7      => T("city_wall7", 0.711f, 0.668f, 0.592f, 0.38f);
+        private static Material CyYellow     => T("city_yellow", 0.896f, 0.735f, 0.190f, 0.70f);
+        // The signal lenses. Only the green one exists in the blend — the red
+        // and amber are the dark M_City_SigOff piece, split per lamp head by
+        // the exporter — so those two take the Downtown pack's lens colours
+        // rather than a measurement of an unlit lens. All three carry emission
+        // (glow > 0 enables the keyword) so SignalCycle can drive them through
+        // MaterialPropertyBlocks.
+        private static Material CySigGreen   => T("city_siggreen", 0.152f, 0.618f, 0.396f, 0.86f, 3.0f);   // authored 19.35
+        private static Material CySigAmber   => T("city_sigamber", 0.95f, 0.55f, 0.10f, 0.85f, 0.3f);
+        private static Material CySigRed     => T("city_sigred", 0.90f, 0.12f, 0.06f, 0.85f, 0.3f);
 
         // ---- per-theme token tables ------------------------------------------
         // One table per pack, passed whole to every MeshProp of that theme — an
@@ -1475,6 +1772,38 @@ namespace AIHWSim.TrackEd
             ("stalk", HaStalk), ("earth", HaEarth), ("glass", HaGlass),
             ("moss", HaMoss), ("iron", HaIron), ("jack", HaJack),
             ("bark", HaBark), ("tar", HaTar),
+        };
+
+        private static (string, Material)[] CityTokens => new (string, Material)[]
+        {
+            // Fifty tokens, which is twice any other pack, and the eight
+            // containments below are the whole reason the order is written out
+            // rather than sorted alphabetically: brickpale⊃brick,
+            // concretedk⊃concrete, glasslit/glassshop⊃glass, barkpine⊃bark,
+            // siggreen⊃green, sigred/neonred⊃red, trimdk⊃trim.
+            // TrackPresetValidator resolves every real FBX child name through
+            // this table and FAILs when the first match is not the child's own
+            // token, so a re-sort that breaks one of them cannot ship.
+            ("paintwhite", CyPaintWhite), ("concretedk", CyConcreteDk),
+            ("brickpale", CyBrickPale), ("leafhedge", CyLeafHedge),
+            ("glassshop", CyGlassShop), ("barkpine", CyBarkPine),
+            ("leafpine", CyLeafPine), ("siggreen", CySigGreen),
+            ("sigamber", CySigAmber), ("interior", CyInterior),
+            ("glasslit", CyGlassLit), ("asphalt", CyAsphalt),
+            ("neonred", CyNeonRed), ("signlit", CySignLit),
+            ("render2", CyRender2), ("render3", CyRender3),
+            ("flower2", CyFlower2), ("flower3", CyFlower3),
+            ("concrete", CyConcrete), ("chrome", CyChrome),
+            ("stucco", CyStucco), ("rubber", CyRubber), ("timber", CyTimber),
+            ("yellow", CyYellow), ("sigred", CySigRed), ("trimdk", CyTrimDk),
+            ("wall5", CyWall5), ("wall7", CyWall7), ("roof0", CyRoof0),
+            ("roof1", CyRoof1), ("leaf0", CyLeaf0), ("leaf1", CyLeaf1),
+            ("leaf2", CyLeaf2), ("black", CyBlack), ("brick", CyBrick),
+            ("cream", CyCream), ("glass", CyGlass), ("grass", CyGrass),
+            ("green", CyGreen), ("steel", CySteel), ("trim", CyTrim),
+            ("door", CyDoor), ("galv", CyGalv), ("lamp", CyLamp),
+            ("tube", CyTube), ("blue", CyBlue), ("bark", CyBark),
+            ("soil", CySoil), ("red", CyRed), ("alu", CyAlu),
         };
 
         /// <summary>Find an item definition by id (null when unknown/legacy).</summary>
