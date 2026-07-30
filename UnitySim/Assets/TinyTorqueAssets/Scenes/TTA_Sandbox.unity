@@ -10476,6 +10476,21 @@ Transform:
   - {fileID: 532576065}
   m_Father: {fileID: 1708708093}
   m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
+--- !u!115 &807009821
+MonoScript:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_Name: 
+  serializedVersion: 7
+  m_DefaultReferences: {}
+  m_Icon: {fileID: 0}
+  m_Type: 0
+  m_ExecutionOrder: 0
+  m_ClassName: TrackSpawnMarker
+  m_Namespace: AIHWSim.Track
+  m_AssemblyName: Assembly-CSharp
 --- !u!4 &823012265 stripped
 Transform:
   m_CorrespondingSourceObject: {fileID: 1099723822698857843, guid: 9193589787059e6449e256d99322f6f7, type: 3}
@@ -32213,6 +32228,52 @@ Transform:
   m_CorrespondingSourceObject: {fileID: 6425746138248531331, guid: 2c44a396b52938643a2f54be22089c8c, type: 3}
   m_PrefabInstance: {fileID: 903774042}
   m_PrefabAsset: {fileID: 0}
+--- !u!1 &1310111858
+GameObject:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  serializedVersion: 6
+  m_Component:
+  - component: {fileID: 1310111859}
+  - component: {fileID: 1310111860}
+  m_Layer: 0
+  m_Name: Spawn
+  m_TagString: Untagged
+  m_Icon: {fileID: 0}
+  m_NavMeshLayer: 0
+  m_StaticEditorFlags: 0
+  m_IsActive: 1
+--- !u!4 &1310111859
+Transform:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 1310111858}
+  serializedVersion: 2
+  m_LocalRotation: {x: -0, y: -0, z: -0, w: 1}
+  m_LocalPosition: {x: 0, y: 0, z: 0}
+  m_LocalScale: {x: 1, y: 1, z: 1}
+  m_ConstrainProportionsScale: 0
+  m_Children: []
+  m_Father: {fileID: 1628723576}
+  m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
+--- !u!114 &1310111860
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 1310111858}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 807009821}
+  m_Name: 
+  m_EditorClassIdentifier: 
+  team: 0
+  gridOrder: 0
 --- !u!4 &1315162862 stripped
 Transform:
   m_CorrespondingSourceObject: {fileID: 8033382591139302892, guid: b1a34e32e6efd1a42bc3cdbdee6bcc40, type: 3}
@@ -32295,6 +32356,50 @@ PrefabInstance:
     m_AddedGameObjects: []
     m_AddedComponents: []
   m_SourcePrefab: {fileID: 100100000, guid: 9193589787059e6449e256d99322f6f7, type: 3}
+--- !u!1 &1334422591
+GameObject:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  serializedVersion: 6
+  m_Component:
+  - component: {fileID: 1334422592}
+  - component: {fileID: 1334422593}
+  m_Layer: 0
+  m_Name: Spawn
+  m_TagString: Untagged
+  m_Icon: {fileID: 0}
+  m_NavMeshLayer: 0
+  m_StaticEditorFlags: 0
+  m_IsActive: 1
+--- !u!4 &1334422592
+Transform:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 1334422591}
+  serializedVersion: 2
+  m_LocalRotation: {x: -0, y: -0, z: -0, w: 1}
+  m_LocalPosition: {x: 0, y: 0, z: 0}
+  m_LocalScale: {x: 1, y: 1, z: 1}
+  m_ConstrainProportionsScale: 0
+  m_Children: []
+  m_Father: {fileID: 1628723576}
+  m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
+--- !u!114 &1334422593
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 1334422591}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 2107212046}
+  m_Name: 
+  m_EditorClassIdentifier: 
 --- !u!1001 &1335630924
 PrefabInstance:
   m_ObjectHideFlags: 0
@@ -51710,6 +51815,64 @@ PrefabInstance:
     m_AddedGameObjects: []
     m_AddedComponents: []
   m_SourcePrefab: {fileID: 100100000, guid: c4a36a084b7885645b16ffbce11c9196, type: 3}
+--- !u!1 &1628723574
+GameObject:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  serializedVersion: 6
+  m_Component:
+  - component: {fileID: 1628723576}
+  - component: {fileID: 1628723575}
+  m_Layer: 0
+  m_Name: TrackDescriptor
+  m_TagString: Untagged
+  m_Icon: {fileID: 0}
+  m_NavMeshLayer: 0
+  m_StaticEditorFlags: 0
+  m_IsActive: 1
+--- !u!114 &1628723575
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 1628723574}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: a98d9ebf6a872464a95470d1d09b49ff, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: 
+  displayName: TTA_Sandbox
+  kind: 2
+  ambience: 
+  sceneOwnsSky: 1
+  skyboxOverride: {fileID: 0}
+  terrainFloors: {fileID: 11400000, guid: 8d3b793ea8a823b41bf2b51f455e4775, type: 2}
+  sceneFallbackFloor: 1
+  centerline: []
+  halfWidths: []
+  corridorClosed: 1
+  racingLine: {fileID: 0}
+  sectors: {fileID: 0}
+--- !u!4 &1628723576
+Transform:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 1628723574}
+  serializedVersion: 2
+  m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}
+  m_LocalPosition: {x: -33.64, y: 5.904, z: 6.42}
+  m_LocalScale: {x: 1, y: 1, z: 1}
+  m_ConstrainProportionsScale: 0
+  m_Children:
+  - {fileID: 1334422592}
+  - {fileID: 1310111859}
+  m_Father: {fileID: 0}
+  m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
 --- !u!1001 &1633703421
 PrefabInstance:
   m_ObjectHideFlags: 0
@@ -71874,6 +72037,21 @@ Transform:
   m_CorrespondingSourceObject: {fileID: 1099723822698857843, guid: 9193589787059e6449e256d99322f6f7, type: 3}
   m_PrefabInstance: {fileID: 196304238}
   m_PrefabAsset: {fileID: 0}
+--- !u!115 &2107212046
+MonoScript:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_Name: 
+  serializedVersion: 7
+  m_DefaultReferences: {}
+  m_Icon: {fileID: 0}
+  m_Type: 0
+  m_ExecutionOrder: 0
+  m_ClassName: TrackSpawnMarker
+  m_Namespace: AIHWSim.Track
+  m_AssemblyName: Assembly-CSharp
 --- !u!1001 &2111014484
 PrefabInstance:
   m_ObjectHideFlags: 0
@@ -73340,3 +73518,4 @@ SceneRoots:
   - {fileID: 159442966}
   - {fileID: 1662280489}
   - {fileID: 427130933}
+  - {fileID: 1628723576}

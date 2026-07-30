@@ -8,8 +8,378 @@ describe is documented in [README.md](../README.md).
 Active work lives in the session plan file, not here; a plan moves into this archive
 once its milestones are done.
 
-Covering the project bootstrap through the handling/collision/rendering pass (570618 chars, 40 plans).
-Last updated 2026-07-29.
+Covering the project bootstrap through the Track Studio pass (596507 chars, 41 plans).
+Last updated 2026-07-30.
+
+---
+
+# Track Studio: a Unity-Editor track builder, scene-native tracks, surface brush and racing-line baker (2026-07-30)
+
+## Context
+
+Tracks in this game are `TrackDesign` data: a tile grid of floor indices, `PlacedItem`s from
+`TrackCatalog`, and `SplineSpec` ribbons. `TrackFactory.Build` turns that into a live scene at
+`Awake`. The in-game Track Builder authors it, and `TrackDesign` JSON is *also* the LAN wire
+format (`NetSession.cs:571`) and the resume-snapshot format (`PauseMenu.cs:332`).
+
+That model cannot express what the user is now building. They installed
+`com.unity.splines` 2.8.4, `com.unity.terrain-tools` 5.3.2 and ProBuilder 6.0.9, hand-painted
+**13 Terrains** into `TTA_Sandbox`, and built a `SplineExtrude` road there — then hand-wrote a
+branch into `TrackBootstrap.Awake:63-110` to make that scene drivable at all. It hardcodes a
+player named "Jacob" and early-returns before bot paths, respawn, arena nav and the race
+director. **Terrain is completely outside the runtime pipeline**: no script references `Terrain`,
+and `SurfaceMap.At` resolves surfaces only via `SurfaceTag` or a tile lookup on the floor slab,
+so a `TerrainCollider` hit silently returns baseline friction no matter what it is painted with.
+
+This plan makes a hand-authored Unity scene a first-class track: authored with Unity Splines,
+marked up with gizmos, painted with real surface types, and analysed by a racing-line solver
+that is calibrated against the actual car.
+
+**Decisions taken (asked):** scene-native tracks (not compile-to-`TrackDesign`); the brush paints
+**both** Terrain and mesh colliders; the baked racing line is **bake + visualize only —
+`BotDriver` is not modified**, so race feel and every existing regression stay put; **Circuit +
+FreeRoam** kinds only (Arena refused with a clear message); and the `TTA_Sandbox` hack is
+**replaced** by the real path.
+
+**Hard constraints**
+- The tile-map path is untouched. `TrackFactory.Build`, `TrackDesign`, `TrackPresets`,
+  `TrackBuilderUI` and the in-game builder behave exactly as today.
+- `BotDriver` is not modified. Bot lap times and race balance must not move.
+- Opus mission stays bit-identical: legA −13.615608 mm, turn +0.187378°, legB +15.803814 mm,
+  total +58.145523 mm, fault 0.
+- Scene tracks are **not** editable in the in-game Track Builder. Accepted.
+
+---
+
+## Naming and layout
+
+New menu root **`Tools/Track Studio/`** (not `Tools/AIHWSim/`, which is a flat list of one-shot
+actions; not "Track Builder", which is the shipped in-game tile builder — two things with that
+name is a support problem). Log tag **`[TRK]`**, joining `[PMV]` `[TPV]` `[COS]` `[PACK]`.
+
+```
+Assets/Scripts/Track/          runtime: descriptor, markers, RacingLineAsset,
+                               TerrainFloorTable, SectorTimer, RaceLineFollower,
+                               RacingLineAutorun, PathCurvature
+Assets/Scripts/TrackEd/        runtime: UnitySplineSampler (next to SplineMath)
+Assets/Editor/TrackStudio/     editor: window, brushes, tools, solver, runner, validator
+Assets/TrackData/              baked .asset files (RacingLines/, Sectors/)
+```
+
+Namespace `AIHWSim.TrackTools` for editor code; existing `AIHWSim.Track` / `AIHWSim.TrackEd`
+for runtime. No asmdefs (the project has none) — `Unity.Splines` is `autoReferenced`, so it is
+already visible everywhere.
+
+**Anything a player build must read cannot live under an `Editor/` folder.** `ScatterPreset` is
+deliberately editor-only; `RacingLineAsset`, `TerrainFloorTable`, `TrackSectorSet` and
+`TelemetryZoneSet` are the opposite and go in `Assets/Scripts/Track/`.
+
+---
+
+## M0 — Housekeeping and a live bug
+
+- [ ] **Fix `EditorBuildSettings`.** It currently holds *six* entries: `TTA_Sandbox` is
+      registered twice, the second as `TinyTorqueAssets/Scenes/TTA_Sandbox.unity` with an
+      **all-zero GUID** (missing the `Assets/` prefix). A zero-GUID entry fails a player build,
+      and `PackValidator.CheckIsolation` fails on the pack scene being registered at all — so
+      `[PACK]` is red right now for reasons unrelated to this work.
+      Root cause: `Assets/Editor/SceneBuilderMenu.cs:116-144 CreateMapDebugScene` calls
+      `AddSceneToBuild` with an un-prefixed path, and `AddSceneToBuild` compares paths with
+      `==` so it appends instead of matching. Fix both: normalise the path in
+      `AddSceneToBuild`, and drop the `AddSceneToBuild` call from `CreateMapDebugScene`.
+- [ ] Once `TTA_Sandbox` becomes a real scene track (M2) it must be **registered** in Build
+      Settings — so `PackValidator.GameScenes` and `CheckIsolation` need updating in the same
+      breath, and its doc comment ("the pack must ship nothing") rewritten to say that a scene
+      promoted to a game track is no longer pack content.
+
+---
+
+## M1 — The runtime scene-track spine
+
+- [ ] **`Assets/Scripts/Track/SceneTrackDescriptor.cs`** — one component per track scene:
+      display name, `TrackKind` (Circuit | FreeRoam), ambience key, `TerrainFloorTable`
+      reference, optional `RacingLineAsset`, a `sceneFallbackFloor` (default asphalt), and the
+      baked bot corridor (`Vector3[] centerline`, `float[] halfWidths`, `bool closed`).
+      Checkpoints / spawns / finish are **child marker components, not arrays** — they need
+      Scene-view transforms, gizmos and per-object Undo, all of which come free from being
+      GameObjects. The descriptor collects them at `Awake` via `GetComponentsInChildren`.
+- [ ] **`Assets/Scripts/Track/SceneTrackBuilder.cs`** — turns the descriptor into a
+      `BuiltTrack` (contract at `TrackFactory.cs:8-38`), field by field. It builds gate triggers
+      with the same geometry `TrackFactory.MakeGateTrigger` uses (finish 1.6 m, checkpoint
+      1.35 m, 1 m tall, centred 0.5 m up), attaches `LapTimer` / `Checkpoint`, and fills
+      `spawns`.
+      **`floorCollider` is the one hole**: a terrain scene has no floor slab. Its only
+      unguarded consumer is `ArenaNav` (`ArenaNav.Drop` has no raycast fallback) — which is
+      exactly why Arena is out of scope for v1. `TrackFactory.DropToSurface`'s two other callers
+      (`ArcadeDirector.cs:340`, `TrackRespawn.cs:113`) already fall back to
+      `Physics.RaycastAll`, so they are fine with it null. Leave it null, and have the
+      validator refuse `TrackKind.Arena` with a message naming this.
+- [ ] **`GameFlow.cs`** — add `public static string ActiveSceneTrack { get; private set; }`
+      alongside `ActiveTrack`, with a setter pair that guarantees **exactly one of the two is
+      ever non-null**. `LoadTrack()` gains a one-line dispatch, so its ~9 call sites
+      (`MenuUI` ×4, `NetSession` ×3, `Championship`, `PauseMenu`) do not change.
+- [ ] **Scene loading: the track scene loads `Single`, `TrackScene` loads additively on top.**
+      `RenderSettings`, `LightmapSettings`, skybox, fog and baked reflection probes come from
+      the *active* scene, and a hand-authored scene's entire look lives there — loading it
+      Single makes it active with no `SetActiveScene` bookkeeping. `TrackScene` carries the
+      composition (`TrackBootstrap` with inspector-authored `physicsRateHz = 400`,
+      `controlRateHz = 100`), and there must be exactly one copy of that rather than a
+      re-authored one per track scene. Delete `TrackScene`'s own `Directional Light` and
+      `Main Camera` on the additive load.
+      *Verify the two-loads-in-one-frame ordering before committing to it* — a `Start()`
+      assertion in the descriptor is cheap insurance either way.
+- [ ] **`TrackBootstrap.Awake:131`** becomes a three-way branch. **Delete the hand-written
+      `TTA_Sandbox` block at `:63-110`** — `SessionConfig.ResolvePlayers()` already synthesizes
+      a single merged-input slot from `GameFlow.ActiveDesign` when the roster is empty, so the
+      hardcoded `PlayerSlot { name = "Jacob" }` was never needed. The one load-bearing piece
+      *was* the skybox fix: **`MapAmbience.ApplyCamera` (`MapAmbience.cs:326-333`) forces
+      `CameraClearFlags.SolidColor` unconditionally**, which is what eats an authored skybox.
+      Give it a "scene owns the sky" opt-out and use that from the scene-track path
+      (three call sites: `TrackBootstrap.cs:566`, `:1124`, `:1399`).
+- [ ] **`BotPath.Build`** — new tier 0: if a `SceneTrackDescriptor` supplies a corridor, use it
+      with its real per-node half-widths. The existing tier-3 checkpoint fallback still works for
+      a scene track with no corridor, but its constant `GateHalfWidth = 1.0f` makes bots drive a
+      coarse line, so prefer the corridor. Tiers 1-3 unchanged; the point list must stay
+      byte-identical between the two overloads (`BotPath.cs:30-36`).
+- [ ] **Menu.** `MenuUI.RefreshLists` (`:114-139`) adds scene tracks to `_tracks` with a
+      distinguishing prefix (presets already use `"★ "`); `ResolveTrack` (`:169-174`) gains a
+      scene-name branch ahead of `TrackPresets.Resolve` / `TrackLibrary.Load`. The scene list
+      comes from a small registry asset so the menu does not scan Build Settings at runtime.
+
+---
+
+## M2 — Surfaces: terrain and meshes
+
+- [ ] **`Assets/Scripts/Track/TerrainFloorTable.cs`** — a runtime `ScriptableObject` mapping
+      `TerrainLayer` → `TrackCatalog.Floors` index, plus a default. Keyed on the **asset
+      reference**, not the layer name — a name-keyed code table breaks silently on the one
+      thing an artist actually changes. Referenced from the descriptor so both the editor brush
+      and the runtime read one source of truth.
+- [ ] **`SurfaceMap` — bake once at bind, then pure array arithmetic.** `At` is called per
+      grounded wheel per physics step: at 400 Hz with an 8-car grid that is **12 800 calls/sec**,
+      so a per-call `terrainData.GetAlphamaps(x, z, 1, 1)` is unacceptable twice over (a managed
+      `float[1,1,layers]` allocation each time, plus an engine interop call per wheel).
+      New `BindScene(SceneTrackDescriptor)` walks every `Terrain`, calls `GetAlphamaps` **once**
+      per terrain, resolves the dominant layer per texel, maps it through the table, and stores a
+      flat `byte[] floorIds`. Runtime lookup is two multiplies and an array index.
+      - Resolution order becomes: `SurfaceTag` → terrain texel → tile slab → scene fallback →
+        baseline. The `_design == null` early return at `:57-59` must be **dropped** (it defeats
+        scene tracks entirely); guard the positional branch individually instead.
+      - "Which terrain" is answered by a `Dictionary<Collider,int>` — `hit.collider` *is* that
+        terrain's `TerrainCollider`, so no spatial index is needed and overlapping terrains cost
+        nothing. Cache negatives too, exactly as `_tagCache` does.
+      - `terrainLayers` is **per-terrain**, so layer index 0 may be Dirt on one and Grass on the
+        next. Map the layer *asset*, never a raw index.
+      - `GetAlphamaps` indexes `[z, x, layer]` — y-then-x. Getting this wrong yields a track
+        that is correct along one axis and transposed along the other, which reads as "grip is
+        randomly wrong in patches".
+      - Memory: 512² × 13 terrains = 3.4 MB. Time the bake with a `Stopwatch` and log it
+        (`TrackFactory.cs:268` does this for mesh cooking); if it ever exceeds ~250 ms the escape
+        hatch is a side asset baked at import. Do not build that yet.
+      - **No second-level position cache** — four wheels would thrash a single-entry memo, and
+        the hash+compare costs more than the two multiplies it saves. Say so in the comment so
+        nobody adds one later thinking it is free.
+      - Free consequence worth documenting on the descriptor tooltip: `frictionMult` doubles as
+        the arcade track-limit classifier (`ArcadeConfig.OffTrackFrictionThreshold = 0.90f`,
+        `ArcadeDirector.cs:1639`). Painting grass makes it count as off-track automatically;
+        painting a whole terrain dirt (1.00) means **track limits never trigger anywhere**.
+- [ ] **Promote `TTA_Sandbox`** to a real scene track: descriptor, terrain floor table, spawn.
+      This is the M1+M2 acceptance test — it should gain bots, respawn and surface physics that
+      the hand-written branch skipped.
+
+---
+
+## M3 — Spline authoring
+
+- [ ] **`Assets/Scripts/TrackEd/UnitySplineSampler.cs`** — samples a `SplineContainer` into the
+      project's existing `SplineMath.Sample` shape (`pos`, `tan`, `roll`, `width`, `dist`,
+      `surfaceType`, `pointIndex`), so everything downstream is unchanged.
+- [ ] **Road mesh: reuse `RibbonMeshBuilder`, fed by the sampler.** Not `SplineExtrude` —
+      its `ExtrusionShapes.Road` is a fixed 4-vertex normalized cross-section with no per-segment
+      surface, no kerb submesh and no edge walls, and critically it emits no `SurfaceTag`, which
+      is how the ribbon gets its friction today. `RibbonMeshBuilder` already splits a ribbon into
+      contiguous same-surface runs, each with its own `MeshCollider` + `SurfaceTag`, plus kerb
+      stripes as submesh 1 and optional walls. Refactor it additively to accept samples directly.
+      *Regression fence:* the existing `SplineSpec` path must produce a **byte-identical** mesh
+      before and after — hash a preset's ribbon vertex arrays either side.
+- [ ] Width / banking / surface per segment ride on Unity Splines' idiomatic `SplineData<T>`
+      embedded data (it has no such fields natively), authored by a custom `EditorTool` with
+      handles. `TrackSplineAuthoring` (runtime component) holds the settings and the baked
+      corridor it hands to the descriptor.
+- [ ] `Tools/Track Studio/1. Bake ribbon`.
+
+---
+
+## M4 — Checkpoints, spawns, finish
+
+- [ ] Marker components in `Assets/Scripts/Track/` with `OnDrawGizmos` — gate width, heading
+      arrow, order label, team colour for spawns. A custom `Editor` per type plus an `EditorTool`
+      for placement.
+- [ ] **Snap to the spline by default**, per-marker toggle for free placement: place at an
+      arc-length `t`, auto-orient to the tangent. `yawDeg` is the direction cars travel *through*
+      a gate, so a hand-rotated gate is a common and silent authoring error.
+- [ ] Ordering UI in the Track Studio window: a reorderable list that renumbers densely.
+      **Dense `0..n-1` is required, not cosmetic** — `LapTimer.NotifyCheckpoint` (`:76-83`) only
+      advances on `index == NextCheckpoint`, and `:125` refuses to count a lap until every
+      checkpoint is hit, so one gap makes the track permanently un-lappable with no error.
+
+---
+
+## M5 — Physics Material Brush
+
+- [ ] **`Assets/Editor/TrackStudio/SurfaceBrushWindow.cs`**, structurally copied from
+      `ScatterBrushWindow` (`SceneView.duringSceneGui` subscribe/unsubscribe;
+      `GUIUtility.GetControlID(FocusType.Passive)` unconditionally first;
+      `HandleUtility.AddDefaultControl` only during `EventType.Layout`;
+      `HandleUtility.GUIPointToWorldRay`; `Handles.DrawWireDisc` + `view.Repaint()` each frame;
+      paint gated on `(MouseDown||MouseDrag) && button == 0 && !ev.alt`; `ev.Use()` only on an
+      actual paint). One aim raycast serves both targets — unlike the scatter brush it is
+      recolouring an existing collider, not finding ground for a new object.
+- [ ] **Mesh target:** add or edit `SurfaceTag.floorType` on the hit collider.
+      `Undo.RecordObject` before the mutation — a fourth Undo API the scatter brush never needed
+      because it only ever creates and destroys.
+- [ ] **Terrain target:** paint the mapped `TerrainLayer` into the alphamap.
+      `TerrainData.SetAlphamaps` + `Undo.RegisterCompleteObjectUndo` on the `TerrainData` is
+      **heavy**; coalesce a whole stroke into one undo entry and one write on mouse-up rather
+      than per stamp, and write only the dirty sub-rect. *Measure `SetAlphamaps` GPU-flush
+      behaviour in 6000.1 before choosing per-stamp vs. coalesced.*
+- [ ] The floor palette is `TrackCatalog.Floors` — 18 entries, index is the persisted id.
+      Show `frictionMult` in the picker so the off-track threshold (0.90) is visible while
+      painting.
+
+---
+
+## M6 — Racing line solver and visualization
+
+- [ ] **`Assets/Scripts/Track/PathCurvature.cs`** — extract the signed-curvature recipe from
+      `BotDriver.cs:189-216` (`SignedAngle · Deg2Rad / arcLen`, ±2-node box smooth) into a shared
+      helper. A copy, not a refactor of `BotDriver` — that file stays untouched — with a doc
+      comment naming the source and a validator check that the two agree numerically.
+- [ ] **Corridor:** centerline + per-node usable half-width, minus `CarHalfWidth = 0.20` and
+      `EdgeMargin = 0.30` (`BotDriver.cs:73-82`).
+- [ ] **Line: minimum curvature over lateral offsets, projected SOR.** Parameterise node *i* by
+      a scalar `n_i ∈ [−wL_i, +wR_i]` along the node normal; minimise
+      `J(n) = Σ ‖p_{i-1} − 2p_i + p_{i+1}‖²`, which is linear least squares in `n` with a
+      pentadiagonal normal-equation matrix. Solve by projected SOR rather than a direct banded
+      solve: a closed loop makes the system **cyclic** (SOR just indexes modulo N — no seam case),
+      the box constraint makes it a QP (clamping after each coordinate update *is* projected
+      Gauss-Seidel), and `H_ii = 12` exactly for unit normals so `ω ≈ 1.3` needs no per-track
+      tuning. N ≈ 750 at 0.4 m spacing; 200-400 sweeps is a few milliseconds.
+      *Not minimum-time:* that needs the velocity profile inside the loop and becomes a
+      nonconvex NLP we would have to write and debug, for a few percent on a fixed-width corridor.
+- [ ] **Expose a shortest-path blend** (`ε`, default 0.15). Pure min-curvature runs wide on every
+      corner exit, including hairpins into short straights — wrong for 1/10-scale cars on tight
+      circuits at ~9.5 m/s. One extra gradient term. `ε = 1` collapsing the line to the inside of
+      everything is also the cheapest test that the term is wired correctly.
+- [ ] **Velocity profile:** per-node `mu = Floors[surface].frictionMult · muScale` sampled at the
+      *offset* position (the whole point of a racing line is that it moves onto the kerb);
+      `v_curve = sqrt(g·(mu + tanφ) / (|κ|·(1 − mu·tanφ)))` including bank; then a forward pass
+      (drive-limited) and backward pass (brake-limited) on the friction ellipse, iterated 2-4
+      times to a fixed point on a closed loop.
+      Note `maxBrakeTorque = 0.8 N·m` over 4 wheels at r ≈ 0.033 m on ~1.8 kg gives ~54 m/s² —
+      an order of magnitude above `µ·g`, so **brakes are friction-limited everywhere on this
+      car**; `brakeUse` is the fraction of the friction circle a real car uses, and gets fitted.
+      *Unverified:* the sign of `SplineSpec.rollDeg` ("+ve = right edge down") relative to turn
+      direction. Gate banking behind a flag and confirm empirically — a sign error makes banked
+      corners read *slower*, which is a very confusing bug.
+- [ ] **Apexes** = local maxima of `|κ|` above `KappaRef = 0.18`, ≥1.5 m apart, taking the node of
+      minimum `v`. **Braking zones** = contiguous runs where the backward pass binds.
+- [ ] **`RacingLineAsset`** (runtime `ScriptableObject`, `Assets/TrackData/RacingLines/`):
+      points, curvature, speed, apex indices, brake zones, predicted lap, calibration block, and
+      a `bakeHash` + `sceneGuid` for staleness.
+- [ ] Scene-view visualization: speed-coloured ribbon, apex markers, brake-zone bars.
+
+---
+
+## M7 — Headless calibration run
+
+- [ ] **The sim's job is calibration, not search.** A black-box optimizer (drive many candidate
+      lines, keep the fastest) needs 50-200 laps per track and produces an output nobody can
+      explain. Calibration needs **3 laps** and yields four numbers with physical meaning that
+      transfer to every track built with the same car.
+- [ ] **`Assets/Editor/TrackStudio/RacingLineCalibrationRunner.cs`** — follows
+      `OpusMissionRunner` exactly: custom flags off `Environment.GetCommandLineArgs()`, a
+      **request file** rather than static fields (entering play mode domain-reloads), no `-quit`,
+      and `EditorApplication.delayCall += Exit` from the `EnteredEditMode` callback.
+- [ ] **`Assets/Scripts/Track/RacingLineAutorun.cs`** — `[RuntimeInitializeOnLoadMethod]`,
+      consumes-**then-deletes** the request file (a killed run must not arm the next launch),
+      attaches a watcher that rides `FixedUpdate` and never calls `Physics.Simulate`.
+- [ ] **Car spawn: the `MenuAttract.cs:95-119` recipe verbatim** — `VehicleFactory.Build` →
+      `SetSpawn` → `CarInput` → a `SimulationRunner` with `loadControllerDll = false`,
+      `logCsv = false`, `physicsRateHz = 400`. `RaceLineFollower : IDriverInputSource` tracks the
+      profile with pure pursuit. **It never respawns** — a lap that teleports is garbage data;
+      stuck >2 s under 0.3 m/s aborts and reports.
+- [ ] **Three laps:** 1 warm-up (discarded), 2 measurement, 3 repeat. Because surface roughness is
+      a deterministic positional noise field (`CarVehicle.cs:1419-1431`), **lap 3 must reproduce
+      lap 2 to a few ms** — a free repeatability assertion. `|t3 − t2| > 20 ms` means something
+      non-deterministic is in the loop, so **fail rather than fit noise**.
+- [ ] Fit `muScale` from committed-cornering samples only (`|κ| > 0.5·KappaRef`, `slipNorm` near 1
+      — `TyreModel` normalises so `slipNorm = 1` *is* the force-curve peak), plus `a0`, `vMax`,
+      `brakeUse`. At most three passes. Write back with `Undo.RecordObject` + `SetDirty`.
+
+---
+
+## M8 — Sectors, splits, telemetry zones
+
+- [ ] Sectors as arc-length ranges on `TrackSpine` (`Project`, `Sample`, `Gap`, `TotalLength`
+      already exist). `TrackSectorSet` ScriptableObject; targets derived from the velocity profile.
+- [ ] **Do not touch `LapTracker`.** It is `[Serializable]`, round-trips through `JsonUtility` in
+      snapshots, and rides the LAN protocol — adding `float[] SectorTimes` is a snapshot and
+      possible wire break. Instead `Assets/Scripts/Track/SectorTimer.cs` records locally:
+      subscribe to the existing `LapTimer.LapCompleted` event, detect boundary crossings at 10 Hz
+      via `TrackSpine.Project` + a sign change in `Gap`. Zero new colliders, zero wire change —
+      splits are a presentation concern, and a remote car's splits recompute from the position
+      that already replicates. Rejoin guard: accept a crossing only if `s` advanced less than half
+      a lap and the boundary is the next expected one.
+- [ ] Register exactly **three** telemetry channels — `race/sector`, `race/sector_time`,
+      `race/sector_delta` — not one per sector: sector count is track-dependent and
+      `CsvLogger.Begin` freezes column order from the registered set, so per-sector channels would
+      change the CSV layout per track. Named zones go in a `TelemetryZoneSet` publishing
+      `zone/<suffix>`. **`CsvLogger` joins column names with `,` and does no quoting**, so assert
+      names are unique, non-empty and comma/newline-free.
+
+---
+
+## M9 — Validator, docs, verification
+
+- [ ] **`Assets/Editor/TrackStudio/TrackStudioValidator.cs`**, `[TRK]`, edit-mode so `-quit` is
+      correct (say why in the doc comment, the way `OpusMissionRunner` explains the opposite).
+      Checks: checkpoint density `{0..n-1}`; gate width ≥ corridor width; spawn count/spacing/
+      heading; every `SurfaceTag` and `TerrainFloorTable` id within `[0, Floors.Length)`; every
+      `TerrainLayer` in the scene has a table row; racing-line freshness (`sceneGuid` + `bakeHash`
+      + every node inside the corridor) — **the stale-bake-after-a-spline-edit case is the single
+      most likely real failure**; calibration honesty (`residual ≤ 2%`, `lapRepeatDelta ≤ 20 ms`);
+      sector monotonicity and target sum; telemetry name hygiene; solver determinism (re-run and
+      reproduce to 1e-4); and `CarHalfWidth`/`EdgeMargin` parity with `BotDriver`.
+      Refuse `TrackKind.Arena` with a message naming the `floorCollider` gap.
+- [ ] `Docs/` + repo `README.md` section; archive this plan as entry 41 in `Docs/plan-archive.md`
+      when complete (splice from the END marker; the char-count line is self-referential, so use
+      a fixed-point loop).
+- [ ] **Full gate:** compile 0 `error CS` → `[PMV] ALL PASS` → `[TPV] ALL PASS` → `[COS] ALL PASS`
+      → `[PACK] ALL PASS` → `[TRK] ALL PASS` → **Opus mission bit-identical, fault 0** →
+      `[BuildMenu] Release build succeeded`.
+      Then manual: drive `TTA_Sandbox` as a real scene track; paint ice on a corner and confirm
+      the grip drop; bake a line and check it runs out-in-out; run the calibration headlessly;
+      confirm bot lap times on `Boost Speedway` are unchanged (the `BotDriver`-untouched proof).
+
+---
+
+## Deviations, stated up front
+
+- **Scene tracks cannot be opened in the in-game Track Builder**, and cannot be sent over LAN as
+  data. LAN must ship a **scene name** instead of `trackJson` — otherwise `ActiveTrack` is null,
+  `trackJson` is `""`, and the client silently falls through to the **classic oval** while the
+  host drives terrain. That is a **protocol bump, v14 → v15**, and a client without the scene must
+  be refused with a clear message rather than desynced.
+- **Snapshots** (`PauseMenu.cs:332`) must store the scene name too, or Resume drops to the oval.
+- **Arena scene tracks are refused in v1.** `ArenaNav.Drop` reads `built.floorCollider.bounds`
+  with no raycast fallback, and a terrain scene has no floor slab; giving arenas a playfield
+  volume is a separate pass.
+- **`BotDriver` is not modified**, so bots still use the runtime out-in-out heuristic even on a
+  track with a baked line. Wiring it in is a deliberate follow-up decision once the line is
+  visible.
+- **The curvature recipe is duplicated**, not shared, to keep `BotDriver` untouched. The validator
+  asserts the two agree.
 
 ---
 

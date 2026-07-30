@@ -25,7 +25,7 @@ namespace AIHWSim.Core
 
         public static List<Vector3> Build(TrackDesign design, AIHWSim.Track.LapTimer lapTimer,
             Vector3[] ovalPath, Vector3 spawnPos, Vector3 spawnForward, out bool closed)
-            => Build(design, lapTimer, ovalPath, spawnPos, spawnForward, out closed, out _);
+            => Build(null, design, lapTimer, ovalPath, spawnPos, spawnForward, out closed, out _);
 
         /// <summary>
         /// As above, plus the local half road width at every path point, so a
@@ -37,13 +37,45 @@ namespace AIHWSim.Core
         public static List<Vector3> Build(TrackDesign design, AIHWSim.Track.LapTimer lapTimer,
             Vector3[] ovalPath, Vector3 spawnPos, Vector3 spawnForward, out bool closed,
             out List<float> halfWidths)
+            => Build(null, design, lapTimer, ovalPath, spawnPos, spawnForward, out closed,
+                     out halfWidths);
+
+        /// <summary>
+        /// Scene-aware, widths discarded. The LAN host and client paths want the
+        /// point list only, and must still honour a scene track's corridor.
+        /// </summary>
+        public static List<Vector3> Build(AIHWSim.Track.SceneTrackDescriptor scene,
+            TrackDesign design, AIHWSim.Track.LapTimer lapTimer,
+            Vector3[] ovalPath, Vector3 spawnPos, Vector3 spawnForward, out bool closed)
+            => Build(scene, design, lapTimer, ovalPath, spawnPos, spawnForward, out closed,
+                     out _);
+
+        /// <summary>
+        /// As above, with a hand-authored scene track's baked corridor taking
+        /// priority over everything else when it has one.
+        /// </summary>
+        public static List<Vector3> Build(AIHWSim.Track.SceneTrackDescriptor scene,
+            TrackDesign design, AIHWSim.Track.LapTimer lapTimer,
+            Vector3[] ovalPath, Vector3 spawnPos, Vector3 spawnForward, out bool closed,
+            out List<float> halfWidths)
         {
             closed = true;
             List<Vector3> pts = null;
             halfWidths = null;
 
+            // 0. Scene track with a baked corridor — the authored road, at its real
+            //    width. Preferred over the checkpoint fallback below because gates
+            //    are metres apart and carry no width, so bots would drive a coarse
+            //    polygon down the middle of a road they cannot see the edges of.
+            if (scene != null && scene.HasCorridor)
+            {
+                pts = new List<Vector3>(scene.centerline);
+                halfWidths = new List<float>(scene.halfWidths);
+                closed = scene.corridorClosed;
+            }
+
             // 1. Spline map — follow the longest spline (the racing line).
-            if (design != null && design.splines != null && design.splines.Count > 0)
+            if (pts == null && design != null && design.splines != null && design.splines.Count > 0)
             {
                 SplineSpec best = null;
                 foreach (var sp in design.splines)

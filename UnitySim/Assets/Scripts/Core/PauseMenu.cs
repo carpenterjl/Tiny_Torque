@@ -329,8 +329,14 @@ namespace AIHWSim.Core
                 mode = (int)SessionConfig.Mode,
                 targetLaps = SessionConfig.TargetLaps,
                 simTime = runner != null ? runner.SimTime : 0f,
-                trackName = GameFlow.ActiveTrack != null ? GameFlow.ActiveTrack.name : "",
+                trackName = GameFlow.HasSceneTrack
+                    ? GameFlow.ActiveSceneTrack
+                    : (GameFlow.ActiveTrack != null ? GameFlow.ActiveTrack.name : ""),
                 trackJson = GameFlow.ActiveTrack != null ? JsonUtility.ToJson(GameFlow.ActiveTrack) : "",
+                // A scene track ships inside the build, so the snapshot names it
+                // rather than embedding it. Without this a resumed scene track
+                // would find an empty trackJson and drop the player onto the oval.
+                trackScene = GameFlow.ActiveSceneTrack ?? "",
             };
 
             foreach (var rig in rigs)

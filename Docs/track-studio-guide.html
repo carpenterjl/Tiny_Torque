@@ -1,0 +1,465 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Track Studio — editing TTA_Sandbox and making new maps</title>
+<style>
+  :root{
+    --bg:#f7f7f5; --fg:#1c1c1a; --muted:#6b6b66; --rule:#dcdcd6;
+    --card:#fff; --accent:#b4531f; --code-bg:#f0efeb; --warn-bg:#fdf3e7; --warn-br:#e0a35c;
+    --ui-bg:#3c3c3c; --ui-fg:#d6d6d6; --ui-hi:#2c5d87; --ui-rule:#4a4a4a; --ui-panel:#4a4a4a;
+  }
+  @media (prefers-color-scheme: dark){
+    :root{
+      --bg:#17171a; --fg:#e6e6e2; --muted:#9a9a94; --rule:#33333a;
+      --card:#1f1f24; --accent:#e08a4c; --code-bg:#26262c; --warn-bg:#2b2317; --warn-br:#8a6428;
+    }
+  }
+  :root[data-theme="light"]{
+    --bg:#f7f7f5; --fg:#1c1c1a; --muted:#6b6b66; --rule:#dcdcd6;
+    --card:#fff; --accent:#b4531f; --code-bg:#f0efeb; --warn-bg:#fdf3e7; --warn-br:#e0a35c;
+  }
+  :root[data-theme="dark"]{
+    --bg:#17171a; --fg:#e6e6e2; --muted:#9a9a94; --rule:#33333a;
+    --card:#1f1f24; --accent:#e08a4c; --code-bg:#26262c; --warn-bg:#2b2317; --warn-br:#8a6428;
+  }
+
+  *{box-sizing:border-box}
+  body{
+    margin:0; padding:2.5rem 1.25rem 5rem; background:var(--bg); color:var(--fg);
+    font:16px/1.6 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;
+  }
+  main{max-width:52rem; margin:0 auto}
+  h1{font-size:1.9rem; line-height:1.2; margin:0 0 .4rem}
+  h2{font-size:1.3rem; margin:2.75rem 0 .75rem; padding-top:1.25rem; border-top:1px solid var(--rule)}
+  h3{font-size:1.02rem; margin:1.75rem 0 .5rem}
+  p{margin:.7rem 0}
+  .sub{color:var(--muted); margin:0 0 2rem}
+  code{background:var(--code-bg); padding:.1em .35em; border-radius:3px;
+       font:.87em/1.5 ui-monospace,"Cascadia Code",Consolas,monospace}
+  pre{background:var(--code-bg); padding:.85rem 1rem; border-radius:6px;
+      overflow-x:auto; font:.82rem/1.5 ui-monospace,Consolas,monospace}
+  pre code{background:none; padding:0; font-size:1em}
+  ol,ul{padding-left:1.3rem} li{margin:.4rem 0}
+  a{color:var(--accent)}
+  .note{background:var(--warn-bg); border-left:3px solid var(--warn-br);
+        padding:.75rem 1rem; border-radius:0 5px 5px 0; margin:1.1rem 0; font-size:.94rem}
+  .note b{color:var(--fg)}
+  .lede{font-size:1.05rem}
+  .tbl-wrap{overflow-x:auto; margin:1rem 0}
+  table{border-collapse:collapse; width:100%; font-size:.9rem; min-width:30rem}
+  th,td{text-align:left; padding:.5rem .7rem; border-bottom:1px solid var(--rule); vertical-align:top}
+  th{font-weight:600; color:var(--muted); font-size:.8rem; text-transform:uppercase; letter-spacing:.04em}
+
+  /* ---- Unity UI mockups (not screenshots — see the note in the doc) ---- */
+  .shot{margin:1.1rem 0 1.4rem}
+  .shot figcaption{color:var(--muted); font-size:.82rem; margin-top:.45rem}
+  .unity{
+    background:var(--ui-bg); color:var(--ui-fg); border-radius:5px; overflow:hidden;
+    border:1px solid #262626; box-shadow:0 2px 10px rgba(0,0,0,.25);
+    font:13px/1.45 "Segoe UI",Roboto,sans-serif; max-width:100%;
+  }
+  .menubar{display:flex; gap:.15rem; padding:.3rem .4rem; background:#333; border-bottom:1px solid #262626}
+  .menubar span{padding:.15rem .5rem; border-radius:3px; color:#c9c9c9}
+  .menubar span.on{background:var(--ui-hi); color:#fff}
+  .dropdown{display:flex; padding:0 0 .4rem .4rem; gap:.4rem; flex-wrap:wrap}
+  .col{background:var(--ui-panel); border:1px solid #2b2b2b; border-radius:3px; min-width:13rem; padding:.25rem 0}
+  .col .it{padding:.22rem .75rem; white-space:nowrap; display:flex; justify-content:space-between; gap:1.5rem}
+  .col .it.on{background:var(--ui-hi); color:#fff}
+  .col .it .arrow{color:#9a9a9a}
+  .col .sep{height:1px; background:#5a5a5a; margin:.3rem .4rem}
+  .col .hd{padding:.2rem .75rem; color:#9a9a9a; font-size:11px; text-transform:uppercase; letter-spacing:.05em}
+
+  .win{background:var(--ui-panel); border-radius:5px; border:1px solid #2b2b2b; overflow:hidden;
+       font:13px/1.5 "Segoe UI",Roboto,sans-serif; color:#d6d6d6; max-width:26rem;
+       box-shadow:0 2px 10px rgba(0,0,0,.25)}
+  .win .tab{background:#3c3c3c; padding:.35rem .8rem; border-bottom:1px solid #2b2b2b; font-size:12px}
+  .win .body{padding:.6rem .7rem}
+  .win .hd2{font-weight:700; margin:.65rem 0 .35rem; font-size:12px}
+  .win .hd2:first-child{margin-top:0}
+  .win .row{display:flex; justify-content:space-between; gap:1rem; padding:.12rem 0; font-size:12px}
+  .win .row .k{color:#b4b4b4}
+  .win .btn{display:block; width:100%; background:#585858; border:1px solid #303030; border-radius:3px;
+            text-align:center; padding:.3rem; margin:.25rem 0; font-size:12px; color:#e2e2e2}
+  .win .btn.tall{padding:.5rem}
+  .win .btns{display:flex; gap:.3rem} .win .btns .btn{margin:.25rem 0}
+  .win .miss{color:#e2705a} .win .ok{color:#8fca6a}
+</style>
+</head>
+<body>
+<main>
+
+<h1>Track Studio</h1>
+<p class="sub">Editing <code>TTA_Sandbox</code> in the Unity Editor, getting it back into the game, and making a new map from scratch.</p>
+
+<div class="note">
+<b>About the pictures.</b> The panels below are hand-built mockups of the Unity UI, not captured screenshots.
+Every label in them is taken from the source — the <code>[MenuItem]</code> strings in
+<code>Assets/Editor/TrackStudio/</code> and the button text in <code>TrackStudioWindow.cs</code> — so they
+match what is actually on screen, but the pixels are drawn here rather than photographed.
+</div>
+
+<p class="lede"><code>TTA_Sandbox</code> is already a registered scene track, so there is no import step in the
+sense of a file being copied anywhere. The scene <em>is</em> the track: it lives in the project, it ships inside the
+build, and the game loads it by name. Editing it and "putting it back" is just <b>open, change, re-bake, save</b>.</p>
+
+<h2>Part 1 — Editing TTA_Sandbox</h2>
+
+<h3>1. Open the scene</h3>
+<p>In the Project window: <code>Assets/TinyTorqueAssets/Scenes/TTA_Sandbox.unity</code> — double-click it.</p>
+
+<div class="note">
+Do <b>not</b> use <code>Tools/AIHWSim/Create Map Debug Scene</code> to get to this scene. That menu item
+<em>creates</em> the scene and will replace it with an empty one — terrains, painted surfaces and baked
+lighting included. It now asks for confirmation first; say Cancel if you ever see that dialog by accident.
+</div>
+
+<h3>2. Open the Track Studio window</h3>
+
+<figure class="shot">
+  <div class="unity">
+    <div class="menubar"><span>File</span><span>Edit</span><span>Assets</span><span>GameObject</span><span>Component</span><span class="on">Tools</span><span>Window</span><span>Help</span></div>
+    <div class="dropdown">
+      <div class="col">
+        <div class="it">AIHWSim <span class="arrow">▸</span></div>
+        <div class="it">TinyTorque Assets <span class="arrow">▸</span></div>
+        <div class="it on">Track Studio <span class="arrow">▸</span></div>
+      </div>
+      <div class="col">
+        <div class="it on">Track Studio</div>
+        <div class="it">Surface Brush</div>
+        <div class="sep"></div>
+        <div class="it">1. Make this scene a track</div>
+        <div class="it">2. Bake ribbon + corridor</div>
+        <div class="it">3. Renumber checkpoints</div>
+        <div class="it">4. Bake racing line</div>
+        <div class="it">5. Calibrate racing line (play mode)</div>
+        <div class="it">6. Sector configurator</div>
+      </div>
+    </div>
+  </div>
+  <figcaption><code>Tools ▸ Track Studio</code>. The two windows sit above the separator, the numbered pipeline below it —
+  Unity draws that rule from the menu priorities in <code>TrackStudio.cs</code>. There is no Validate entry here;
+  validation is the button in the window, or the headless command in step 6.</figcaption>
+</figure>
+
+<p>The window is the dashboard for whatever scene is currently open. Everything in the numbered menu is also a
+button in here, plus a live read-out of what the scene has.</p>
+
+<figure class="shot">
+  <div class="win">
+    <div class="tab">Track Studio</div>
+    <div class="body">
+      <div class="hd2">Scene</div>
+      <div class="row"><span class="k">Descriptor</span><span>TrackDescriptor</span></div>
+      <div class="row"><span class="k">Kind</span><span>FreeRoam</span></div>
+      <div class="btn">Select descriptor</div>
+
+      <div class="hd2">Gates and spawns</div>
+      <div class="row"><span class="k">Finish</span><span class="miss">MISSING</span></div>
+      <div class="row"><span class="k">Checkpoints</span><span>0</span></div>
+      <div class="row"><span class="k">Spawns</span><span>1</span></div>
+      <div class="btns"><span class="btn">Add checkpoint</span><span class="btn">Add player spawn</span><span class="btn">Add finish</span></div>
+      <div class="btn">Renumber checkpoints densely</div>
+
+      <div class="hd2">Road</div>
+      <div class="row"><span class="k">Spline roads</span><span>1</span></div>
+      <div class="btns"><span class="btn">Add spline road</span><span class="btn">Bake ribbon + corridor</span></div>
+
+      <div class="hd2">Racing line</div>
+      <div class="btn tall">Bake racing line</div>
+
+      <div class="btn tall">Validate this scene</div>
+    </div>
+  </div>
+  <figcaption>The Track Studio window. <span class="miss">MISSING</span> next to Finish is expected here —
+  the sandbox is a FreeRoam map and has no finish line.</figcaption>
+</figure>
+
+<h3>3. Change things</h3>
+<p>Terrain sculpting, ProBuilder geometry, props and lighting are all just normal Unity work — nothing in
+Track Studio cares how the scene got its shape. The parts that <em>are</em> track data:</p>
+
+<div class="tbl-wrap">
+<table>
+  <tr><th>To change</th><th>Do this</th><th>Then</th></tr>
+  <tr><td>Road shape or width</td><td>Select the <code>SplineContainer</code>, use Unity's Spline tool</td><td><b>Re-bake</b> — step 2</td></tr>
+  <tr><td>Surface / grip</td><td><code>Surface Brush</code>, paint onto terrain or meshes</td><td>nothing</td></tr>
+  <tr><td>Gate positions</td><td>Move the marker, then <b>Snap to road</b> in its inspector</td><td>Renumber if you added one</td></tr>
+  <tr><td>Spawn points</td><td>Move / add <code>TrackSpawnMarker</code>s</td><td>nothing</td></tr>
+  <tr><td>Sky, fog, ambience</td><td>Scene lighting, plus the descriptor's ambience fields</td><td>nothing</td></tr>
+</table>
+</div>
+
+<div class="note">
+<b>The re-bake is the step people forget.</b> Moving a spline does not move the road mesh, the bot corridor
+or the baked racing line — those are all baked artifacts. A racing line baked against an older spline is the
+single most likely real failure, which is why the validator explicitly checks the line against the corridor
+it was solved in.
+</div>
+
+<h3>4. Surface Brush</h3>
+<p><code>Tools ▸ Track Studio ▸ Surface Brush</code>. Pick a floor type from the palette, set a radius,
+paint in the Scene view. It writes terrain alphamaps and mesh <code>SurfaceTag</code>s through the same click,
+so you do not choose a target — it paints whatever you are pointing at.</p>
+<p>The palette shows each floor's <code>frictionMult</code> for a reason: anything under <b>0.90</b> also counts
+as <em>off track</em> for arcade track limits. So painting grass gives you a track-limits penalty zone for free,
+and painting a whole map in something at 1.00 means track limits never trigger anywhere on it.</p>
+
+<h3>5. Save, and you're done</h3>
+<p><kbd>Ctrl+S</kbd>. That is the "import back into the game" step — <code>TTA_Sandbox</code> is already in
+<code>SceneTrackCatalog.All</code> and in Build Settings, so the game picks up the saved scene the next time it
+loads it. Press Play in the editor to drive it, or make a build.</p>
+
+<div class="note">
+The sandbox is registered as <b>FreeRoam</b>, and FreeRoam tracks are filtered out of the race picker — the same
+convention Torque Falls follows, since there is nothing to race on a map with no finish line. You reach it by
+opening the scene and pressing Play. Give it a finish line and a dense set of checkpoints, flip the descriptor's
+<code>kind</code> to <b>Circuit</b>, and it appears in the menu as <code>▣ Sandbox</code>.
+</div>
+
+<h3>6. Check it (optional, but cheap)</h3>
+<p><b>Validate this scene</b> in the window, or headlessly across every registered track:</p>
+<pre><code>"E:\Unity Hub\Editor\6000.1.15f1\Editor\Unity.exe" -batchmode -quit -projectPath "E:\EE Projects\Tiny_Torque\UnitySim" -executeMethod AIHWSim.TrackTools.TrackStudioValidator.Report -logFile trk.log</code></pre>
+<p>Then look for <code>[TRK] RESULT</code> in <code>trk.log</code>. Fourteen checks, including the two silent
+killers: checkpoint orders that are not a dense <code>0..n-1</code> run, and a stale racing line.</p>
+
+<h2>Part 2 — Making a new map</h2>
+
+<p>Seven steps. The first six are in the editor; the seventh is two lines of registration that are deliberately
+manual, because a track that is half-registered fails in a confusing way.</p>
+
+<h3>1. New scene, build the world</h3>
+<p><code>File ▸ New Scene</code>, save it under <code>Assets/Scenes/</code> with the name you want the track to
+have. Add terrain, geometry, lighting — whatever the map is.</p>
+
+<h3>2. Make it a track</h3>
+<p><code>Tools ▸ Track Studio ▸ 1. Make this scene a track</code>. This adds a <code>TrackDescriptor</code>
+object, seeds one spawn marker, and — if the scene has terrain — creates a <code>TerrainFloorTable</code>
+guessed from the terrain layers actually present.</p>
+<p><b>Review the guesses.</b> They come from layer names, and a layer called "Rock" could reasonably be dirt,
+paving or obsidian. The validator only insists that every layer <em>has</em> a row, so a wrong guess is a wrong
+guess it will happily accept.</p>
+<p>Select the descriptor and set <code>kind</code>: <b>Circuit</b> for a lap-timed track, <b>FreeRoam</b> for a
+playground. (Arena is refused — arena mode needs a floor slab to compute its playfield from, and a
+hand-authored scene has none.)</p>
+
+<h3>3. Add a road</h3>
+<p><b>Add spline road</b> in the window drops a <code>SplineContainer</code> with a
+<code>TrackSplineAuthoring</code> component. Shape it with Unity's normal Spline tool — click to add knots,
+drag tangents. Width, banking and surface type are <code>SplineData</code> channels on the authoring component,
+so they are keyed <em>along</em> the curve rather than being one value for the whole road.</p>
+
+<h3>4. Bake the ribbon</h3>
+<p><code>2. Bake ribbon + corridor</code>. Generates the road mesh, splits it into per-surface colliders with
+their own <code>SurfaceTag</code>s, adds kerbs and optional walls, and bakes the centreline that bots follow.</p>
+
+<h3>5. Place gates</h3>
+<p><b>Add finish</b>, then <b>Add checkpoint</b> as many times as you need. For each one: position it, then hit
+<b>Snap to road</b> in its inspector.</p>
+
+<div class="note">
+<b>A gate is directional.</b> It spans its own local X, and cars are counted as passing through when they cross
+travelling along its local <b>+Z</b>. A gate rotated by eye is the classic "my lap never counts and nothing in the
+console says why" bug — which is exactly what Snap to road exists to prevent.
+</div>
+
+<p>Then <code>3. Renumber checkpoints</code>. Orders must be a dense <code>0, 1, 2, … n-1</code>: the lap timer
+only advances on an exact index match and refuses to count a lap until every checkpoint has been hit, so a single
+gap makes the track permanently un-lappable with no error message anywhere.</p>
+
+<h3>6. Paint, then bake a line</h3>
+<p>Surface Brush for grip. Then <code>4. Bake racing line</code> to solve the ideal line inside the corridor and
+put a speed profile on it — the Scene view draws it coloured by speed, with apex markers and brake-zone bars.
+Optionally <code>5. Calibrate racing line (play mode)</code>, which drives it for three laps and fits four numbers
+describing the <em>car</em> (grip scale, acceleration, top speed, brake usage), and <code>6. Sector
+configurator</code> to slice it into sectors with target times.</p>
+<p>The baked line is analysis and visualization. <b>Nothing in the shipped game reads it</b> — bots still use their
+runtime heuristic, so baking a line does not change race feel or lap times.</p>
+
+<h3>7. Register it — both halves</h3>
+<p>Add a row to <code>SceneTrackCatalog.All</code> in
+<code>Assets/Scripts/Track/SceneTrackCatalog.cs</code>:</p>
+<pre><code>new Row { scene = "MyTrack", label = "My Track",
+          kind = TrackPresets.TrackKind.Circuit },</code></pre>
+<p>And add the scene to <code>File ▸ Build Profiles ▸ Scene List</code>.</p>
+<div class="note">
+Both are required. A catalog row with no build entry is a picker item that loads a black screen —
+<code>SceneManager.LoadScene</code> simply cannot find a scene that is not in the build. The validator fails on
+one without the other for this reason.
+</div>
+<p>Validate, and it is a track.</p>
+
+<h2>Part 3 — Spline roads, and what a "key" is</h2>
+
+<h3>Converting a spline you already have</h3>
+<p>A road is just a <code>SplineContainer</code> with a <code>TrackSplineAuthoring</code> component next to
+it. Converting adds that component and <b>changes nothing about your curve</b> — same knots, same tangents,
+same position.</p>
+<p>Select the spline, then <code>Tools ▸ Track Studio ▸ Convert selected spline to road</code>, or use the
+buttons that appear in the Track Studio window:</p>
+
+<figure class="shot">
+  <div class="win">
+    <div class="tab">Track Studio</div>
+    <div class="body">
+      <div class="hd2">Road</div>
+      <div class="row"><span class="k">Spline roads</span><span>1</span></div>
+      <div class="row" style="padding-left:1rem"><span class="k">SplineRoad</span><span>corridor</span></div>
+      <div style="background:#3a4654; border:1px solid #2b2b2b; border-radius:3px; padding:.4rem .55rem; margin:.45rem 0; font-size:11.5px; color:#c8d4e0">
+        1 spline(s) in this scene are not roads yet. Converting keeps the curve exactly as
+        drawn — it only adds the component that carries width, banking and surface.
+      </div>
+      <div class="btns"><span class="btn">Convert selected spline</span><span class="btn">Adopt all</span></div>
+      <div class="btns"><span class="btn">Add spline road</span><span class="btn">Bake ribbon + corridor</span></div>
+    </div>
+  </div>
+  <figcaption>The Road section. Each road is listed with <b>Select</b>, because getting to its channels means
+  selecting it, and finding it by hand in a scene full of terrain is the slow part.</figcaption>
+</figure>
+
+<div class="note">
+<b>You already hit this one.</b> A spline drawn before Track Studio usually has a <code>SplineExtrude</code>
+generating its own mesh. Baking a ribbon on top leaves <em>two</em> overlapping road surfaces competing for
+the same wheel raycasts — grip then depends on which collider wins the raycast, which reads as random.
+Disable or remove the <code>SplineExtrude</code> first, which is what you did.
+</div>
+
+<h3>What a channel is, and what a key is</h3>
+
+<p>A Unity spline stores position and tangents and <b>nothing else</b>. It has no idea how wide your road is,
+how much it leans, or what it's made of. Those three live on the authoring component as <b>channels</b>.</p>
+
+<p>A channel starts <b>empty</b>, which means <em>"use the single default value above, for the entire
+road."</em> That is a perfectly good road — you never have to touch a channel.</p>
+
+<p>A <b>key</b> pins a value at one point along the curve. Position runs <b>0 at the start of the spline to 1
+at the end</b>. Between two keys the value blends smoothly:</p>
+
+<figure class="shot">
+<svg viewBox="0 0 640 150" style="max-width:100%;height:auto" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Diagram of three width keys along a spline">
+  <g fill="none" stroke="currentColor" stroke-opacity=".35" stroke-width="1">
+    <line x1="40" y1="118" x2="600" y2="118"/>
+  </g>
+  <g fill="currentColor" font-family="ui-monospace,Consolas,monospace" font-size="11" opacity=".65">
+    <text x="34" y="136">0.0</text><text x="300" y="136">0.5</text><text x="580" y="136">1.0</text>
+    <text x="34" y="146" font-size="10">start</text><text x="572" y="146" font-size="10">end</text>
+  </g>
+  <path d="M40 92 Q170 92 320 56 Q470 20 600 92" fill="none" stroke="currentColor" stroke-width="2.5" stroke-opacity=".85"/>
+  <g fill="currentColor">
+    <circle cx="40" cy="92" r="5"/><circle cx="320" cy="56" r="5"/><circle cx="600" cy="92" r="5"/>
+  </g>
+  <g fill="currentColor" font-family="ui-monospace,Consolas,monospace" font-size="11.5">
+    <text x="52" y="88">3.0 m</text><text x="332" y="52">4.5 m</text><text x="546" y="88">3.0 m</text>
+  </g>
+  <g fill="currentColor" font-size="11" opacity=".6" font-family="-apple-system,Segoe UI,sans-serif">
+    <text x="150" y="34">road widens…</text><text x="420" y="34">…then narrows back</text>
+  </g>
+</svg>
+<figcaption>Three width keys. The road is 3 m at both ends and bulges to 4.5 m through the middle.</figcaption>
+</figure>
+
+<p>So <b>"add a width key or two"</b> just means: click <b>Add key</b> twice and set the two values, if you
+want the road to change width. Key counts behave like this:</p>
+
+<div class="tbl-wrap">
+<table>
+  <tr><th>Keys</th><th>Result</th></tr>
+  <tr><td><b>0</b></td><td>Constant, using the default field above the channel. The normal case.</td></tr>
+  <tr><td><b>1</b></td><td>Still constant — at the key's value. Nothing to blend toward.</td></tr>
+  <tr><td><b>2+</b></td><td>The value blends from key to key along the road.</td></tr>
+</table>
+</div>
+
+<figure class="shot">
+  <div class="win">
+    <div class="tab">Inspector — Track Spline Authoring</div>
+    <div class="body">
+      <div class="hd2">Road</div>
+      <div class="row"><span class="k">Default Width</span><span>3</span></div>
+      <div class="row"><span class="k">Default Surface</span><span>1</span></div>
+
+      <div class="hd2">Channels</div>
+      <div style="background:#454545; border:1px solid #2b2b2b; border-radius:3px; padding:.4rem .55rem; margin:.35rem 0; font-size:11.5px; color:#c2c2c2">
+        Empty channel = the default above, for the whole road. Add keys to vary it along the
+        curve. Position is 0 at the start and 1 at the end.
+      </div>
+
+      <div class="row" style="font-weight:700; margin-top:.4rem"><span>Width (m)</span><span class="btn" style="width:64px;margin:0">Add key</span></div>
+      <div class="row" style="padding-left:.9rem"><span class="k">0.00 ────●────</span><span>3</span></div>
+      <div class="row" style="padding-left:.9rem"><span class="k">0.50 ────●────</span><span>4.5</span></div>
+      <div class="row" style="padding-left:.9rem"><span class="k">1.00 ────●────</span><span>3</span></div>
+
+      <div class="row" style="font-weight:700; margin-top:.5rem"><span>Banking (deg)</span><span class="btn" style="width:64px;margin:0">Add key</span></div>
+      <div class="row" style="padding-left:.9rem"><span class="k">(constant — using the default)</span><span></span></div>
+
+      <div class="row" style="font-weight:700; margin-top:.5rem"><span>Surface</span><span class="btn" style="width:64px;margin:0">Add key</span></div>
+      <div class="row" style="padding-left:.9rem"><span class="k">0.00 ────●────</span><span>1 Asphalt (grip 0.90) ▾</span></div>
+
+      <div class="btn tall" style="margin-top:.6rem">Bake this road</div>
+      <div class="btn">Clear baked geometry</div>
+    </div>
+  </div>
+  <figcaption>The channel editor. Each row is one key: a 0–1 position slider, then the value. Surface is a
+  dropdown of all 18 floor types with their grip shown.</figcaption>
+</figure>
+
+<h3>The three channels</h3>
+
+<p><b>Width</b> — metres, edge to edge. Straightforward.</p>
+
+<p><b>Banking</b> — degrees of lean. Positive drops the <em>right</em> edge, per <code>SplineSpec.rollDeg</code>.</p>
+<div class="note">
+<b>Check the sign yourself before you build a whole track on it.</b> Which way positive leans <em>relative to
+the direction a corner turns</em> was never confirmed against a driven car — it was flagged as unverified when
+this was designed and it still is. Set one key to something obvious like <b>15°</b>, bake, and look at the road
+in the Scene view. A sign error makes banked corners drive <em>slower</em> than flat ones, which is a genuinely
+confusing bug to chase later.
+</div>
+
+<p><b>Surface</b> — which of the 18 <code>TrackCatalog.Floors</code> the road is made of, and the thing that
+decides grip. The dropdown shows each floor's grip value.</p>
+<div class="note">
+<b>Surface blends, which is rarely what you want.</b> The channel interpolates like the other two, so a key of
+Asphalt at 0.3 and Dirt at 0.7 gives you a smeared ramp through every floor id in between. For a hard edge —
+asphalt that becomes dirt at one line across the road — put two keys <b>very close together</b>: asphalt at
+0.499, dirt at 0.501.
+</div>
+
+<h3>The two Bake buttons</h3>
+<div class="tbl-wrap">
+<table>
+  <tr><th>Button</th><th>Does</th><th>Use when</th></tr>
+  <tr><td><b>Bake this road</b><br><span style="color:var(--muted);font-size:.85em">on the component</span></td>
+      <td>Rebuilds this one spline's ribbon.</td>
+      <td>Iterating on width or surface for a single road.</td></tr>
+  <tr><td><b>2. Bake ribbon + corridor</b><br><span style="color:var(--muted);font-size:.85em">menu / window</span></td>
+      <td>Every road in the scene, <b>plus</b> the corridor bots drive and the racing line is solved in.</td>
+      <td>Before driving, validating, or baking a racing line.</td></tr>
+</table>
+</div>
+<p>That's what the message under the Bake button is telling you: the per-component button is the fast
+iteration loop, but it does not refresh the corridor, so finish with the full bake.</p>
+
+<h2>Worth knowing</h2>
+
+<ul>
+  <li><b>Scene tracks cannot be opened in the in-game Track Builder.</b> That builder edits <code>TrackDesign</code>
+      tile maps, which are data; a scene track is a scene. Different track sources, both live.</li>
+  <li><b>Over LAN a scene track travels as a name</b>, not as data — so everyone needs the same build. A client
+      that does not have the scene is refused with a message rather than being dropped onto the classic oval and
+      silently desynced.</li>
+  <li><b>The scene owns its own sky.</b> The track scene loads first and <code>TrackScene</code> comes in
+      additively on top, so your lighting, skybox, fog and baked lightmaps are the ones that survive.</li>
+  <li><b>Terrain is real physics now.</b> Painted surfaces are baked to one floor id per texel when the track
+      binds, so what you paint is what the tyres feel.</li>
+</ul>
+
+<p style="color:var(--muted); font-size:.88rem; margin-top:2.5rem">
+Reference detail, including the solver maths and every validator check:
+<code>Docs/track-studio.md</code>.</p>
+
+</main>
+</body>
+</html>

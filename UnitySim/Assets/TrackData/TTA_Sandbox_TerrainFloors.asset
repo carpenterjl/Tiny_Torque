@@ -1,0 +1,20 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!114 &11400000
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 0}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: be4ad102f40607b4798593c9d18bd62b, type: 3}
+  m_Name: TTA_Sandbox_TerrainFloors
+  m_EditorClassIdentifier: 
+  rows:
+  - layer: {fileID: 8574412962073106934, guid: 0ef97c4f24fbc704d9dca5ae9fdee02b, type: 2}
+    floorType: 0
+  - layer: {fileID: 8574412962073106934, guid: 898317f8ef3ca2d4187230359fdd092f, type: 2}
+    floorType: 2
+  defaultFloorType: 0

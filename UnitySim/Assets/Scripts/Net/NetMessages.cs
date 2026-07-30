@@ -86,6 +86,12 @@ namespace AIHWSim.Net
     {
         public int yourSlot;
         public string trackJson = "";     // "" = classic oval
+        /// <summary>v15: scene name of a hand-authored track, "" for every other
+        /// source. A scene track ships inside the build and cannot be serialised,
+        /// so it crosses the wire as a name and the client looks it up locally.
+        /// A client that does not have the scene must say so rather than fall
+        /// through to the oval and desync silently.</summary>
+        public string trackScene = "";
         public int state;                 // NetSession.LanState
         public int targetLaps;
         public RosterEntry[] roster = Array.Empty<RosterEntry>();
@@ -107,6 +113,8 @@ namespace AIHWSim.Net
     public class MapMsg
     {
         public string trackJson = "";
+        /// <summary>v15: see <see cref="WelcomeMsg.trackScene"/>.</summary>
+        public string trackScene = "";
     }
 
     [Serializable]

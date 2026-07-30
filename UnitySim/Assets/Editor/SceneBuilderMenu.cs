@@ -116,6 +116,21 @@ namespace AIHWSim.EditorTools
         [MenuItem("Tools/AIHWSim/Create Map Debug Scene")]
         public static void CreateMapDebugScene()
         {
+            const string path = "Assets/TinyTorqueAssets/Scenes/TTA_Sandbox.unity";
+
+            // This writes a BLANK scene to a fixed path. Every other menu item here
+            // creates a scene that is empty by design, so overwriting is harmless —
+            // but TTA_Sandbox is hand-authored (terrains, painted alphamaps, baked
+            // lighting, spline roads), and a stray click would silently destroy all
+            // of it with nothing but Ctrl+Z between you and the loss.
+            if (System.IO.File.Exists(path) &&
+                !EditorUtility.DisplayDialog("AIHWSim",
+                    $"{path} already exists and will be REPLACED with an empty scene.\n\n" +
+                    "Any terrain, painted surfaces, baked lighting and authored geometry " +
+                    "in it will be lost.",
+                    "Replace it", "Cancel"))
+                return;
+
             // 1. Create a blank scene with default lights and camera
             var scene = EditorSceneManager.NewScene(
                 NewSceneSetup.DefaultGameObjects,
@@ -132,29 +147,48 @@ namespace AIHWSim.EditorTools
             if (!AssetDatabase.IsValidFolder("Assets/TinyTorqueAssets/Scenes"))
                 AssetDatabase.CreateFolder("Assets/TinyTorqueAssets", "Scenes");
 
-            // 4. Define the unique path and filename for your new scene
-            const string path = "Assets/TinyTorqueAssets/Scenes/TTA_Sandbox.unity";
-
-            // 5. Save the file and automatically inject it into Build Settings
+            // 4. Save the file and automatically inject it into Build Settings
             EditorSceneManager.SaveScene(scene, path);
             AddSceneToBuild(path);
 
-            // 6. Alert the developer that it succeeded
+            // 5. Alert the developer that it succeeded
             EditorUtility.DisplayDialog("AIHWSim", $"Created {path} and added it to Build Settings.", "OK");
         }
 
         /// <summary>
         /// Ensure a scene is registered (and enabled) in Build Settings so
         /// SceneManager.LoadScene(name) works at runtime for the garage↔track flow.
+        /// Matching is on the NORMALIZED project-relative path, not the raw string:
+        /// an ordinal compare let "TinyTorqueAssets/Scenes/TTA_Sandbox.unity" miss
+        /// the already-registered "Assets/TinyTorqueAssets/Scenes/TTA_Sandbox.unity"
+        /// and get appended as a second entry — with an all-zero GUID, because the
+        /// path resolved to nothing. A zero-GUID row is a dangling reference that
+        /// fails the player build, and it sat in the settings unnoticed.
         /// </summary>
         private static void AddSceneToBuild(string path)
         {
+            path = Normalize(path);
             var scenes = new System.Collections.Generic.List<EditorBuildSettingsScene>(
                 EditorBuildSettings.scenes);
             foreach (var s in scenes)
-                if (s.path == path) { s.enabled = true; EditorBuildSettings.scenes = scenes.ToArray(); return; }
+                if (Normalize(s.path) == path)
+                {
+                    s.enabled = true;
+                    EditorBuildSettings.scenes = scenes.ToArray();
+                    return;
+                }
             scenes.Add(new EditorBuildSettingsScene(path, true));
             EditorBuildSettings.scenes = scenes.ToArray();
+        }
+
+        /// <summary>Project-relative, forward-slashed, "Assets/"-prefixed.</summary>
+        private static string Normalize(string path)
+        {
+            if (string.IsNullOrEmpty(path)) return "";
+            path = path.Replace('\\', '/').Trim('/');
+            if (!path.StartsWith("Assets/", System.StringComparison.OrdinalIgnoreCase))
+                path = "Assets/" + path;
+            return path;
         }
     }
 }

@@ -1617,6 +1617,44 @@ Rebuild with `Tools > TinyTorque Assets > Rebuild everything`, or headless via
 `-executeMethod AIHWSim.Pack.PackBuildAll.RunHeadless`. Full detail in
 [the pack's own README](UnitySim/Assets/TinyTorqueAssets/README.md).
 
+## Track Studio (hand-authored scene tracks)
+
+`Tools > Track Studio` is the **editor-side** track builder. It makes a real Unity
+scene — terrain, ProBuilder geometry, Unity-spline roads, authored lighting — into a
+track the game loads and races. It is a third track *source* alongside the in-game
+Track Builder's `TrackDesign` tile maps and the classic procedural oval, not a
+replacement for either; `TrackBootstrap` dispatches on `GameFlow.ActiveSceneTrack`,
+then `GameFlow.ActiveTrack`, then the oval.
+
+The trade is explicit. A tile map is data: it saves to JSON, crosses the LAN wire as
+JSON, round-trips through a resume snapshot and opens in the in-game builder. A scene
+track buys terrain and arbitrary geometry and gives up all four — it ships inside the
+build and is identified across the wire by **name** (protocol **v15**), so a client
+that lacks the scene is refused with a message rather than silently dropped onto the
+oval.
+
+What it adds: Unity-spline road authoring that bakes through the existing
+`RibbonMeshBuilder` (so tile-map ribbons stay byte-identical); checkpoint / spawn /
+finish markers with gizmos and snap-to-road; a **Physics Material Brush** that paints
+`TrackCatalog.Floors` surface types onto Unity Terrain alphamaps *and* onto mesh
+colliders; an **AI racing-line optimizer** (minimum curvature by projected SOR, with a
+friction-limited velocity profile, apexes and brake zones) baked to a ScriptableObject
+and drawn in the Scene view; a three-lap headless **calibration** run that fits the
+car's grip and drive scalars; and a **sector configurator** whose targets integrate
+from the same profile the lap prediction uses.
+
+Terrain was previously invisible to the physics — `SurfaceMap` resolved only
+`SurfaceTag`s and the tile floor slab, so a `TerrainCollider` hit returned baseline
+friction whatever it was painted with. It now bakes each terrain's alphamap to one
+floor id per texel once at bind, because `SurfaceMap.At` runs ~12 800 times a second
+on a full grid at 400 Hz.
+
+**Bots are not modified.** The baked line is analysis and visualization only, so lap
+times, race balance and difficulty tiers are exactly what they were.
+
+Validate with `-executeMethod AIHWSim.TrackTools.TrackStudioValidator.Report` and grep
+`[TRK] RESULT`. Full detail in [Docs/track-studio.md](Docs/track-studio.md).
+
 ## Layout
 
 ```

@@ -36,6 +36,12 @@ namespace AIHWSim.Persistence
         public int mode;                  // SessionMode
         public string trackName = "";     // display + records key; "" = classic oval
         public string trackJson = "";     // embedded TrackDesign dump; "" = classic oval
+        /// <summary>Scene name for a hand-authored track; "" for every other source.
+        /// A scene track is not data, so there is nothing to embed — it is named,
+        /// and resuming means loading that scene again. Additive by design: an older
+        /// snapshot deserialises this as "" and takes the trackJson path, exactly as
+        /// it always did.</summary>
+        public string trackScene = "";
         public int targetLaps;
         public float simTime;
         public List<PlayerSnapshot> players = new List<PlayerSnapshot>();

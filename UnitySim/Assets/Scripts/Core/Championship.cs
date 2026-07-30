@@ -132,9 +132,16 @@ namespace AIHWSim.Core
         public static void LoadNextRoundTrack()
         {
             string name = NextTrack();
-            GameFlow.ActiveTrack = string.IsNullOrEmpty(name)
-                ? null                                   // "" = the classic oval
-                : TrackEd.TrackPresets.Resolve(name) ?? TrackEd.TrackLibrary.Load(name);
+            if (string.IsNullOrEmpty(name)) { GameFlow.ActiveTrack = null; return; }
+
+            // A round may name a hand-authored scene track. Checked first: it is
+            // not TrackDesign data, so the resolvers below would both miss it and
+            // quietly run the round on the classic oval.
+            string scene = Track.SceneTrackCatalog.Resolve(name);
+            if (scene != null) { GameFlow.ActiveSceneTrack = scene; return; }
+
+            GameFlow.ActiveTrack =
+                TrackEd.TrackPresets.Resolve(name) ?? TrackEd.TrackLibrary.Load(name);
         }
 
         /// <summary>Is the human alone on top? A tie on points is not a win —

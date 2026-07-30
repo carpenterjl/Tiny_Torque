@@ -323,13 +323,22 @@ namespace AIHWSim.TrackEd
         /// own neutral colour because the menu, the builder and the drive scene
         /// do not agree on one.
         /// </summary>
-        public static void ApplyCamera(Camera cam, string key, Color neutralBackground)
+        /// <param name="sceneOwnsSky">
+        /// Leave the camera's clear flags and background alone — a hand-authored
+        /// scene track has a real skybox, baked reflection probes and its own
+        /// RenderSettings, and the SolidColor assignment below replaces all of it
+        /// with a flat colour. The far plane is still widened, because a scene can
+        /// be as large as a tile map and clipping distant terrain is never wanted.
+        /// </param>
+        public static void ApplyCamera(Camera cam, string key, Color neutralBackground,
+            bool sceneOwnsSky = false)
         {
             if (cam == null) return;
+            cam.farClipPlane = Mathf.Max(cam.farClipPlane, 900f);
+            if (sceneOwnsSky) return;
             var a = Resolve(key);
             cam.clearFlags = CameraClearFlags.SolidColor;
             cam.backgroundColor = a.HasDome ? a.skyHorizon : neutralBackground;
-            cam.farClipPlane = Mathf.Max(cam.farClipPlane, 900f);
         }
 
         private static Shader _skyShader;

@@ -422,8 +422,15 @@ namespace AIHWSim.TrackEd
             return (new Vector3(it.x, 0f, it.z), yaw);
         }
 
-        /// <summary>An invisible gate trigger volume across a resolved pose's local X axis.</summary>
-        private static GameObject MakeGateTrigger(Vector3 pos, Quaternion rot, Transform parent, float width)
+        /// <summary>
+        /// An invisible gate trigger volume across a resolved pose's local X axis.
+        /// Public because hand-authored scene tracks build their finish and
+        /// checkpoint gates through this exact call: two implementations of "what
+        /// a gate is" would drift in width, height or the half-metre lift, and the
+        /// symptom — a lap that counts on one track source and not the other —
+        /// would be maddening to chase.
+        /// </summary>
+        public static GameObject MakeGateTrigger(Vector3 pos, Quaternion rot, Transform parent, float width)
         {
             var trig = new GameObject("GateTrigger");
             trig.transform.SetParent(parent, false);

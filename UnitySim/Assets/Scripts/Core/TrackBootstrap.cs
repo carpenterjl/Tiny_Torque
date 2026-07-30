@@ -54,6 +54,11 @@ namespace AIHWSim.Core
         private List<float> _botHalfWidths;
         private bool _splitScreen;                      // 2+ local humans (not a bot race)
 
+        /// <summary>The hand-authored track's descriptor; null on every other
+        /// source. Held because the bot corridor, the sky opt-out and the surface
+        /// table all live on it and are needed after the environment is built.</summary>
+        private AIHWSim.Track.SceneTrackDescriptor _sceneTrack;
+
         /// <summary>How many local humans share the screen — the divisor the
         /// viewport table needs, and 1 in every LAN session.</summary>
         private int _localHumans = 1;
@@ -62,51 +67,25 @@ namespace AIHWSim.Core
 
         private void Awake()
         {
-            // If we are testing the sandbox scene directly, force Single Player 
-            // and assign a default placeholder track so the game doesn't break.
-            if (UnityEngine.SceneManagement.SceneManager.GetActiveScene().name == "TTA_Sandbox")
+            // Pressing Play directly in a hand-authored track scene: there is no
+            // menu to have chosen it, so adopt it. This replaces the old TTA_Sandbox
+            // special case, which forced a hardcoded roster and then early-returned
+            // past the bot path, respawn, arena nav and race director — everything
+            // that makes a track a track. Going through the real branch below costs
+            // nothing and means the scene you test is the scene the game loads.
+            if (!GameFlow.HasSceneTrack)
             {
-                SessionConfig.SetSinglePlayer();
-               
-                GameFlow.ActiveDesign = VehiclePresets.Resolve("TT Patrol");
-                _spawnPos = new Vector3(0f, 2f, 0f);
-                _spawnRot = Quaternion.identity;
-
-                SessionConfig.Players.Add(new PlayerSlot
+                var here = FindFirstObjectByType<AIHWSim.Track.SceneTrackDescriptor>();
+                if (here != null)
                 {
-                    name = "Jacob",
-                    profileId = "Jacob",
-                    design = GameFlow.ActiveDesign,
-                    deviceKind = InputDeviceKind.MergedKeyboardGamepad,
-                    assists = SessionConfig.P1Assists(SettingsStore.Current),
-                    isBot = false,
-                    control = DriveControl.Human,
-                });
-
-                var players = SessionConfig.ResolvePlayers(); // Resolves exactly 1 human player
-                
-                // 3. Force-spawn the player rig (passing your default position settings)
-                // Note: Check if your BuildPlayerRig function signature matches (Slot, Index, TotalSlots, SplitScreen)
-                var sandboxRig = BuildPlayerRig(players[0], 0, 1, false);
-                _rigs.Add(sandboxRig);
-                _humanRig = sandboxRig;
-                _runner = sandboxRig.runner;
-                BuildLighting();
-
-                if (sandboxRig.camera != null)
-                {
-                    sandboxRig.camera.clearFlags = CameraClearFlags.Skybox;
-
-                    // Remove or update an existing Skybox component if the prefab came with one
-                    var oldSkyboxComponent = sandboxRig.camera.GetComponent<Skybox>();
-                    if (oldSkyboxComponent != null)
-                    {
-                        oldSkyboxComponent.material = Resources.Load<Material>("Environment/Sky_PurpleSunset");
-                    }
+                    GameFlow.ActiveSceneTrack = here.gameObject.scene.name;
+                    if (GameFlow.ActiveDesign == null)
+                        GameFlow.ActiveDesign = VehiclePresets.Resolve("TT Patrol");
+                    // SessionConfig.ResolvePlayers already synthesises a single
+                    // merged-input human from ActiveDesign when the roster is empty,
+                    // so no PlayerSlot needs building by hand here.
+                    if (SessionConfig.Players.Count == 0) SessionConfig.SetSinglePlayer();
                 }
-
-                // 4. Instantly exit Awake() so it doesn't look for track paths or race directors
-                return;
             }
 
             // LAN sessions have their own composition paths (host simulates all
@@ -128,11 +107,10 @@ namespace AIHWSim.Core
             _localHumans = localHumans;
             _splitScreen = localHumans > 1;
 
-            if (GameFlow.ActiveTrack != null) BuildCustomEnvironment();
-            else BuildOvalEnvironment();
+            BuildEnvironment();
 
             // The ordered racing line bots follow (null on finish-less maps).
-            _botPath = BotPath.Build(GameFlow.ActiveTrack, _lapTimer, _ovalPath,
+            _botPath = BotPath.Build(_sceneTrack, GameFlow.ActiveTrack, _lapTimer, _ovalPath,
                 _spawnPos, _spawnRot * Vector3.forward, out _botPathClosed,
                 out _botHalfWidths);
             TrackRespawn.SetTrack(_built, _botPath, _botPathClosed);
@@ -342,8 +320,15 @@ namespace AIHWSim.Core
         private readonly System.Collections.Generic.Dictionary<int, Net.HostCarFollower> _followers =
             new System.Collections.Generic.Dictionary<int, Net.HostCarFollower>();
 
+        /// <summary>
+        /// The three track sources, in priority order: a hand-authored scene, a
+        /// user-built tile map, or the classic procedural oval. This is the whole
+        /// dispatch — every composition path funnels through here so a source added
+        /// once is a source every mode understands.
+        /// </summary>
         private void BuildEnvironment()
         {
+            if (GameFlow.HasSceneTrack) { BuildSceneEnvironment(); return; }
             if (GameFlow.ActiveTrack != null) BuildCustomEnvironment();
             else BuildOvalEnvironment();
         }
@@ -365,7 +350,7 @@ namespace AIHWSim.Core
             // before — but the arcade layer needs it for item-box placement,
             // live positions, missile targeting and wreck recovery, so without
             // it arcade over LAN would silently do almost nothing.
-            _botPath = BotPath.Build(GameFlow.ActiveTrack, _lapTimer, _ovalPath,
+            _botPath = BotPath.Build(_sceneTrack, GameFlow.ActiveTrack, _lapTimer, _ovalPath,
                 _spawnPos, _spawnRot * Vector3.forward, out _botPathClosed);
             TrackRespawn.SetTrack(_built, _botPath, _botPathClosed);
             // The arena's answer to the racing line — spawn ring, floor bounds
@@ -563,7 +548,7 @@ namespace AIHWSim.Core
             cam.farClipPlane = 800f;
             // Background, far plane and (on a themed map) the sky dome's own
             // horizon colour come from the map's ambience.
-            TrackEd.MapAmbience.ApplyCamera(cam, AmbienceKey(), SkyBlue);
+            TrackEd.MapAmbience.ApplyCamera(cam, AmbienceKey(), SkyBlue, SceneOwnsSky());
             cam.rect = new Rect(0f, 0f, 1f, 1f);
             AIHWSim.Rendering.CameraBloom.Attach(cam);
             var follow = cam.gameObject.GetComponent<ChaseCamera>() ?? cam.gameObject.AddComponent<ChaseCamera>();
@@ -713,7 +698,7 @@ namespace AIHWSim.Core
             // mirroring arcade director needs the same line the host used, or the
             // two would lay their item boxes out differently.
             bool timed = _lapTimer != null;
-            _botPath = BotPath.Build(GameFlow.ActiveTrack, _lapTimer, _ovalPath,
+            _botPath = BotPath.Build(_sceneTrack, GameFlow.ActiveTrack, _lapTimer, _ovalPath,
                 _spawnPos, _spawnRot * Vector3.forward, out _botPathClosed);
             // A client owns its own car, so its respawn key is its own business —
             // it needs the line locally even though lap timing is the host's.
@@ -1059,6 +1044,22 @@ namespace AIHWSim.Core
                     return (apos, arot);
             }
 
+            // A scene track may author its whole start grid — one TrackSpawnMarker
+            // per slot, gridOrder N feeding player N — so the row can follow the
+            // road instead of being projected straight backwards from pole. Author
+            // fewer markers than the field and the remainder falls through to the
+            // procedural row below, which is also what a lone marker does.
+            //
+            // Gated on HasSceneTrack deliberately: a tile map's spawn list is
+            // authored for arena rings, and consuming it here would silently move
+            // every existing grid on every existing map.
+            if (GameFlow.HasSceneTrack && _built != null &&
+                index >= 0 && index < _built.spawns.Count && _built.spawns.Count > 1)
+            {
+                var s = _built.spawns[index];
+                return (s.pos, s.rot);
+            }
+
             if (count <= 1 || index < 0) return (_spawnPos, _spawnRot);
 
             Vector3 right = _spawnRot * Vector3.right;
@@ -1121,7 +1122,7 @@ namespace AIHWSim.Core
             }
 
             cam.farClipPlane = 800f;
-            TrackEd.MapAmbience.ApplyCamera(cam, AmbienceKey(), SkyBlue);
+            TrackEd.MapAmbience.ApplyCamera(cam, AmbienceKey(), SkyBlue, SceneOwnsSky());
             cam.rect = ViewportFor(index, _localHumans);
             // Per-viewport bloom: OnRenderImage runs on each camera's own
             // viewport-sized RT, so splits cannot bleed into each other.
@@ -1201,6 +1202,68 @@ namespace AIHWSim.Core
             _lapTimer = built.lapTimer; // null when the map has no finish line
         }
 
+        /// <summary>
+        /// A hand-authored scene track. The geometry is already loaded — this scene
+        /// WAS loaded first and TrackScene came in additively on top of it — so all
+        /// that is built here are the gates, the surface lookup and the spawn poses.
+        /// </summary>
+        private void BuildSceneEnvironment()
+        {
+            _sceneTrack = FindFirstObjectByType<AIHWSim.Track.SceneTrackDescriptor>();
+            if (_sceneTrack == null)
+            {
+                // The additive load landed without the track scene's objects, or
+                // someone selected a scene name that carries no descriptor. Falling
+                // through to the oval keeps the game playable and says why, which
+                // beats a black screen and a null reference two systems later.
+                Debug.LogError($"[TrackBootstrap] scene track '{GameFlow.ActiveSceneTrack}' " +
+                               "has no SceneTrackDescriptor — falling back to the oval.");
+                GameFlow.ActiveSceneTrack = null;
+                BuildOvalEnvironment();
+                return;
+            }
+
+            if (_sceneTrack.skyboxOverride != null)
+            {
+                RenderSettings.skybox = _sceneTrack.skyboxOverride;
+                RenderSettings.ambientMode = UnityEngine.Rendering.AmbientMode.Skybox;
+                DynamicGI.UpdateEnvironment();
+            }
+
+            // TrackScene came in additively and brought its own Directional Light.
+            // The authored scene almost certainly has one too — often with baked
+            // lighting matched to it — and two suns double every shadow and wash the
+            // scene out. Membership tells them apart: anything not in TrackScene
+            // belongs to the track the author lit.
+            DisableForeignSuns();
+            BuildLighting();
+            var built = AIHWSim.Track.SceneTrackBuilder.Build(_sceneTrack, interactive: true);
+            _built = built;
+            _spawnPos = built.spawnPos;
+            _spawnRot = built.spawnRot;
+            _lapTimer = built.lapTimer; // null on a FreeRoam scene, as on a tile map
+        }
+
+        /// <summary>
+        /// Turn off TrackScene's own directional light when the loaded track scene
+        /// supplies one. Kept one-directional on purpose: a track scene with NO sun
+        /// of its own keeps TrackScene's, so a half-lit authored scene still renders
+        /// rather than going black.
+        /// </summary>
+        private void DisableForeignSuns()
+        {
+            var mine = gameObject.scene;
+            bool trackSceneHasSun = false;
+            foreach (var l in FindObjectsByType<Light>(FindObjectsSortMode.None))
+                if (l.type == LightType.Directional && l.enabled && l.gameObject.scene != mine)
+                { trackSceneHasSun = true; break; }
+            if (!trackSceneHasSun) return;
+
+            foreach (var l in FindObjectsByType<Light>(FindObjectsSortMode.None))
+                if (l.type == LightType.Directional && l.gameObject.scene == mine)
+                    l.enabled = false;
+        }
+
         private void BuildMaterials()
         {
             _dirt = TrackBuilder.StandardMat(new Color(0.42f, 0.32f, 0.22f));
@@ -1222,8 +1285,19 @@ namespace AIHWSim.Core
 
         /// <summary>This map's <see cref="TrackEd.MapAmbience"/> key ("" for the
         /// classic oval and every map authored before the TinyTorque ports).</summary>
-        private static string AmbienceKey() =>
-            GameFlow.ActiveTrack != null ? GameFlow.ActiveTrack.ambience : "";
+        private string AmbienceKey()
+        {
+            if (_sceneTrack != null) return _sceneTrack.ambience;
+            return GameFlow.ActiveTrack != null ? GameFlow.ActiveTrack.ambience : "";
+        }
+
+        /// <summary>
+        /// Whether the camera's clear flags and background must be left alone.
+        /// True only on a scene track that says so — a hand-authored scene has a
+        /// real skybox and baked reflection probes, and MapAmbience.ApplyCamera
+        /// would otherwise replace both with a flat colour.
+        /// </summary>
+        private bool SceneOwnsSky() => _sceneTrack != null && _sceneTrack.sceneOwnsSky;
 
         /// <summary>
         /// One directional key light. Colour, angle and intensity are retuned
@@ -1232,22 +1306,11 @@ namespace AIHWSim.Core
         /// </summary>
         private void BuildLighting()
         {
-            if (UnityEngine.SceneManagement.SceneManager.GetActiveScene().name == "TTA_Sandbox")
-            {
-                Material synthwaveSky = Resources.Load<Material>("Environment/Sky_PurpleSunset");
-                if (synthwaveSky != null)
-                {
-                    RenderSettings.skybox = synthwaveSky;
-                    RenderSettings.ambientMode = UnityEngine.Rendering.AmbientMode.Skybox;
-                    DynamicGI.UpdateEnvironment();
-                }
-                else
-                {
-                    UnityEngine.Debug.LogError("Skybox material 'Sky_PurpleSunset' not found inside Resources folder!");
-                }
-                return;
-            }
-
+            // A hand-authored scene brings its own sun (and often baked lighting to
+            // match it), so the guard below already does the right thing there —
+            // the scene-name special case this used to carry has moved onto
+            // SceneTrackDescriptor.skyboxOverride, where it is authored rather than
+            // hardcoded.
             if (FindFirstObjectByType<Light>() != null) return;
             var lightGo = new GameObject("Directional Light");
             var light = lightGo.AddComponent<Light>();
@@ -1396,7 +1459,7 @@ namespace AIHWSim.Core
                 go.AddComponent<AudioListener>();
             }
             cam.farClipPlane = 800f;
-            TrackEd.MapAmbience.ApplyCamera(cam, AmbienceKey(), SkyBlue);
+            TrackEd.MapAmbience.ApplyCamera(cam, AmbienceKey(), SkyBlue, SceneOwnsSky());
             AIHWSim.Rendering.CameraBloom.Attach(cam);
 
             var follow = cam.gameObject.GetComponent<ChaseCamera>() ?? cam.gameObject.AddComponent<ChaseCamera>();

@@ -98,7 +98,13 @@ namespace AIHWSim.Net
         // JSON, so a v13 client handed a town it has no meshes for would draw
         // eleven hundred fallback boxes — and the floor id it has never heard
         // of would index past the end of its own catalog.
-        public const int ProtocolVersion = 14;
+        // v15 adds hand-authored SCENE tracks. Those cannot be serialised — the
+        // scene ships inside the build — so the map crosses the wire as a NAME and
+        // each client loads its own copy. A v14 client would read no trackJson,
+        // conclude "classic oval" and drive a different track from everyone else
+        // while every position message still looked perfectly valid. That failure
+        // is invisible, which is exactly why the version had to move.
+        public const int ProtocolVersion = 15;
 
         /// <summary>Raised from 4 for 3v3 soccer. The slot goes on the wire as a
         /// byte and every MaxPlayers-sized array simply grows, so the only cost
@@ -307,7 +313,10 @@ namespace AIHWSim.Net
             {
                 gameName = Persistence.SettingsStore.Current.player1Name,
                 players = Roster.Count,
-                trackName = GameFlow.ActiveTrack != null ? GameFlow.ActiveTrack.name : "Classic Oval",
+                trackName = GameFlow.HasSceneTrack
+                    ? (AIHWSim.Track.SceneTrackCatalog.LabelFor(GameFlow.ActiveSceneTrack)
+                       ?? GameFlow.ActiveSceneTrack)
+                    : (GameFlow.ActiveTrack != null ? GameFlow.ActiveTrack.name : "Classic Oval"),
             });
         }
 
@@ -569,6 +578,7 @@ namespace AIHWSim.Net
             {
                 yourSlot = slot,
                 trackJson = GameFlow.ActiveTrack != null ? JsonUtility.ToJson(GameFlow.ActiveTrack) : "",
+                trackScene = GameFlow.ActiveSceneTrack ?? "",
                 state = (int)State,
                 targetLaps = TargetLaps,
                 roster = BuildRosterEntries(),
@@ -594,8 +604,7 @@ namespace AIHWSim.Net
             ApplyArcadeRules(msg.arcade, msg.trackLimits, msg.arcadeHandling);
             ApplyMatchRules(msg.match, msg.targetScore, msg.timeLimitSec);
 
-            GameFlow.ActiveTrack = string.IsNullOrEmpty(msg.trackJson)
-                ? null : JsonUtility.FromJson<TrackDesign>(msg.trackJson);
+            if (!ApplyWireTrack(msg.trackScene, msg.trackJson)) return;
             SessionConfig.Mode = SessionMode.LanClient;
             SessionConfig.TargetLaps = 0;
             GameFlow.LoadTrack();
@@ -974,9 +983,39 @@ namespace AIHWSim.Net
         {
             if (IsHost) return;
             var m = ReadJson<MapMsg>(reader);
-            GameFlow.ActiveTrack = string.IsNullOrEmpty(m.trackJson)
-                ? null : JsonUtility.FromJson<TrackDesign>(m.trackJson);
+            if (!ApplyWireTrack(m.trackScene, m.trackJson)) return;
             GameFlow.LoadTrack(); // scene rebuild sends aihw.ready again
+        }
+
+        /// <summary>
+        /// Adopt the host's map. Returns false — having already disconnected — when
+        /// the host is on a scene track this build does not contain.
+        ///
+        /// Refusing is the whole point. Every other mismatch in this protocol is
+        /// loud: a version mismatch is rejected at Hello, an unknown item id draws
+        /// a fallback box you can see. A missing scene is silent. The client would
+        /// find no trackJson, take the classic-oval branch, and then exchange
+        /// perfectly well-formed position updates about a track nobody else is on.
+        /// </summary>
+        private bool ApplyWireTrack(string trackScene, string trackJson)
+        {
+            if (!string.IsNullOrEmpty(trackScene))
+            {
+                if (!Application.CanStreamedLevelBeLoaded(trackScene))
+                {
+                    Debug.LogError($"[NetSession] host is on scene track '{trackScene}', " +
+                                   "which this build does not contain");
+                    Leave($"This host is racing \"{trackScene}\", a track your copy " +
+                          "of the game does not have.");
+                    return false;
+                }
+                GameFlow.ActiveSceneTrack = trackScene;
+                return true;
+            }
+
+            GameFlow.ActiveTrack = string.IsNullOrEmpty(trackJson)
+                ? null : JsonUtility.FromJson<TrackDesign>(trackJson);
+            return true;
         }
 
         private void OnRaceStart(ulong sender, FastBufferReader reader)
@@ -1106,7 +1145,7 @@ namespace AIHWSim.Net
         public void HostChangeMap(TrackDesign design)
         {
             if (!IsHost || State != LanState.FreeRoam) return;
-            GameFlow.ActiveTrack = design;
+            GameFlow.ActiveTrack = design;   // also clears any scene track
             BroadcastJson(NetMsg.Map, new MapMsg
             {
                 trackJson = design != null ? JsonUtility.ToJson(design) : "",

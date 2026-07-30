@@ -26,9 +26,11 @@ namespace AIHWSim.Pack
     ///      pack as a self-contained copy, so it is measured rather than hoped for.
     ///   4. <b>maps</b> — both JSON parse, every item id resolves, every floor
     ///      index is in range and the checkpoint sequence is gapless.
-    ///   5. <b>isolation</b> — Build Settings still holds exactly the five game
-    ///      scenes and neither debug scene. This is "don't add it to the game yet"
-    ///      written as an assertion.
+    ///   5. <b>isolation</b> — Build Settings holds every game scene, no pack
+    ///      DEBUG scene, and no dangling zero-GUID row. This is "don't add it to
+    ///      the game yet" written as an assertion. A pack scene that has since
+    ///      been promoted to real game content is listed in
+    ///      <see cref="PromotedScenes"/> rather than exempted by loosening it.
     /// </summary>
     public static class PackValidator
     {
@@ -45,6 +47,18 @@ namespace AIHWSim.Pack
             "Assets/Scenes/GarageScene.unity",
             "Assets/Scenes/MenuScene.unity",
             "Assets/Scenes/TrackBuilderScene.unity",
+        };
+
+        /// <summary>Pack scenes that have been PROMOTED to game content and are
+        /// therefore expected in Build Settings. TTA_Sandbox stopped being a debug
+        /// scene the day it became a hand-authored scene track the game can load;
+        /// a scene the player can drive is not "the pack shipping nothing".
+        /// The isolation check still fails on every OTHER pack scene, so TTA_Kit
+        /// — which really is a browsing lineup and really must not ship — is
+        /// still guarded. Promote by listing here, never by weakening the check.</summary>
+        private static readonly string[] PromotedScenes =
+        {
+            "Assets/TinyTorqueAssets/Scenes/TTA_Sandbox.unity",
         };
 
         private static int _fail;
@@ -295,14 +309,25 @@ namespace AIHWSim.Pack
                 inBuild.Add(s.path.Replace('\\', '/'));
 
             foreach (string p in inBuild)
-                if (p.Contains(PackPaths.Root))
+                if (p.Contains(PackPaths.Root) && System.Array.IndexOf(PromotedScenes, p) < 0)
                     Fail($"pack scene '{p}' is in Build Settings — the pack must ship nothing");
 
             foreach (string g in GameScenes)
                 if (!inBuild.Contains(g))
                     Fail($"game scene missing from Build Settings: {g}");
 
-            PackPaths.Log($"ISOLATION {inBuild.Count} scenes in Build Settings, none from the pack");
+            // A dangling row builds an exe that cannot load the scene it names,
+            // and Unity writes one whenever a path fails to resolve to an asset.
+            foreach (var s in EditorBuildSettings.scenes)
+                if (s.guid.Empty())
+                    Fail($"Build Settings entry '{s.path}' has an all-zero GUID — " +
+                         "the path does not resolve to a scene asset");
+
+            int promoted = 0;
+            foreach (string p in inBuild)
+                if (System.Array.IndexOf(PromotedScenes, p) >= 0) promoted++;
+            PackPaths.Log($"ISOLATION {inBuild.Count} scenes in Build Settings, " +
+                          $"{promoted} promoted from the pack, no debug scenes");
         }
     }
 }

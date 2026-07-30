@@ -127,6 +127,10 @@ namespace AIHWSim.Menu
             _vehicles.AddRange(VehicleLibrary.List());   // user saves: never gated
             _tracks = new List<string> { "" };    // "" = classic oval
             _tracks.AddRange(TrackPresets.DisplayNames());
+            // ▣ hand-authored scene tracks, between the ★ presets and user saves —
+            // they are shipped content like a preset, but resolve down a different
+            // path and cannot be opened in the Track Builder.
+            _tracks.AddRange(AIHWSim.Track.SceneTrackCatalog.DisplayNames());
             _tracks.AddRange(TrackLibrary.List());
 
             if (prevPick != null)
@@ -165,12 +169,28 @@ namespace AIHWSim.Menu
             return d;
         }
 
-        /// <summary>Resolve a picker track name: "" = classic oval, ★-preset, or a save.</summary>
+        /// <summary>Resolve a picker track name: "" = classic oval, ★-preset, or a save.
+        /// Returns null for a ▣ scene track too — those are not TrackDesign data at
+        /// all, so every caller must go through <see cref="SelectTrack"/> rather than
+        /// assigning the result of this straight onto GameFlow.</summary>
         private static TrackDesign ResolveTrack(string name)
         {
             if (string.IsNullOrEmpty(name)) return null;             // classic oval
             var preset = TrackPresets.Resolve(name);
             return preset ?? TrackLibrary.Load(name);
+        }
+
+        /// <summary>
+        /// Point GameFlow at whichever of the three track sources a picker name
+        /// means. The single funnel for track selection: the two GameFlow
+        /// properties are mutually exclusive, and choosing between them in four
+        /// places is how they would eventually disagree.
+        /// </summary>
+        private static void SelectTrack(string name)
+        {
+            string scene = AIHWSim.Track.SceneTrackCatalog.Resolve(name);
+            if (scene != null) { GameFlow.ActiveSceneTrack = scene; return; }
+            GameFlow.ActiveTrack = ResolveTrack(name);
         }
 
         private void Update()
@@ -749,9 +769,8 @@ namespace AIHWSim.Menu
             GameFlow.ActiveDesign = ResolveVehicle(vehicle);
             // Free roam owns its map: the town is not in the track picker at
             // all, so it is resolved by name here rather than selected.
-            GameFlow.ActiveTrack = roam
-                ? TrackPresets.Resolve(TrackPresets.FreeRoamName)
-                : ResolveTrack(track);
+            if (roam) GameFlow.ActiveTrack = TrackPresets.Resolve(TrackPresets.FreeRoamName);
+            else SelectTrack(track);
 
             // Slot 0 = the human; slots 1..N = AI opponents.
             string pname = string.IsNullOrWhiteSpace(s.player1Name) ? "Player" : s.player1Name;
@@ -1041,7 +1060,9 @@ namespace AIHWSim.Menu
             SessionConfig.Players.Add(MakeSlot(s.player1Name, _mpVeh1, _mpDev1, SessionConfig.P1Assists(s)));
             SessionConfig.Players.Add(MakeSlot(s.player2Name, _mpVeh2, _mpDev2, SessionConfig.P2Assists(s)));
 
-            GameFlow.ActiveTrack = track == "" ? null : TrackLibrary.Load(track);
+            // Split-screen's picker offers saves and scene tracks, not presets.
+            if (track == "") GameFlow.ActiveTrack = null;
+            else SelectTrack(track);
             GameFlow.ActiveDesign = SessionConfig.Players[0].design;
 
             s.p1DeviceKind = _mpDev1 == 0 ? (int)InputDeviceKind.Keyboard : (int)InputDeviceKind.Gamepad;
@@ -1145,8 +1166,14 @@ namespace AIHWSim.Menu
                         ? SessionConfig.P1Assists(cur) : SessionConfig.P2Assists(cur),
                 });
             }
-            GameFlow.ActiveTrack = string.IsNullOrEmpty(s.trackJson)
-                ? null : JsonUtility.FromJson<TrackDesign>(s.trackJson);
+            // A scene track has no trackJson to restore — it is named, and the
+            // scene name is what the snapshot carries. Checked first because the
+            // ActiveTrack assignment would clear it.
+            if (!string.IsNullOrEmpty(s.trackScene))
+                GameFlow.ActiveSceneTrack = s.trackScene;
+            else
+                GameFlow.ActiveTrack = string.IsNullOrEmpty(s.trackJson)
+                    ? null : JsonUtility.FromJson<TrackDesign>(s.trackJson);
             GameFlow.ActiveDesign = SessionConfig.Players.Count > 0 ? SessionConfig.Players[0].design : null;
             GameFlow.PendingSnapshot = s;
             LoadIfBuilt(GameFlow.TrackSceneName, GameFlow.LoadTrack);
@@ -1203,7 +1230,7 @@ namespace AIHWSim.Menu
             SettingsStore.Save();
 
             GameFlow.ActiveDesign = ResolveVehicle(vehicle);
-            GameFlow.ActiveTrack = ResolveTrack(track);
+            SelectTrack(track);
 
             SessionConfig.Mode = SessionMode.LanHost;
             SessionConfig.TargetLaps = 0; // free roam; races start in-game
