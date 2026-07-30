@@ -1,0 +1,36 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!114 &11400000
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 0}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: cca44baf75781804e80a8520d7e3e456, type: 3}
+  m_Name: Rocks
+  m_EditorClassIdentifier: 
+  entries:
+  - prefab: {fileID: 1120871450602908036, guid: 816c768af5c18b547af115b436854e80, type: 3}
+    weight: 1
+  - prefab: {fileID: 1480858269727594510, guid: e03c4ff98ed6ade47a437ff303e99928, type: 3}
+    weight: 1
+  - prefab: {fileID: 1201102271639617440, guid: 11f9f6a90a3133741a7fe0bce1467b33, type: 3}
+    weight: 1
+  - prefab: {fileID: 7044280482590241432, guid: 0f3a2eb3beafa9e40a71fd4ab1e9f5e8, type: 3}
+    weight: 1
+  - prefab: {fileID: 2596661176125823953, guid: a7deb5efb969dd34093af7e64d788aca, type: 3}
+    weight: 1
+  radius: 1.2
+  density: 3
+  randomYaw: 1
+  scaleMin: 0.7
+  scaleMax: 1.6
+  alignToSurface: 1
+  avoidRadius: 0.1
+  surfaceMask:
+    serializedVersion: 2
+    m_Bits: 55
+  parentName: Scatter

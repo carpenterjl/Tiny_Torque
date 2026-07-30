@@ -90,10 +90,10 @@ namespace AIHWSim.Modes
         // ---- aerial -----------------------------------------------------------
 
         /// <summary>Upward impulse of the first jump, in N·s.</summary>
-        public const float JumpImpulse = 2.6f;
+        public const float JumpImpulse = 8.6f;
 
         /// <summary>The second jump is weaker — it is a correction, not a lift.</summary>
-        public const float DoubleJumpImpulse = 2.0f;
+        public const float DoubleJumpImpulse = 6.0f;
 
         /// <summary>Window after the first jump in which a second press flips
         /// instead of jumping, if a direction is held.</summary>
@@ -102,7 +102,7 @@ namespace AIHWSim.Modes
         /// <summary>Flip impulse along the held direction, and the torque that
         /// makes it read as a barrel roll rather than a shove.</summary>
         public const float FlipImpulse = 3.2f;
-        public const float FlipTorque = 0.055f;
+        public const float FlipTorque = 1.055f;
 
         /// <summary>Air-roll authority, in N·m per unit of stick.</summary>
         public const float AirTorque = 0.05f;

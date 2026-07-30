@@ -1,0 +1,40 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!114 &11400000
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 0}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: cca44baf75781804e80a8520d7e3e456, type: 3}
+  m_Name: ToyClutter
+  m_EditorClassIdentifier: 
+  entries:
+  - prefab: {fileID: 7596793516025455155, guid: 8890881c560619e458262c1fb804d540, type: 3}
+    weight: 1
+  - prefab: {fileID: 3741771707085092454, guid: 54ca5d7742deafc42a5ff46c63941b9f, type: 3}
+    weight: 1
+  - prefab: {fileID: 7465450206487618776, guid: cd961fa0b7bd0e149b330b72ef7ecd07, type: 3}
+    weight: 1
+  - prefab: {fileID: 5250723095720834831, guid: bc7b4d66c05d7a8468a2b771123c60bd, type: 3}
+    weight: 1
+  - prefab: {fileID: 1114787617299105143, guid: 0a18b408d91c33a4fb47c5c97aa45204, type: 3}
+    weight: 1
+  - prefab: {fileID: 3769036521546189744, guid: 9193589787059e6449e256d99322f6f7, type: 3}
+    weight: 1
+  - prefab: {fileID: 8472169320426216207, guid: 5468c6bea9c99c7489b412a8e0425624, type: 3}
+    weight: 1
+  radius: 1
+  density: 5
+  randomYaw: 1
+  scaleMin: 0.8
+  scaleMax: 1.25
+  alignToSurface: 1
+  avoidRadius: 0.05
+  surfaceMask:
+    serializedVersion: 2
+    m_Bits: 55
+  parentName: Scatter

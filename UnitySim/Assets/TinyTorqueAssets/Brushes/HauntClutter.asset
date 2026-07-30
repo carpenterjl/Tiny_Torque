@@ -1,0 +1,36 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!114 &11400000
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 0}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: cca44baf75781804e80a8520d7e3e456, type: 3}
+  m_Name: HauntClutter
+  m_EditorClassIdentifier: 
+  entries:
+  - prefab: {fileID: 291127293854836781, guid: 3cde56cb63997fe4881f32f2b7631f0b, type: 3}
+    weight: 1
+  - prefab: {fileID: 1239428492520776285, guid: 0fa6477638e2b064f8cb2737ed162ea7, type: 3}
+    weight: 1
+  - prefab: {fileID: 2505320382882855349, guid: f81560e7cada8af429abadd52ba53f0e, type: 3}
+    weight: 1
+  - prefab: {fileID: 4344120366397134079, guid: 7aa96a4a82d11c945bcaaa10d6704516, type: 3}
+    weight: 1
+  - prefab: {fileID: 2837402360771429254, guid: cfbc6b10f483c904f95b01c4abfe6439, type: 3}
+    weight: 1
+  radius: 1.4
+  density: 4
+  randomYaw: 1
+  scaleMin: 0.85
+  scaleMax: 1.2
+  alignToSurface: 1
+  avoidRadius: 0.12
+  surfaceMask:
+    serializedVersion: 2
+    m_Bits: 55
+  parentName: Scatter

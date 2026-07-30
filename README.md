@@ -1583,6 +1583,40 @@ flag's default only exists to make a future port read this paragraph. The
 measurement behind it is on the imported asset: `city_house_a`'s door piece
 sits at z = +0.214, so a prop's front is on **+Z**.
 
+## Tiny Torque Assets (editor-only kit)
+
+`UnitySim/Assets/TinyTorqueAssets/` is a browsable kit of every model in the
+project — categorised mesh copies, generated `.mat` assets, prefabs, a Scene-view
+scatter brush, two debug scenes and two starter maps. It exists because the game
+has no prefabs and no material assets by design: everything is built
+procedurally at `Awake` and shaded by name token, which is right for the game and
+useless for looking at your own models.
+
+**It ships nothing.** The pack sits outside every `Resources/` folder, neither
+debug scene is in Build Settings, and no game script references it —
+`AIHWSim.Pack.PackValidator.Report` asserts all three on every run, alongside
+prefab completeness, mesh-collider coverage and a hash check that the pack's mesh
+copies still match their `Resources/` originals.
+
+Every material in it is a **clone of the material the game builds at runtime**,
+taken from `PartVisualFactory`'s tables, `CosmeticCatalog.Tokens`, and — for
+props, whose four procedural themes keep their tokens inline in each `ItemDef` —
+whatever actually lands on the renderers when the real build path runs. No PBR
+number is retyped, so the pack cannot drift from the game.
+
+Two things are pack-only. The **24-tile soccer/arena kit** (`soc_*`) is exported
+straight into the pack rather than into `Resources/`, keeps its authored 8 m grid
+frame so the shell tiles still self-stack, and carries all three themes'
+palettes; it is deliberately **not** registered in `TrackCatalog`, so the Track
+Builder cannot place it. And the two maps —
+`TinyTorque_FreeRoam` and `TinyTorque_BaseRace` — are `TrackDesign` JSON rather
+than `TrackPresets` rows, so they load and Drive from the Track Builder but
+appear in no in-game picker.
+
+Rebuild with `Tools > TinyTorque Assets > Rebuild everything`, or headless via
+`-executeMethod AIHWSim.Pack.PackBuildAll.RunHeadless`. Full detail in
+[the pack's own README](UnitySim/Assets/TinyTorqueAssets/README.md).
+
 ## Layout
 
 ```

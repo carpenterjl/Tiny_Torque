@@ -8,8 +8,331 @@ describe is documented in [README.md](../README.md).
 Active work lives in the session plan file, not here; a plan moves into this archive
 once its milestones are done.
 
-Covering the project bootstrap through the mini-game modes pass (551059 chars, 39 plans).
+Covering the project bootstrap through the handling/collision/rendering pass (570618 chars, 40 plans).
 Last updated 2026-07-29.
+
+---
+
+# Handling, honest collision, and the rendering-fidelity pass (2026-07-29)
+
+## Context
+
+The user play-tested the city/free-roam build and reported three problem areas.
+Three exploration passes pinned every symptom to a verified root cause:
+
+1. **"Slips way too much; wants an explicit Arcade/Sim physics toggle + Forza-style
+   assists; car should feel heavier."** The toggle already exists —
+   `SessionConfig.ArcadeHandling` (Core/SessionConfig.cs:107) — but it is only
+   applied through `TrackBootstrap.BuildArcade → ApplyArcadeHandling`
+   (TrackBootstrap.cs:250–301), which requires an arcade **lap race**. MenuUI.cs:694
+   forces arcade off for free roam and arenas, so those modes run base grip (1.0 not
+   1.45), base ESC (clamp 0.3 not 2.25 N·m), and whatever assist preset is saved
+   (default Standard = half strength) — on a town whose grass verges are 0.85 µ.
+   No launch control exists anywhere; downforce is ~3.5 % of weight by design.
+2. **"Buildings not enterable, ramps with invisible walls, ghost walls."** 87 of 113
+   static mesh props have a single-primitive hull: 60 full-footprint boxes (every
+   house/store/hangar sealed solid), 27 capsules of which 5 degenerate to **spheres**
+   (`HullCyl` makes a capsule; h<2r collapses — dt_volcano is a 12.6 m mesh with a
+   5 m ball at y 2.3). Ramp slab hulls have feet parked 0.038–0.192 m off the ground;
+   `ench_ramp_bridge`/`haunt_ramp_slab` sit on solid understructure boxes that wall
+   off the slope; the city arena ring floats 0.42 m inside the visible stands.
+3. **"Missing text/colors/materials, bare billboards, neon lost its glow, rims."**
+   Five distinct causes: (a) the three TinyTorque liveries (`M_Paint`,
+   `M_Buggy_Paint`, `M_Police_Paint`) are *procedural* in Blender and export as the
+   flat tintable "paint" token → grey cars (the police "POLICE" lettering is present
+   and correct — it's navy-on-grey invisible); (b) no bloom, no HDR, Gamma space —
+   `_EMISSION` above 1 just clips, so neon reads flat (nothing regressed; structural);
+   (c) `HideStockRim`'s 3-token keep-list hides Autopia's `whitewall_1`, which is
+   part of the **tyre**; (d) cosmetic mounts are coupe-fractions of whole-body
+   renderer bounds, so Highwing's stalk wing / Rattletrap's boom float the hats into
+   mid-air; (e) billboards are authored **blank in the source kit** (faithful).
+
+**User decisions (asked):** billboards get **in-game generated ad art**; the four
+themed circuits' backwards-facing props (last pass's axis bug) **get fixed this
+pass** — each map re-ports into its true Blender orientation (mirror of current).
+
+**Hard constraints:** Opus mission numbers bit-identical (leg A −13.615608 mm …
+total +58.145523 mm); protocol stays v14 (nothing below crosses the wire); IMGUI
+Layout-snapshot discipline; persistence via GameSettings JSON; full headless suite
+green (compile / PMV / TPV / CosmeticProbe `Report` / Opus mission / BuildRelease).
+
+**Design-agent verifications that de-risk the plan:**
+- The arcade channels have **zero writers outside ArcadeDirector** in
+  director-less sessions (`ArcadeRacer.RestoreCar`, `AerialControl` (aerial+boost
+  only), and nothing else; `CarVehicle.ResetVehicleTo` touches none) — so a
+  per-frame floor component is safe and cannot be stomped.
+- **Opus Proving Ground and all three arenas place zero `MeshProp` items** (cones,
+  tire stacks, walls, ramps — all procedural). The collider migration cannot
+  perturb the regression or arena physics by construction.
+- `AssistApplier.ApplyLive` (Core/AssistApplier.cs:82-83) overwrites `car.assists`
+  with raw slider values, silently dropping the arcade floor mid-session — a latent
+  bug the new per-frame floor fixes for free.
+
+---
+
+## M0 — plan housekeeping
+
+- [x] Spliced the mini-games plan into `Docs/plan-archive.md` as entry 39
+      (newest-first, 551 059 chars), titled and dated, flagged for #251/#252 left
+      pending. No plan files exist for the Legendary-cars or city passes (planned
+      inline — noted in the memory). `plan-archive` memory updated. Script:
+      `scratchpad/archive_splice5.py`.
+
+---
+
+# Part A — handling
+
+## M1 — Arcade handling as a mode-independent, live setting
+
+- [x] **New `Core/HandlingFloor.cs`** (MonoBehaviour). Added in
+      `TrackBootstrap.BuildPlayerRig` beside the assist floor
+      (TrackBootstrap.cs:883-890) for every rig this machine simulates (same
+      ownership rule as BuildArcade :265), **skipping firmware slots** (same checks
+      as AssistApplier.cs:37-38). Per-frame `Update()`:
+      - director session (`rig.arcade != null`): write `racer.gripBase/driveBase/
+        stabilityBase` = handling consts or 1f — bases only; ApplyEffects keeps its
+        per-frame channel path.
+      - no director: write `car.arcadeGripMult/arcadeDriveMult/arcadeStabilityMult`
+        directly. **Never touch** boost/yaw/assistMult/handbrakeMult/aerial (owned
+        by AerialControl + director).
+      - both: when on, re-assert the assist floor via `AssistApplier.ApplyFloor`
+        (bots included, mirroring ApplyArcadeHandling's deliberate bot inclusion).
+- [x] Retire `TrackBootstrap.ApplyArcadeHandling` (:284-301) — its work moves to
+      HandlingFloor; keep BuildArcade's Register loop.
+- [x] **Gate the drift latch on handling mode**: `ArcadeDirector.ApplyEffects`
+      (:1183) passes `disabled: wrecked || spun || !SessionConfig.ArcadeHandling`
+      to `UpdateDrift` (the disabled path is the existing wreck path — ends a held
+      drift cleanly).
+- [x] **MenuUI: lift the toggle out of the `if (_spArcade)` nest** in all three
+      places (Single Player :695-709, Split :946-956, LAN Host :1165-1173) — its
+      own always-visible row ("Handling: Arcade / Simulation"), reachable in free
+      roam and arenas. Layout-snapshot anything conditional.
+- [x] **SettingsPanel (:120-127): read-only label becomes a live toggle** (persist
+      `spArcadeHandling` + Save; on transition off, `AssistApplier.ApplyLive` to
+      restore slider values). LAN sessions keep the read-only label (flag is a
+      join-time session parameter).
+
+Verify: compile; free roam grips and the toggle flips it live; drift latch dies
+under Sim handling; Opus headless bit-identical.
+
+## M2 — Launch control, downforce, heavier tune
+
+- [x] **`CarVehicle`**: `AssistSettings` gains `launch`. Private `_launchScale`
+      (default 1f); apply as `volts *= _launchScale;` immediately after the proven
+      Opus-neutral seam `volts *= arcadeDriveMult;` (CarVehicle.cs:1242). New
+      `UpdateLaunchControl(in AssistSettings, float dt)` at the **end** of
+      `StepPhysics` (fresh `w.slipRatio`, one-step-latency governor): `launch<=0 →
+      scale=1`; arm below `LaunchEngageSpeed`, release-ramp above
+      `LaunchReleaseSpeed`; integrate toward worst powered wheel slip =
+      `LaunchSlipTarget`, clamp `[LaunchFloor, 1]`. Reset `_launchScale=1` in
+      `ResetVehicleTo` (:1123-1124 area). Composes with TC (per-wheel, torque-side,
+      stateless) without fighting: LC holds average slip at the peak, TC trims
+      transients.
+- [x] **`CarVehicle`**: new channel `arcadeDownforce` (N per (m/s)², default 0);
+      in `StepPhysics` next to `ApplyAerodynamics()` (:1589):
+      `if (arcadeDownforce > 0f) AddForce(-up * arcadeDownforce * v²)` at COM
+      (no pitch moment; branch-skipped at 0 → bit-identical).
+- [x] **`AssistTuning`**: `LaunchSlipTarget 0.12f` (1.2 × KappaPeak — comment the
+      provenance), `LaunchGain ~4f`, `LaunchFloor 0.30f`, `LaunchEngageSpeed 3.0f`,
+      `LaunchReleaseSpeed 4.0f`, `LaunchReleaseRate ~2f`.
+- [x] **`ArcadeConfig`**: `HandlingAssists` gains `launch = 1f`;
+      `HandlingGripBonus 1.45f → 1.60f`; new `HandlingDownforce = 0.10f`
+      (≈6.4 N at 8 m/s ≈ 36 % of the 1.8 kg car's weight — comment the
+      arithmetic). HandlingFloor owns `car.arcadeDownforce` in both session kinds.
+- [x] **Plumbing**: GameSettings p1/p2 launch floats (field-initializer
+      back-compat); `SessionConfig` presets (Standard 0.5 / Full 1.0); "Launch
+      ctrl" slider in Options + SettingsPanel P1/P2 blocks (unconditional
+      controls — IMGUI-safe).
+
+Verify: compile; **Opus headless bit-identical (the critical gate)**; manual
+standing starts asphalt/grass, launch 0 vs 1. Feel numbers are play-tune consts.
+
+# Part B — collision
+
+## M3 — Geometry-accurate prop collision (mesh colliders)
+
+- [x] **`PartModelPostprocessor.cs:58`**: TrackProps become readable
+      (`file.StartsWith("body_") || path.Contains("/Resources/TrackProps/")`);
+      bump `GetVersion()` so all 126 FBX reimport.
+- [x] **`TrackCatalog.MeshProp` (:277-294)**: when the mesh instantiates and the
+      `hull` lambda is **null**, auto-add a non-convex `MeshCollider` per
+      `MeshFilter` piece (`sharedMesh = mf.sharedMesh`, null PhysicMaterial —
+      friction parity with the old hulls; BodyPainter.cs:105-113 precedent). A
+      non-null `hull` opts out (invoked, no auto). Then **delete the hull lambdas
+      from all ~111 static scenery items**, keeping: `haunt_ghost`/`haunt_wisp`
+      trigger hulls (concave meshes can't be triggers), `MeshPropDynamic` items
+      (non-convex + Rigidbody is illegal — they keep primitives), primitive
+      fallbacks. `city_arena` goes auto provisionally — restore a residual ring
+      via opt-out only if the new validator says the stands mesh is open at car
+      height. While in `Hull`: use `DestroyImmediate` when not playing (kills the
+      edit-mode Destroy noise in validators).
+- [x] **`PartModelValidator`**: assert `ModelImporter.isReadable == true` for every
+      FBX under Resources/TrackProps — the guard against the editor-passes/
+      player-build-fails runtime-cook trap.
+- [x] **`TrackPresetValidator`**: (i) `CheckDriveIns` gains a `city_gas`
+      canopy-bay case (measure the corridor in-editor); the existing 4 should pass
+      with exact apertures. (ii) New `CheckColliderCoverage`: for every static
+      non-trigger mesh item, build it and assert combined collider bounds ≈
+      combined renderer bounds (shortfall < ~5 cm, overshoot < ~10 cm per axis) —
+      catches ghost gaps (dt_volcano's ball) and stray hulls (arena ring) forever.
+      (iii) BUILD line gains collider count; `TrackFactory.BuildItems` gains a
+      Stopwatch cook-time log (watch the 1 243-item town; if > ~250 ms, pre-warm
+      with `Physics.BakeMesh` jobs at the top of `TrackFactory.Build`).
+
+Verify: PMV + TPV ALL PASS (two new checks live); Opus bit-identical (proving
+ground places zero mesh props — belt and braces); BuildRelease; then a **player
+build** smoke-drive: garage/autoshop/firehouse/arena tunnel/gas canopy + every
+themed ramp foot.
+
+# Part C — rendering
+
+## M4 — Bloom (dependency-free, Built-in RP)
+
+- [x] **New `Assets/Resources/Shaders/AIHWSimBloom.shader`** ("Hidden/AIHWSim/
+      Bloom": bright-pass w/ threshold+soft-knee, separable blur H/V, additive
+      composite). Resources placement ships it in builds.
+- [x] **New `Scripts/Rendering/CameraBloom.cs`**: `OnRenderImage` — descriptor-
+      derived temp RTs at ½/¼/⅛, 3-iteration chain; early-out blit when
+      `!SettingsStore.Current.bloom || _mat == null` (one-time warn on stripped
+      shader). Static `Attach(Camera)` sets `allowHDR = true` + adds component.
+      HDR threshold ~1.0–1.15 (authored >1 emission drives glow); LDR fallback
+      threshold ~0.80 — both named consts.
+- [x] **Attach at**: TrackBootstrap.cs:527/1077/1084/1340 (drive + split
+      viewports), MenuBootstrap.cs:98, MenuAttract.cs:142, GarageBootstrap.cs:89,
+      ShowroomRig.cs:73, CrateRig.cs:54. **Never**: CameraSensor (firmware eyes),
+      PartPreviewRig/icon RTs, SimBootstrap, TrackBuilderBootstrap.
+- [x] **GameSettings**: `bool bloom = true` + toggle in Options video block +
+      SettingsPanel. IMGUI draws after all cameras — bloom cannot smear the UI;
+      split-screen is per-camera-RT so no cross-viewport bleed (verify 2P
+      visually).
+
+Verify: compile; BuildRelease (shader resolves in player); A/B toggle in menu/
+garage/drive/2P split; firmware HUD's sensor preview shows no bloom; Opus
+bit-identical.
+
+## M5 — Glow retune (data-only, strictly after M4)
+
+- [x] Raise emissive multipliers toward authored ratios (source 5–19×, game
+      0.3–2.2×) in one tuning table per family, authored values in comments:
+      `TrackCatalog.T` glow args, `PartVisualFactory.Em` sites,
+      `CosmeticCatalog.Mat`. Start ≈ authored × 0.5; user tunes with bloom on.
+
+## M6 — Baked liveries (coupe / buggy / police)
+
+- [x] **`Blender/build_vehicles.py`**: remap `M_Paint`/`M_Buggy_Paint`/
+      `M_Police_Paint` from the tintable "paint" token to per-car baked tokens;
+      add `"bake_token"` per config — exactly the Rattletrap template (:188-202,
+      `bake_token_to_texture` :403-490). Re-export the three cars; commit
+      `body_<key>_paint.png` beside the FBX.
+- [x] **`PartVisualFactory`**: three lazily-built materials mirroring `RustPaint`
+      (:151-167) — white tint, Resources texture, measured rough/metal from the
+      exporter's printout; bind tokens in the accent tables (follow every
+      "rustpaint" reference as the wiring checklist).
+- [x] **`CarVehicle.HasPaintableBody` (:831-841)**: add the three shapes beside
+      `Rattle` — a baked shell can't also drive `_bodyMat.mainTexture`.
+- [x] **Deviation to state loudly**: TT Coupe (the starter car), Baja and Patrol
+      lose garage repaint/tint — the authored livery replaces the colour picker
+      (Rattletrap precedent). POLICE lettering becomes visible for free.
+
+Verify: compile; CosmeticProbe PASS; garage visual (liveries render, paint mode
+absent for the three); PMV; BuildRelease.
+
+## M7 — Whitewall fix + probe hardening
+
+- [x] **`HideStockRim` (PartVisualFactory.cs:311)**: keep-list gains `whitewall`.
+      First print hidden-renderer names per wheel FBX via the probe and decide
+      from the printout whether any `dark`/`steel` piece is tyre-side.
+- [x] **`CosmeticProbe`**: hidden count → hidden **names**; hard FAIL if any
+      hidden name contains tire/tyre/whitewall; extend the matrix to **all**
+      presets × all 10 rims, explicitly the four Legendary cars (their wheels
+      have no `brake` piece — assert by name list, not structure). The Autopia
+      case must fail before the fix and pass after (proves the assertion bites).
+
+## M8 — Measured cosmetic mounts for the Legendary bodies
+
+- [x] **`build_vehicles.py`**: measure roof plane / nose ornament point / wing
+      mount per Legendary body; print a paste-ready C# table (the VEHJSON-paste
+      contract, VehiclePresets.cs:253-259).
+- [x] **`CosmeticMounts`**: per-`BodyShape` override table of absolute local
+      mount points, used when present; coupe-fraction path stays as fallback.
+      Kills the bounds inflation from Highwing's stalk wing / Rattletrap's boom.
+      Bobble keeps the antenna-tip rule with a measured rear-deck fallback.
+- [x] **CosmeticProbe**: mount check — body meshes are readable, so cook a temp
+      MeshCollider (BodyPainter pattern) and assert a downward ray from above each
+      mount hits body geometry within ~15 mm. Visual pass on all four cars with
+      topper/ornament/wing/bobble.
+
+## M9 — Billboard ad art (user decision: generate in-game)
+
+- [x] **New poster-texture generator** (TrackBuilder-style, cached by variant):
+      seeded ad variants — stripe/block motifs + crude lettering via a small
+      in-code pixel font ("TINY TORQUE", "SPEED SODA", …), mild emission so M4
+      bloom lifts the lit face. Precedent: NoiseTexture/StripeTexture/Chevron +
+      the attic wallpaper (MapAmbience.cs:423).
+- [x] **`city_billboard`**: build lambda adds a thin poster **quad overlay**
+      sized to the face (avoids unknown FBX UVs entirely). A tiny
+      `BillboardPoster` component picks the variant in `Start()` from a hash of
+      world position (posed by then; deterministic per placement; LAN-consistent
+      since layouts are identical).
+- [x] Stretch (same mechanism): a neon-word overlay for `dt_bld_block`'s blank
+      roof signface.
+
+# Part D — the mirrored circuits
+
+## M10 — Re-port the four themed circuits into true orientation
+
+- [x] Switch Downtown, Toy Room, Enchanted Kingdom and Haunted Hollow presets to
+      `new MapLayout(d, seed, shiftX, shiftZ', meshAxes: true)`, re-deriving each
+      `shiftZ'` from the authored bounds exactly as Torque Falls did (TPV
+      in-bounds check verifies). `Road()`/`ForTiles()` were already made
+      negation-safe last pass.
+- [x] Grep each port for any placement bypassing `L.Heading`/`L.Prop` (raw yaw or
+      static `MapLayout.Yaw`) and convert.
+- [x] **Temporary probe** (CityAxisProbe pattern, delete after): dump position/yaw
+      of a handful of asymmetric props per map (doors, signs, building fronts) and
+      check against the Blender source layout dump — the same proof used for
+      Torque Falls (facing rows at z −24.6 yaw 0 / z −18.2 yaw 180).
+- [x] Note for README: circuits now match the Blender source orientation; the
+      previous builds were mirror images. Lap records keep their names; times were
+      set on the mirrored layout.
+
+Verify: TPV ALL PASS (in-bounds, spline, coverage); bot lap sanity on one circuit
+(BotPath follows the mirrored spline consistently — same CP order).
+
+---
+
+## M11 — Docs + full verification
+
+- [x] README: handling rewrite under Arcade mode (mode-independent + live +
+      launch control + downforce + grip 1.60), mesh-collision section replacing
+      the hull prose, "Rendering: bloom, baked liveries, posters" section,
+      mirrored-circuits note, free-roam drive-in + emission updates. Protocol
+      stays v14 (nothing crossed the wire).
+- [x] Memory: `cosmetics-pipeline` extended (TrackProps CPU-readable + runtime
+      MeshCollider cooking + coverage/drive-in checks; all five ports on
+      meshAxes with the flip recipe; the X-mirror measurement; three more
+      baked liveries + repaint exclusions).
+- [x] Full gate GREEN: compile 0 `error CS` (the [Script Updater] pre-pass
+      lines in the build log are benign) → `[PMV] RESULT ALL PASS (204)` +
+      `READABLE all 126` → `[TPV] RESULT ALL PASS (12)` with five DRIVEIN
+      clear + `COVER 111` → `[COS] RESULT ALL PASS` (incl. the new tyre-hidden
+      and topper-mount checks) → **Opus completed fault 0, bit-identical**
+      (legA −13.615608 mm, turn +0.187378°, legB +15.803814 mm, total
+      +58.145523 mm) → `[BuildMenu] Release build succeeded`.
+- [ ] User play-test: handling feel consts (`HandlingGripBonus`,
+      `HandlingDownforce`, launch consts, glow table, bloom
+      threshold/intensity) are the expected tuning surface, plus the in-player
+      smoke drive (drive-ins, ramp feet, bloom toggle, mirrored circuits).
+
+**Deviations, stated:** P8 measures the Legendary SHELL by excluding appendage
+tokens (hwwhite/steel/gunmetal/face) instead of an exporter mount table — same
+measurement, self-maintaining; the probe's ray check is topper-only and
+report-only for open-top shapes (the Baja has no roof; the hat perches at cage
+height). The dt_bld_block neon-word overlay (stretch) was skipped — under bloom
+the authored blank gold sign face reads as lit. The DRIVEIN corridors moved to
+the props' true bays: probing the real meshes showed the old hand-authored
+hulls (and corridors) sat on the X-mirrored side — the garage's "open" corridor
+ran over the closed roller-door bay and its tyre stacks.
 
 ---
 

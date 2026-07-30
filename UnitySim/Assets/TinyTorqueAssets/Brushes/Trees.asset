@@ -1,0 +1,40 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!114 &11400000
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 0}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: cca44baf75781804e80a8520d7e3e456, type: 3}
+  m_Name: Trees
+  m_EditorClassIdentifier: 
+  entries:
+  - prefab: {fileID: 2323791701447924644, guid: 060d283f3364924409e4ecd5908ad776, type: 3}
+    weight: 1
+  - prefab: {fileID: 3486704585052133669, guid: 24eb40260388d9342bf7aa613e9969e6, type: 3}
+    weight: 1
+  - prefab: {fileID: 1015878303614230058, guid: 07a31165acb42e14c9056be9d1c095d1, type: 3}
+    weight: 1
+  - prefab: {fileID: 4350996235148552361, guid: 7b726fddae867dc47821659f71d39f3e, type: 3}
+    weight: 1
+  - prefab: {fileID: 800241389158834980, guid: 30d515e0f111d7b448213544c9589c02, type: 3}
+    weight: 1
+  - prefab: {fileID: 4592244985755729316, guid: 9983c94b943e92840aec4cc749729e83, type: 3}
+    weight: 1
+  - prefab: {fileID: 1992834634208529554, guid: 5f5295d917c2c94499e95723ed650af9, type: 3}
+    weight: 1
+  radius: 2
+  density: 2
+  randomYaw: 1
+  scaleMin: 0.85
+  scaleMax: 1.35
+  alignToSurface: 0
+  avoidRadius: 0.35
+  surfaceMask:
+    serializedVersion: 2
+    m_Bits: 4294967295
+  parentName: Scatter

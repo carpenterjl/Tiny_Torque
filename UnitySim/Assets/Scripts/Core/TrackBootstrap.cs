@@ -1,10 +1,11 @@
-﻿using System.Collections.Generic;
-using AIHWSim.Garage;
+﻿using AIHWSim.Garage;
+using AIHWSim.Persistence;
 using AIHWSim.Sensors;
 using AIHWSim.Telemetry;
 using AIHWSim.Track;
 using AIHWSim.TrackEd;
 using AIHWSim.Vehicles;
+using System.Collections.Generic;
 using UnityEngine;
 
 namespace AIHWSim.Core
@@ -61,6 +62,53 @@ namespace AIHWSim.Core
 
         private void Awake()
         {
+            // If we are testing the sandbox scene directly, force Single Player 
+            // and assign a default placeholder track so the game doesn't break.
+            if (UnityEngine.SceneManagement.SceneManager.GetActiveScene().name == "TTA_Sandbox")
+            {
+                SessionConfig.SetSinglePlayer();
+               
+                GameFlow.ActiveDesign = VehiclePresets.Resolve("TT Patrol");
+                _spawnPos = new Vector3(0f, 2f, 0f);
+                _spawnRot = Quaternion.identity;
+
+                SessionConfig.Players.Add(new PlayerSlot
+                {
+                    name = "Jacob",
+                    profileId = "Jacob",
+                    design = GameFlow.ActiveDesign,
+                    deviceKind = InputDeviceKind.MergedKeyboardGamepad,
+                    assists = SessionConfig.P1Assists(SettingsStore.Current),
+                    isBot = false,
+                    control = DriveControl.Human,
+                });
+
+                var players = SessionConfig.ResolvePlayers(); // Resolves exactly 1 human player
+                
+                // 3. Force-spawn the player rig (passing your default position settings)
+                // Note: Check if your BuildPlayerRig function signature matches (Slot, Index, TotalSlots, SplitScreen)
+                var sandboxRig = BuildPlayerRig(players[0], 0, 1, false);
+                _rigs.Add(sandboxRig);
+                _humanRig = sandboxRig;
+                _runner = sandboxRig.runner;
+                BuildLighting();
+
+                if (sandboxRig.camera != null)
+                {
+                    sandboxRig.camera.clearFlags = CameraClearFlags.Skybox;
+
+                    // Remove or update an existing Skybox component if the prefab came with one
+                    var oldSkyboxComponent = sandboxRig.camera.GetComponent<Skybox>();
+                    if (oldSkyboxComponent != null)
+                    {
+                        oldSkyboxComponent.material = Resources.Load<Material>("Environment/Sky_PurpleSunset");
+                    }
+                }
+
+                // 4. Instantly exit Awake() so it doesn't look for track paths or race directors
+                return;
+            }
+
             // LAN sessions have their own composition paths (host simulates all
             // cars; clients render ghosts). Guard against a stale mode with no
             // live session (e.g. pressing Play directly in TrackScene).
@@ -1184,6 +1232,22 @@ namespace AIHWSim.Core
         /// </summary>
         private void BuildLighting()
         {
+            if (UnityEngine.SceneManagement.SceneManager.GetActiveScene().name == "TTA_Sandbox")
+            {
+                Material synthwaveSky = Resources.Load<Material>("Environment/Sky_PurpleSunset");
+                if (synthwaveSky != null)
+                {
+                    RenderSettings.skybox = synthwaveSky;
+                    RenderSettings.ambientMode = UnityEngine.Rendering.AmbientMode.Skybox;
+                    DynamicGI.UpdateEnvironment();
+                }
+                else
+                {
+                    UnityEngine.Debug.LogError("Skybox material 'Sky_PurpleSunset' not found inside Resources folder!");
+                }
+                return;
+            }
+
             if (FindFirstObjectByType<Light>() != null) return;
             var lightGo = new GameObject("Directional Light");
             var light = lightGo.AddComponent<Light>();

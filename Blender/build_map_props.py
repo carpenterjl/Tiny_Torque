@@ -23,6 +23,12 @@ UnitySim/Assets/Resources/TrackProps/<key>.fbx:
     TinyTorque_city_props.blend   -> city_*    (Torque Falls; the source names
                                     are ALREADY city_-prefixed, so this pack
                                     adds nothing)
+    TinyTorque_soc_props.blend    -> soc_*     (the 24-tile arena kit; also
+                                    already prefixed. This one goes to the
+                                    asset pack instead of Resources, keeps the
+                                    authoring frame instead of a base-contact
+                                    origin, and reads three palettes off the
+                                    theme axis -- see the PACKS entry.)
 
 Per prop: duplicate, bake S(0.1) @ T(-cx, -cy, -minz) (origin at the base
 contact point, centre in plan -- TrackFactory.ItemPose snaps roots onto the
@@ -68,6 +74,17 @@ FBX_DIR = os.path.normpath(os.path.join(
 
 SCALE = 0.1
 PROFILE_STATIONS = 12
+
+# Where the modeling project's authoring modules live, so a pack can ask one of
+# them for palettes it does not carry in its own blend (see "themes" below).
+SCRIPTS = os.path.join(os.path.dirname(MODELS), "scripts")
+
+# The asset pack's arena folder. Pack-native props are exported straight here
+# and never enter Resources/ -- they are a Unity-side kit for editing, not
+# content the game can place, so putting them in Resources would ship bytes for
+# something no TrackCatalog item references.
+PACK_DIR = os.path.normpath(os.path.join(
+    HERE, "..", "UnitySim", "Assets", "TinyTorqueAssets", "Models", "Props", "Arena"))
 
 # Known materials per pack -- the token is the name minus this prefix,
 # lowercased. Anything not listed here is fatal: a silently auto-derived
@@ -125,6 +142,40 @@ PACKS = {
                  "Roof0", "Roof1", "Rubber", "SigGreen", "SigOff", "SignLit",
                  "Soil", "Steel", "Stucco", "Timber", "Trim", "TrimDk",
                  "Tube", "Wall5", "Wall7", "Yellow"],
+    },
+    # The soccer/arena tile kit. Three things make it unlike the five above,
+    # and each is one optional key rather than a special case in build_pack:
+    #
+    #   "origin": "row" -- the other packs are showcase props that TrackFactory
+    #     drops onto a surface, so their origin is baked to the base contact
+    #     point, centred in plan. These are TILES: an arena is assembled by
+    #     placing all of them at the same point and letting the authored
+    #     offsets stack the shell (floor z -0.6..0, cove 0..16, wall 16..32,
+    #     crown 32..40.6, ceiling at 40). Recentring each one would collapse
+    #     the shell into a pile at the origin. Measured: the blend stores the
+    #     kit lined up along X for the lineup render with `location = (x, 0, 0)`
+    #     and Y/Z authored in place, so undoing exactly that X offset restores
+    #     the authoring frame and nothing else.
+    #
+    #   "themes" -- the palette is a THEME AXIS. Every one of the twenty slots
+    #     is answered by all three themes (M_Soc_Circuit_wall, M_Soc_Sandlot_wall,
+    #     M_Soc_Forge_wall) and retheme() swaps an arena by name lookup without
+    #     touching a vertex. The blend was built in the default theme only, so
+    #     the other two palettes are read by asking the authoring module to
+    #     build them -- geometry still exports ONCE.
+    #
+    #   "dest" -- pack-native, see PACK_DIR.
+    "soc": {
+        "blend": "TinyTorque_soc_props.blend",
+        "prefix": "M_Soc_Sandlot_",
+        "mats": ["floor", "sub", "line", "cove", "wall", "ceiling", "trim",
+                 "metal", "glass", "glow_a", "glow_b", "light", "screen",
+                 "net", "seat", "crowd", "banner", "ball", "team_blue",
+                 "team_orange"],
+        "origin": "row",
+        "dest": PACK_DIR,
+        "themes": {"module": "tt_26_soccer",
+                   "names": ["circuit", "sandlot", "forge"]},
     },
 }
 
@@ -228,13 +279,14 @@ def separate_loose(objs):
             if o.type == 'MESH' and o.select_get()]
 
 
-def export_fbx(objs, key):
+def export_fbx(objs, key, dest=None):
     deselect_all()
     for o in objs:
         o.select_set(True)
     bpy.context.view_layer.objects.active = objs[0]
-    os.makedirs(FBX_DIR, exist_ok=True)
-    path = os.path.join(FBX_DIR, key + ".fbx")
+    dest = dest or FBX_DIR
+    os.makedirs(dest, exist_ok=True)
+    path = os.path.join(dest, key + ".fbx")
     # Identical to mcp_helpers.export_part: apply_unit_scale=False +
     # global_scale=0.01 cancels the m->cm bake; EDGE smoothing carries split
     # normals; PartModelPostprocessor reads the raw numbers.
@@ -370,6 +422,61 @@ def srgb(c):
                  else 1.055 * (c ** (1.0 / 2.4)) - 0.055, 4)
 
 
+def read_principled(m):
+    """The measured PBR of one material, or None if it has no Principled node."""
+    if m is None or not m.use_nodes:
+        return None
+    bsdf = next((n for n in m.node_tree.nodes if n.type == 'BSDF_PRINCIPLED'), None)
+    if bsdf is None:
+        return None
+    base = _read(bsdf.inputs["Base Color"]) or [0.5, 0.5, 0.5]
+    rough = (_read(bsdf.inputs["Roughness"], 'VALUE') or [0.5])[0]
+    metal = (_read(bsdf.inputs["Metallic"], 'VALUE') or [0.0])[0]
+    emis = _read(bsdf.inputs["Emission Color"]) or [0.0, 0.0, 0.0]
+    strength = (_read(bsdf.inputs["Emission Strength"], 'VALUE') or [0.0])[0]
+    alpha = (_read(bsdf.inputs["Alpha"], 'VALUE') or [1.0])[0]
+    lit = [c * strength for c in emis]
+    return {
+        "color": [srgb(c) for c in base],     # paste this into T()
+        "linear": base,
+        "smooth": round(1.0 - rough, 4),      # Unity Standard _Glossiness
+        "metal": round(metal, 4),
+        "alpha": round(alpha, 4),
+        # T()'s `glow` scales the sRGB colour, so the useful number is how
+        # many times its own albedo the surface emits.
+        "glow": round(sum(lit) / max(1e-6, sum(base)), 3),
+        "emission": [round(c, 4) for c in lit],
+    }
+
+
+def dump_theme_materials(pack, cfg):
+    """Palettes for a pack whose materials are a THEME AXIS.
+
+    The blend carries exactly one theme's materials (whichever the kit was
+    built in), but the authoring module can construct any of them -- every
+    theme answers the same slot names, which is the whole point of the axis.
+    So the geometry is exported once and the palette is read three times,
+    rather than exporting the kit three times over.
+    """
+    spec = cfg["themes"]
+    if SCRIPTS not in sys.path:
+        sys.path.insert(0, SCRIPTS)
+    try:
+        mod = __import__(spec["module"])
+    except Exception as e:                       # noqa: BLE001 - report and go on
+        die("could not import %s from %s (%s)" % (spec["module"], SCRIPTS, e))
+
+    for theme in spec["names"]:
+        mats = mod.materials(theme)              # slot -> bpy material
+        out = {}
+        for slot, m in sorted(mats.items()):
+            pbr = read_principled(m)
+            if pbr is not None:
+                out[slot] = pbr
+        print("MATJSON>>>" + json.dumps(
+            {"pack": pack, "theme": theme, "materials": out}) + "<<<MATJSON")
+
+
 def dump_materials(pack, cfg, tokens):
     """One JSON block of authored PBR per pack, between MATJSON markers.
 
@@ -454,15 +561,31 @@ def build_pack(pack, cfg):
     if not props:
         die("no P_* meshes in " + cfg["blend"])
 
-    dump_materials(pack, cfg, tokens)
+    if "themes" in cfg:
+        dump_theme_materials(pack, cfg)
+    else:
+        dump_materials(pack, cfg, tokens)
+
+    origin = cfg.get("origin", "base")
+    dest = cfg.get("dest")
 
     for src in props:
         name = src.name[2:]                       # strip "P_"
         key = ("dt_" + name) if pack == "dt" else name
 
         dups = duplicate([src])
-        lo, hi = world_bbox(dups)
-        base = Vector(((lo.x + hi.x) * 0.5, (lo.y + hi.y) * 0.5, lo.z))
+        if origin == "row":
+            # Tiles: keep the authoring frame, undo only the lineup offset.
+            # Measured, not assumed -- the kit blend stores every tile with
+            # location = (x, 0, 0) and its Y/Z authored in place, so this is
+            # exactly the showcase translation and nothing else.
+            base = Vector((src.location.x, 0.0, 0.0))
+        else:
+            # Showcase props: origin at the base contact point, centred in
+            # plan, because TrackFactory.ItemPose snaps roots onto the drop
+            # surface and a centred origin would bury half the prop.
+            lo, hi = world_bbox(dups)
+            base = Vector(((lo.x + hi.x) * 0.5, (lo.y + hi.y) * 0.5, lo.z))
         bake(dups, Matrix.Scale(SCALE, 4) @ Matrix.Translation(-base))
 
         parts = separate_and_tokenise(dups, tokens)
@@ -480,9 +603,10 @@ def build_pack(pack, cfg):
                 "size": to_unity_size(olo, ohi),
             }
 
-        export_fbx(parts, key)
+        export_fbx(parts, key, dest)
         report = {
             "key": key,
+            "origin": origin,
             "size": to_unity_size(plo, phi),
             "tris": tris,
             "tokens": sorted({o.name.rsplit("_", 1)[0] for o in parts}),

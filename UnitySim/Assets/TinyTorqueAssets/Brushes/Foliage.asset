@@ -1,0 +1,36 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!114 &11400000
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 0}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: cca44baf75781804e80a8520d7e3e456, type: 3}
+  m_Name: Foliage
+  m_EditorClassIdentifier: 
+  entries:
+  - prefab: {fileID: 7828571889652415973, guid: 83952e42ed894a44aaa3e131b2059eac, type: 3}
+    weight: 1
+  - prefab: {fileID: 721867845445366966, guid: 152a2428d38a5894a83d7f1d902268b4, type: 3}
+    weight: 1
+  - prefab: {fileID: 8891317000892477806, guid: 201c9339e1e9455439994cfc2688b75e, type: 3}
+    weight: 1
+  - prefab: {fileID: 8106886412134823765, guid: 6bf077024855b394bba0327d7804c088, type: 3}
+    weight: 1
+  - prefab: {fileID: 3454033406022693336, guid: 4938024ad751a6948b5f4069a9592718, type: 3}
+    weight: 1
+  radius: 0.86
+  density: 1
+  randomYaw: 1
+  scaleMin: 0.8
+  scaleMax: 1.3
+  alignToSurface: 0
+  avoidRadius: 2
+  surfaceMask:
+    serializedVersion: 2
+    m_Bits: 1
+  parentName: Scatter

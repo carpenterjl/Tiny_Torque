@@ -113,6 +113,36 @@ namespace AIHWSim.EditorTools
                 "Tip: also create the Track Scene so Drive can load your map.", "OK");
         }
 
+        [MenuItem("Tools/AIHWSim/Create Map Debug Scene")]
+        public static void CreateMapDebugScene()
+        {
+            // 1. Create a blank scene with default lights and camera
+            var scene = EditorSceneManager.NewScene(
+                NewSceneSetup.DefaultGameObjects,
+                NewSceneMode.Single);
+
+            // 2. Add your scene's specific bootstrap object (optional)
+            var go = new GameObject("TrackBootstrap");
+            // Note: If you don't have a specific script for this scene yet, 
+            // you can comment out or remove the AddComponent line below:
+            // go.AddComponent<AIHWSim.MyNamespace.MyNewSceneBootstrap>(); 
+            Selection.activeGameObject = go;
+
+            // 3. Ensure the folder structure exists
+            if (!AssetDatabase.IsValidFolder("Assets/TinyTorqueAssets/Scenes"))
+                AssetDatabase.CreateFolder("Assets/TinyTorqueAssets", "Scenes");
+
+            // 4. Define the unique path and filename for your new scene
+            const string path = "Assets/TinyTorqueAssets/Scenes/TTA_Sandbox.unity";
+
+            // 5. Save the file and automatically inject it into Build Settings
+            EditorSceneManager.SaveScene(scene, path);
+            AddSceneToBuild(path);
+
+            // 6. Alert the developer that it succeeded
+            EditorUtility.DisplayDialog("AIHWSim", $"Created {path} and added it to Build Settings.", "OK");
+        }
+
         /// <summary>
         /// Ensure a scene is registered (and enabled) in Build Settings so
         /// SceneManager.LoadScene(name) works at runtime for the garage↔track flow.

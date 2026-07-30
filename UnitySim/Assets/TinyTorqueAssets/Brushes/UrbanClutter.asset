@@ -1,0 +1,38 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!114 &11400000
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 0}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: cca44baf75781804e80a8520d7e3e456, type: 3}
+  m_Name: UrbanClutter
+  m_EditorClassIdentifier: 
+  entries:
+  - prefab: {fileID: 1748181756833726840, guid: af3848e30e09b8240859267e5f0050fc, type: 3}
+    weight: 1
+  - prefab: {fileID: 4334677692662151710, guid: 95ecaf063caa4b147b631a8737f8854e, type: 3}
+    weight: 1
+  - prefab: {fileID: 6855029594885188379, guid: 4e27b7aaf88ab0442b11a65b7a4de7d7, type: 3}
+    weight: 1
+  - prefab: {fileID: 2730289324626349588, guid: c31e621eb9b5657449df36af0e76360a, type: 3}
+    weight: 1
+  - prefab: {fileID: 2427947443558480788, guid: 4bed42e812e4a8f40875f41b74453b37, type: 3}
+    weight: 1
+  - prefab: {fileID: 7977054219001716463, guid: 576fc44e220670c409d4a09844c5af55, type: 3}
+    weight: 1
+  radius: 1.5
+  density: 2
+  randomYaw: 1
+  scaleMin: 0.95
+  scaleMax: 1.05
+  alignToSurface: 0
+  avoidRadius: 0.25
+  surfaceMask:
+    serializedVersion: 2
+    m_Bits: 55
+  parentName: Scatter
