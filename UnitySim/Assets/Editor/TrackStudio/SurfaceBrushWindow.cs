@@ -1,3 +1,4 @@
+using System.Collections.Generic;
 using AIHWSim.Track;
 using AIHWSim.TrackEd;
 using UnityEditor;
@@ -14,6 +15,13 @@ namespace AIHWSim.TrackTools
     /// a patch of ground is made of. Which mechanism carries that decision is an
     /// implementation detail of the thing under the cursor, and asking the user to
     /// track it would be asking them to think about SurfaceMap's resolution order.
+    ///
+    /// <b>Nothing is unpaintable.</b> A terrain with no TerrainLayer for the chosen
+    /// floor gets one built (see <see cref="TerrainLayerLibrary"/>), so the only way
+    /// a stroke can do nothing is a target the author switched off in the window's
+    /// own list — and that case draws the brush red and says so under the cursor.
+    /// The earlier behaviour, refusing with a console warning per stamp, made a
+    /// setup problem look like a broken tool.
     ///
     /// Scene-view interaction follows ScatterBrushWindow exactly — control ID taken
     /// first, AddDefaultControl only during Layout, alt/right-drag left to the
@@ -35,16 +43,51 @@ namespace AIHWSim.TrackTools
         private bool _stroking;
         private TerrainData _strokeUndoTarget;
 
+        /// <summary>
+        /// One paintable thing in the scene, as the brush window lists it.
+        ///
+        ///
+        /// Grouped by scene root rather than per collider: a scene with a few hundred
+        /// props would give a few hundred rows, and nobody wants to hunt for
+        /// "Barrel_037" in a list. A root is also the unit an author already thinks
+        /// in — "don't paint the buildings" is a sentence about a root.
+        /// </summary>
+        private sealed class Target
+        {
+            public GameObject root;
+            public int terrains, roads, meshes;
+            public string Key => root.name;
+            public int Total => terrains + roads + meshes;
+        }
+
+        /// <summary>Rebuilt from the scene, never serialised. Keyed by root NAME so a
+        /// toggle survives a domain reload, which instance ids do not. Two roots with
+        /// the same name therefore share one toggle — rename one if that matters.</summary>
+        private List<Target> _targets;
+        private readonly Dictionary<string, bool> _off = new Dictionary<string, bool>();
+        private Vector2 _scroll;
+
         [MenuItem(TrackStudio.Menu + "Surface Brush", priority = TrackStudio.PrioBrush)]
         public static void Open()
         {
             var w = GetWindow<SurfaceBrushWindow>(false, "Surface Brush", true);
-            w.minSize = new Vector2(300f, 320f);
+            w.minSize = new Vector2(320f, 420f);
             w.Show();
         }
 
-        private void OnEnable() => SceneView.duringSceneGui += OnSceneGui;
-        private void OnDisable() => SceneView.duringSceneGui -= OnSceneGui;
+        private void OnEnable()
+        {
+            SceneView.duringSceneGui += OnSceneGui;
+            EditorApplication.hierarchyChanged += Invalidate;
+        }
+
+        private void OnDisable()
+        {
+            SceneView.duringSceneGui -= OnSceneGui;
+            EditorApplication.hierarchyChanged -= Invalidate;
+        }
+
+        private void Invalidate() { _targets = null; Repaint(); }
 
         // -------------------------------------------------------------------
         // window
@@ -54,13 +97,11 @@ namespace AIHWSim.TrackTools
         {
             EditorGUILayout.Space();
 
-            var names = new string[TrackCatalog.Floors.Length];
-            for (int i = 0; i < names.Length; i++)
-            {
-                var f = TrackCatalog.Floors[i];
-                names[i] = $"{i}  {f.label}   (grip {f.frictionMult:0.00})";
-            }
-            _floorType = EditorGUILayout.Popup("Surface", _floorType, names);
+            // The same list every other floor field shows, so "Asphalt" reads the
+            // same in the brush, the inspector and the terrain table.
+            var names = FloorTypeDrawer.Names;
+            _floorType = EditorGUILayout.Popup(
+                new GUIContent("Surface"), _floorType, names);
 
             var def = TrackCatalog.Floors[Mathf.Clamp(_floorType, 0, names.Length - 1)];
             // The off-track threshold is a property of frictionMult, not a separate
@@ -95,6 +136,8 @@ namespace AIHWSim.TrackTools
             else
                 EditorGUILayout.LabelField("Terrain table", d.terrainFloors.name);
 
+            DrawTargets();
+
             EditorGUILayout.Space();
             GUI.backgroundColor = _active ? new Color(0.5f, 1f, 0.5f) : Color.white;
             if (GUILayout.Button(_active ? "Painting — click to stop" : "Start painting",
@@ -108,7 +151,107 @@ namespace AIHWSim.TrackTools
             EditorGUILayout.HelpBox(
                 "Drag in the Scene view to paint.\n" +
                 "Terrain under the cursor is painted into its alphamap; any other " +
-                "collider gets a SurfaceTag component.", MessageType.None);
+                "collider gets a SurfaceTag component. A terrain missing the layer " +
+                "for this surface has one created for it.", MessageType.None);
+        }
+
+        // -------------------------------------------------------------------
+        // targets
+        // -------------------------------------------------------------------
+
+        private void DrawTargets()
+        {
+            if (_targets == null) Rebuild();
+
+            EditorGUILayout.Space();
+            using (new EditorGUILayout.HorizontalScope())
+            {
+                EditorGUILayout.LabelField($"Paint targets ({_targets.Count})",
+                                           EditorStyles.boldLabel);
+                if (GUILayout.Button("All", GUILayout.Width(44f))) _off.Clear();
+                if (GUILayout.Button("None", GUILayout.Width(52f)))
+                    foreach (var t in _targets) _off[t.Key] = true;
+                if (GUILayout.Button("Refresh", GUILayout.Width(66f))) Rebuild();
+            }
+
+            if (_targets.Count == 0)
+            {
+                EditorGUILayout.HelpBox(
+                    "Nothing in this scene has a collider, so there is nothing to " +
+                    "paint on.", MessageType.Info);
+                return;
+            }
+
+            _scroll = EditorGUILayout.BeginScrollView(_scroll, GUILayout.MaxHeight(190f));
+            foreach (var t in _targets)
+            {
+                if (t.root == null) continue;
+                using (new EditorGUILayout.HorizontalScope())
+                {
+                    bool on = !_off.ContainsKey(t.Key);
+                    bool next = EditorGUILayout.ToggleLeft(
+                        new GUIContent(t.root.name, Describe(t)), on,
+                        GUILayout.MinWidth(120f));
+                    if (next != on)
+                    {
+                        if (next) _off.Remove(t.Key); else _off[t.Key] = true;
+                        SceneView.RepaintAll();
+                    }
+                    GUILayout.Label(Describe(t), EditorStyles.miniLabel,
+                                    GUILayout.Width(120f));
+                    if (GUILayout.Button("Select", EditorStyles.miniButton,
+                                         GUILayout.Width(52f)))
+                        Selection.activeGameObject = t.root;
+                }
+            }
+            EditorGUILayout.EndScrollView();
+        }
+
+        private static string Describe(Target t)
+        {
+            var parts = new List<string>(3);
+            if (t.terrains > 0) parts.Add($"{t.terrains} terrain");
+            if (t.roads > 0) parts.Add($"{t.roads} road");
+            if (t.meshes > 0) parts.Add($"{t.meshes} mesh");
+            return string.Join(", ", parts);
+        }
+
+        /// <summary>
+        /// Walk the scene once and group every collider under its root. Cached rather
+        /// than done per repaint — this is a full-scene <c>GetComponentsInChildren</c>
+        /// and the window repaints continuously while the brush is live.
+        /// </summary>
+        private void Rebuild()
+        {
+            _targets = new List<Target>();
+            var scene = UnityEditor.SceneManagement.EditorSceneManager.GetActiveScene();
+            if (!scene.IsValid()) return;
+
+            foreach (var root in scene.GetRootGameObjects())
+            {
+                var cols = root.GetComponentsInChildren<Collider>(true);
+                if (cols.Length == 0) continue;
+
+                var t = new Target { root = root };
+                foreach (var c in cols)
+                {
+                    if (c is TerrainCollider) t.terrains++;
+                    else if (c.GetComponentInParent<TrackSplineAuthoring>() != null) t.roads++;
+                    else t.meshes++;
+                }
+                if (t.Total > 0) _targets.Add(t);
+            }
+            _targets.Sort((a, b) => string.CompareOrdinal(a.root.name, b.root.name));
+        }
+
+        /// <summary>The list row a collider belongs to, or null if its root is gone.</summary>
+        private static string RootKey(Collider col)
+            => col != null ? col.transform.root.name : null;
+
+        private bool Enabled(Collider col)
+        {
+            string key = RootKey(col);
+            return key != null && !_off.ContainsKey(key);
         }
 
         private static LayerMask LayerMaskField(string label, LayerMask mask)
@@ -157,21 +300,66 @@ namespace AIHWSim.TrackTools
                 return;
 
             bool terrain = aim.collider is TerrainCollider;
-            Handles.color = terrain
-                ? new Color(0.6f, 1f, 0.4f, 0.9f)
-                : new Color(0.4f, 0.9f, 1f, 0.9f);
-            Handles.DrawWireDisc(aim.point, aim.normal, _radius);
-            Handles.DrawWireDisc(aim.point, aim.normal, _radius * 0.02f);
+            bool allowed = Enabled(aim.collider);
+            DrawBrush(aim, terrain, allowed);
             view.Repaint();
 
             bool paint = (ev.type == EventType.MouseDown || ev.type == EventType.MouseDrag)
                          && ev.button == 0 && !ev.alt;
             if (!paint) return;
 
+            // The only refusal left. Everything else the brush needs — the layer, the
+            // table row, the terrain slot — it makes for itself, so "nothing happened"
+            // always means "you switched this off", which is a thing you can see.
+            if (!allowed)
+            {
+                ev.Use();
+                return;
+            }
+
             if (terrain) PaintTerrain(aim);
             else PaintCollider(aim.collider);
 
             ev.Use();
+        }
+
+        /// <summary>
+        /// The brush footprint, filled and tinted with the floor being painted.
+        ///
+        /// A wire ring says where the brush is; it does not say what the brush will
+        /// do. Filling it in the surface's own colour makes the answer to "is this
+        /// working" visible before the click as well as after it — and a target you
+        /// switched off goes red, which is now the only way a stroke can do nothing.
+        /// </summary>
+        private void DrawBrush(RaycastHit aim, bool terrain, bool allowed)
+        {
+            var def = TrackCatalog.Floors[Mathf.Clamp(_floorType, 0,
+                                                      TrackCatalog.Floors.Length - 1)];
+            Color tint = allowed ? SurfaceColor(def.frictionMult)
+                                 : new Color(0.95f, 0.3f, 0.25f);
+
+            // Lifted off the surface, or z-fighting with the ground makes the disc
+            // strobe as the camera moves.
+            Vector3 at = aim.point + aim.normal * 0.02f;
+
+            Handles.color = new Color(tint.r, tint.g, tint.b, 0.22f);
+            Handles.DrawSolidDisc(at, aim.normal, _radius);
+            Handles.color = new Color(tint.r, tint.g, tint.b, 0.95f);
+            Handles.DrawWireDisc(at, aim.normal, _radius);
+            Handles.DrawWireDisc(at, aim.normal, _radius * 0.02f);
+
+            Handles.Label(at + aim.normal * 0.05f,
+                allowed ? $"{def.label} → {(terrain ? "terrain" : "SurfaceTag")}"
+                        : $"{RootKey(aim.collider)} — turned off in Paint targets");
+        }
+
+        /// <summary>Same grip-to-colour rule the spline channel handles use, so a
+        /// surface looks the same wherever you meet it.</summary>
+        private static Color SurfaceColor(float grip)
+        {
+            if (grip < 0.90f) return new Color(0.95f, 0.55f, 0.25f);
+            float t = Mathf.InverseLerp(0.90f, 1.10f, grip);
+            return Color.Lerp(new Color(0.35f, 0.6f, 1f), new Color(0.4f, 1f, 0.5f), t);
         }
 
         private void EndStroke()
@@ -230,14 +418,12 @@ namespace AIHWSim.TrackTools
             }
 
             var td = terrain.terrainData;
-            int layer = LayerForFloor(td, table, _floorType);
-            if (layer < 0)
-            {
-                TrackStudio.Warn($"no TerrainLayer on '{terrain.name}' maps to floor " +
-                    $"{_floorType} ({TrackCatalog.Floors[_floorType].label}). Add a row to " +
-                    $"'{table.name}' and the matching layer to the terrain.");
-                return;
-            }
+
+            // Provision rather than refuse: the layer asset, the table row and the
+            // terrain's own layer slot are all created on demand. This is why a
+            // stroke on a never-painted terrain works the first time.
+            int layer = TerrainLayerLibrary.EnsureLayer(td, table, _floorType);
+            if (layer < 0) return;   // EnsureLayer has already said why
 
             if (!_stroking || _strokeUndoTarget != td)
             {
@@ -309,20 +495,14 @@ namespace AIHWSim.TrackTools
             }
 
             td.SetAlphamaps(x0, z0, maps);
+
+            // Push the new weights into the terrain's rendering data now. Without
+            // this the splat textures can lag a stroke by a repaint or more, which
+            // makes painting feel like it is not working — you are looking at the
+            // old ground while the data underneath has already changed.
+            terrain.Flush();
+            SceneView.RepaintAll();
         }
 
-        /// <summary>
-        /// The terrain's own layer index whose asset maps to this floor type.
-        /// Resolved per terrain because terrainLayers is per-terrain: layer 2 may be
-        /// grass on one tile and gravel on the next.
-        /// </summary>
-        private static int LayerForFloor(TerrainData td, TerrainFloorTable table, int floorType)
-        {
-            var layers = td.terrainLayers;
-            if (layers == null) return -1;
-            for (int i = 0; i < layers.Length; i++)
-                if (layers[i] != null && table.FloorFor(layers[i]) == floorType) return i;
-            return -1;
-        }
     }
 }

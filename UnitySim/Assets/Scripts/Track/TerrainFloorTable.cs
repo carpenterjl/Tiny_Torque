@@ -35,6 +35,7 @@ namespace AIHWSim.Track
 
             /// <summary>Index into <c>TrackCatalog.Floors</c> — the same append-only
             /// id persisted in track JSON and read by <c>SurfaceTag.floorType</c>.</summary>
+            [FloorType]
             public int floorType;
         }
 

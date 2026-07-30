@@ -9,6 +9,7 @@ namespace AIHWSim.Track
     /// </summary>
     public sealed class SurfaceTag : MonoBehaviour
     {
+        [FloorType]
         public int floorType;
     }
 }

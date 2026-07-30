@@ -1,0 +1,56 @@
+# This repo is cloned onto machines with different core.autocrlf settings, and
+# Unity's serialized formats are what suffer for it. Without these rules a clone
+# can differ from its origin in every line of every scene — diffs nobody made,
+# merges nobody can read.
+
+# Let git detect text vs binary per file, and store text as LF in the repo.
+* text=auto
+
+# ---- Unity YAML (the project is on Force Text, m_SerializationMode: 2) ----
+# eol=lf so the bytes are identical on every machine. merge=binary so git never
+# attempts a three-way merge: a merged .unity or .prefab parses fine and is
+# wrong, which is worse than a conflict. Resolve by taking one side, or set up
+# Unity's UnityYAMLMerge as the mergetool.
+*.unity          text eol=lf merge=binary
+*.prefab         text eol=lf merge=binary
+*.mat            text eol=lf merge=binary
+*.anim           text eol=lf merge=binary
+*.controller     text eol=lf merge=binary
+*.physicMaterial text eol=lf merge=binary
+*.terrainlayer   text eol=lf merge=binary
+*.meta           text eol=lf merge=binary
+
+# .asset is NOT forced to text. Force Text does not apply to TerrainData,
+# textures or meshes — those always serialize binary — and this project has four
+# ~2 MB binary TerrainData_*.asset files. Marking the extension `text eol=lf`
+# would strip CR bytes out of the middle of them, which is silent corruption
+# that only shows up as a broken terrain on the machine that cloned. Detection
+# handles it; the merge rule is all that is wanted here.
+*.asset          merge=binary
+TerrainData_*.asset binary
+
+# ---- Source ----
+*.cs   text diff=csharp
+*.py   text
+*.ps1  text eol=crlf
+*.sh   text eol=lf
+*.md   text
+*.json text
+*.html text
+*.c    text
+*.h    text
+
+# ---- Binary: never diffed, never touched ----
+*.blend        binary
+*.blend1       binary
+*.fbx          binary
+*.png          binary
+*.jpg          binary
+*.tga          binary
+*.wav          binary
+*.dll          binary
+*.pdb          binary
+*.exe          binary
+*.ttf          binary
+*.cubemap      binary
+*.unitypackage binary

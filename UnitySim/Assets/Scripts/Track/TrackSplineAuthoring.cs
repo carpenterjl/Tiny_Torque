@@ -15,10 +15,13 @@ namespace AIHWSim.Track
     /// That is the package's own idiom for exactly this, and it means the width of
     /// a corner is authored on the corner rather than in a list somewhere else.
     ///
-    /// The bake is explicit rather than continuous. Regenerating a few thousand
-    /// triangles on every handle drag would make authoring miserable, and the
-    /// generated meshes are scene objects that want saving — so Track Studio's
-    /// "Bake ribbon" is the moment geometry appears.
+    /// The ribbon rebuilds itself as the road is edited (see
+    /// <see cref="liveRebuild"/>): move a knot, drag a width handle or bank a
+    /// corner and the geometry follows, because a road you have to remember to
+    /// bake is a road you will look at stale. The rebuild lands when an edit is
+    /// committed rather than on every mouse-move — regenerating a few thousand
+    /// triangles and re-cooking a MeshCollider at drag rate would stutter — and
+    /// the explicit bake stays for scripted and headless use.
     /// </summary>
     [AddComponentMenu("Tiny Torque/Track/Track Spline Authoring")]
     [RequireComponent(typeof(SplineContainer))]
@@ -37,7 +40,8 @@ namespace AIHWSim.Track
         [Tooltip("Width in metres where the width channel says nothing.")]
         public float defaultWidth = SplineSpec.DefaultWidth;
 
-        [Tooltip("Surface where the surface channel says nothing. 1 = asphalt.")]
+        [FloorType]
+        [Tooltip("Surface where the surface channel says nothing.")]
         public int defaultSurface = SplineSpec.DefaultSurface;
 
         public bool edgeWalls;
@@ -55,6 +59,11 @@ namespace AIHWSim.Track
                  "SplineData interpolates; step changes by keying both sides.")]
         public SplineData<float> surfaceChannel = new SplineData<float>();
 
+        [Tooltip("Rebuild the ribbon whenever the curve or a channel changes, so " +
+                 "what you see in the Scene view is the road. Turn off for a very " +
+                 "long spline where the rebuild becomes noticeable while dragging.")]
+        public bool liveRebuild = true;
+
         [Header("Corridor")]
         [Tooltip("Feed this spline's centreline to the SceneTrackDescriptor as the " +
                  "path bots drive. Turn off for a decorative spline.")]
@@ -67,6 +76,20 @@ namespace AIHWSim.Track
         /// <summary>The container this authors. Cached lookups would go stale
         /// across a domain reload, and this is never called per frame.</summary>
         public SplineContainer Container => GetComponent<SplineContainer>();
+
+        /// <summary>True once this spline has geometry. The live rebuild uses it to
+        /// tell "keep the road in step with the edit" from "this spline has never
+        /// been asked to be a road", so adding the component to a decorative curve
+        /// does not silently fill the scene with meshes.</summary>
+        public bool HasBaked
+        {
+            get
+            {
+                for (int i = 0; i < transform.childCount; i++)
+                    if (transform.GetChild(i).name == BakedRootName) return true;
+                return false;
+            }
+        }
 
         /// <summary>The authored curve as a SplineSpec, in world space.</summary>
         public SplineSpec BuildSpec()

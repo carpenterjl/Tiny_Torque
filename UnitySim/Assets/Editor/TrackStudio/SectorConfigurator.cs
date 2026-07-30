@@ -80,7 +80,6 @@ namespace AIHWSim.TrackTools
             EditorGUILayout.EndScrollView();
             EditorGUILayout.LabelField("Sum of targets",
                 $"{set.TotalTarget:0.000} s vs predicted lap {line.predictedLapSec:0.000} s");
-            EditorGUILayout.EndScrollView();
         }
 
         private static List<float> EvenBoundaries(RacingLineAsset line, int count)

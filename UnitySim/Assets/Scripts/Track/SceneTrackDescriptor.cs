@@ -95,7 +95,8 @@ namespace AIHWSim.Track
         /// surfaces all sit above that threshold has track limits that never trigger
         /// anywhere. That is a property of the paint job, not a bug.
         /// </summary>
-        [Tooltip("Fallback for untagged mesh colliders. 1 = asphalt.")]
+        [FloorType]
+        [Tooltip("Fallback for untagged mesh colliders.")]
         public int sceneFallbackFloor = 1;
 
         // ---- bot corridor ---------------------------------------------------

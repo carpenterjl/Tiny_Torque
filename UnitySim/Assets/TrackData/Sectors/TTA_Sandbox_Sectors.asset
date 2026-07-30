@@ -1,0 +1,25 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!114 &11400000
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 0}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 54e4e1691acde6646a0ed00d00c6c781, type: 3}
+  m_Name: TTA_Sandbox_Sectors
+  m_EditorClassIdentifier: 
+  line: {fileID: 11400000, guid: 54679a375cfb80941a5c8ac3b0c924f8, type: 2}
+  sectors:
+  - sStart: 0
+    targetSec: 5.975769
+    label: S1
+  - sStart: 49.10175
+    targetSec: 6.916743
+    label: S2
+  - sStart: 98.2035
+    targetSec: 5.3143406
+    label: S3

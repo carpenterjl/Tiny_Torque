@@ -1,0 +1,2 @@
+# Keeps this folder in git so its sibling .meta is not orphaned on a fresh
+# clone. Unity would delete a .meta whose folder does not exist.

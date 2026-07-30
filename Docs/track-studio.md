@@ -52,6 +52,11 @@ being dropped onto the oval and desynced silently.
    so they are keyed along the curve.
 4. **`2. Bake ribbon + corridor`** — generates the road mesh, its per-surface
    colliders and `SurfaceTag`s, and bakes the centreline bots follow.
+   The ribbon itself rebuilds live from then on (`TrackSplineAuthoring.liveRebuild`,
+   on by default): move a knot or a channel key and the mesh follows on the frame the
+   edit commits, debounced past the drag because re-cooking a `MeshCollider` per
+   mouse-move stutters. **The corridor and the racing line are not live** — they are
+   solved artifacts, so finish a shaping session with this bake and re-bake the line.
 5. **Place gates**: `Add checkpoint` / `Add finish` / `Add player spawn`. Select a marker and
    use **Snap to road** — a gate spans its own local X and cars travel through its
    local **+Z**, so a marker rotated by eye is the classic "my lap never counts" bug.
@@ -94,6 +99,15 @@ being dropped onto the oval and desynced silently.
 **Physics Material Brush** (`Tools/Track Studio/Surface Brush`) paints both: terrain
 into the alphamap, anything else as a `SurfaceTag`. One undo entry per stroke, because
 a terrain alphamap undo copies the whole map.
+
+Nothing is unpaintable. A terrain with no `TerrainLayer` for the chosen floor gets one
+— `TerrainLayerLibrary` reuses the layer the scene's table already names for that
+floor, or generates a `.terrainlayer` from `FloorTypeDef.Tex` so the terrain looks like
+the tiles of the same surface — then writes the table row and appends the layer to the
+terrain. `terrain.Flush()` after every stamp, or the splat textures lag the stroke and
+painting reads as broken. The window's **Paint targets** list is built from the scene's
+root objects and is the one thing that can stop a stroke; a target switched off draws
+the brush red and names itself under the cursor.
 
 Terrain alphamaps are baked to one floor id per texel **once**, at bind. `At` runs
 ~12 800 times a second on an eight-car grid at 400 Hz, so a per-call `GetAlphamaps`

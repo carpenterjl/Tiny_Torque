@@ -17,4 +17,10 @@ MonoBehaviour:
     floorType: 0
   - layer: {fileID: 8574412962073106934, guid: 898317f8ef3ca2d4187230359fdd092f, type: 2}
     floorType: 2
+  - layer: {fileID: 8574412962073106934, guid: e95f531fc374cae4fbe35c13d91ebac6, type: 2}
+    floorType: 2
+  - layer: {fileID: 8574412962073106934, guid: 64aa296db8ec02e46bf05792c83b206f, type: 2}
+    floorType: 1
+  - layer: {fileID: 8574412962073106934, guid: 1434afd503757db4a8b01ca9f73d76b8, type: 2}
+    floorType: 14
   defaultFloorType: 0
