@@ -1057,7 +1057,18 @@ namespace AIHWSim.Net
         /// the whole lobby on the track forever. Arcade makes that likelier, not
         /// less: a well-timed missile can cost most of a lap.</summary>
         private float _firstFinishAt = -1f;
-        private const float DnfGraceSeconds = 45f;
+
+        /// <summary>
+        /// The host's grace window, in seconds. Follows the same "Results wait"
+        /// setting the local race uses, because two different answers to "how long
+        /// after the leader?" is a difference nobody can see and everybody trips
+        /// over. Host-local timing only — never on the wire, so this is not a
+        /// protocol concern. A lobby set to "wait for everyone" still needs a
+        /// backstop, since a disconnected client never finishes: hence the 45 s
+        /// fallback rather than infinity.
+        /// </summary>
+        private static float DnfGraceSeconds =>
+            SessionConfig.ResultsWaitSeconds > 0 ? SessionConfig.ResultsWaitSeconds : 45f;
 
         /// <summary>Host: teleport everyone to the grid and start the countdown.</summary>
         public void HostStartRace(int laps)

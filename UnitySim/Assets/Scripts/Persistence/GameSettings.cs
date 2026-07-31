@@ -93,6 +93,11 @@ namespace AIHWSim.Persistence
         public int spControl = 0;       // 0 Manual / 1 Autonomous (C firmware) / 2 Autonomous (bot AI)
         public bool spRubberBand = false;
         public int spCountdown = 3;     // race-start countdown seconds (0..60)
+        /// <summary>Seconds the race keeps running after the first car finishes
+        /// before the results screen appears (0 = wait for the whole field). The
+        /// field initializer is the back-compat mechanism: a settings.json written
+        /// before this key existed reads as 30, not as "wait forever".</summary>
+        public int spResultsWait = 30;
         public bool spArcade = false;      // power-ups, weapons, arcade scoreboard
         public bool spTrackLimits = true;  // off-track penalty (only used in arcade)
         /// <summary>Arcade handling: grip baseline + assist floor for everyone in
@@ -100,6 +105,31 @@ namespace AIHWSim.Persistence
         /// JsonUtility leaves it alone for keys a saved settings.json predates,
         /// so an existing install reads as Arcade rather than as false.</summary>
         public bool spArcadeHandling = true;
+
+        /// <summary>Controller DLL last chosen on the Simulate Controller screen,
+        /// as a bare file name in Assets/Plugins/x86_64.</summary>
+        public string simControllerDll = "controller.dll";
+
+        // ---- in-game controller build ----------------------------------------
+
+        /// <summary>Explicit path to the Controllers/ source folder. Empty means
+        /// "find it" — see ControllerWorkspace, which probes upward from the data
+        /// folder. Only a player build shipped somewhere odd needs this set.</summary>
+        public string controllerWorkspace = "";
+
+        /// <summary>Rebuild the controller whenever a source file is saved.
+        /// Explicit opt-in, OFF by default: a watcher that fires on every save is
+        /// a compiler running in the background of somebody's race.</summary>
+        public bool controllerRebuildOnSave = false;
+
+        /// <summary>CMake build type passed to build.ps1 (Release / Debug).</summary>
+        public string controllerBuildConfig = "Release";
+
+        /// <summary>Put the car back on the grid after a hot reload. Default OFF:
+        /// the point of a hot reload is watching the SAME situation respond to new
+        /// code, and a reset throws that situation away (along with the telemetry
+        /// buffer, which RestartRun clears).</summary>
+        public bool controllerResetOnReload = false;
 
         /// <summary>
         /// Keyboard and gamepad bindings. Nested rather than flattened into

@@ -96,9 +96,36 @@ being dropped onto the oval and desynced silently.
 4. **Scene fallback** — `SceneTrackDescriptor.sceneFallbackFloor`, default asphalt,
    so a road you forgot to tag drives like a road instead of like nothing.
 
-**Physics Material Brush** (`Tools/Track Studio/Surface Brush`) paints both: terrain
-into the alphamap, anything else as a `SurfaceTag`. One undo entry per stroke, because
-a terrain alphamap undo copies the whole map.
+**Physics Material Brush** (`Tools/Track Studio/Surface Brush`) paints all three:
+terrain into the alphamap, a spline road into its **surface channel**, anything else as
+a `SurfaceTag`. One undo entry per stroke per object, because a terrain alphamap undo
+copies the whole map.
+
+**A road is painted into the spline, not onto the ribbon.** The ribbon's colliders are
+destroyed and recreated by every `Bake`, which now runs live on every knot drag — so a
+`SurfaceTag` stamped on a ribbon collider survives until the next edit and then silently
+vanishes. The brush projects the cursor onto the curve instead and writes keys into
+`surfaceChannel`, so the brush radius becomes an arc-length half-span: a 1.5 m brush
+paints a 3 m run. Each stamp lays a hard-edged run (four keys — a step pair at each end)
+and a compaction pass drops keys that carry no information, or a two-second drag would
+leave a channel of several hundred. The ribbon rebuilds **once, when the stroke ends**;
+during the drag the road's centreline is drawn in its own surface colours so you can see
+where the paint is landing.
+
+**Brush controls** mirror what terrain painting gives you:
+
+| | |
+|---|---|
+| Shape | Circle, or Square — the only way to paint a straight edge without stair-stepping it out of discs |
+| Size / Rotation / Hardness / Strength | footprint, turn about the surface normal, solid core fraction, alphamap weight per stamp |
+| Spacing | minimum gap between stamps, in brush diameters; 0 stamps every mouse event |
+| Scatter | random offset from the cursor in the surface plane, in radii |
+| Jitter | per-stamp randomisation of size, rotation and strength |
+
+Strength and hardness blend alphamap weights, so they shape **terrain only** — a floor id
+is discrete, and a road run or a `SurfaceTag` is either painted or not. Size does nothing
+on a mesh either: a `SurfaceTag` applies to the whole collider, and splitting a mesh into
+painted regions is a modelling decision rather than a brush one.
 
 Nothing is unpaintable. A terrain with no `TerrainLayer` for the chosen floor gets one
 — `TerrainLayerLibrary` reuses the layer the scene's table already names for that

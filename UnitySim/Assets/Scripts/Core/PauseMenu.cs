@@ -55,6 +55,23 @@ namespace AIHWSim.Core
         private bool _showTuneDraw, _showSettingsDraw, _pausedDraw;
         private PendingExit _pendingDraw;
 
+        private bool _showBuild, _showBuildDraw;
+        // Whether the "Build controller…" row exists at all. Snapshotted like the
+        // rest: it is derived from live scene state, and a row appearing between a
+        // Layout pass and its Repaint is the one IMGUI error this UI never risks.
+        private bool _hasBuildDraw;
+
+        /// <summary>Is any car in this session driven by a controller DLL?</summary>
+        private bool HasControllerRunner
+        {
+            get
+            {
+                foreach (var r in AllRunners)
+                    if (r != null && r.loadControllerDll) return true;
+                return false;
+            }
+        }
+
         private void Start()
         {
             _tunable = tunableBehaviour as ITunable;
@@ -74,10 +91,11 @@ namespace AIHWSim.Core
             if (_paused && MenuNav.ConsumeBack())
             {
                 if (_pending != PendingExit.None) _pending = PendingExit.None;
-                else if (_showTune || _showSettings)
+                else if (_showTune || _showSettings || _showBuild)
                 {
                     _showTune = false;
                     _showSettings = false;
+                    _showBuild = false;
                     SettingsPanel.Reset();
                 }
                 else SetPaused(false);
@@ -111,6 +129,8 @@ namespace AIHWSim.Core
                 _pausedDraw = _paused;
                 _showTuneDraw = _showTune;
                 _showSettingsDraw = _showSettings;
+                _showBuildDraw = _showBuild;
+                _hasBuildDraw = HasControllerRunner;
                 _pendingDraw = _pending;
             }
             if (!_pausedDraw) return;
@@ -134,9 +154,10 @@ namespace AIHWSim.Core
             // panel was clipping inside BeginArea long before the settings panel
             // was added to it. The scroll view below is the actual fix — with it,
             // the height only has to be reasonable rather than exactly right.
-            float w = _showSettingsDraw ? 460f : (_showTuneDraw ? 380f : 300f);
+            float w = _showSettingsDraw || _showBuildDraw ? 460f : (_showTuneDraw ? 380f : 300f);
             float h = Mathf.Min(UIScale.H - 60f,
-                _showSettingsDraw ? 620f : (_showTuneDraw && _tunable != null ? 560f : 470f));
+                _showSettingsDraw || _showBuildDraw ? 620f
+                    : (_showTuneDraw && _tunable != null ? 560f : 470f));
             var area = new Rect((UIScale.W - w) * 0.5f, (UIScale.H - h) * 0.5f, w, h);
             GUILayout.BeginArea(area, GUI.skin.box);
 
@@ -174,10 +195,19 @@ namespace AIHWSim.Core
                 _showTune = !_showTune;
             if (MenuNav.Button(_showSettingsDraw ? "Hide settings" : "Settings…", GUILayout.Height(30)))
                 _showSettings = !_showSettings;
+            // Rebuild the C controller and hot-swap it without leaving the drive.
+            // Offered only where it means something: a session with no DLL loaded
+            // has nothing to reload, and the row would be a button that does
+            // nothing rather than an honest absence.
+            if (_hasBuildDraw &&
+                MenuNav.Button(_showBuildDraw ? "Hide controller build" : "Build controller…",
+                               GUILayout.Height(30)))
+                _showBuild = !_showBuild;
             if (MenuNav.Button("Quit", GUILayout.Height(30))) RequestExit(PendingExit.Quit);
 
             if (_showTuneDraw && _tunable != null) DrawTuning();
             if (_showSettingsDraw) DrawSettings();
+            if (_showBuildDraw) UI.ControllerBuildPanel.Draw(logHeight: 180f);
 
             if (!string.IsNullOrEmpty(_status))
             {

@@ -37,7 +37,9 @@ namespace AIHWSim.Sensors
         public override int DataCount => 0;
         public override IReadOnlyList<string> FieldNames => Fields;
 
-        /// <summary>Latest grayscale frame (row-major, length == Width*Height), or null.</summary>
+        /// <summary>Latest grayscale frame, or null. Row-major, length ==
+        /// Width*Height, <b>row 0 = the TOP of the image</b> — see
+        /// <c>controller_api.h</c>, which is where that convention is contracted.</summary>
         public byte[] Pixels => _gray;
         public int Width => width;
         public int Height => height;
@@ -93,11 +95,21 @@ namespace AIHWSim.Sensors
             _tex.Apply(false);
             RenderTexture.active = prev;
 
+            // GetPixels32 hands back the image BOTTOM row first (Unity texture
+            // space), but cam_pixels is defined top-down — the usual vision
+            // convention, and the one a controller author will assume. Reverse the
+            // row index on the way out; per-pixel cost is unchanged.
             _scratch = _tex.GetPixels32();
-            for (int i = 0; i < _gray.Length && i < _scratch.Length; i++)
+            int n = Mathf.Min(width, _scratch.Length / Mathf.Max(1, height));
+            for (int y = 0; y < height; y++)
             {
-                var c = _scratch[i];
-                _gray[i] = (byte)((c.r + c.g + c.b) / 3);
+                int src = y * width;                    // row 0 = bottom
+                int dst = (height - 1 - y) * width;     // row 0 = top
+                for (int x = 0; x < n; x++)
+                {
+                    var c = _scratch[src + x];
+                    _gray[dst + x] = (byte)((c.r + c.g + c.b) / 3);
+                }
             }
         }
 

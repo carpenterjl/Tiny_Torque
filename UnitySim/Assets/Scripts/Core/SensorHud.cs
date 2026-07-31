@@ -35,8 +35,12 @@ namespace AIHWSim.Core
                 var box = new Rect(x, y - h, w, h);
                 GUI.Box(new Rect(box.x - 2, box.y - 18, w + 4, h + 20), GUIContent.none);
                 GUI.Label(new Rect(box.x, box.y - 17, w, 16), $"cam: {cam.sensorName} ({cam.Width}x{cam.Height})", _label);
-                // Camera renders bottom-up; flip vertically for display.
-                GUI.DrawTextureWithTexCoords(box, cam.Preview, new Rect(0f, 1f, 1f, -1f));
+                // No flip. ReadPixels already produced an upright Texture2D, and
+                // IMGUI maps a texture's top row to the top of the rect — the
+                // tex-coord flip that used to be here inverted a correct image.
+                // "RenderTextures are bottom-up" is true of a raw blit, not of a
+                // Texture2D handed to GUI.DrawTexture.
+                GUI.DrawTexture(box, cam.Preview);
                 y -= h + 24f;
             }
 

@@ -108,12 +108,20 @@ quadcopter and hardware-in-the-loop over serial are planned follow-ons.
   nudges sliders and cycles pickers; the OS cursor hides while the pad is the
   active device. The whole UI also scales with resolution (authored at 1080p,
   crisp at 4K, no overflow at 720p), and scene changes fade instead of cutting.
-  **Single Player** — a full **race setup**: pick your vehicle (or open the
-  **Showroom** — see below), track, the number of **AI opponents** (0–7), their
-  **difficulty** (Easy/Medium/Hard) with an optional **rubber-band** catch-up,
-  how your own car is **driven** (Manual, Autonomous via the C firmware
-  controller, or Autonomous via the bot AI), and the **lap count** — then Race
-  (0 opponents + 0 laps = free drive), or jump to the Garage / Track Builder.
+  **Single Player** — a **list of modes**, each opening its own setup screen so
+  every screen shows only the controls that mode actually has: **Race**,
+  **Free Roam**, **Demolition**, **Capture the Flag**, **Soccer**, and
+  **Simulate Controller** (run your compiled C firmware — see
+  [Running your controller](#running-your-controller-and-rebuilding-it-without-leaving-the-game)),
+  plus shortcuts to the Garage and Track Builder. A race screen carries your
+  vehicle (or the **Showroom** — see below), the track, the number of **AI
+  opponents** (0–7), their **difficulty** (Easy/Medium/Hard) with an optional
+  **rubber-band** catch-up, how your own car is **driven** (Manual, Autonomous
+  via the C firmware controller, or Autonomous via the bot AI), the **lap
+  count** (0 opponents + 0 laps = free drive), and **Results wait** — how long
+  after the *first* car finishes before the results screen appears and the
+  stragglers are called DNF (default 30 s; 0 waits for the whole field, which
+  a bot stuck against a wall will never satisfy).
   **Multiplayer** — a **2-player split-screen** setup (per-player name, vehicle,
   and device: keyboard or a specific gamepad; shared track; first-to-N-laps race
   or sandbox) plus LAN, **Resume Drive** (saved session snapshots), and
@@ -402,6 +410,42 @@ Iteration 22 replaced the physics floor itself (these apply to **all** vehicles)
   metrics + seed + delay into the run's JSON sidecar — comparing sim vs. real
   reduces to diffing two sidecars. Start from the **★ Real Twin 1/10** preset
   (everything on at hardware-shaped values) and edit toward your car.
+
+### Running your controller, and rebuilding it without leaving the game
+
+**Main Menu ▸ Single Player ▸ Simulate Controller** is the front door: pick which
+`.dll` in `Assets/Plugins/x86_64/` drives, pick a car and a track, and press
+**Run controller ▶**. The car starts closed-loop under your firmware; press **M**
+on track to take over by hand.
+
+That screen — and the pause menu, mid-drive — carries a **Build & Reload** panel:
+
+- **Build & Reload** shells out to `Controllers/build.ps1`, streams the compiler's
+  output into the panel, and on success hot-swaps the DLL into the running car.
+  No restart, no separate terminal. Pick which CMake target to build from the
+  row above; the list is read out of `CMakeLists.txt`, so a controller you add
+  yourself shows up without touching any C#.
+- **Rebuild when I save a source file** watches `Controllers/` for `.c`/`.h`
+  saves and does the same automatically, 750 ms after you stop typing.
+  Opt-in, off by default.
+- **Reset the car after a reload** is also off by default, deliberately: the
+  value of a hot reload is watching *the same situation* answer to new code.
+
+This works because `NativeControllerLoader` loads a **shadow copy** of the DLL
+from `%TEMP%` rather than the file itself — the compiler is free to overwrite the
+original while the game holds a handle. Reloading runs `ctrl_shutdown` →
+`ctrl_init` → `ctrl_configure`, so a stateful controller starts clean; if the new
+DLL fails to load, the session goes open-loop and the car coasts rather than
+stopping, and the reason appears in the panel.
+
+**One thing the game cannot protect you from:** a bad pointer in your C takes
+down the whole process. A managed `try`/`catch` does not catch a native access
+violation — in the editor, that means Unity itself. Telemetry is saved before
+every panel-triggered build for exactly this reason.
+
+If the `Controllers/` folder is not next to the game (a standalone build copied
+elsewhere), the panel says so and offers a path field instead of a button that
+would do nothing.
 
 ## The Opus Vector mission (a worked end-to-end example)
 
@@ -1750,6 +1794,10 @@ Without JGraph the pages plot everything themselves — none of this is required
    PID), `car_sensors_controller.dll` (the ABI v2 sensor demo), and
    `opus_controller.dll` (the Opus Vector mission), and copies them into
    `UnitySim/Assets/Plugins/x86_64/`.
+
+   After the first time you can skip this: **Single Player ▸ Simulate
+   Controller ▸ Build & Reload** runs the same script from inside the game and
+   hot-swaps the result into the running car.
 
 2. **Open the Unity project** (`UnitySim/`) in Unity Hub. Let it import.
 

@@ -117,7 +117,7 @@ Track Studio cares how the scene got its shape. The parts that <em>are</em> trac
 <table>
   <tr><th>To change</th><th>Do this</th><th>Then</th></tr>
   <tr><td>Road shape or width</td><td>Select the <code>SplineContainer</code>, use Unity's Spline tool</td><td>Mesh follows live; <b>re-bake</b> for the corridor</td></tr>
-  <tr><td>Surface / grip</td><td><code>Surface Brush</code>, paint onto terrain or meshes</td><td>nothing</td></tr>
+  <tr><td>Surface / grip</td><td><code>Surface Brush</code>, paint onto terrain, roads or meshes</td><td>nothing</td></tr>
   <tr><td>Gate positions</td><td>Move the marker, then <b>Snap to road</b> in its inspector</td><td>Renumber if you added one</td></tr>
   <tr><td>Spawn points</td><td>Move / add <code>TrackSpawnMarker</code>s</td><td>nothing</td></tr>
   <tr><td>Sky, fog, ambience</td><td>Scene lighting, plus the descriptor's ambience fields</td><td>nothing</td></tr>
@@ -135,9 +135,32 @@ So: shape the road freely, then finish with <code>2. Bake ribbon + corridor</cod
 
 <h3>4. Surface Brush</h3>
 <p><code>Tools ▸ Track Studio ▸ Surface Brush</code>. Pick a floor type from the palette, set a radius,
-paint in the Scene view. It writes terrain alphamaps and mesh <code>SurfaceTag</code>s through the same click,
-so you do not choose a mechanism — it paints whatever you are pointing at, and the terrain texture updates
-under the brush as you drag.</p>
+paint in the Scene view. One click writes whichever of three mechanisms the thing under the cursor uses —
+a terrain alphamap, a road's surface channel, or a mesh <code>SurfaceTag</code> — so you never choose a
+mechanism, and the terrain texture updates under the brush as you drag.</p>
+
+<div class="note">
+<b>A road is painted into the spline, not onto the ribbon.</b> The ribbon's colliders are destroyed and
+recreated by every rebuild, which now happens on every knot drag — so a <code>SurfaceTag</code> stamped onto
+one survives until the next edit and then silently vanishes. The brush projects the cursor onto the curve
+instead and writes keys into the <b>surface channel</b>, exactly the keys you would place by hand in the
+inspector. The radius becomes an arc-length half-span, so a 1.5&nbsp;m brush paints a 3&nbsp;m run, with a
+hard edge at each end. During the drag the road's centreline is drawn in its own surface colours; the ribbon
+itself rebuilds once, when you let go.
+</div>
+
+<p>The brush controls are the ones terrain painting gives you. <b>Shape</b> is a circle or a square — a square
+is the only way to paint a straight edge without stair-stepping it out of overlapping discs, and
+<b>Rotation</b> turns it. <b>Hardness</b> is how much of the radius is laid down flat before the edge falls
+away. <b>Spacing</b> sets a minimum gap between stamps along the drag, in brush diameters; <b>Scatter</b>
+throws each stamp off the cursor by up to a few radii; and the three <b>Jitter</b> sliders randomise size,
+rotation and strength per stamp so a large painted area does not read as a stencil.</p>
+
+<p>Two of those only bite on terrain, and the window says so: <b>Strength</b> and <b>Hardness</b> blend
+alphamap weights, and a floor id has nothing to blend — a road run and a <code>SurfaceTag</code> are either
+painted or not. <b>Size</b> does nothing on a mesh either, because a <code>SurfaceTag</code> applies to the
+whole collider; splitting a mesh into painted regions means splitting the mesh, which is a modelling decision
+rather than a brush one.</p>
 
 <p><b>Paint targets</b> lists everything in the scene that has a collider, grouped by its root object, with a
 count of what kind. Untick one and the brush leaves it alone; the disc turns red over it and says which row

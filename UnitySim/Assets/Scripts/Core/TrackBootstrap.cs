@@ -147,6 +147,12 @@ namespace AIHWSim.Core
             var match = BuildMatchDirector();
             var race = match as RaceDirector;
 
+            // How long after the leader finishes before the results screen appears.
+            // This used to be set only inside the arcade branch below, which meant
+            // every other race waited for the LAST car — and a bot that spun into
+            // scenery never arrives, so those races simply never ended.
+            if (race != null) race.resultsGraceSeconds = SessionConfig.ResultsWaitSeconds;
+
             // Arcade layer, gated exactly like the race above: item boxes and
             // positions both need a finish line, and power-ups in a free-drive
             // would be meaningless.
@@ -156,9 +162,6 @@ namespace AIHWSim.Core
                 if (race != null)
                 {
                     race.arcade = true;
-                    // A repeatedly spun-out bot must not hold the results screen
-                    // hostage forever.
-                    race.resultsGraceSeconds = 30f;
                     race.PlayerFinished += _arcade.AwardFinish;
                 }
                 if (_lapTimer != null) _lapTimer.showDefaultHud = false;

@@ -5,6 +5,11 @@ set(CMAKE_C_STANDARD 11)
 set(CMAKE_C_STANDARD_REQUIRED ON)
 
 # Where Unity looks for native plugins (64-bit).
+#
+# CACHE, and load-bearing: the game's in-game "Build & Reload" overrides this via
+# build.ps1 -PluginDir so a player build copies the DLL next to the RUNNING game
+# instead of into the repo it was compiled from. Turning this into a plain set()
+# would make that feature silently do nothing.
 set(UNITY_PLUGIN_DIR "${CMAKE_SOURCE_DIR}/../UnitySim/Assets/Plugins/x86_64"
     CACHE PATH "Destination for the built controller DLLs")
 

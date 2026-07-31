@@ -196,6 +196,18 @@ namespace AIHWSim.TrackTools
         /// reinterpreting them, so a channel authored before this fix keeps its
         /// positions.
         /// </summary>
+        /// <summary>
+        /// The same conversion, for callers that have the component but not its
+        /// spline — the Surface Brush writes surface keys without this inspector
+        /// ever being open, and a channel still in Knot units would put those keys
+        /// at knot numbers rather than at 0-1 positions.
+        /// </summary>
+        internal static void EnsureNormalized(TrackSplineAuthoring a)
+        {
+            var spline = Spline(a);
+            if (spline != null) NormalizeUnits(a, spline);
+        }
+
         private static void NormalizeUnits(TrackSplineAuthoring a, Spline spline)
         {
             if (spline == null || spline.Count < 2) return;

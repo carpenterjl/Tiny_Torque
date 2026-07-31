@@ -84,6 +84,17 @@ namespace AIHWSim.Core
         /// <summary>Race-start countdown in seconds (0 = go immediately).</summary>
         public static int CountdownSeconds;
 
+        /// <summary>
+        /// How long the race keeps running after the FIRST car finishes, before
+        /// the results screen appears and everyone still out there is a DNF.
+        /// 0 = wait for the whole field.
+        ///
+        /// Waiting for everyone is only reasonable when everyone can finish. A bot
+        /// wedged against a wall never does, so a race with no grace period simply
+        /// never ends — which is what this defaulting to 30 rather than 0 is for.
+        /// </summary>
+        public static int ResultsWaitSeconds = 30;
+
         /// <summary>Arcade mode: item boxes, power-ups, weapons, arcade scoreboard.</summary>
         public static bool Arcade;
 
@@ -134,6 +145,7 @@ namespace AIHWSim.Core
             TargetLaps = 0; // legacy entry paths are free-drive; the menu sets laps after
             RubberBand = false;
             CountdownSeconds = 0;
+            ResultsWaitSeconds = 30;   // the default the menu offers next time
             // Every legacy entry path (garage Drive, builder Drive, the stale-LAN
             // guard) funnels through here, which makes this the one place that has
             // to clear arcade — otherwise a race's flags leak into a free-drive.

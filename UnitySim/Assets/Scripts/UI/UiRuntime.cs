@@ -29,6 +29,11 @@ namespace AIHWSim.UI
             _instance = go.AddComponent<UiRuntime>();
             go.AddComponent<ScreenFade>();
             go.AddComponent<CursorAutoHide>();
+            // The controller build/hot-reload service. Here because a build started
+            // in the menu has to survive the scene load into the track — and because
+            // the batch-mode early-return above keeps it out of every headless
+            // validator for free.
+            go.AddComponent<Build.ControllerBuildRunner>();
             Audio.MusicDirector.Attach(go);
             return _instance;
         }

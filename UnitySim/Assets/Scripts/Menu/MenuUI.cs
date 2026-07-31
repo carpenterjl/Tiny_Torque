@@ -17,7 +17,15 @@ namespace AIHWSim.Menu
     /// </summary>
     public sealed class MenuUI : MonoBehaviour
     {
-        private enum Page { Root, SinglePlayer, Multiplayer, Championship, Options, Resume, LanHost, LanJoin, Showroom, Crates, Shop, Cheats }
+        // SinglePlayer is the submenu LIST; Sp* are its leaves. Appended rather
+        // than inserted so existing values keep their meaning — and the nav page
+        // id is "menu:" + the name, not the number.
+        private enum Page
+        {
+            Root, SinglePlayer, Multiplayer, Championship, Options, Resume,
+            LanHost, LanJoin, Showroom, Crates, Shop, Cheats,
+            SpRace, SpFreeRoam, SpDerby, SpCtf, SpSoccer, SpController,
+        }
 
         private Page _page = Page.Root;
         // What this frame DRAWS. Snapshotted from _page on Layout passes only,
@@ -46,12 +54,31 @@ namespace AIHWSim.Menu
         private int _spControl;     // 0 Manual / 1 Autonomous (C firmware) / 2 Autonomous (bot AI)
         private bool _spRubber;
         private int _spCountdown = 3; // race-start countdown seconds (0..60)
+        private int _spResultsWait = 30; // seconds after the first finisher (0 = wait for all)
         private bool _spArcade;       // power-ups, weapons, arcade board
         private bool _spTrackLimits = true;
         private bool _spArcadeHandling = true;   // false = race the circuits on raw sim physics
         private static readonly List<string> DiffNames = new List<string> { "Easy", "Medium", "Hard" };
         private static readonly List<string> ControlNames =
             new List<string> { "Manual", "Autonomous (firmware)", "Autonomous (bot AI)" };
+
+        /// <summary>
+        /// The "Driving" picker index as a <see cref="DriveControl"/>.
+        ///
+        /// The index order is frozen — <c>GameSettings.spControl</c> persists it, and
+        /// every guard in this file reads <c>_spControl == 1</c> as "firmware". The enum
+        /// happens to be { Human, BotAI, Firmware }, so the straight cast that used to
+        /// live at the call site mapped index 1 to <c>BotAI</c>: picking "Autonomous
+        /// (firmware)" silently ran the bot AI and never loaded a DLL, while "Autonomous
+        /// (bot AI)" was the option that did. Map the two explicitly rather than relying
+        /// on two unrelated orderings agreeing.
+        /// </summary>
+        private static DriveControl ControlFor(int idx) => idx switch
+        {
+            1 => DriveControl.Firmware,
+            2 => DriveControl.BotAI,
+            _ => DriveControl.Human,
+        };
 
         // LAN pages state.
         private string _joinIp = "127.0.0.1";
@@ -72,7 +99,10 @@ namespace AIHWSim.Menu
         // Showroom state: the 3D turntable + its panels, plus where Select/Back
         // should land (SP page vs the LAN pages).
         private ShowroomUI _showroom;
-        private Page _showroomReturn = Page.SinglePlayer;
+        // Fallback only — every caller passes a page explicitly. Points at a
+        // setup screen rather than the Single Player LIST, which has no vehicle
+        // picker for a selection to land in.
+        private Page _showroomReturn = Page.SpRace;
 
         // Crate room: the same shape as the Showroom — a full-screen 3D page
         // with its own rig, entered from the root menu and from the Showroom.
@@ -106,6 +136,7 @@ namespace AIHWSim.Menu
             _spControl = Mathf.Clamp(s.spControl, 0, 2);
             _spRubber = s.spRubberBand;
             _spCountdown = Mathf.Clamp(s.spCountdown, 0, 60);
+            _spResultsWait = Mathf.Clamp(s.spResultsWait, 0, 300);
             _spArcade = s.spArcade;
             _spArcadeHandling = s.spArcadeHandling;
             _spTrackLimits = s.spTrackLimits;
@@ -252,6 +283,16 @@ namespace AIHWSim.Menu
                 case Page.Cheats:
                     GoTo(Page.Options);
                     break;
+                // The setup screens are one level below the Single Player list.
+                // Without these they would hit `default` and jump two levels.
+                case Page.SpRace:
+                case Page.SpFreeRoam:
+                case Page.SpDerby:
+                case Page.SpCtf:
+                case Page.SpSoccer:
+                case Page.SpController:
+                    BackFromSetup();
+                    break;
                 default:
                     GoTo(Page.Root);
                     break;
@@ -305,14 +346,7 @@ namespace AIHWSim.Menu
             if (root && _titleTex != null)
                 GUI.DrawTexture(Cover(_titleTex.width, _titleTex.height), _titleTex, ScaleMode.StretchToFill);
 
-            float w = 380f, h = _pageDraw == Page.Options
-                ? Mathf.Min(680f, UIScale.H - 20f)
-                : _pageDraw == Page.SinglePlayer ? Mathf.Min(560f, UIScale.H - 20f)
-                : _pageDraw == Page.Multiplayer ? Mathf.Min(560f, UIScale.H - 20f)
-                // The shop scrolls ten offers and the championship lists four
-                // rounds plus a points table; both drown in the default 430.
-                : _pageDraw == Page.Shop ? Mathf.Min(620f, UIScale.H - 20f)
-                : _pageDraw == Page.Championship ? Mathf.Min(600f, UIScale.H - 20f) : 430f;
+            float w = 380f, h = Mathf.Min(PanelHeight(_pageDraw), UIScale.H - 20f);
             Rect area;
             if (root && _titleTex != null)
             {
@@ -345,6 +379,12 @@ namespace AIHWSim.Menu
             {
                 case Page.Root: DrawRoot(); break;
                 case Page.SinglePlayer: DrawSinglePlayer(); break;
+                case Page.SpRace: DrawSpRace(); break;
+                case Page.SpFreeRoam: DrawSpFreeRoam(); break;
+                case Page.SpDerby: DrawSpArena(MatchMode.Derby); break;
+                case Page.SpCtf: DrawSpArena(MatchMode.Ctf); break;
+                case Page.SpSoccer: DrawSpArena(MatchMode.Soccer); break;
+                case Page.SpController: DrawSpController(); break;
                 case Page.Multiplayer: DrawMultiplayer(); break;
                 case Page.Championship: DrawChampionship(); break;
                 case Page.Shop: DrawShop(); break;
@@ -365,6 +405,27 @@ namespace AIHWSim.Menu
         // Layout-snapshotted twin of _attractHidden (same rule as _pageDraw:
         // whether the panel exists must not change between Layout and Repaint).
         private bool _attractDraw;
+
+        /// <summary>
+        /// Unclamped panel height per page; the caller clamps to the window. A
+        /// page missing from here is not an error and draws nothing wrong — it
+        /// just clips silently at 430, which is why the two tallest screens also
+        /// sit in a scroll view rather than trusting this number to be right.
+        /// </summary>
+        private static float PanelHeight(Page p) => p switch
+        {
+            Page.Options => 680f,
+            // The shop scrolls ten offers and the championship lists four rounds
+            // plus a points table; both drown in the default 430.
+            Page.Shop => 620f,
+            Page.Championship => 600f,
+            Page.SpController => 620f,
+            Page.SpRace => 600f,
+            Page.Multiplayer => 560f,
+            Page.SpDerby or Page.SpCtf or Page.SpSoccer => 520f,
+            Page.SpFreeRoam => 430f,
+            _ => 430f,
+        };
 
         /// <summary>Smallest rect of the given aspect covering the screen, in UI units.</summary>
         private static Rect Cover(float tw, float th)
@@ -584,9 +645,32 @@ namespace AIHWSim.Menu
         private static readonly string[] ModeArena =
             { "", "Scrapyard Bowl", "Cargo Yard", "Torque Dome", "" };
 
-        private int _spMode;         // SessionConfig.MatchMode
-        private int _spModeDraw;     // Layout snapshot — see DrawSinglePlayer
         private int _spScore = 3;    // captures / goals to win
+
+        /// <summary>
+        /// Which mode a setup page is for. Derived from the page rather than held
+        /// in a field, because <see cref="_pageDraw"/> is already the Layout
+        /// snapshot every draw method is required to read from — a separate mode
+        /// field would need its own twin, and would be one more thing that can
+        /// disagree with the page you are looking at.
+        /// </summary>
+        private static MatchMode ModeOf(Page p) => p switch
+        {
+            Page.SpDerby => MatchMode.Derby,
+            Page.SpCtf => MatchMode.Ctf,
+            Page.SpSoccer => MatchMode.Soccer,
+            Page.SpFreeRoam => MatchMode.FreeRoam,
+            _ => MatchMode.Race,     // SpRace and SpController both race
+        };
+
+        private static Page PageOf(MatchMode m) => m switch
+        {
+            MatchMode.Derby => Page.SpDerby,
+            MatchMode.Ctf => Page.SpCtf,
+            MatchMode.Soccer => Page.SpSoccer,
+            MatchMode.FreeRoam => Page.SpFreeRoam,
+            _ => Page.SpRace,
+        };
 
         /// <summary>Point the track picker at this mode's arena.</summary>
         private void SelectArenaFor(int mode)
@@ -601,9 +685,8 @@ namespace AIHWSim.Menu
         /// <summary>Write the chosen mode's rules into SessionConfig, and split
         /// the roster into two sides when the mode has teams. Called by every
         /// start path, so a mode never half-starts.</summary>
-        private void ApplyMatchRules()
+        private void ApplyMatchRules(MatchMode mode)
         {
-            var mode = (MatchMode)Mathf.Clamp(_spMode, 0, (int)MatchMode.FreeRoam);
             SessionConfig.Match = mode;
             SessionConfig.TargetScore = Mathf.Max(1, _spScore);
             if (mode == MatchMode.Race) return;
@@ -624,94 +707,115 @@ namespace AIHWSim.Menu
                 SessionConfig.Players[i].team = i % 2;
         }
 
+        /// <summary>
+        /// The Single Player page is a LIST now, not a setup form: one row per
+        /// mode, each opening a screen that shows only the controls that mode
+        /// actually has. The setup form it used to be carried five modes' worth of
+        /// rows behind `if (roam)` / `if (arena)` gates, which is how the firmware
+        /// option ended up as one ◀ ▶ row two thirds of the way down a page most
+        /// people never scrolled.
+        /// </summary>
         private void DrawSinglePlayer()
         {
             GUILayout.Label("SINGLE PLAYER", GarageSkin.Header);
             GUILayout.Space(6);
 
-            int wasMode = _spMode;
-            _spMode = MenuNav.Cycle("Mode", Mathf.Clamp(_spMode, 0, ModeNames.Length - 1),
-                ModeNames.Length, k => ModeNames[k], 60f);
-            if (_spMode != wasMode) SelectArenaFor(_spMode);
-            // Which controls exist below depends on the mode, so the mode has to
-            // be snapshotted on Layout: a click that changes it mid-pass would
-            // otherwise offer Repaint a different set of controls than Layout
-            // registered, which is the IMGUI error this whole UI avoids.
-            if (Event.current.type == EventType.Layout) _spModeDraw = _spMode;
-            bool roam = _spModeDraw == (int)MatchMode.FreeRoam;
-            bool arena = !roam && _spModeDraw != (int)MatchMode.Race;
+            if (MenuButton("Race")) GoToMode(MatchMode.Race);
+            if (MenuButton("Free Roam")) GoToMode(MatchMode.FreeRoam);
+            if (MenuButton("Demolition")) GoToMode(MatchMode.Derby);
+            if (MenuButton("Capture the Flag")) GoToMode(MatchMode.Ctf);
+            if (MenuButton("Soccer")) GoToMode(MatchMode.Soccer);
+            if (MenuButton("Simulate Controller"))
+                GoTo(Page.SpController, () => { RefreshLists(); RefreshControllerDlls(); });
+            GUILayout.Space(8);
+            if (MenuButton("Garage")) LoadIfBuilt(GameFlow.GarageSceneName, GameFlow.LoadGarage);
+            if (MenuButton("Track Builder")) LoadIfBuilt(GameFlow.TrackBuilderSceneName, GameFlow.LoadTrackBuilder);
+            GUILayout.Space(8);
+            if (MenuButton("← Back")) GoTo(Page.Root);
+        }
 
+        /// <summary>
+        /// Open a mode's setup screen. <see cref="SelectArenaFor"/> runs on entry
+        /// now that there is no Mode cycle to change — and it must run AFTER
+        /// RefreshLists, because it searches <c>_tracks</c>. Get that order wrong
+        /// and the picker silently keeps the previous track, which for an arena
+        /// mode means a derby on a race circuit quietly degrading to a free drive.
+        /// </summary>
+        private void GoToMode(MatchMode mode)
+        {
+            GoTo(PageOf(mode), () => { RefreshLists(); SelectArenaFor((int)mode); });
+        }
+
+        /// <summary>One step back out of any setup screen. Shared by the pad-Back
+        /// handler and the "← Back" row so the two cannot drift apart — they were
+        /// two independent copies of the same decision before.</summary>
+        private void BackFromSetup()
+        {
+            SettingsStore.Save();
+            GoTo(Page.SinglePlayer);
+        }
+
+        // ---- shared setup rows ----------------------------------------------
+        // Each interlock lives in exactly one of these. Five screens copying the
+        // firmware↔arcade rules by hand is how they would eventually disagree.
+
+        private void DrawVehicleRow(Page returnTo)
+        {
             _vehicleIdx = CyclePicker("Vehicle", _vehicles, _vehicleIdx, v => v == "" ? "Stock Default" : v);
             if (MenuNav.Button("Showroom — preview & customize ▶"))
-                OpenShowroom(Page.SinglePlayer);
-            if (roam)
-            {
-                // No track picker at all. The town is the only free-roam map and
-                // it is the only map free roam runs on — offering a choice of
-                // one, on a list that deliberately excludes it, would be a
-                // control that does nothing.
-                GUILayout.Label($"   Map: ★ {TrackPresets.FreeRoamName} — a town to drive around.\n" +
-                                "   No laps, no clock, no opponents. R puts you back on a street.",
+                OpenShowroom(returnTo);
+        }
+
+        private void DrawTrackRow(MatchMode mode)
+        {
+            _trackIdx = CyclePicker("Track", _tracks, _trackIdx, t => t == "" ? "Classic Oval" : t);
+            if (mode != MatchMode.Race)
+                GUILayout.Label($"   {ModeNames[(int)mode]} needs an arena — " +
+                                $"★ {ModeArena[(int)mode]} is the one built for it.",
                                 GarageSkin.StatLabel);
-            }
-            else
+        }
+
+        /// <summary>AI opponents. Never drawn in free roam: with no racing line and
+        /// no arena policy to hunt anything, a bot dropped into the town would sit
+        /// at its spawn, and an opponent that does nothing is worse than none.</summary>
+        private void DrawOpponentsRows()
+        {
+            _spBots = MenuNav.Stepper("Opponents", _spBots, 0, 7,
+                v => v == 0 ? "None" : $"{v} bots");
+
+            if (_spBots > 0)
             {
-                _trackIdx = CyclePicker("Track", _tracks, _trackIdx, t => t == "" ? "Classic Oval" : t);
-                if (arena)
-                    GUILayout.Label($"   {ModeNames[_spModeDraw]} needs an arena — " +
-                                    $"★ {ModeArena[_spModeDraw]} is the one built for it.",
-                                    GarageSkin.StatLabel);
+                _spDiff = CyclePicker("Difficulty", DiffNames, _spDiff, x => x);
+                _spRubber = MenuNav.Toggle(_spRubber, " Rubber-band (keep the pack close)");
             }
+        }
 
-            // AI opponents. Not in free roam: with no racing line and no arena
-            // policy to hunt anything, a bot dropped into the town would sit at
-            // its spawn — an opponent that does nothing is worse than none.
-            if (!roam)
-            {
-                _spBots = MenuNav.Stepper("Opponents", _spBots, 0, 7,
-                    v => v == 0 ? "None" : $"{v} bots");
-
-                if (_spBots > 0)
-                {
-                    _spDiff = CyclePicker("Difficulty", DiffNames, _spDiff, x => x);
-                    _spRubber = MenuNav.Toggle(_spRubber, " Rubber-band (keep the pack close)");
-                }
-            }
-
-            // How the player's own car is driven.
+        /// <summary>How the player's own car is driven.</summary>
+        private void DrawDrivingRow()
+        {
             _spControl = CyclePicker("Driving", ControlNames, _spControl, x => x);
+        }
 
-            // Race distance, or the score that ends an arena match.
-            if (arena)
-            {
-                if (_spModeDraw != (int)MatchMode.Derby)
-                    _spScore = MenuNav.Stepper("Score to win", _spScore, 1, 15,
-                        v => _spModeDraw == (int)MatchMode.Soccer ? $"{v} goals" : $"{v} captures");
-                else
-                    GUILayout.Label("   Last car still running wins.", GarageSkin.StatLabel);
-            }
-            else if (!roam)
-            {
-                _spLaps = MenuNav.Stepper("Race laps", _spLaps, 0, 50,
-                    v => v == 0 ? "Free drive" : $"{v} laps");
-            }
+        private void DrawCountdownRow(bool show)
+        {
+            if (!show) return;
+            _spCountdown = MenuNav.Stepper("Countdown", _spCountdown, 0, 60,
+                v => v == 0 ? "None" : $"{v} s");
+        }
 
-            if (!roam && (_spBots > 0 || _spLaps > 0 || arena))
-                _spCountdown = MenuNav.Stepper("Countdown", _spCountdown, 0, 60,
-                    v => v == 0 ? "None" : $"{v} s");
-
-            // Arcade is always offered — hiding it behind "set some laps first"
-            // made the whole mode undiscoverable. It still REQUIRES a lap count
-            // (item boxes and race positions both need a finish line), so ticking
-            // it with a free-drive selected sets a race up rather than silently
-            // doing nothing. It must never run on a firmware session: a boost or
-            // a spin-out would corrupt the controller-validation run.
+        /// <summary>
+        /// Arcade items and their track-limits sub-toggle. Race screen only: the
+        /// boxes and the position board both need a finish line, the arena modes
+        /// bring their own scoring, and free roam has nothing to hang either from.
+        ///
+        /// Arcade must never run on a firmware session — a boost or a spin-out
+        /// would corrupt a controller-validation run — so the whole block is
+        /// disabled rather than hidden when firmware is selected.
+        /// </summary>
+        private void DrawArcadeRows()
+        {
             bool firmware = _spControl == 1;
-            // Arcade items belong to a race: they need a finish line for their
-            // boxes and their positions. The arena modes bring their own, and
-            // free roam has no finish line to hang either from.
-            GUI.enabled = !firmware && !arena && !roam;
-            if (arena || roam) _spArcade = false;
+            GUI.enabled = !firmware;
             bool wantArcade = MenuNav.Toggle(_spArcade && !firmware, " Arcade mode (power-ups & weapons)");
             if (wantArcade && !_spArcade && _spLaps == 0) _spLaps = 3;   // arcade needs a race
             _spArcade = wantArcade && !firmware;
@@ -724,14 +828,19 @@ namespace AIHWSim.Menu
             }
             GUI.enabled = true;
             if (firmware) GUILayout.Label("Arcade is off in firmware sessions.", GarageSkin.StatLabel);
+        }
 
-            // The handling mode is its own row, OUTSIDE the arcade-items nest:
-            // free roam and the arena modes have no item boxes but very much
-            // have physics, and burying the physics choice under a weapons
-            // toggle made it unreachable exactly where the car felt worst.
-            // Firmware sessions face raw physics regardless (no HandlingFloor),
-            // so the control is disabled rather than lying.
-            GUI.enabled = !firmware;
+        /// <summary>
+        /// The handling mode, deliberately OUTSIDE the arcade-items nest and drawn
+        /// on every setup screen: free roam and the arena modes have no item boxes
+        /// but very much have physics, and burying the physics choice under a
+        /// weapons toggle made it unreachable exactly where the car felt worst.
+        /// Firmware sessions face raw physics regardless (no HandlingFloor), so the
+        /// control is disabled rather than lying.
+        /// </summary>
+        private void DrawHandlingRows()
+        {
+            GUI.enabled = _spControl != 1;
             _spArcadeHandling = MenuNav.Toggle(_spArcadeHandling,
                 " Arcade handling (extra grip + driving assists)");
             GUILayout.Label(_spArcadeHandling
@@ -739,20 +848,224 @@ namespace AIHWSim.Menu
                     : "    SIM — raw brush-tyre physics, no assist floor. The circuits bite.",
                 GarageSkin.StatLabel);
             GUI.enabled = true;
-            GUILayout.Space(10);
-
-            string go = (arena || roam) ? $"{ModeNames[_spModeDraw]} ▶"
-                      : (_spBots > 0 || _spLaps > 0) ? "Race ▶" : "Drive ▶";
-            if (MenuButton(go)) StartSinglePlayer();
-            if (MenuButton("Garage")) LoadIfBuilt(GameFlow.GarageSceneName, GameFlow.LoadGarage);
-            if (MenuButton("Track Builder")) LoadIfBuilt(GameFlow.TrackBuilderSceneName, GameFlow.LoadTrackBuilder);
-            GUILayout.Space(8);
-            if (MenuButton("← Back")) GoTo(Page.Root);
         }
 
-        private void StartSinglePlayer()
+        private void DrawSetupFooter(string goLabel, MatchMode mode)
         {
-            bool roam = _spMode == (int)MatchMode.FreeRoam;
+            GUILayout.Space(10);
+            if (MenuButton(goLabel)) StartSinglePlayer(mode);
+            GUILayout.Space(8);
+            if (MenuButton("← Back")) BackFromSetup();
+        }
+
+        // ---- per-mode setup screens -----------------------------------------
+
+        private void DrawSpRace()
+        {
+            GUILayout.Label("RACE", GarageSkin.Header);
+            GUILayout.Space(6);
+
+            // The scroll view is the actual fix for "does this page fit": with it,
+            // PanelHeight only has to be reasonable rather than exactly right.
+            _raceScroll = GUILayout.BeginScrollView(_raceScroll);
+            DrawVehicleRow(Page.SpRace);
+            DrawTrackRow(MatchMode.Race);
+            DrawOpponentsRows();
+            DrawDrivingRow();
+
+            _spLaps = MenuNav.Stepper("Race laps", _spLaps, 0, 50,
+                v => v == 0 ? "Free drive" : $"{v} laps");
+            // How long after the LEADER finishes before the results screen. Without
+            // this the race waited for the last car, and a bot wedged in scenery
+            // never arrives — so the race simply never ended.
+            _spResultsWait = MenuNav.Stepper("Results wait", _spResultsWait, 0, 300,
+                v => v == 0 ? "Wait for everyone" : $"{v} s after 1st");
+
+            DrawCountdownRow(_spBots > 0 || _spLaps > 0);
+            DrawArcadeRows();
+            DrawHandlingRows();
+            GUILayout.EndScrollView();
+            DrawSetupFooter((_spBots > 0 || _spLaps > 0) ? "Race ▶" : "Drive ▶", MatchMode.Race);
+        }
+
+        private void DrawSpFreeRoam()
+        {
+            GUILayout.Label("FREE ROAM", GarageSkin.Header);
+            GUILayout.Space(6);
+
+            DrawVehicleRow(Page.SpFreeRoam);
+            // No track picker at all. The town is the only free-roam map and it is
+            // the only map free roam runs on — offering a choice of one, from a
+            // list that deliberately excludes it, would be a control that does
+            // nothing.
+            GUILayout.Label($"   Map: ★ {TrackPresets.FreeRoamName} — a town to drive around.\n" +
+                            "   No laps, no clock, no opponents. R puts you back on a street.",
+                            GarageSkin.StatLabel);
+            DrawDrivingRow();
+            DrawHandlingRows();
+            DrawSetupFooter("Free Roam ▶", MatchMode.FreeRoam);
+        }
+
+        // ---- simulate controller ---------------------------------------------
+
+        private readonly List<string> _ctlDlls = new List<string>();
+        private int _ctlDllIdx;
+        private int _ctlSeenBuild = -1;
+
+        /// <summary>
+        /// The controller DLLs sitting in the plugin folder, refreshed on page
+        /// entry rather than per OnGUI pass — the row count must not change
+        /// between a Layout pass and its Repaint, and a folder scan every frame
+        /// would be both a census hazard and pointless disk traffic.
+        /// </summary>
+        private void RefreshControllerDlls()
+        {
+            // Keep whatever is on screen selected across a re-list; only fall back
+            // to the saved choice when nothing was selected yet.
+            string keep = SelectedControllerDll;
+            if (string.IsNullOrEmpty(keep)) keep = SettingsStore.Current.simControllerDll;
+
+            _ctlDlls.Clear();
+            try
+            {
+                string dir = System.IO.Path.Combine(Application.dataPath, "Plugins", "x86_64");
+                if (System.IO.Directory.Exists(dir))
+                    foreach (var f in System.IO.Directory.GetFiles(dir, "*.dll"))
+                        _ctlDlls.Add(System.IO.Path.GetFileName(f));
+            }
+            catch (System.Exception e)
+            {
+                // A missing or unreadable plugin folder is a "nothing built yet"
+                // state, not a crash — the page says so below.
+                Debug.LogWarning($"[Menu] Could not list controller DLLs: {e.Message}");
+            }
+            _ctlDlls.Sort();
+
+            int want = _ctlDlls.IndexOf(keep);
+            _ctlDllIdx = want >= 0 ? want : 0;
+        }
+
+        private string SelectedControllerDll =>
+            _ctlDlls.Count > 0 ? _ctlDlls[Mathf.Clamp(_ctlDllIdx, 0, _ctlDlls.Count - 1)] : "";
+
+        private Vector2 _ctlScroll;
+        private Vector2 _raceScroll;
+
+        private void DrawSpController()
+        {
+            GUILayout.Label("SIMULATE CONTROLLER", GarageSkin.Header);
+            GUILayout.Label("Drive a car with your compiled C controller instead of\n" +
+                            "the keyboard. The DLL runs closed-loop from the green flag;\n" +
+                            "press M in the drive to take over by hand.",
+                            GarageSkin.StatLabel);
+            GUILayout.Space(6);
+
+            // A build that just finished may have produced the first DLL there has
+            // ever been. Re-listing changes which rows exist below, so it happens on
+            // a Layout pass and nowhere else.
+            var build = AIHWSim.Build.ControllerBuildRunner.Instance;
+            if (build != null && Event.current.type == EventType.Layout
+                && _ctlSeenBuild != build.BuildGeneration)
+            {
+                _ctlSeenBuild = build.BuildGeneration;
+                RefreshControllerDlls();
+            }
+
+            _ctlScroll = GUILayout.BeginScrollView(_ctlScroll);
+            if (_ctlDlls.Count == 0)
+            {
+                GUILayout.Label("No controller DLL built yet — use Build & Reload below.",
+                                GarageSkin.StatLabel);
+            }
+            else
+            {
+                _ctlDllIdx = CyclePicker("Controller", _ctlDlls, _ctlDllIdx, x => x);
+            }
+
+            GUILayout.Space(6);
+            // Compile the C sources and hot-swap the result, without leaving the
+            // game. Same panel the pause menu shows mid-drive.
+            ControllerBuildPanel.Draw(logHeight: 120f);
+            GUILayout.Space(6);
+            DrawVehicleRow(Page.SpController);
+            DrawTrackRow(MatchMode.Race);
+            DrawOpponentsRows();
+            _spLaps = MenuNav.Stepper("Race laps", _spLaps, 0, 50,
+                v => v == 0 ? "Free drive" : $"{v} laps");
+            DrawCountdownRow(true);
+
+            // Not a choice here: a firmware session gets no assist floor either
+            // way (TrackBootstrap skips HandlingFloor for it), so the row is shown
+            // disabled rather than removed — removing it would change the control
+            // census against the other setup screens for no gain.
+            GUI.enabled = false;
+            DrawHandlingRows();
+            GUI.enabled = true;
+            GUILayout.EndScrollView();
+
+            GUILayout.Space(10);
+            GUI.enabled = _ctlDlls.Count > 0;
+            if (MenuButton("Run controller ▶")) StartController();
+            GUI.enabled = true;
+            GUILayout.Space(8);
+            if (MenuButton("← Back")) BackFromSetup();
+        }
+
+        /// <summary>
+        /// Start a race with the selected DLL driving. Nothing new is plumbed: the
+        /// firmware slot and the per-car DLL name are both existing session
+        /// concepts, so this only picks them.
+        /// </summary>
+        private void StartController()
+        {
+            _spControl = 1;                    // "Autonomous (firmware)" — see ControlFor
+            _spArcade = false;                 // never on a controller-validation run
+            _pendingControllerDll = SelectedControllerDll;
+
+            var s = SettingsStore.Current;
+            s.simControllerDll = _pendingControllerDll;
+            StartSinglePlayer(MatchMode.Race);
+        }
+
+        /// <summary>DLL the Simulate Controller screen wants this car to load, or
+        /// null for whatever the vehicle design already names. Consumed and cleared
+        /// by <see cref="StartSinglePlayer"/>.</summary>
+        private string _pendingControllerDll;
+
+        /// <summary>One body for all three arena modes; they differ only in how the
+        /// match is won.</summary>
+        private void DrawSpArena(MatchMode mode)
+        {
+            GUILayout.Label(ModeNames[(int)mode].ToUpperInvariant(), GarageSkin.Header);
+            GUILayout.Space(6);
+
+            DrawVehicleRow(PageOf(mode));
+            DrawTrackRow(mode);
+            DrawOpponentsRows();
+            DrawDrivingRow();
+
+            if (mode == MatchMode.Derby)
+                GUILayout.Label("   Last car still running wins.", GarageSkin.StatLabel);
+            else
+                _spScore = MenuNav.Stepper("Score to win", _spScore, 1, 15,
+                    v => mode == MatchMode.Soccer ? $"{v} goals" : $"{v} captures");
+
+            DrawCountdownRow(true);
+            DrawHandlingRows();
+            DrawSetupFooter($"{ModeNames[(int)mode]} ▶", mode);
+        }
+
+        /// <summary>
+        /// Start a single-player session in <paramref name="mode"/>. The mode is a
+        /// parameter rather than a field read: each setup screen passes its own
+        /// literal, so what starts can never disagree with the page you started it
+        /// from — and no handler has to read live page state, which
+        /// <see cref="GoTo"/> is allowed to change mid-pass.
+        /// </summary>
+        private void StartSinglePlayer(MatchMode mode)
+        {
+            bool roam = mode == MatchMode.FreeRoam;
+            bool arena = mode != MatchMode.Race && !roam;
             string vehicle = _vehicles[_vehicleIdx];
             string track = _tracks[_trackIdx];
             int bots = roam ? 0 : _spBots;
@@ -762,11 +1075,27 @@ namespace AIHWSim.Menu
             SessionConfig.TargetLaps = roam ? 0 : _spLaps;
             SessionConfig.RubberBand = bots > 0 && _spRubber;
             SessionConfig.CountdownSeconds = (bots > 0 || _spLaps > 0) && !roam ? _spCountdown : 0;
+            SessionConfig.ResultsWaitSeconds = _spResultsWait;
             // Assigned AFTER SetSinglePlayer, which clears them.
-            SessionConfig.Arcade = _spArcade && _spLaps > 0 && _spControl != 1 && !roam;
+            // Arcade is decided from the MODE here rather than by the arena and
+            // free-roam screens clearing _spArcade on their way past: that flag is
+            // shared with the split-screen and LAN-host pages, so merely visiting
+            // a Soccer setup screen used to wipe their arcade toggle too.
+            SessionConfig.Arcade = !roam && !arena
+                && _spArcade && _spLaps > 0 && _spControl != 1;
             SessionConfig.TrackLimits = SessionConfig.Arcade && _spTrackLimits;
             SessionConfig.ArcadeHandling = _spArcadeHandling;
             GameFlow.ActiveDesign = ResolveVehicle(vehicle);
+            // The Simulate Controller screen picks the DLL by name; TrackBootstrap
+            // reads it straight off the design (through SafeDllName). ResolveVehicle
+            // hands back a freshly built design every call, so writing here cannot
+            // leak the choice into a later session.
+            if (!string.IsNullOrEmpty(_pendingControllerDll))
+            {
+                GameFlow.ActiveDesign ??= VehicleDesign.Default();
+                GameFlow.ActiveDesign.controllerDll = _pendingControllerDll;
+                _pendingControllerDll = null;
+            }
             // Free roam owns its map: the town is not in the track picker at
             // all, so it is resolved by name here rather than selected.
             if (roam) GameFlow.ActiveTrack = TrackPresets.Resolve(TrackPresets.FreeRoamName);
@@ -782,13 +1111,13 @@ namespace AIHWSim.Menu
                 deviceKind = InputDeviceKind.MergedKeyboardGamepad,
                 assists = SessionConfig.P1Assists(s),
                 isBot = false,
-                control = (DriveControl)Mathf.Clamp(_spControl, 0, 2),
+                control = ControlFor(_spControl),
             });
             for (int k = 1; k <= bots; k++)
                 SessionConfig.Players.Add(MakeBotSlot(k, _spDiff));
 
             // After the roster exists: a team mode has to split it.
-            ApplyMatchRules();
+            ApplyMatchRules(mode);
 
             s.lastVehicle = vehicle;
             s.lastTrack = track;
@@ -798,6 +1127,7 @@ namespace AIHWSim.Menu
             s.spControl = _spControl;
             s.spRubberBand = _spRubber;
             s.spCountdown = _spCountdown;
+            s.spResultsWait = _spResultsWait;
             s.spArcade = _spArcade;
             s.spTrackLimits = _spTrackLimits;
             s.spArcadeHandling = _spArcadeHandling;

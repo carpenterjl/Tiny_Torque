@@ -26,12 +26,19 @@
 param(
     [string]$Config = "Release",
     [switch]$Clean,
-    [string]$Target
+    [string]$Target,
+    # Where the built DLLs must land. Normally left alone: CMakeLists.txt already
+    # defaults UNITY_PLUGIN_DIR to the editor's plugin folder. The in-game
+    # "Build & Reload" passes this so a PLAYER build copies next to the running
+    # game rather than into the repo it was compiled from — without it the build
+    # succeeds and the running game keeps loading the DLL it shipped with.
+    [string]$PluginDir
 )
 
 $ErrorActionPreference = "Stop"
 $here       = Split-Path -Parent $MyInvocation.MyCommand.Path
-$pluginDir  = Join-Path $here "..\UnitySim\Assets\Plugins\x86_64"
+$pluginDir  = if ($PluginDir) { $PluginDir }
+              else { Join-Path $here "..\UnitySim\Assets\Plugins\x86_64" }
 
 # ---------------------------------------------------------------- helpers --
 
@@ -121,10 +128,43 @@ if ($useMsvc) {
                         "-DCMAKE_BUILD_TYPE=$Config")
 }
 
-if (-not (Test-Path (Join-Path $buildDir "CMakeCache.txt"))) {
+# Always state the destination explicitly. UNITY_PLUGIN_DIR is a CACHE PATH, so
+# whatever the last configure stored wins until it is overwritten — without this,
+# one build with -PluginDir would redirect every later build too, silently and
+# invisibly.
+$wantPlugin = ([System.IO.Path]::GetFullPath($pluginDir)) -replace '\\','/'
+$wantPlugin = $wantPlugin.TrimEnd('/')
+$configureArgs += @("-DUNITY_PLUGIN_DIR=$wantPlugin")
+
+# Configure when there is no cache, or when the cached destination is not the one
+# we want. Comparing rather than always re-configuring keeps the common case
+# (same destination as last time) at zero extra cost.
+$cachePath = Join-Path $buildDir "CMakeCache.txt"
+$needConfigure = -not (Test-Path $cachePath)
+if (-not $needConfigure) {
+    $cached = (Select-String -Path $cachePath -Pattern '^UNITY_PLUGIN_DIR:PATH=(.*)$' |
+               Select-Object -First 1)
+    $cachedDir = if ($cached) { $cached.Matches[0].Groups[1].Value.TrimEnd('/') } else { "" }
+    if ($cachedDir -ne $wantPlugin) { $needConfigure = $true }
+}
+
+if ($needConfigure) {
     Write-Host "Configuring..." -ForegroundColor Cyan
     & $cmakeExe @configureArgs
-    if ($LASTEXITCODE -ne 0) { throw "CMake configure failed." }
+    if ($LASTEXITCODE -ne 0) {
+        # A CMake cache records the absolute source and binary paths it was made
+        # for, so moving or renaming the repo poisons it permanently — and the
+        # error ("does not match the source used to generate cache") is one nobody
+        # should have to look up. There is nothing in build/ worth keeping that a
+        # re-configure cannot regenerate, so wipe it and try once more.
+        if (Test-Path $cachePath) {
+            Write-Host "Stale CMake cache (the project moved?) — reconfiguring from scratch." `
+                -ForegroundColor Yellow
+            Remove-Item -Recurse -Force $buildDir
+            & $cmakeExe @configureArgs
+        }
+        if ($LASTEXITCODE -ne 0) { throw "CMake configure failed." }
+    }
 }
 
 Write-Host "Building ($Config)..." -ForegroundColor Cyan

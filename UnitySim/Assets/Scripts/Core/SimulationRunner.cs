@@ -267,15 +267,39 @@ namespace AIHWSim.Core
             }
         }
 
-        /// <summary>Reload the controller DLL in place (hot reload). Safe during play.</summary>
-        public void ReloadController()
+        /// <summary>File name of the DLL currently mapped, or "" if none.</summary>
+        public string LoadedControllerName =>
+            _loader != null && !string.IsNullOrEmpty(_loader.SourcePath)
+                ? Path.GetFileName(_loader.SourcePath) : "";
+
+        /// <summary>When the mapped DLL was last written. A reload that leaves this
+        /// unchanged means CMake decided the binary was identical and skipped the
+        /// copy — worth showing, because otherwise "build ok, nothing happened" is
+        /// indistinguishable from a broken reload.</summary>
+        public System.DateTime LoadedControllerStamp =>
+            _loader != null ? _loader.LoadedStamp : System.DateTime.MinValue;
+
+        /// <summary>
+        /// Reload the controller DLL in place (hot reload). Safe during play.
+        ///
+        /// Callers drive this from Update, i.e. between FixedUpdates — which is the
+        /// whole safety argument: it can never run re-entrantly with the
+        /// <c>_loader.Step</c> call inside ControlStep. The library is unmapped and
+        /// re-mapped, so a stateful controller drops whatever odometry and phase it
+        /// had accumulated, exactly as <see cref="OnVehicleReset"/> already does.
+        /// </summary>
+        /// <returns>True if a controller is loaded and armed afterwards. False
+        /// means the session is now open-loop — the car coasts rather than
+        /// stopping, and the reason is in the log.</returns>
+        public bool ReloadController()
         {
-            if (!loadControllerDll) return; // humans-only session (split-screen)
+            if (!loadControllerDll) return false; // humans-only session (split-screen)
             if (_loader != null && _loader.IsLoaded)
                 SafeShutdown();
             LoadController();
             RegisterChannels(); // debug channel set may have changed
             ConfigureGraph();
+            return ControllerReady;
         }
 
         private void RegisterChannels()

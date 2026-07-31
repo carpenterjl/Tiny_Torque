@@ -30,11 +30,20 @@ must not block, allocate across the boundary, or throw.
 | `sensor_data` | const float* | varies | Flat configurable-sensor block (ABI v2), layout per manifest |
 | `sensor_count`| int       | —       | Number of manifest entries (ABI v2)       |
 | `sensor_data_len`| int    | —       | Total floats in `sensor_data` (ABI v2)    |
-| `cam_pixels`  | const unsigned char* | 0–255 | Grayscale frame, row-major, or NULL (ABI v2) |
+| `cam_pixels`  | const unsigned char* | 0–255 | Grayscale frame, row-major, **row 0 = top** (see below), or NULL (ABI v2) |
 | `cam_width`   | int       | px      | Camera frame width, 0 if no camera (ABI v2)|
 | `cam_height`  | int       | px      | Camera frame height, 0 if no camera (ABI v2)|
 
 The pointer fields are valid only for the duration of the `ctrl_step` call.
+
+**Camera row order (ABI v4).** `cam_pixels` is top-down: pixel *(x, y)* is
+`cam_pixels[y * cam_width + x]` with *y* counting **down** from the top edge.
+Through ABI v3 the frame arrived bottom-up — not by design, but because that is
+the order Unity's texture space hands it over in, and no version of this document
+said which it was. v4 changes no struct layout; it only fixes the convention. A
+controller that reads the frame symmetrically (left-half vs right-half sums,
+whole-frame brightness) is unaffected; one that looks at "the bottom of the
+image" for the track ahead needs its row indices flipped.
 
 ## Configurable sensors & actuators (ABI v3)
 

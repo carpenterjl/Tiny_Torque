@@ -7,10 +7,18 @@
  *
  * Field counts here must stay in sync with ControllerInterop.cs on the C# side.
  *
- * ABI v2 (this file) appends a generic, manifest-described sensor block to
- * CtrlInputs and adds one OPTIONAL export, ctrl_configure(). Everything from
- * v1 keeps its original offset, so a v1 controller DLL (which never reads the
- * new fields and doesn't export ctrl_configure) still loads and runs.
+ * ABI v2 appends a generic, manifest-described sensor block to CtrlInputs and
+ * adds one OPTIONAL export, ctrl_configure(). Everything from v1 keeps its
+ * original offset, so a v1 controller DLL (which never reads the new fields and
+ * doesn't export ctrl_configure) still loads and runs.
+ *
+ * ABI v4 (this file) changes NO layout. It only pins down a convention that was
+ * previously unstated: cam_pixels is TOP-DOWN (row 0 = top of the image). It
+ * used to arrive bottom-up by accident of Unity's texture space. The version
+ * bump exists purely so a controller written against v3 that assumed the old
+ * order has something to notice — nothing about the struct moved, and any
+ * controller that treats the frame symmetrically (left/right sums, whole-frame
+ * brightness) is unaffected either way.
  */
 #ifndef CONTROLLER_API_H
 #define CONTROLLER_API_H
@@ -25,7 +33,7 @@ extern "C" {
 #define CTRL_EXPORT __attribute__((visibility("default")))
 #endif
 
-#define CTRL_ABI_VERSION 3
+#define CTRL_ABI_VERSION 4
 
 /*
  * Sensor type tags. A vehicle in the sim is assembled from these parts; the
@@ -79,7 +87,11 @@ typedef struct CtrlInputs {
     const float* sensor_data;        /* flat array; layout per manifest    */
     int   sensor_count;              /* entries in the manifest            */
     int   sensor_data_len;           /* total floats in sensor_data        */
-    const unsigned char* cam_pixels; /* grayscale, row-major, or NULL      */
+    /* Grayscale frame, or NULL. Row-major, 1 byte per pixel, and ROW 0 IS THE
+     * TOP of the image: pixel (x,y) is cam_pixels[y*cam_width + x] with y
+     * counting DOWN from the top edge. (v4; v3 and earlier shipped it bottom-up
+     * without ever saying so.) */
+    const unsigned char* cam_pixels;
     int   cam_width;                 /* camera frame width  (0 if no cam)  */
     int   cam_height;                /* camera frame height (0 if no cam)  */
 } CtrlInputs;
