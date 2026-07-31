@@ -78,6 +78,22 @@ namespace AIHWSim.Garage
             car.wheelVelNoiseStd = design.wheelVelNoiseStd;
             car.wheelVelQuantCpr = design.wheelVelQuantCpr;
 
+            // Scale-dependent constants the design now authors. The first three
+            // were already public CarVehicle fields that nothing ever assigned,
+            // so until now every car in the game shared one brake, one handbrake
+            // and one anti-roll bar; the design defaults are those same numbers,
+            // so nothing moves.
+            car.maxBrakeTorque = design.maxBrakeTorque;
+            car.handbrakeTorque = design.handbrakeTorque;
+            car.antiRoll = design.antiRoll;
+            car.linearDampingOverride = design.linearDamping;
+            car.angularDampingOverride = design.angularDamping;
+            car.maxDepenetrationVelOverride = design.maxDepenetrationVel;
+            car.stickyPhantomNm = design.stickyPhantomNm;
+            car.contactOffsetOverride = design.contactOffset;
+            car.dragCdOverride = design.dragCd;
+            car.frontalAreaOverride = design.frontalAreaM2;
+
             // Composite mass model: total/CoM/inertia from chassis + parts.
             if (design.useCompositeMass)
             {
@@ -112,6 +128,11 @@ namespace AIHWSim.Garage
                     loadSensitivity = w.loadSensitivity,
                     balloonPct = w.balloonPct,
                     wheelStyle = w.wheelStyle,
+                    unsprungMassKg = w.unsprungMassKg,
+                    spinInertiaKgM2 = w.spinInertiaKgM2,
+                    brushEps = w.brushEps,
+                    suspTargetPos = w.suspTargetPos,
+                    brakeScale = w.brakeScale,
                     // Reflected drivetrain inertia J·gear² for powered wheels
                     // (0 on old JSON / unpowered wheels = legacy spin inertia).
                     extraSpinInertia = w.powered && w.motor.rotorInertia > 0f

@@ -61,12 +61,39 @@ namespace AIHWSim.EditorTools
             // Wheels/battery/antenna/cosmetics stay render-only.
             string file = System.IO.Path.GetFileName(assetPath);
             string p = assetPath.Replace('\\', '/');
-            mi.isReadable = file.StartsWith("body_") || p.Contains("Resources/TrackProps/");
+            //   • the Tiguan's WHEELS — the only wheels anywhere that are read.
+            //     TiguanChecks measures winding and signed volume off the CPU
+            //     copy, and without it those checks find no readable mesh and
+            //     pass by finding nothing, which is the precise failure shape
+            //     the whole winding gate exists to prevent. It is a debug asset;
+            //     the memory does not matter.
+            mi.isReadable = file.StartsWith("body_") || p.Contains("Resources/TrackProps/")
+                            || file.StartsWith("wheel_tiguan");
+
+            // The Tiguan is a real car at 1:1 in a kit of 1/10 toys, so it is the
+            // only asset here anywhere near the 16-bit index ceiling — its shell
+            // alone is ~100k triangles against the arcade bodies' few thousand.
+            // Unity's default SPLITS a mesh past 65 535 vertices silently, and a
+            // split shell is a shell with a seam down it AND a different renderer
+            // count than the validator was told to expect. Scoped by name so every
+            // other asset in these folders keeps importing bit-identically.
+            if (file.StartsWith("body_tiguan") || file.StartsWith("wheel_tiguan"))
+                mi.indexFormat = ModelImporterIndexFormat.UInt32;
         }
 
         /// <summary>Bumped so a settings change here reimports every asset in
         /// scope on the next editor/batch run (the TrackProps isReadable flip
-        /// must reach all 126 existing FBX, not just future ones).</summary>
-        public override uint GetVersion() => 2;
+        /// must reach all 126 existing FBX, not just future ones).
+        ///
+        /// 3: the Tiguan's 32-bit index format.
+        /// 4: the Tiguan wheels' isReadable. Separate bump because the rule
+        /// changed AFTER 3's reimport had already run, and an OnPreprocessModel
+        /// edit reaches nothing without one — the wheels stayed unreadable and
+        /// their winding check reported itself broken, which is the right way
+        /// for that to fail but still a wasted run.
+        /// Expect a one-off reimport of every FBX in scope on the next editor
+        /// start — slow, harmless, and worth knowing about before it looks like
+        /// a hang.</summary>
+        public override uint GetVersion() => 4;
     }
 }

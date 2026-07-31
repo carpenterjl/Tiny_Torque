@@ -1275,7 +1275,13 @@ namespace AIHWSim.Garage
         {
             Header("BODY");
             // Rows of four — eight shapes no longer fit one line.
-            var shapes = (BodyShape[])System.Enum.GetValues(typeof(BodyShape));
+            // BodyShape.Tiguan is a full-scale physics reference vehicle, not
+            // game content: its design is 1500 kg on 0.349 m wheels, which every
+            // slider below clamps away, and VehicleLibrary would hide the save.
+            // Offering it here would be a shape you can pick and cannot use.
+            var shapes = System.Array.FindAll(
+                (BodyShape[])System.Enum.GetValues(typeof(BodyShape)),
+                s => s != BodyShape.Tiguan);
             for (int row = 0; row < shapes.Length; row += 4)
             {
                 GUILayout.BeginHorizontal();

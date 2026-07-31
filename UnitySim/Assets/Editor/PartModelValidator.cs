@@ -97,6 +97,25 @@ namespace AIHWSim.EditorTools
             new Spec("wheel_redline", null,   0.066f, 0.066f, 6000),
             new Spec("wheel_highwing", null,  0.066f, 0.066f, 6000),
             new Spec("wheel_autopia", null,   0.066f, 0.066f, 6000),
+            // The Volkswagen Tiguan — a real car at 1:1 among 1/10 toys, and the
+            // only asset here with no runtime scale factor at all. All three
+            // axes are pinned because nothing is free: the mesh is not divided
+            // by an author size, so any drift is a straight error.
+            //
+            // These numbers come from the EXPORTER's own measurement of the
+            // Blender scene (its VEHJSON block), not from a first [PMV] run.
+            // That makes the check an independent prediction about what the FBX
+            // round-trip should preserve; reading them back off Unity and then
+            // asserting them would only prove Unity agrees with itself.
+            //   body  X 2.0990 carries the door mirrors (body alone is 1.839)
+            //         Y 1.4716 is floor 0.2014 to roof-rail top 1.6730
+            //         Z 4.4864 against the published 4.486
+            //   wheel X 0.2380 across the tread, Y 0.7077 tall, Z 0.7174 across
+            //         — Y < Z by 9.7 mm because the tyre is modelled with a flat
+            //         loaded contact patch. That asymmetry is a check in itself.
+            new Spec("body_tiguan",    2.0990f, 1.4716f, 4.4864f, 105000),
+            new Spec("wheel_tiguan",   0.2380f, 0.7077f, 0.7174f,  23000),
+            new Spec("wheel_tiguan_r", 0.2380f, 0.7077f, 0.7174f,  22000),
             // Cosmetic parts render at authored size, like antenna_stub.
             new Spec("light_bar",     null,   null,   null,  2500),
             new Spec("light_pods",    null,   null,   null,  2500),
@@ -334,9 +353,16 @@ namespace AIHWSim.EditorTools
         /// </summary>
         private static string TokenTrouble(string key, Renderer[] rs)
         {
-            var table = key.StartsWith("wheel_")
-                ? AIHWSim.Vehicles.PartVisualFactory.WheelTokens
-                : AIHWSim.Vehicles.PartVisualFactory.AccentTokens;
+            // The Tiguan binds against its own manifest-built table. Testing its
+            // "tig*" names against AccentTokens would find no match, conclude
+            // "not a token at all", skip every renderer and PASS VACUOUSLY —
+            // which is the exact shape of failure this whole check exists to
+            // stop, just one level up.
+            var table = key.Contains("tiguan")
+                ? AIHWSim.Vehicles.PartVisualFactory.TiguanTokens
+                : key.StartsWith("wheel_")
+                    ? AIHWSim.Vehicles.PartVisualFactory.WheelTokens
+                    : AIHWSim.Vehicles.PartVisualFactory.AccentTokens;
 
             var seen = new System.Collections.Generic.HashSet<string>();
             string why = "";
@@ -414,6 +440,10 @@ namespace AIHWSim.EditorTools
                 Object.DestroyImmediate(inst);
             }
             fail += CheckPropReadability();
+            // Folded in here rather than given its own menu entry and its own
+            // RESULT line, so there is one gate. A second validator is a second
+            // thing to forget to run.
+            fail += TiguanChecks.Run();
 
             Debug.Log($"[PMV] RESULT {(fail == 0 ? "ALL PASS" : fail + " FAILED")} " +
                       $"({Specs.Length} assets)");

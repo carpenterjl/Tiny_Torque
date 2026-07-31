@@ -171,6 +171,7 @@ namespace AIHWSim.Pack
             foreach (string src in Fbx(ResPartModels))
             {
                 string key = Path.GetFileNameWithoutExtension(src);
+                if (IsNotPackContent(key)) continue;
                 string cat = VehicleCategory(key);
                 list.Add(new PackEntry
                 {
@@ -226,6 +227,33 @@ namespace AIHWSim.Pack
 
             list.Sort((a, b) => string.CompareOrdinal(a.key, b.key));
             return list;
+        }
+
+        /// <summary>
+        /// Keys that live in Resources/PartModels but that the pack deliberately
+        /// does not own.
+        ///
+        /// The Tiguan is a physics-verification asset: a real car at 1:1 in a kit
+        /// of 1/10 arcade toys, and its 29 materials come from its own probed
+        /// manifest rather than from <c>PartVisualFactory.AccentTokens</c>. Left
+        /// in, <c>PackPrefabGenerator</c> would hand it the accent table, none of
+        /// its "tig*" names would match, and every renderer would take the
+        /// fallback — the pack would ship a full-size Tiguan uniformly painted in
+        /// generic arcade body paint. <c>PackValidator</c> would NOT fail that,
+        /// because a fallback is a real material and not a MISSING one, which
+        /// makes it worse than a failure: silently wrong content that passes the
+        /// gate.
+        /// </summary>
+        public static readonly string[] NotPackContent =
+        {
+            "body_tiguan", "wheel_tiguan", "wheel_tiguan_r",
+        };
+
+        public static bool IsNotPackContent(string key)
+        {
+            foreach (string k in NotPackContent)
+                if (key == k) return true;
+            return false;
         }
 
         /// <summary>The four baked liveries live beside their bodies and must ride

@@ -41,6 +41,14 @@ namespace AIHWSim.Vehicles
         // A real car ESC never drives against rotation: opposite-sign throttle
         // while moving is a proportional (shorted-winding) brake, and reverse
         // engages only after a dwell in neutral at rest.
+        // Wheel speed above which the ESC treats the car as MOVING (rad/s);
+        // 0 = the legacy 2 rad/s. That literal encodes a GROUND speed, not a
+        // wheel speed: 2 rad/s is 0.07 m/s on a 33 mm wheel but 0.70 m/s on a
+        // 349 mm one, so a full-scale car left on it is still "stationary" at
+        // walking pace and the ESC drives when it should brake — which breaks
+        // the end of every braking measurement.
+        public float escMovingOmega;
+
         public float escDragBrakePct;     // brake duty at neutral while spinning (%); 0 = coast
         public float escBrakeStrengthPct; // full-brake duty scale (%); ≤0 = 100 (old JSON)
         public float escReverseLockMs;    // neutral dwell before reverse engages; ≤0 = 150 (old JSON)

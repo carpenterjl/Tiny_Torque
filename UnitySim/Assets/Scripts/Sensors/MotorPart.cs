@@ -172,7 +172,13 @@ namespace AIHWSim.Sensors
                 float lockS = (motor.escReverseLockMs > 0f ? motor.escReverseLockMs : 150f) * 0.001f;
                 float strength = motor.escBrakeStrengthPct > 0f
                     ? Mathf.Clamp01(motor.escBrakeStrengthPct / 100f) : 1f;
-                bool moving = Mathf.Abs(wheelOmega) > 2f;   // ≈0.07 m/s at r = 33 mm
+                // The literal encodes a GROUND speed, not a wheel speed: 2 rad/s
+                // is ≈0.07 m/s at r = 33 mm but ≈0.70 m/s at r = 349 mm, where
+                // the ESC would still call a car moving at walking pace
+                // "stationary" and drive when it should brake — which breaks the
+                // last few metres of every braking measurement.
+                bool moving = Mathf.Abs(wheelOmega) >
+                    (motor.escMovingOmega > 0f ? motor.escMovingOmega : 2f);
 
                 if (Mathf.Abs(v) < dead)
                 {

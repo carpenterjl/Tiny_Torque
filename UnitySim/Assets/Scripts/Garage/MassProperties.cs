@@ -66,7 +66,11 @@ namespace AIHWSim.Garage
             // Gather point masses: chassis + every part at its mount point.
             var masses = new System.Collections.Generic.List<(float m, Vector3 p)>
             {
-                (Mathf.Max(0.05f, d.mass), ChassisCoM),
+                // The design's own chassis CoM. The legacy default IS ChassisCoM,
+                // so every existing design lands on the same vector — but a 30 mm
+                // drop describes a 40 cm RC tray and means nothing on a 4.5 m car,
+                // where CoM height is the number that sets load transfer and roll.
+                (Mathf.Max(0.05f, d.mass), d.chassisCoM),
             };
             // Wheel mass sits at the hub (mount + strut drop), not the mount, so a
             // long strut lowers the composite CoM. Legacy length 0 => hub == mount.

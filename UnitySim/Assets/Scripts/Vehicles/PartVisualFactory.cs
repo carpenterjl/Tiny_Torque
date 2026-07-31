@@ -250,6 +250,24 @@ namespace AIHWSim.Vehicles
             ("stud", Stud),
         };
 
+        /// <summary>
+        /// The token→material table for the full-scale Tiguan — a THIRD table,
+        /// not thirty more rows in <see cref="AccentTokens"/>.
+        ///
+        /// Two reasons, and both are load-bearing. Its numbers come from a
+        /// Blender-probed manifest rather than from the measured C# tables
+        /// above, so it is built at runtime and cannot be a static array here.
+        /// And leaving the other two tables' contents AND order untouched is
+        /// what guarantees this work cannot regress any of the seven arcade
+        /// cars — a claim worth having by construction, given the ordering bugs
+        /// the AccentTokens comment records.
+        ///
+        /// One table serves the Tiguan's body and both its wheels: the wheel
+        /// needs tigrubber/tigtread/tigrim/tigdisc/tiggloss/tigchrome, all of
+        /// which the body already carries, so there is no second split to make.
+        /// </summary>
+        public static (string, Material)[] TiguanTokens => TiguanMaterials.Tokens;
+
         // ---- primitive helper ----
 
         private static Transform Piece(PrimitiveType type, Transform parent, Material mat,
@@ -291,8 +309,38 @@ namespace AIHWSim.Vehicles
             10 => "redline",  // gold-faced race wheel
             11 => "highwing", // polished five-spoke
             12 => "autopia",  // whitewall on a chrome hubcap
+            // The Tiguan's two, front and rear. They differ ONLY in the brake
+            // disc — vented 340x30 front against solid 300x12 rear — which,
+            // once the calipers are dropped, is the only brake hardware still
+            // visible through the spokes. One style for both would put a front
+            // disc on both rear corners.
+            13 => "tiguan",
+            14 => "tiguan_r",
             _ => "slick",
         };
+
+        /// <summary>
+        /// The radius at which a wheel mesh renders UNSCALED.
+        ///
+        /// For every arcade style that is <see cref="WheelAuthorRadius"/>: the
+        /// exporter rescales each tyre to 33 mm, so one constant served them
+        /// all. The Tiguan is exported 1:1 and is not rescaled at all, so its
+        /// author radius is its own — and it is the LOADED centre height
+        /// 0.349 m, not the 0.3588 m free radius, because 0.349 is also the
+        /// number the design gives the WheelCollider. Defining the constant as
+        /// "the radius that means scale 1" keeps those two the same number;
+        /// defining it as the free radius would render every Tiguan wheel at
+        /// 0.9727 and sit the car 10 mm low on a mesh that needed no scaling.
+        ///
+        /// Every existing style still divides by the same literal, so this is
+        /// bit-identical for the seven arcade cars.
+        /// </summary>
+        public const float TiguanWheelAuthorRadius = 0.349f;
+
+        public static float AuthorRadiusFor(int wheelStyle) =>
+            wheelStyle == 13 || wheelStyle == 14
+                ? TiguanWheelAuthorRadius
+                : WheelAuthorRadius;
 
         // Neon rim: hot-pink emissive, the one wheel that glows in the dark maps.
         private static Material _neonRim;
@@ -455,7 +503,7 @@ namespace AIHWSim.Vehicles
             var mesh = PartMeshLibrary.TryInstantiate("wheel_" + WheelStyleKey(style), holder);
             if (mesh != null)
             {
-                mesh.transform.localScale = Vector3.one * (radius / WheelAuthorRadius);
+                mesh.transform.localScale = Vector3.one * (radius / AuthorRadiusFor(style));
 
                 // The wheel is authored with its rim face toward +X and the brake
                 // disc behind it, so on the axle side where +X points inboard it
@@ -471,8 +519,15 @@ namespace AIHWSim.Vehicles
                 // "whitewall" MUST come before "rim"/"white", and "hubcap"
                 // before "hub" — first-match substring, and "redtrim" really
                 // does contain "rim".
-                PartMeshLibrary.AssignByName(mesh, Tire, WheelTokens);
-                ApplyWheelFinish(mesh, style);
+                //
+                // The Tiguan binds against its own manifest-built table
+                // instead: its pieces carry "tig*" names that match nothing in
+                // WheelTokens, so it would otherwise take the tyre fallback on
+                // every piece and arrive as a solid black wheel.
+                bool tiguan = style == 13 || style == 14;
+                PartMeshLibrary.AssignByName(mesh, tiguan ? null : Tire,
+                                             tiguan ? TiguanTokens : WheelTokens);
+                if (!tiguan) ApplyWheelFinish(mesh, style);
                 if (powered) BuildMotorCan(holder, radius, inboardSign);
                 return;
             }

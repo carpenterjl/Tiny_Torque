@@ -83,6 +83,54 @@ namespace AIHWSim.Garage
 
         public float massKg = 0f;             // wheel assembly mass; 0 = auto (30/190 g)
 
+        // ---- scale-dependent constants, made authorable -------------------
+        // Each of these was a hard-coded literal inside CarVehicle sized for a
+        // ~40 cm, ~1.8 kg RC car. A full-scale vehicle needs different values,
+        // and no continuous formula can supply them: the ten shipped designs sit
+        // at eight different wheel radii, so any expression that reproduces the
+        // old literal at one of them moves all the others. Since the Opus
+        // mission is a bit-identical gate, "close enough" is a failure.
+        //
+        // So they are AUTHORED, and every initialiser here IS the literal it
+        // replaced. JsonUtility leaves absent keys at their initialiser, so old
+        // saved designs and all ten code presets keep exactly what they had —
+        // bit-identity becomes a property of the code's shape rather than a
+        // numerical coincidence. The 0 sentinels mean "use the old expression
+        // verbatim" for cases where 0 is not a legal authored value.
+
+        /// <summary>Unsprung mass at this corner (kg). Was a hard-coded 0.05 in
+        /// MakeWheel — 50 g, right for an RC wheel, and about 1/500th of a real
+        /// one.</summary>
+        public float unsprungMassKg = 0.05f;
+
+        /// <summary>Wheel spin inertia J (kg·m²); 0 = the legacy ½·0.05·r².
+        /// The most consequential number here: at RC scale J is 2.7e-5, so a
+        /// full-scale wheel left on that derivation spins up in microseconds and
+        /// every drive or brake measurement becomes a wheelspin measurement.</summary>
+        public float spinInertiaKgM2 = 0f;
+
+        /// <summary>Floor on the PhysX tyre-curve stiffness; 0 = the legacy 0.01.
+        /// It exists because PhysX does not honour stiffness 0 as "no friction",
+        /// so the curves are scaled to nearly nothing instead. The residual is
+        /// proportional to load: ≤0.05 N/wheel at a 4.4 N RC corner, but ~40 N at
+        /// a 3.7 kN one — which would be 38 % of a real car's aero drag and would
+        /// wreck a coastdown. NEVER flatten the curve SHAPE to fix this; a
+        /// degenerate curve is recorded in CarVehicle as having hard-crashed the
+        /// editor.</summary>
+        public float brushEps = 0f;
+
+        /// <summary>Suspension rest point in travel; 0 = the legacy 0.5 (mid).
+        /// Couples spring rate to travel: static ride sits at
+        /// targetPosition − W/(k·D), so a heavy car on realistic travel needs
+        /// this above 0.5 or it rides on the bump stops.</summary>
+        public float suspTargetPos = 0f;
+
+        /// <summary>Per-wheel brake torque multiplier. The engine has no brake
+        /// bias, so one torque on all four locks a real car's rears first and
+        /// spins it. 1 = unchanged, and IEEE-754 guarantees x·1.0f == x exactly
+        /// for every finite x, so this cannot move an existing result.</summary>
+        public float brakeScale = 1f;
+
         // Drive motor (only used when powered)
         public bool powered = false;
         public MotorParams motor = MotorParams.Default();
@@ -230,6 +278,70 @@ namespace AIHWSim.Garage
         public string cosOrnament = "";
         public string cosBobble = "";
         public string cosWing = "";
+
+        // ---- vehicle-level scale-dependent constants ----------------------
+        // Same contract as the WheelSpec block above: every initialiser IS the
+        // literal it replaced, so absent JSON and all ten code presets are
+        // unchanged by construction.
+        //
+        // Note the first four were ALREADY public fields on CarVehicle that
+        // VehicleFactory never assigned — so every car in the game has been
+        // sharing one 0.8 N·m foot brake, one 1.2 N·m handbrake and one 8 N
+        // anti-roll bar regardless of what it weighs. Plumbing them is a fix in
+        // its own right, and the defaults keep today's behaviour exactly.
+
+        /// <summary>Foot-brake torque per wheel (N·m).</summary>
+        public float maxBrakeTorque = 0.8f;
+
+        /// <summary>Handbrake torque (N·m). Also the park brake the sticky-tyre
+        /// hold applies at rest.</summary>
+        public float handbrakeTorque = 1.2f;
+
+        /// <summary>Anti-roll bar, in newtons per unit of NORMALISED travel
+        /// difference — not a roll rate, and not physical. A full-scale car
+        /// should generally set 0: tyre forces are applied at the contact point,
+        /// so this model has no roll centre and already over-states the roll
+        /// moment; a bar on top would double-count.</summary>
+        public float antiRoll = 8f;
+
+        /// <summary>Rigidbody linear damping (1/s). Units matter here: force
+        /// scales with MASS, so 0.02 is ~0.03 N on an RC car and ~900 N at 30 m/s
+        /// on 1500 kg — more than twice a real car's aero drag, and enough on its
+        /// own to make a coastdown measure nothing but this number.</summary>
+        public float linearDamping = 0.02f;
+
+        /// <summary>Rigidbody angular damping (1/s). A fake yaw/roll/pitch
+        /// damper; Unity's own default is 0.05.</summary>
+        public float angularDamping = 0.5f;
+
+        /// <summary>Rigidbody max depenetration velocity (m/s).</summary>
+        public float maxDepenetrationVel = 2f;
+
+        /// <summary>Phantom motor torque the sticky-tyre hold releases against
+        /// (N·m). It has to overcome the wheel's own inertia to let the car move
+        /// off: 0.05 gives 1837 rad/s² on an RC wheel but 0.033 rad/s² on a real
+        /// one, where the constraint never releases and the car is pinned at
+        /// rest.</summary>
+        public float stickyPhantomNm = 0.05f;
+
+        /// <summary>Chassis-box contact offset (m); 0 = Physics.defaultContactOffset.
+        /// The global is 2 mm, tuned for a 33 mm wheel and set BeforeSceneLoad,
+        /// where it cannot see a vehicle — so a full-scale car overrides its own
+        /// collider rather than moving a global that every RC car reads.</summary>
+        public float contactOffset = 0f;
+
+        /// <summary>Drag coefficient; 0 = AeroDynamics.BodyCd(bodyShape).</summary>
+        public float dragCd = 0f;
+
+        /// <summary>Reference frontal area (m²); 0 = the bodySize estimate. The
+        /// built-in estimate is width·height·0.9, which is a reasonable guess and
+        /// no substitute for a published figure when one exists.</summary>
+        public float frontalAreaM2 = 0f;
+
+        /// <summary>Chassis centre of mass in body-local metres (composite mass
+        /// model only). Was a hard-coded 30 mm drop — right for a 40 cm car,
+        /// meaningless on a 4.5 m one.</summary>
+        public Vector3 chassisCoM = new Vector3(0f, -0.03f, 0f);
 
         /// <summary>
         /// The stock car: a 1/10-scale RC (F1TENTH-style) — four wheels (steered

@@ -30,6 +30,41 @@ namespace AIHWSim.EditorTools
                 $"Created {path}.\nPress Play to run the simulation.", "OK");
         }
 
+        /// <summary>
+        /// The physics-verification scene: a 2.4 km frictionless straight, a
+        /// 10 % slope, and one full-scale VW Tiguan.
+        ///
+        /// Deliberately NOT added to Build Settings, following
+        /// <see cref="CreateBootstrapScene"/> — which is the existing precedent
+        /// for a scene that is a tool rather than content. Three reasons it
+        /// stays out: EditorSceneManager.OpenScene and AssetDatabase.FindAssets
+        /// both reach a scene asset regardless of registration, so the headless
+        /// runner needs nothing; leaving EditorBuildSettings.asset untouched
+        /// keeps the Release build byte-identical and steers clear of the
+        /// zero-GUID bug guarded further down this file; and OpusMissionRunner
+        /// picks its scene by scanning that list, so not being in it means the
+        /// question of collision never arises.
+        /// </summary>
+        [MenuItem("Tools/AIHWSim/Create Physics Debug Scene")]
+        public static void CreatePhysicsDebugScene()
+        {
+            var scene = EditorSceneManager.NewScene(
+                NewSceneSetup.DefaultGameObjects, NewSceneMode.Single);
+
+            var go = new GameObject("PhysicsDebugBootstrap");
+            go.AddComponent<PhysicsDebugBootstrap>();
+            Selection.activeGameObject = go;
+
+            if (!AssetDatabase.IsValidFolder("Assets/Scenes"))
+                AssetDatabase.CreateFolder("Assets", "Scenes");
+
+            const string path = "Assets/Scenes/PhysicsDebugScene.unity";
+            EditorSceneManager.SaveScene(scene, path);
+            EditorUtility.DisplayDialog("AIHWSim",
+                $"Created {path}.\nPress Play to drive the full-scale Tiguan.\n"
+                + "Debug-only: not in Build Settings.", "OK");
+        }
+
         [MenuItem("Tools/AIHWSim/Create Track Scene")]
         public static void CreateTrackScene()
         {

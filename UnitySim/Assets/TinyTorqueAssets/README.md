@@ -150,6 +150,35 @@ hundreds of metres.
 each axis through the real pipeline and asserts it lands on a copy Blender baked
 into place itself. It gates the rest, and it has already earned that three times.
 
+It also got one wrong, which is worth knowing about. The marker's other job is
+winding — a solid's signed volume is positive only if its faces wind outward —
+and it certified a flip that shipped all three circuits inside out: road and
+terrain invisible from above, drawn from below. The marker itself had been
+authored with its boxes reversed, so the flip cancelled the reference solid's own
+inversion and the test read PASS. **A reference object is only ground truth if
+something independent says so.** The test now calibrates against a Unity
+primitive before it trusts a sign.
+
+`3. Validate circuit scenes` carries the three checks that need no reference
+object at all, one per failure shape:
+
+- **A road points up.** Every mostly-horizontal sheet, measured from the winding
+  and from the shipped normals separately, since one decides what is culled and
+  the other decides how it is lit. Meshes that are vertical, or balanced up
+  against down, are skipped — they have no opinion and saying so is the point.
+- **A mesh is wound the same way on every circuit.** This is the one that sees
+  the bug this pipeline actually has: a builder whose quad order depends on a
+  side variable is correct where the pits sit at positive `u` and mirrored where
+  they do not, so Interlagos looked right while Monza and Spa did not. Four
+  builders failed exactly that way and no single-circuit test can see it.
+- **A barrier faces the circuit**, measured against the manifest spine. Vertical
+  geometry is invisible to the first check, and a W-beam is a single-sided sheet:
+  turned outwards it does not shade oddly, it disappears, and you see the far side
+  of the track through it. The left-hand guardrail did, on all three circuits.
+
+None of this is visible in Blender, which does not backface-cull in the viewport.
+That is the whole reason the checks live on this side.
+
 **Kerbs are striped in geometry, not in a texture.** The Blender kerb is a
 red/white block pattern driven off the road ribbon's `trk` UV, and a flat
 Standard material can only average it — one dull red, on the most recognisable
@@ -168,9 +197,26 @@ They are kept under the 16-bit index ceiling and vertex-compressed, because this
 project serialises assets as text and 32-bit indices are eight hex characters
 each — that one choice is tens of megabytes.
 
-**These scenes are pack scenes.** They are not in Build Settings and the game
-cannot load them yet — see `PackValidator.PromotedScenes` for what promoting one
-involves.
+**Open one and press Play — you drive it.** Each scene carries a
+`TrackBootstrap` and a `SceneTrackDescriptor`, the same two components that make
+`TTA_Sandbox` drivable, so the Play button builds the car, camera and HUD in
+place. The twenty starting-grid slots are real `TrackSpawnMarker`s named
+`Player 1 Spawn`…`Player 20 Spawn`, positioned and headed straight from the
+manifest, so `gridOrder` N starts player N in grid box N+1 and a full field sits
+on the painted grid following the road rather than in a line projected back from
+pole. The bot corridor is baked from the manifest spine as well — the same array
+the validator measures the road against.
+
+They are declared **FreeRoam, not Circuit**, and deliberately: Circuit claims a
+finish line and a dense run of ordered checkpoints, and nothing here authors
+either. Driving works regardless; lap counting is a separate pass over the same
+spine. Every mesh takes the descriptor's fallback floor (asphalt) because none of
+them carries a `SurfaceTag`, so grass and gravel currently grip like the road.
+
+**They are still pack scenes.** Not being in Build Settings, the in-game track
+pickers cannot reach them — that is what promoting means, and
+`PackValidator.PromotedScenes` says what it involves. Pressing Play on an open
+scene needs none of it.
 
 ## Not in the pack's remit
 

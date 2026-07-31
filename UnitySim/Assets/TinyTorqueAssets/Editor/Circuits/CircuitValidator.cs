@@ -39,6 +39,12 @@ namespace AIHWSim.Pack.Circuits
     /// <item><b>Props are on the ground.</b> Each placed prop against the
     /// terrain height near it. Catches an instance transform that converted
     /// differently from the mesh it places.</item>
+    /// <item><b>The road faces up.</b> Area-weighted, from the winding and from
+    /// the shipped normals independently. This is here because the axis test's
+    /// winding half was checked against a reference solid that had itself been
+    /// authored inside out, so it certified a flip that inverted every circuit —
+    /// invisible from above, drawn from below. "A road points up" needs no
+    /// reference object to be wrong about.</item>
     /// </list>
     /// </summary>
     public static class CircuitValidator
@@ -48,6 +54,22 @@ namespace AIHWSim.Pack.Circuits
         private const float MaxVertical = 0.35f;  // m, allows crown and kerb fall
         private const float MaxRelief = 2.0f;     // m, measured climb vs manifest
         private const float MaxPropDrop = 6.0f;   // m, prop base vs terrain nearby
+
+        // A mesh is judged on facing only if it is mostly a horizontal sheet, and
+        // that is measured rather than taken from its group: PITS holds the pit
+        // road surface and the pit building, and "which way is up" is a fact
+        // about the first and a matter of taste about the second.
+        private const float FlatCos = 0.6f;        // |n.y| above this counts as horizontal
+        private const float FlatShare = 0.5f;      // ...and half the area must be
+        private const float BalanceMax = 0.2f;     // ...and it must be one-sided
+        private const float MinUpShare = 0.8f;     // of that, this much must face up
+        private const float BarrierMin = 0.2f;     // below this a barrier is double-sided
+
+        /// <summary>Per-mesh signed facing, keyed by name, gathered across every
+        /// circuit in a run. See <see cref="CheckAcrossCircuits"/>.</summary>
+        private static readonly Dictionary<string, List<KeyValuePair<string, float>>> _facing
+            = new Dictionary<string, List<KeyValuePair<string, float>>>();
+        private const float SignEps = 0.05f;
 
         private static int _fail;
 
@@ -61,12 +83,14 @@ namespace AIHWSim.Pack.Circuits
         public static void ValidateAll()
         {
             _fail = 0;
+            _facing.Clear();
             int n = 0;
             foreach (string key in CircuitImport.Available())
             {
                 n++;
                 ValidateOne(key);
             }
+            if (n > 1) CheckAcrossCircuits();
             if (n == 0) CircuitPaths.Err(CircuitPaths.SourceProblem);
             if (_fail == 0 && n > 0)
                 CircuitPaths.Log("RESULT ALL PASS (" + n + " circuits)");
@@ -101,6 +125,9 @@ namespace AIHWSim.Pack.Circuits
             CheckColliders(man, byName, sb);
             CheckProps(man, byName, sb);
             CheckKerbStripes(byName, sb);
+            CheckFacing(man, byName, sb);
+            CheckBarriersFaceTrack(man, byName, sb);
+            CheckDrivable(man, scene, sb);
             CheckTreeChunks(scene, sb);
 
             CircuitPaths.Log(sb.ToString());
@@ -307,6 +334,352 @@ namespace AIHWSim.Pack.Circuits
             if (bands > 0)
                 sb.AppendFormat("; kerb stripes {0} bands, worst skew {1:P0}",
                                 bands, worstSkew);
+        }
+
+        /// <summary>
+        /// Every near-horizontal surface faces up, measured two independent ways.
+        ///
+        /// Winding decides what Unity culls; the shipped normals decide how it
+        /// shades. They are set by different lines of the exporter and can
+        /// disagree, so both are measured — a surface can be invisible with
+        /// perfect normals, or visible and lit from underneath.
+        /// </summary>
+        private static void CheckFacing(CircuitManifest man,
+                                        Dictionary<string, GameObject> byName,
+                                        StringBuilder sb)
+        {
+            int n = 0;
+            float worst = 1f;
+            string worstName = null;
+            bool worstFromWinding = true;
+
+            foreach (var e in man.world)
+            {
+                if (!byName.TryGetValue(e.name, out var go)) continue;
+                var mf = go.GetComponent<MeshFilter>();
+                if (mf == null || mf.sharedMesh == null) continue;
+
+                // Recorded for every mesh, sheet or not — a wall says nothing on
+                // its own and a great deal next to the same wall on another
+                // circuit. See CheckAcrossCircuits.
+                if (!_facing.TryGetValue(e.name, out var list))
+                    _facing[e.name] = list = new List<KeyValuePair<string, float>>();
+                list.Add(new KeyValuePair<string, float>(
+                    man.circuit, MeanUp(mf.sharedMesh)));
+
+                float w = UpShare(mf.sharedMesh, true);
+                if (float.IsNaN(w)) continue;       // not a sheet; says nothing
+                n++;
+                float s = UpShare(mf.sharedMesh, false);
+                if (w < worst) { worst = w; worstName = e.name; worstFromWinding = true; }
+                if (!float.IsNaN(s) && s < worst)
+                { worst = s; worstName = e.name; worstFromWinding = false; }
+            }
+            if (n == 0) return;
+
+            sb.AppendFormat("; facing {0} sheets, worst {1:P0} up ({2})",
+                            n, worst, worstName);
+            if (worst < MinUpShare)
+                Fail(man.circuit + string.Format(
+                    ": only {0:P0} of {1}'s horizontal area faces up, by its {2}. "
+                    + "That surface is invisible from above and drawn from below. "
+                    + "If every sheet is inverted it is REVERSE_WINDING in "
+                    + "scripts/export_unity.py; if one is, it is that builder "
+                    + "winding its quads off a side variable, which is how the "
+                    + "grid boxes, the pit markings and the TECPRO blocks each "
+                    + "came out wrong.",
+                    worst, worstName, worstFromWinding ? "winding" : "shipped normals"));
+        }
+
+        /// <summary>
+        /// Of the area that is near-horizontal, the share facing up — or NaN if
+        /// this mesh is not mostly a horizontal sheet and therefore has no
+        /// opinion. Direction comes from the triangle winding (what Unity culls)
+        /// or from the shipped normals (how Unity lights it); those are set by
+        /// different lines of the exporter and can disagree.
+        /// </summary>
+        private static float UpShare(Mesh m, bool fromWinding)
+        {
+            var v = m.vertices;
+            var t = m.triangles;
+            var nn = m.normals;
+            if (!fromWinding && (nn == null || nn.Length == 0)) return float.NaN;
+
+            double up = 0.0, down = 0.0, all = 0.0;
+            for (int i = 0; i + 2 < t.Length; i += 3)
+            {
+                Vector3 a = v[t[i]], b = v[t[i + 1]], c = v[t[i + 2]];
+                // Exactly how Unity derives a face normal for its front-face test.
+                Vector3 fn = Vector3.Cross(b - a, c - a);
+                float w = fn.magnitude;
+                if (w <= 1e-9f) continue;
+                all += w;
+
+                Vector3 dir;
+                if (fromWinding) dir = fn / w;
+                else
+                {
+                    dir = nn[t[i]] + nn[t[i + 1]] + nn[t[i + 2]];
+                    if (dir.sqrMagnitude <= 1e-12f) continue;
+                    dir.Normalize();
+                }
+                if (dir.y >= FlatCos) up += w;
+                else if (dir.y <= -FlatCos) down += w;
+            }
+            if (all <= 0.0) return float.NaN;
+            double flat = up + down;
+            if (flat / all < FlatShare) return float.NaN;   // a wall
+            // Balanced up against down is a closed or double-sided shell — a
+            // debris fence with a top and a bottom reads exactly 50 %, and
+            // inverting it would still read exactly 50 %. It has no opinion.
+            if (Mathf.Min((float)up, (float)down) / flat >= BalanceMax)
+                return float.NaN;
+            return (float)(up / flat);
+        }
+
+        /// <summary>
+        /// Press Play and you drive.
+        ///
+        /// Four things have to be true and each fails silently on its own: the
+        /// scene needs a <c>TrackBootstrap</c> (no game, no car), a
+        /// <c>SceneTrackDescriptor</c> (the bootstrap falls back to the
+        /// procedural oval and logs an error into a scene that looks fine), a
+        /// dense run of spawn markers (a gap leaves a grid slot nobody occupies,
+        /// and <c>TrackBootstrap.SpawnPose</c> only consults the authored grid at
+        /// all when there is more than one marker), and solid ground under pole.
+        ///
+        /// The last one is the one worth measuring rather than reasoning about.
+        /// <c>SceneTrackBuilder.Drop</c> raycasts from 3 m above the marker and
+        /// keeps the authored height on a miss — so a grid floating over a hole
+        /// in the collider does not error, it drops the car through the world on
+        /// Play, several seconds after anything you could point at.
+        /// </summary>
+        private static void CheckDrivable(CircuitManifest man,
+                                          UnityEngine.SceneManagement.Scene scene,
+                                          StringBuilder sb)
+        {
+            AIHWSim.Track.SceneTrackDescriptor desc = null;
+            bool boot = false;
+            foreach (var root in scene.GetRootGameObjects())
+            {
+                if (desc == null)
+                    desc = root.GetComponentInChildren<AIHWSim.Track.SceneTrackDescriptor>(true);
+                if (!boot)
+                    boot = root.GetComponentInChildren<AIHWSim.Core.TrackBootstrap>(true) != null;
+            }
+
+            if (!boot)
+                Fail(man.circuit + ": no TrackBootstrap — pressing Play loads the "
+                     + "scene and never builds a car.");
+            if (desc == null)
+            {
+                Fail(man.circuit + ": no SceneTrackDescriptor — TrackBootstrap "
+                     + "falls back to the procedural oval and the circuit just sits "
+                     + "there.");
+                return;
+            }
+
+            var spawns = desc.Spawns();
+            int want = man.grid != null ? man.grid.Length : 0;
+            sb.AppendFormat("; drivable {0} spawns", spawns.Count);
+            if (spawns.Count != want)
+                Fail(man.circuit + string.Format(
+                    ": {0} spawn markers for {1} grid slots", spawns.Count, want));
+            for (int i = 0; i < spawns.Count; i++)
+                if (spawns[i].gridOrder != i)
+                {
+                    Fail(man.circuit + string.Format(
+                        ": spawn gridOrder is not a dense 0..n-1 run (slot {0} says {1}) "
+                        + "— a gap silently leaves a starting box empty.",
+                        i, spawns[i].gridOrder));
+                    break;
+                }
+
+            if (!desc.HasCorridor)
+                Fail(man.circuit + ": the descriptor has no usable bot corridor "
+                     + "(centerline and halfWidths must be the same length, >= 2)");
+
+            // Ground under every slot, not just pole: the grid runs 80 m back down
+            // the road and the far end is where a collider gap would be.
+            Physics.SyncTransforms();
+            int floating = 0;
+            foreach (var s in spawns)
+            {
+                var ray = new Ray(s.transform.position + Vector3.up * 3f, Vector3.down);
+                if (!Physics.Raycast(ray, 63f, ~0, QueryTriggerInteraction.Ignore))
+                    floating++;
+            }
+            if (floating > 0)
+                Fail(man.circuit + string.Format(
+                    ": {0} of {1} grid slots have no collider beneath them. The car "
+                    + "keeps its authored height and falls through the world on Play.",
+                    floating, spawns.Count));
+        }
+
+        /// <summary>
+        /// A barrier faces the circuit.
+        ///
+        /// Vertical geometry has no opinion about up, so the facing check above
+        /// skips it entirely — and a guardrail is the one thing beside the road
+        /// you are always looking at. A W-beam is a single-sided sheet: turned
+        /// the wrong way it does not shade oddly, it disappears, and you see the
+        /// far side of the circuit through it. <c>armco</c> is handed a point
+        /// list and builds its profile along the left normal of travel, which is
+        /// toward the track on one side and away from it on the other, so this
+        /// failure is guaranteed on exactly one side unless somebody reverses
+        /// it. It was, on all three circuits, at -0.64.
+        ///
+        /// Meshes that come out near zero are double-sided (fences, TECPRO
+        /// blocks, the pit wall) and are left alone: they read the same either
+        /// way, so there is nothing to assert.
+        /// </summary>
+        private static void CheckBarriersFaceTrack(CircuitManifest man,
+                                                   Dictionary<string, GameObject> byName,
+                                                   StringBuilder sb)
+        {
+            var spine = new List<Vector3>();
+            for (int i = 0; i < man.SpineCount; i++)
+                spine.Add(CircuitAxis.Position(man.Spine(i, 1), man.Spine(i, 2),
+                                               man.Spine(i, 3)));
+            if (spine.Count == 0) return;
+
+            const float cell = 25f;
+            var grid = new Dictionary<(int, int), List<int>>();
+            for (int i = 0; i < spine.Count; i++)
+            {
+                var k = (Mathf.FloorToInt(spine[i].x / cell), Mathf.FloorToInt(spine[i].z / cell));
+                if (!grid.TryGetValue(k, out var l)) grid[k] = l = new List<int>();
+                l.Add(i);
+            }
+
+            int judged = 0;
+            float worst = 1f;
+            string worstName = null;
+            foreach (var e in man.world)
+            {
+                if (e.group != "BARRIER") continue;
+                if (!byName.TryGetValue(e.name, out var go)) continue;
+                var mf = go.GetComponent<MeshFilter>();
+                if (mf == null || mf.sharedMesh == null) continue;
+
+                float f = FacesTrack(mf.sharedMesh, spine, grid, cell);
+                if (Mathf.Abs(f) < BarrierMin) continue;    // double-sided
+                judged++;
+                if (f < worst) { worst = f; worstName = e.name; }
+            }
+            if (judged == 0) return;
+
+            sb.AppendFormat("; barriers {0} single-sided, worst {1:F2} ({2})",
+                            judged, worst, worstName);
+            if (worst < 0f)
+                Fail(man.circuit + string.Format(
+                    ": {0} faces away from the circuit ({1:F2}). A single-sided "
+                    + "guardrail turned outwards is invisible from the racing "
+                    + "line — you see the far side of the track through it.",
+                    worstName, worst));
+        }
+
+        /// <summary>Area-weighted mean of dot(face normal, horizontal direction
+        /// to the nearest centreline point). +1 all toward the track, -1 all
+        /// away, ~0 double-sided. Every seventh triangle: barriers run to tens
+        /// of thousands and the answer is a bulk property.</summary>
+        private static float FacesTrack(Mesh m, List<Vector3> spine,
+                                        Dictionary<(int, int), List<int>> grid, float cell)
+        {
+            var v = m.vertices;
+            var t = m.triangles;
+            double sum = 0.0, area = 0.0;
+            for (int i = 0; i + 2 < t.Length; i += 21)
+            {
+                Vector3 a = v[t[i]], b = v[t[i + 1]], c = v[t[i + 2]];
+                Vector3 fn = Vector3.Cross(b - a, c - a);
+                float w = fn.magnitude;
+                if (w <= 1e-9f) continue;
+                Vector3 nrm = fn / w;
+                if (Mathf.Abs(nrm.y) > 0.7f) continue;      // a cap, not a face
+                Vector3 ctr = (a + b + c) / 3f;
+
+                float best = float.MaxValue;
+                Vector3 bp = Vector3.zero;
+                int cx = Mathf.FloorToInt(ctr.x / cell), cz = Mathf.FloorToInt(ctr.z / cell);
+                for (int dx = -2; dx <= 2; dx++)
+                    for (int dz = -2; dz <= 2; dz++)
+                    {
+                        if (!grid.TryGetValue((cx + dx, cz + dz), out var l)) continue;
+                        foreach (int si in l)
+                        {
+                            float d = new Vector2(spine[si].x - ctr.x, spine[si].z - ctr.z).sqrMagnitude;
+                            if (d < best) { best = d; bp = spine[si]; }
+                        }
+                    }
+                if (best == float.MaxValue) continue;
+                var to = new Vector2(bp.x - ctr.x, bp.z - ctr.z);
+                if (to.sqrMagnitude < 1e-6f) continue;
+                to.Normalize();
+                sum += (nrm.x * to.x + nrm.z * to.y) * w;
+                area += w;
+            }
+            return area > 0.0 ? (float)(sum / area) : 0f;
+        }
+
+        /// <summary>Area-weighted mean upward component: +1 every face up, -1
+        /// every face down, ~0 for anything balanced or vertical.</summary>
+        private static float MeanUp(Mesh m)
+        {
+            var v = m.vertices;
+            var t = m.triangles;
+            double up = 0.0, area = 0.0;
+            for (int i = 0; i + 2 < t.Length; i += 3)
+            {
+                Vector3 fn = Vector3.Cross(v[t[i + 1]] - v[t[i]], v[t[i + 2]] - v[t[i]]);
+                float w = fn.magnitude;
+                if (w <= 1e-9f) continue;
+                up += fn.y;          // == (fn.y / w) * w, without the divide
+                area += w;
+            }
+            return area > 0.0 ? (float)(up / area) : 0f;
+        }
+
+        /// <summary>
+        /// The same mesh, wound the same way on every circuit.
+        ///
+        /// This is the check with no reference object and no notion of up: it
+        /// only asks whether <c>Pit_Wall</c> agrees with <c>Pit_Wall</c>. That
+        /// makes it the one check that sees the bug this pipeline actually has
+        /// — a builder whose quad order depends on a side variable, so the
+        /// geometry is correct on a circuit whose pits are at positive u and
+        /// mirrored, hence inside out, on one where they are not. Interlagos
+        /// looked right and Monza and Spa did not, four separate times, and
+        /// every one of them is invisible to any single-circuit test.
+        ///
+        /// Vertical and balanced meshes are included deliberately: their own
+        /// facing means nothing, and their disagreement means everything.
+        /// </summary>
+        private static void CheckAcrossCircuits()
+        {
+            int compared = 0, split = 0;
+            foreach (var kv in _facing)
+            {
+                if (kv.Value.Count < 2) continue;
+                compared++;
+                float hi = float.MinValue, lo = float.MaxValue;
+                string hiAt = null, loAt = null;
+                foreach (var e in kv.Value)
+                {
+                    if (e.Value > hi) { hi = e.Value; hiAt = e.Key; }
+                    if (e.Value < lo) { lo = e.Value; loAt = e.Key; }
+                }
+                if (hi <= SignEps || lo >= -SignEps) continue;
+                split++;
+                Fail(string.Format(
+                    "{0} is wound one way at {1} ({2:F2}) and the other at {3} ({4:F2}). "
+                    + "The same builder cannot produce both, so its faces are ordered "
+                    + "off a side variable and it is inside out on one of them.",
+                    kv.Key, hiAt, hi, loAt, lo));
+            }
+            if (split == 0)
+                CircuitPaths.Log("cross-circuit winding agrees on all "
+                                 + compared + " shared meshes");
         }
 
         private static void CheckProps(CircuitManifest man,

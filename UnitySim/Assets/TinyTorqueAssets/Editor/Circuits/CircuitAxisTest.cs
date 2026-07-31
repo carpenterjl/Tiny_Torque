@@ -119,13 +119,36 @@ namespace AIHWSim.Pack.Circuits
             // negative determinant turns a solid inside out, and an inside-out
             // circuit is invisible from outside — you see the far side of the
             // road through the near side and it reads as a lighting bug.
+            //
+            // "Positive means outward" is a claim about the handedness of the
+            // coordinate system, so it is measured rather than reasoned about: a
+            // Unity primitive is wound the way Unity wants by definition, and
+            // whatever sign it produces is what correct looks like here. This
+            // costs one cube and removes the last hand-derived sign in the file.
+            var cal = GameObject.CreatePrimitive(PrimitiveType.Cube);
+            float unit = SignedVolume(cal.GetComponent<MeshFilter>().sharedMesh);
+            UnityEngine.Object.DestroyImmediate(cal);
+            sb.AppendFormat("\ncalibration: Unity's own cube reads {0:F3} m³", unit);
+            if (unit <= 0f)
+            {
+                ok = false;
+                sb.Append("\n  FAIL a correctly wound Unity primitive measured "
+                          + "negative, so this formula's sign convention is "
+                          + "inverted and every winding verdict below it is "
+                          + "backwards. Fix SignedVolume, not the export.");
+            }
+
             float vol = SignedVolume(proto);
             sb.AppendFormat("\nsigned volume {0:F1} m³", vol);
-            if (vol <= 0f)
+            if (vol * unit <= 0f)
             {
                 ok = false;
                 sb.Append("\n  FAIL faces wind inward — flip REVERSE_WINDING in "
-                          + "scripts/export_unity.py and re-export.");
+                          + "scripts/export_unity.py and re-export.\n"
+                          + "  Before changing it, note that this marker is only "
+                          + "ground truth if build_marker() winds outward itself. "
+                          + "It did not once, which is how a flip that inverted "
+                          + "all three circuits passed this line.");
             }
 
             // -- 2. the transform conversion ------------------------------------

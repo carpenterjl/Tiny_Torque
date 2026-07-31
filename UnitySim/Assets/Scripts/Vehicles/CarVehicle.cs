@@ -13,6 +13,10 @@ namespace AIHWSim.Vehicles
     {
         Box, Wedge, Buggy, Shell, LowRacer, Coupe, Baja, Patrol,
         Rattle, Redline, Highwing, Autopia,
+        /// <summary>The 1:1 Volkswagen Tiguan — a physics reference vehicle, not
+        /// game content. Debug-only: GarageUI hides it from the shape picker and
+        /// it is reachable solely through DebugVehicles.</summary>
+        Tiguan,
     }
 
     /// <summary>
@@ -93,6 +97,19 @@ namespace AIHWSim.Vehicles
         public float aeroMult = 1f;
         public AeroConfig[] aeroParts;         // set by the VehicleFactory
         public float antiRoll = 8f;            // ≈ one axle weight at full Δtravel
+
+        // ---- scale-dependent constants, authored by the design --------------
+        // Every default here IS the literal it replaced, and VehicleFactory
+        // copies the design's own defaults over them, so the ten shipped designs
+        // reach exactly the same numbers by exactly the same code path. See
+        // VehicleDesign for what each one is and why a formula could not serve.
+        public float linearDampingOverride = 0.02f;
+        public float angularDampingOverride = 0.5f;
+        public float maxDepenetrationVelOverride = 2f;
+        public float stickyPhantomNm = 0.05f;
+        public float contactOffsetOverride = 0f;   // 0 = Physics.defaultContactOffset
+        public float dragCdOverride = 0f;          // 0 = AeroDynamics.BodyCd(shape)
+        public float frontalAreaOverride = 0f;     // 0 = the bodySize estimate
         public Vector3 centerOfMass = new Vector3(0f, -0.03f, 0f);
 
         [Header("Assists")]
@@ -456,6 +473,48 @@ namespace AIHWSim.Vehicles
                 : (w.col != null ? w.col.rpm * (Mathf.PI * 2f / 60f) : 0f);
         }
 
+        // ---- read-only introspection ----
+        // These exist so a validator or a telemetry channel can SEE the physics
+        // without reaching into it. None of them is read by any physics
+        // expression, so none can move a result: that is the point, and it is
+        // why they were safe to add alongside a bit-identity requirement.
+
+        /// <summary>Wheel i's spin inertia J (kg·m²) — the bare wheel plus any
+        /// reflected drivetrain. Integrated by this class on the brush path, so
+        /// it lives in no engine field and would otherwise be invisible to a
+        /// dump that reads WheelColliders.</summary>
+        public float WheelSpinInertia(int i) =>
+            i >= 0 && i < _wheels.Count ? _wheels[i].spinInertia : 0f;
+
+        /// <summary>Wheel i's longitudinal slip ratio κ.</summary>
+        public float WheelSlipRatio(int i) =>
+            i >= 0 && i < _wheels.Count ? _wheels[i].slipRatio : 0f;
+
+        /// <summary>Whether wheel i is touching the ground this step.</summary>
+        public bool WheelGrounded(int i) =>
+            i >= 0 && i < _wheels.Count && _wheels[i].grounded;
+
+        /// <summary>Wheel i's chassis-local mount position. Lets a measurement
+        /// tell front from rear by GEOMETRY rather than by index — nothing
+        /// guarantees a wheel order, and a weight split read off the wrong two
+        /// corners is a plausible wrong answer rather than an obvious one.</summary>
+        public Vector3 GetWheelLocalPos(int i) =>
+            i >= 0 && i < _wheels.Count ? _wheels[i].cfg.localPos : Vector3.zero;
+
+        /// <summary>Wheel i's hub height above the world origin — the wheel
+        /// CENTRE, not the collider origin. The collider sits at the top of
+        /// travel and the hub hangs compression*suspensionDistance below it, so
+        /// reading the transform directly overstates ride height by most of a
+        /// travel.</summary>
+        public float GetWheelHubWorldY(int i)
+        {
+            if (i < 0 || i >= _wheels.Count) return 0f;
+            var col = _wheels[i].col;
+            if (col == null) return 0f;
+            return col.transform.position.y
+                   - GetSuspensionCompression(i) * col.suspensionDistance;
+        }
+
         /// <summary>
         /// Deposit this step's motor torque on wheel i (called by MotorPart from
         /// StepDrive). Brush path: feeds the wheel-spin integrator. Legacy path:
@@ -517,8 +576,8 @@ namespace AIHWSim.Vehicles
         {
             _body = GetComponent<Rigidbody>();
             _body.mass = bodyMass;
-            _body.linearDamping = 0.02f;   // real drag is modeled explicitly
-            _body.angularDamping = 0.5f;
+            _body.linearDamping = linearDampingOverride;   // real drag is modeled explicitly
+            _body.angularDamping = angularDampingOverride;
             _body.interpolation = RigidbodyInterpolation.Interpolate;
             // ContinuousDynamic is invalid on a kinematic body — Unity warns and
             // falls back. Ghosts and host-side followers are kinematic and still
@@ -541,8 +600,11 @@ namespace AIHWSim.Vehicles
             }
             // Small cars yaw far faster than the 7 rad/s Unity default (wheel spin
             // is internal to WheelCollider and unaffected by this body cap).
+            // Left as a constant deliberately: it is a CAP, and 40 rad/s is far
+            // above anything a 1500 kg car reaches (<2), so it never binds at
+            // either scale and authoring it would be a knob with no effect.
             _body.maxAngularVelocity = 40f;
-            _body.maxDepenetrationVelocity = 2f;
+            _body.maxDepenetrationVelocity = maxDepenetrationVelOverride;
 
             // The root GameObject stays at scale (1,1,1). Body size comes from a
             // BoxCollider + a separately-scaled visual child, NOT from scaling the
@@ -552,6 +614,13 @@ namespace AIHWSim.Vehicles
             if (box == null) box = gameObject.AddComponent<BoxCollider>();
             box.size = bodySize;
             box.center = Vector3.zero;
+            // PhysicsTuning sets a 2 mm global contact offset, which is right for
+            // a 33 mm wheel and very tight on a 349 mm one — but it runs
+            // BeforeSceneLoad, where no vehicle exists to ask. Overriding this
+            // collider is how a full-scale car gets a sane offset without moving
+            // a global that every RC car in the project reads. Never runs for
+            // them: the design default is 0.
+            if (contactOffsetOverride > 0f) box.contactOffset = contactOffsetOverride;
 
             BuildBodyVisual();
             BuildWheels();
@@ -746,10 +815,23 @@ namespace AIHWSim.Vehicles
                 var inst = PartMeshLibrary.TryInstantiate(meshKey, holder, gameObject.layer);
                 if (inst != null)
                 {
-                    inst.transform.localScale = new Vector3(
-                        bodySize.x / BodyMeshAuthorSize.x,
-                        bodySize.y / BodyMeshAuthorSize.y,
-                        bodySize.z / BodyMeshAuthorSize.z);
+                    // Every arcade shell is exported scaled to length 0.420, so
+                    // one author size served them all and bodySize/authorSize is
+                    // the ratio that renders it undistorted.
+                    //
+                    // The Tiguan takes no scale at all, and not merely because
+                    // it is already 1:1. Its renderer bounds (2.099 x 1.472,
+                    // carrying the door mirrors and the roof rails) are
+                    // deliberately NOT its collision box (1.839 x 1.443, the
+                    // published body) — neither mirrors nor rails are solid.
+                    // Routing it through this divide would force those two to be
+                    // the same number and squash the car to make them agree.
+                    inst.transform.localScale = bodyShape == BodyShape.Tiguan
+                        ? Vector3.one
+                        : new Vector3(
+                            bodySize.x / BodyMeshAuthorSize.x,
+                            bodySize.y / BodyMeshAuthorSize.y,
+                            bodySize.z / BodyMeshAuthorSize.z);
                     // Painted livery (decoded by VehicleFactory): the texture
                     // carries the colours, so the material tint goes white.
                     if (liveryTex != null)
@@ -794,6 +876,7 @@ namespace AIHWSim.Vehicles
             BodyShape.Redline  => "body_redline",
             BodyShape.Highwing => "body_highwing",
             BodyShape.Autopia  => "body_autopia",
+            BodyShape.Tiguan   => "body_tiguan",
             _                  => null,
         };
 
@@ -807,7 +890,10 @@ namespace AIHWSim.Vehicles
         private static bool HasAccentTokens(BodyShape s) =>
             s == BodyShape.Coupe || s == BodyShape.Baja || s == BodyShape.Patrol ||
             s == BodyShape.Rattle || s == BodyShape.Redline ||
-            s == BodyShape.Highwing || s == BodyShape.Autopia;
+            s == BodyShape.Highwing || s == BodyShape.Autopia ||
+            // The Tiguan carries 29 authored materials. Without this it takes
+            // the flatten-everything path and arrives as a 4.5 m grey car.
+            s == BodyShape.Tiguan;
 
         /// <summary>
         /// Bind renderers of an accent-token body by object-name token: "paint"
@@ -819,7 +905,13 @@ namespace AIHWSim.Vehicles
         /// </summary>
         private void AssignBodyAccents(GameObject inst)
         {
-            var accents = PartVisualFactory.AccentTokens;
+            // The Tiguan binds against its own manifest-built table. Its pieces
+            // are named "tig*" and match nothing in AccentTokens, so on the
+            // shared table every renderer would miss and fall through to
+            // _bodyMat — a correctly-shaped car in one flat colour.
+            var accents = bodyShape == BodyShape.Tiguan
+                ? PartVisualFactory.TiguanTokens
+                : PartVisualFactory.AccentTokens;
             foreach (var r in inst.GetComponentsInChildren<MeshRenderer>(true))
             {
                 string n = r.gameObject.name.ToLowerInvariant();
@@ -861,6 +953,13 @@ namespace AIHWSim.Vehicles
             // comes back empty. Offering paint mode there would be a mode that
             // silently does nothing.
             if (s == BodyShape.Rattle) return false;
+            // The Tiguan is in the same position for the same reason: after the
+            // exporter separates by material its painted panel is named
+            // "tigpaint_1", which does not StartsWith("paint"), so it binds an
+            // accent like everything else and PaintRenderers comes back empty.
+            // That is the requirement, not a shortfall — the point of this car
+            // is that its Blender materials survive untouched.
+            if (s == BodyShape.Tiguan) return false;
             string key = BodyMeshKey(s);
             return key != null && PartMeshLibrary.Has(key);
         }
@@ -995,6 +1094,13 @@ namespace AIHWSim.Vehicles
             _spawnCaptured = true;
         }
 
+        /// <summary>Unsprung mass at a corner (kg). The legacy 0.05 is a 50 g RC
+        /// wheel; a real one is ~500x that, and it is the WheelCollider's own
+        /// mass, so it decides how the contact behaves as well as what it
+        /// weighs.</summary>
+        private static float UnsprungMass(CarWheelConfig cfg) =>
+            cfg.unsprungMassKg > 0f ? cfg.unsprungMassKg : 0.05f;
+
         private Wheel MakeWheel(string name, CarWheelConfig cfg, float cornerMass)
         {
             var go = new GameObject(name);
@@ -1022,7 +1128,7 @@ namespace AIHWSim.Vehicles
             // spin with I = ½·wc.mass·r², so reflected inertia is folded in as
             // equivalent mass 2·J_reflected/r² — a 540 rotor through 8:1 is ~12×
             // the bare wheel's inertia, which is why spin-up felt crisp.
-            wc.mass = 0.05f + (!TyreModel.Enabled && cfg.extraSpinInertia > 0f
+            wc.mass = UnsprungMass(cfg) + (!TyreModel.Enabled && cfg.extraSpinInertia > 0f
                 ? 2f * cfg.extraSpinInertia / Mathf.Max(1e-6f, wc.radius * wc.radius)
                 : 0f);
             // CRITICAL at RC scale: Unity's default wheelDampingRate (0.25) would
@@ -1041,7 +1147,10 @@ namespace AIHWSim.Vehicles
             spring.damper = cfg.suspDampingRatio > 0f
                 ? cfg.suspDampingRatio * 2f * Mathf.Sqrt(spring.spring * Mathf.Max(0.001f, cornerMass))
                 : suspensionDamper;
-            spring.targetPosition = 0.5f;
+            // Where the corner rests in its travel. Static ride height sits at
+            // targetPosition − W/(k·D), so a heavy car on realistic travel needs
+            // this above the legacy mid-point or it rides on the bump stops.
+            spring.targetPosition = cfg.suspTargetPos > 0f ? cfg.suspTargetPos : 0.5f;
             wc.suspensionSpring = spring;
 
             wc.forceAppPointDistance = 0.02f;
@@ -1057,7 +1166,11 @@ namespace AIHWSim.Vehicles
             // dislikes degenerate curves — a flat epsilon curve hard-crashed the
             // editor); the brush path just scales them to nothing via stiffness.
             float grip = GripMult(cfg);
-            const float BrushEps = 0.01f; // parasitic PhysX force ≤ ~0.05 N/wheel
+            // The residual is proportional to LOAD, so the "≤0.05 N/wheel" this
+            // was justified by holds only at an RC corner weight. Authored, with
+            // the legacy literal as the default, and floored so the curve can
+            // never go degenerate — only this scalar moves, never the shape.
+            float BrushEps = cfg.brushEps > 0f ? Mathf.Max(1e-5f, cfg.brushEps) : 0.01f;
             var fwd = wc.forwardFriction;
             fwd.extremumSlip = 0.4f; fwd.extremumValue = 1.0f;
             fwd.asymptoteSlip = 0.8f; fwd.asymptoteValue = 0.75f;
@@ -1091,8 +1204,14 @@ namespace AIHWSim.Vehicles
             {
                 col = wc, viz = holder, cfg = cfg, baseRadius = wc.radius,
                 strut = strut, mountLocal = cfg.localPos,
-                // J for the brush-path spin integrator: bare wheel + reflected drivetrain.
-                spinInertia = 0.5f * 0.05f * wc.radius * wc.radius
+                // J for the brush-path spin integrator: bare wheel + reflected
+                // drivetrain. Authored when the design says so, because the
+                // legacy ½·m·r² models a solid DISC and a tyre is closer to a
+                // ring — a coincidence that does not survive a change of scale,
+                // and the single most consequential number in this method.
+                spinInertia = (cfg.spinInertiaKgM2 > 0f
+                                  ? cfg.spinInertiaKgM2
+                                  : 0.5f * 0.05f * wc.radius * wc.radius)
                             + Mathf.Max(0f, cfg.extraSpinInertia),
             };
         }
@@ -1392,8 +1511,15 @@ namespace AIHWSim.Vehicles
                 // Foot brake everywhere; handbrake locks the non-steering wheels.
                 // arcadeHandbrakeMult is 1 outside a drift, so this is the same
                 // expression it has always been.
-                float b = brake + ((_handbrake && !w.cfg.allowsSteering)
-                    ? handbrakeTorque * arcadeHandbrakeMult : 0f);
+                // brakeScale is the per-wheel bias this engine otherwise has no
+                // way to express: one torque on all four locks a real car's
+                // rears first and spins it. Branched rather than multiplied
+                // unconditionally — x*1.0f == x is exact in IEEE-754, but the
+                // branch means the bit-identity claim needs no appeal to it.
+                float b = (w.cfg.brakeScale == 1f || w.cfg.brakeScale <= 0f
+                              ? brake : brake * w.cfg.brakeScale)
+                        + ((_handbrake && !w.cfg.allowsSteering)
+                            ? handbrakeTorque * arcadeHandbrakeMult : 0f);
 
                 // Per-tile surface (custom maps only): friction scaling, rolling
                 // resistance, boost pads, rumble strips. Off tile maps SurfaceMap
@@ -1550,7 +1676,14 @@ namespace AIHWSim.Vehicles
                     // torque spins the epsilon-friction PhysX wheel so the
                     // low-speed constraint releases; at true rest brake it so
                     // the constraint returns and parks the car.
-                    w.col.motorTorque = stickyHold ? 0f : 0.05f;
+                    // A phantom torque whose only job is to be big enough to
+                    // release PhysX's static-hold constraint. What "big enough"
+                    // means scales with the wheel's own inertia: 0.05 N·m is
+                    // 1837 rad/s² on an RC wheel and 0.033 rad/s² on a real one,
+                    // where the constraint never lets go and the car cannot move
+                    // off at all. The wheel produces no force either way, so the
+                    // magnitude is free.
+                    w.col.motorTorque = stickyHold ? 0f : stickyPhantomNm;
                     w.col.brakeTorque = stickyHold ? handbrakeTorque : 0f;
                 }
                 else
@@ -1761,7 +1894,16 @@ namespace AIHWSim.Vehicles
             Vector3 vDir = v / Mathf.Sqrt(sp2);
             float q = 0.5f * AeroDynamics.AirDensity * sp2;   // dynamic pressure
 
-            float cdA = AeroDynamics.BodyCd(bodyShape) * AeroDynamics.FrontalArea(bodySize);
+            // Cd and reference area are authored when the real car has published
+            // ones. The built-in BodyCd table and the width*height*0.9 estimate
+            // are reasonable guesses for a stylised arcade shell and no
+            // substitute for a measured figure — and a coastdown against a
+            // published Cd*A is the single strongest check available on this
+            // whole aero model, so the numbers have to be the real ones.
+            float cd = dragCdOverride > 0f ? dragCdOverride : AeroDynamics.BodyCd(bodyShape);
+            float area = frontalAreaOverride > 0f
+                ? frontalAreaOverride : AeroDynamics.FrontalArea(bodySize);
+            float cdA = cd * area;
             _body.AddForceAtPosition(-vDir * (q * cdA), transform.position, ForceMode.Force);
 
             float clA = AeroDynamics.BodyClA(bodyShape);

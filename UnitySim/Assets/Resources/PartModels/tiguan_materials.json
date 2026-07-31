@@ -1,0 +1,616 @@
+{
+ "schema": 1,
+ "units": "metres",
+ "generator": "Blender/build_tiguan_part.py",
+ "materials": [
+  {
+   "token": "tigeublue",
+   "name": "M_TIG_EU_BLUE",
+   "rgb": [
+    0.014,
+    0.045,
+    0.3
+   ],
+   "metallic": 0.0,
+   "transmission": 0.0,
+   "smoothness": 0.6,
+   "coat": 0.0,
+   "coatSmoothness": 0.97,
+   "emission": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "emissionStrength": 0.0,
+   "probed": true
+  },
+  {
+   "token": "tigeustar",
+   "name": "M_TIG_EU_STAR",
+   "rgb": [
+    0.8,
+    0.62,
+    0.05
+   ],
+   "metallic": 0.0,
+   "transmission": 0.0,
+   "smoothness": 0.55,
+   "coat": 0.0,
+   "coatSmoothness": 0.97,
+   "emission": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "emissionStrength": 0.0,
+   "probed": true
+  },
+  {
+   "token": "tigalu",
+   "name": "M_TigAlu",
+   "rgb": [
+    0.467784,
+    0.48515,
+    0.502886
+   ],
+   "metallic": 1.0,
+   "transmission": 0.0,
+   "smoothness": 0.7,
+   "coat": 0.0,
+   "coatSmoothness": 0.97,
+   "emission": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "emissionStrength": 0.0,
+   "probed": true
+  },
+  {
+   "token": "tigchrome",
+   "name": "M_TigChrome",
+   "rgb": [
+    0.672443,
+    0.686685,
+    0.701102
+   ],
+   "metallic": 1.0,
+   "transmission": 0.0,
+   "smoothness": 0.94,
+   "coat": 0.0,
+   "coatSmoothness": 0.97,
+   "emission": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "emissionStrength": 0.0,
+   "probed": true
+  },
+  {
+   "token": "tigclad",
+   "name": "M_TigClad",
+   "rgb": [
+    0.024158,
+    0.020289,
+    0.0185
+   ],
+   "metallic": 0.0,
+   "transmission": 0.0,
+   "smoothness": 0.34,
+   "coat": 0.0,
+   "coatSmoothness": 0.97,
+   "emission": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "emissionStrength": 0.0,
+   "probed": true
+  },
+  {
+   "token": "tigdark",
+   "name": "M_TigDark",
+   "rgb": [
+    0.001518,
+    0.001518,
+    0.001518
+   ],
+   "metallic": 0.0,
+   "transmission": 0.0,
+   "smoothness": 0.05,
+   "coat": 0.0,
+   "coatSmoothness": 0.97,
+   "emission": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "emissionStrength": 0.0,
+   "probed": true
+  },
+  {
+   "token": "tigdisc",
+   "name": "M_TigDisc",
+   "rgb": [
+    0.14996,
+    0.144128,
+    0.135633
+   ],
+   "metallic": 0.72,
+   "transmission": 0.0,
+   "smoothness": 0.7,
+   "coat": 0.0,
+   "coatSmoothness": 0.97,
+   "emission": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "emissionStrength": 0.0,
+   "probed": true
+  },
+  {
+   "token": "tigemita",
+   "name": "M_TigEmitA",
+   "rgb": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "metallic": 0.0,
+   "transmission": 0.0,
+   "smoothness": 0.6,
+   "coat": 0.0,
+   "coatSmoothness": 0.97,
+   "emission": [
+    1.0,
+    0.29,
+    0.02
+   ],
+   "emissionStrength": 9.0,
+   "probed": true
+  },
+  {
+   "token": "tigemitr",
+   "name": "M_TigEmitR",
+   "rgb": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "metallic": 0.0,
+   "transmission": 0.0,
+   "smoothness": 0.6,
+   "coat": 0.0,
+   "coatSmoothness": 0.97,
+   "emission": [
+    1.0,
+    0.045,
+    0.02
+   ],
+   "emissionStrength": 5.0,
+   "probed": true
+  },
+  {
+   "token": "tigemitw",
+   "name": "M_TigEmitW",
+   "rgb": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "metallic": 0.0,
+   "transmission": 0.0,
+   "smoothness": 0.6,
+   "coat": 0.0,
+   "coatSmoothness": 0.97,
+   "emission": [
+    1.0,
+    0.97,
+    0.92
+   ],
+   "emissionStrength": 14.0,
+   "probed": true
+  },
+  {
+   "token": "tigexhaust",
+   "name": "M_TigExhaust",
+   "rgb": [
+    0.144128,
+    0.135633,
+    0.124772
+   ],
+   "metallic": 0.9,
+   "transmission": 0.0,
+   "smoothness": 0.58,
+   "coat": 0.0,
+   "coatSmoothness": 0.97,
+   "emission": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "emissionStrength": 0.0,
+   "probed": true
+  },
+  {
+   "token": "tigglass",
+   "name": "M_TigGlass",
+   "rgb": [
+    0.64448,
+    0.708376,
+    0.658375
+   ],
+   "metallic": 0.0,
+   "transmission": 1.0,
+   "smoothness": 0.975,
+   "coat": 0.0,
+   "coatSmoothness": 0.97,
+   "emission": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "emissionStrength": 0.0,
+   "probed": true
+  },
+  {
+   "token": "tiggloss",
+   "name": "M_TigGloss",
+   "rgb": [
+    0.002428,
+    0.002732,
+    0.003035
+   ],
+   "metallic": 0.0,
+   "transmission": 0.0,
+   "smoothness": 0.95,
+   "coat": 1.0,
+   "coatSmoothness": 0.97,
+   "emission": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "emissionStrength": 0.0,
+   "probed": true
+  },
+  {
+   "token": "tiginterior",
+   "name": "M_TigInterior",
+   "rgb": [
+    0.008023,
+    0.008568,
+    0.01033
+   ],
+   "metallic": 0.0,
+   "transmission": 0.0,
+   "smoothness": 0.25,
+   "coat": 0.0,
+   "coatSmoothness": 0.97,
+   "emission": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "emissionStrength": 0.0,
+   "probed": true
+  },
+  {
+   "token": "tiglens",
+   "name": "M_TigLens",
+   "rgb": [
+    0.887923,
+    0.904661,
+    0.913099
+   ],
+   "metallic": 0.0,
+   "transmission": 1.0,
+   "smoothness": 0.98,
+   "coat": 0.0,
+   "coatSmoothness": 0.97,
+   "emission": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "emissionStrength": 0.0,
+   "probed": true
+  },
+  {
+   "token": "tiglensamber",
+   "name": "M_TigLensAmber",
+   "rgb": [
+    0.445201,
+    0.084376,
+    0.0
+   ],
+   "metallic": 0.0,
+   "transmission": 1.0,
+   "smoothness": 0.95,
+   "coat": 0.0,
+   "coatSmoothness": 0.97,
+   "emission": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "emissionStrength": 0.0,
+   "probed": true
+  },
+  {
+   "token": "tiglensred",
+   "name": "M_TigLensRed",
+   "rgb": [
+    0.270498,
+    0.0,
+    0.002125
+   ],
+   "metallic": 0.0,
+   "transmission": 1.0,
+   "smoothness": 0.95,
+   "coat": 0.0,
+   "coatSmoothness": 0.97,
+   "emission": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "emissionStrength": 0.0,
+   "probed": true
+  },
+  {
+   "token": "tigmesh",
+   "name": "M_TigMesh",
+   "rgb": [
+    0.01033,
+    0.01096,
+    0.012286
+   ],
+   "metallic": 0.15,
+   "transmission": 0.0,
+   "smoothness": 0.58,
+   "coat": 0.0,
+   "coatSmoothness": 0.97,
+   "emission": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "emissionStrength": 0.0,
+   "probed": true
+  },
+  {
+   "token": "tigpaint",
+   "name": "M_TigPaint",
+   "rgb": [
+    0.046919,
+    0.066398,
+    0.142702
+   ],
+   "metallic": 0.55,
+   "transmission": 0.0,
+   "smoothness": 0.66,
+   "coat": 1.0,
+   "coatSmoothness": 0.96,
+   "emission": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "emissionStrength": 0.0,
+   "probed": true
+  },
+  {
+   "token": "tigplate",
+   "name": "M_TigPlate",
+   "rgb": [
+    0.814847,
+    0.814847,
+    0.783538
+   ],
+   "metallic": 0.0,
+   "transmission": 0.0,
+   "smoothness": 0.58,
+   "coat": 0.25,
+   "coatSmoothness": 0.88,
+   "emission": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "emissionStrength": 0.0,
+   "probed": true
+  },
+  {
+   "token": "tigprivacy",
+   "name": "M_TigPrivacy",
+   "rgb": [
+    0.296138,
+    0.323143,
+    0.309469
+   ],
+   "metallic": 0.0,
+   "transmission": 1.0,
+   "smoothness": 0.965,
+   "coat": 0.0,
+   "coatSmoothness": 0.97,
+   "emission": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "emissionStrength": 0.0,
+   "probed": true
+  },
+  {
+   "token": "tigrail",
+   "name": "M_TigRail",
+   "rgb": [
+    0.011612,
+    0.01096,
+    0.01033
+   ],
+   "metallic": 0.55,
+   "transmission": 0.0,
+   "smoothness": 0.55,
+   "coat": 0.0,
+   "coatSmoothness": 0.97,
+   "emission": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "emissionStrength": 0.0,
+   "probed": true
+  },
+  {
+   "token": "tigreflector",
+   "name": "M_TigReflector",
+   "rgb": [
+    0.102242,
+    0.000607,
+    0.001821
+   ],
+   "metallic": 0.0,
+   "transmission": 0.0,
+   "smoothness": 0.9,
+   "coat": 1.0,
+   "coatSmoothness": 0.98,
+   "emission": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "emissionStrength": 0.0,
+   "probed": true
+  },
+  {
+   "token": "tigrim",
+   "name": "M_TigRim",
+   "rgb": [
+    0.564712,
+    0.590619,
+    0.603827
+   ],
+   "metallic": 0.92,
+   "transmission": 0.0,
+   "smoothness": 0.76,
+   "coat": 0.5,
+   "coatSmoothness": 0.91,
+   "emission": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "emissionStrength": 0.0,
+   "probed": true
+  },
+  {
+   "token": "tigrubber",
+   "name": "M_TigRubber",
+   "rgb": [
+    0.01033,
+    0.01096,
+    0.012286
+   ],
+   "metallic": 0.0,
+   "transmission": 0.0,
+   "smoothness": 0.2,
+   "coat": 0.0,
+   "coatSmoothness": 0.97,
+   "emission": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "emissionStrength": 0.0,
+   "probed": true
+  },
+  {
+   "token": "tigseat",
+   "name": "M_TigSeat",
+   "rgb": [
+    0.01096,
+    0.011612,
+    0.013702
+   ],
+   "metallic": 0.0,
+   "transmission": 0.0,
+   "smoothness": 0.15,
+   "coat": 0.0,
+   "coatSmoothness": 0.97,
+   "emission": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "emissionStrength": 0.0,
+   "probed": true
+  },
+  {
+   "token": "tigshield",
+   "name": "M_TigShield",
+   "rgb": [
+    0.155926,
+    0.171441,
+    0.181164
+   ],
+   "metallic": 0.85,
+   "transmission": 0.0,
+   "smoothness": 0.48,
+   "coat": 0.0,
+   "coatSmoothness": 0.97,
+   "emission": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "emissionStrength": 0.0,
+   "probed": true
+  },
+  {
+   "token": "tigtread",
+   "name": "M_TigTread",
+   "rgb": [
+    0.014444,
+    0.014444,
+    0.014444
+   ],
+   "metallic": 0.0,
+   "transmission": 0.0,
+   "smoothness": 0.1,
+   "coat": 0.0,
+   "coatSmoothness": 0.97,
+   "emission": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "emissionStrength": 0.0,
+   "probed": true
+  },
+  {
+   "token": "tigtrim",
+   "name": "M_TigTrim",
+   "rgb": [
+    0.57758,
+    0.603827,
+    0.62396
+   ],
+   "metallic": 1.0,
+   "transmission": 0.0,
+   "smoothness": 0.82,
+   "coat": 0.0,
+   "coatSmoothness": 0.97,
+   "emission": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "emissionStrength": 0.0,
+   "probed": true
+  }
+ ]
+}

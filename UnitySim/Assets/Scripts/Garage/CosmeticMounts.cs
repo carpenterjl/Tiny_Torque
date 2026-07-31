@@ -145,7 +145,17 @@ namespace AIHWSim.Garage
                 var go = CosmeticCatalog.Build(holder, design.cosRim);
                 if (go == null) continue;
                 go.name = "cos_rim";
-                go.transform.localScale = Vector3.one * (radius / PartVisualFactory.WheelAuthorRadius);
+                // Same author-radius rule BuildWheelViz uses, so a cosmetic rim
+                // lands inside its tyre whatever the wheel style. Bit-identical
+                // for every arcade style — they all resolve to the same literal.
+                //
+                // On the Tiguan it would be correctly SIZED but still
+                // RC-PROPORTIONED, since a cosmetic rim FBX is authored to sit
+                // inside a 33 mm toy tyre. No design assigns the Tiguan a
+                // cosRim, so this is a shape that never renders — recorded here
+                // rather than left as an unexplained hazard for whoever tries.
+                go.transform.localScale = Vector3.one
+                    * (radius / PartVisualFactory.AuthorRadiusFor(w?.wheelStyle ?? 0));
                 // BuildWheelViz's rule, mirrored exactly: on the side where +X
                 // points inboard the wheel is spun half a turn, and the rim has
                 // to come with it or it ends up inside the car.

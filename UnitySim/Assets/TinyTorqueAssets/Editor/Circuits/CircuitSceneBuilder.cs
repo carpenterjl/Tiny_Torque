@@ -268,15 +268,8 @@ namespace AIHWSim.Pack.Circuits
             int placedTrees = BuildTrees(man, trees, Group("Trees"), protoMesh, mats,
                                          genDir, ref missingMat);
 
-            // -- grid, and a camera looking down it -----------------------------
-            var grid = Group("Grid");
-            foreach (var g in man.grid)
-            {
-                var go = new GameObject(string.Format("Grid_{0:00}", g.slot));
-                go.transform.SetParent(grid, false);
-                go.transform.SetPositionAndRotation(CircuitAxis.Position(g.p),
-                                                    CircuitAxis.Heading(g.heading_deg));
-            }
+            // -- the start grid, and a camera looking down it -------------------
+            int placedSpawns = MakeDrivable(disp, man);
             AimCamera(man);
 
             MarkStatic(root);
@@ -286,6 +279,7 @@ namespace AIHWSim.Pack.Circuits
             AssetDatabase.SaveAssets();
 
             // -- report ---------------------------------------------------------
+            int wantSpawns = man.grid != null ? man.grid.Length : 0;
             int wantProps = 0, wantTrees = 0;
             foreach (var inst in man.instances)
             {
@@ -296,17 +290,18 @@ namespace AIHWSim.Pack.Circuits
                       && placedSplit == man.split.Length
                       && placedProps == wantProps
                       && placedTrees == wantTrees
+                      && placedSpawns == wantSpawns
                       && missingMesh == 0;
 
             var sb = new StringBuilder();
             sb.AppendFormat("{0}: {1}/{2} world, {3}/{4} stands, {5}/{6} props, "
-                            + "{7}/{8} trees, {9} tris, hash {10}",
+                            + "{7}/{8} trees, {11}/{12} grid slots, {9} tris, hash {10}",
                             disp, placedWorld, man.world.Length,
                             placedSplit, man.split.Length,
                             placedProps, wantProps, placedTrees, wantTrees,
                             man.counts != null
                                 ? man.counts.world_tris + man.counts.split_tris : 0,
-                            man.manifest_hash);
+                            man.manifest_hash, placedSpawns, wantSpawns);
             // Count every drop by reason. "No grandstands appeared" and "every
             // grandstand was culled" look identical in a viewport and cost an
             // hour apiece to tell apart — UNITY_EXPORT.md §7 rule 3, and the
@@ -539,6 +534,86 @@ namespace AIHWSim.Pack.Circuits
         }
 
         // ---------------------------------------------------------------------
+
+        /// <summary>
+        /// Make the scene drivable on Play, the way TTA_Sandbox is.
+        ///
+        /// Two components do it, and they are the same two any scene track needs.
+        /// <c>TrackBootstrap</c> is the game: press Play and it builds the car,
+        /// the camera, the HUD and the physics loop. <c>SceneTrackDescriptor</c>
+        /// is what tells it that the scene it woke up in <i>is</i> a track —
+        /// <c>TrackBootstrap.Awake</c> looks for one whenever it was not launched
+        /// from the menu, which is exactly the Play-button case.
+        ///
+        /// The grid slots become <c>TrackSpawnMarker</c>s rather than the inert
+        /// empties that used to stand here: same positions, same headings, same
+        /// manifest, but now the game reads them. One marker per slot means
+        /// <c>gridOrder</c> N starts player N on the real grid box, so a field of
+        /// cars sits on the painted grid and follows the road, instead of being
+        /// projected backwards from pole in a straight line.
+        ///
+        /// <b>FreeRoam, not Circuit</b>, and deliberately: Circuit claims a finish
+        /// line and a dense run of ordered checkpoints, and nothing here authors
+        /// either. Declaring it would buy a lap counter that never counts and a
+        /// validator failure for a claim the scene cannot back. Driving works
+        /// either way; lapping is a separate pass over the same spine.
+        ///
+        /// The bot corridor IS baked, because the manifest already carries the
+        /// centreline and the half-width at every station — the exact two arrays
+        /// the descriptor wants. It costs nothing to fill and it is what
+        /// <c>TrackRespawn</c> uses to put a car back on the road.
+        /// </summary>
+        /// <returns>Grid slots placed, for the build report.</returns>
+        private static int MakeDrivable(string disp, CircuitManifest man)
+        {
+            // Its own root object, outside `root`, so MarkStatic does not batch
+            // the spawn markers into the scene's static geometry.
+            var boot = new GameObject("TrackBootstrap");
+            boot.AddComponent<AIHWSim.Core.TrackBootstrap>();
+
+            var descGo = new GameObject("TrackDescriptor");
+            var desc = descGo.AddComponent<AIHWSim.Track.SceneTrackDescriptor>();
+            desc.displayName = disp;
+            desc.kind = AIHWSim.TrackEd.TrackPresets.TrackKind.FreeRoam;
+            desc.sceneOwnsSky = true;
+            // No mesh here carries a SurfaceTag, so every collider takes this.
+            // Asphalt is the honest default for a circuit: the road is most of
+            // what a car touches, and the alternative is the 1.0 baseline, which
+            // is not a surface at all. Grass and gravel are a tagging pass.
+            desc.sceneFallbackFloor = 1;
+
+            // The corridor, straight off the manifest spine — the same array the
+            // validator measures the road against, so the bots' idea of the track
+            // and the check that the track is where it should be come from one
+            // source.
+            int n = man.SpineCount;
+            var line = new Vector3[n];
+            var half = new float[n];
+            for (int i = 0; i < n; i++)
+            {
+                line[i] = CircuitAxis.Position(man.Spine(i, 1), man.Spine(i, 2),
+                                               man.Spine(i, 3));
+                half[i] = man.Spine(i, 7);          // spine_fields[7] = half_width
+            }
+            desc.centerline = line;
+            desc.halfWidths = half;
+            desc.corridorClosed = true;             // it is a lap
+
+            int slots = 0;
+            foreach (var g in man.grid)
+            {
+                // slot is 1-based in the manifest, gridOrder is 0-based: slot 1 is
+                // pole is player 1 is gridOrder 0.
+                int order = g.slot - 1;
+                var go = new GameObject(AIHWSim.Track.TrackSpawnMarker.NameFor(order));
+                go.transform.SetParent(descGo.transform, false);
+                go.transform.SetPositionAndRotation(CircuitAxis.Position(g.p),
+                                                    CircuitAxis.Heading(g.heading_deg));
+                go.AddComponent<AIHWSim.Track.TrackSpawnMarker>().gridOrder = order;
+                slots++;
+            }
+            return slots;
+        }
 
         /// <summary>Put the scene camera on the grid looking up the road, so
         /// opening the scene shows the circuit rather than the inside of the

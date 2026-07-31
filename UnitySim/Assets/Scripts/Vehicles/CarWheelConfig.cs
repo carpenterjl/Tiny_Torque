@@ -41,6 +41,16 @@ namespace AIHWSim.Vehicles
         // Cosmetic wheel/tyre mesh style (0 slick / 1 knobby / 2 rally).
         public int wheelStyle;
 
+        // ---- authored scale-dependent constants (see WheelSpec for the why) ----
+        // Runtime mirrors of the design fields. A 0 sentinel means "use the
+        // legacy expression verbatim", which is what makes every existing
+        // design bit-identical rather than approximately unchanged.
+        public float unsprungMassKg;    // 0 = the legacy 0.05 kg
+        public float spinInertiaKgM2;   // 0 = the legacy 0.5*0.05*r*r
+        public float brushEps;          // 0 = the legacy 0.01 curve floor
+        public float suspTargetPos;     // 0 = the legacy 0.5 (mid-travel)
+        public float brakeScale;        // per-wheel brake bias; 1 = unchanged
+
         public static CarWheelConfig Default(Vector3 pos, bool steers)
         {
             return new CarWheelConfig
