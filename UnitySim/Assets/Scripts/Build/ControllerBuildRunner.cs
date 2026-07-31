@@ -38,6 +38,10 @@ namespace AIHWSim.Build
         private bool _rebuildPending;      // a save landed mid-build: coalesce to ONE
         private string _startError = "";
 
+        // Reused rather than allocated per build; Preflight clears them itself.
+        private readonly List<string> _preflightErrors = new List<string>();
+        private readonly List<string> _preflightWarnings = new List<string>();
+
         /// <summary>Bumped whenever <see cref="Lines"/> changes, so the UI can cache
         /// its joined string instead of rebuilding it several times per frame.</summary>
         public int LineVersion { get; private set; }
@@ -92,6 +96,22 @@ namespace AIHWSim.Build
             _lines.Clear();
             LineVersion++;
             _startError = "";
+
+            // Look at the sources before spending a build on them. Only ever for a
+            // player's own script — the game's own controllers are not the ones
+            // being edited, and checking them would be noise on every build.
+            var script = UserScriptCatalog.Find(target);
+            if (script != null)
+            {
+                UserScriptCatalog.Preflight(script, _preflightErrors, _preflightWarnings);
+                foreach (var w in _preflightWarnings) Append(BuildLineKind.Err, "warning: " + w);
+                if (_preflightErrors.Count > 0)
+                {
+                    foreach (var e in _preflightErrors) Append(BuildLineKind.Err, e);
+                    _startError = _preflightErrors[0];
+                    return;   // nothing to hand the compiler
+                }
+            }
 
             if (!_svc.Start(ControllerWorkspace.Root, target,
                             Persistence.SettingsStore.Current.controllerBuildConfig,
@@ -164,6 +184,10 @@ namespace AIHWSim.Build
             _lastState = now;
             if (!finished) return;
             BuildGeneration++;
+            // A build changes what is on disk: which scripts have a DLL, and how old
+            // it is. Both are what the menu reads to say "your edits are not in this
+            // one yet", so the answer has to be re-derived rather than remembered.
+            UserScriptCatalog.Invalidate();
             if (now == BuildState.Succeeded) ReloadAll();
         }
 
@@ -286,22 +310,19 @@ namespace AIHWSim.Build
             return null;
         }
 
-        /// <summary>
-        /// Where the built DLL must land: next to the RUNNING game, not wherever the
-        /// sources were last compiled from. In the editor these are the same folder
-        /// and this is a no-op — in a player build they are not, and without it the
-        /// compiler cheerfully writes into the repo while the game keeps loading the
-        /// DLL it shipped with.
-        /// </summary>
-        private static string PluginDir() =>
-            Path.GetFullPath(Path.Combine(Application.dataPath, "Plugins", "x86_64"));
+        /// <summary>See <see cref="ControllerWorkspace.PluginDir"/> — it lives there
+        /// because the catalogue needs the same answer to date the built DLLs.</summary>
+        private static string PluginDir() => ControllerWorkspace.PluginDir();
 
         private void RefreshWatcher()
         {
             var s = Persistence.SettingsStore.Current;
             if (s == null || !s.controllerRebuildOnSave) return;
             if (!ControllerWorkspace.IsAvailable) return;
-            _watcher = new ControllerWatcher(ControllerWorkspace.Root);
+            // Both roots: the game's controllers and the player's UserScripts. The
+            // second is the one people actually edit, and it is a sibling of the
+            // first rather than inside it.
+            _watcher = new ControllerWatcher(ControllerWorkspace.WatchRoots());
             if (!string.IsNullOrEmpty(_watcher.Error))
             {
                 Append(BuildLineKind.Err, $"rebuild-on-save unavailable: {_watcher.Error}");

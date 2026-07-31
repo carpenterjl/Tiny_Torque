@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.IO;
 using System.Threading;
 using UnityEngine;
@@ -15,40 +16,63 @@ namespace AIHWSim.Build
     /// </summary>
     public sealed class ControllerWatcher : IDisposable
     {
-        private FileSystemWatcher _fsw;
+        private readonly List<FileSystemWatcher> _fsws = new List<FileSystemWatcher>();
+        private readonly List<string> _buildDirs = new List<string>();
         private long _dirtyTicks;         // UtcNow.Ticks of the last accepted event
-        private readonly string _buildDir;
 
         /// <summary>Why the watcher is not running, or empty.</summary>
         public string Error { get; private set; } = "";
-        public bool Active => _fsw != null;
+        public bool Active => _fsws.Count > 0;
 
-        public ControllerWatcher(string workspaceRoot)
+        /// <summary>
+        /// Watch every root given. There are normally two — the game's
+        /// <c>Controllers/</c> and the player's <c>UserScripts/</c> — and they are
+        /// siblings, so one recursive watcher cannot see both. Watching their common
+        /// parent instead would put the whole repo (and Unity's Library folder,
+        /// which churns constantly) under a rebuild trigger.
+        ///
+        /// A root that cannot be watched is skipped, not fatal: rebuild-on-save over
+        /// one of the two is still worth having, and <see cref="Error"/> says which
+        /// one was lost.
+        /// </summary>
+        public ControllerWatcher(params string[] roots)
         {
-            _buildDir = Path.Combine(workspaceRoot ?? "", "build")
-                            .Replace('/', Path.DirectorySeparatorChar);
-            try
+            if (roots == null || roots.Length == 0)
             {
-                _fsw = new FileSystemWatcher(workspaceRoot)
+                Error = "nothing to watch";
+                return;
+            }
+
+            foreach (var root in roots)
+            {
+                if (string.IsNullOrWhiteSpace(root)) continue;
+                _buildDirs.Add(Path.Combine(root, "build")
+                                   .Replace('/', Path.DirectorySeparatorChar));
+                try
                 {
-                    IncludeSubdirectories = true,
-                    // One pattern only, so the extension test happens in the handler.
-                    Filter = "*.*",
-                    NotifyFilter = NotifyFilters.LastWrite | NotifyFilters.FileName
-                                 | NotifyFilters.Size,
-                };
-                _fsw.Changed += OnEvent;
-                _fsw.Created += OnEvent;
-                _fsw.Renamed += OnEvent;
-                _fsw.EnableRaisingEvents = true;
+                    var fsw = new FileSystemWatcher(root)
+                    {
+                        IncludeSubdirectories = true,
+                        // One pattern only, so the extension test happens in the handler.
+                        Filter = "*.*",
+                        NotifyFilter = NotifyFilters.LastWrite | NotifyFilters.FileName
+                                     | NotifyFilters.Size,
+                    };
+                    fsw.Changed += OnEvent;
+                    fsw.Created += OnEvent;
+                    fsw.Renamed += OnEvent;
+                    fsw.EnableRaisingEvents = true;
+                    _fsws.Add(fsw);
+                }
+                catch (Exception e)
+                {
+                    // A nonexistent path throws here. Report it rather than letting
+                    // it escape into whatever scene load happened to construct us.
+                    Error = $"{root}: {e.Message}";
+                }
             }
-            catch (Exception e)
-            {
-                // A nonexistent path throws here. Report it rather than letting it
-                // escape into whatever scene load happened to construct us.
-                _fsw = null;
-                Error = e.Message;
-            }
+
+            if (_fsws.Count > 0) Error = "";
         }
 
         /// <summary>
@@ -85,7 +109,9 @@ namespace AIHWSim.Build
         private bool Accepts(string full)
         {
             if (string.IsNullOrEmpty(full)) return false;
-            if (full.StartsWith(_buildDir, StringComparison.OrdinalIgnoreCase)) return false;
+            for (int i = 0; i < _buildDirs.Count; i++)
+                if (full.StartsWith(_buildDirs[i], StringComparison.OrdinalIgnoreCase))
+                    return false;
 
             string name = Path.GetFileName(full);
             if (string.Equals(name, "CMakeLists.txt", StringComparison.OrdinalIgnoreCase))
@@ -98,20 +124,23 @@ namespace AIHWSim.Build
 
         public void Dispose()
         {
-            if (_fsw == null) return;
-            try
+            foreach (var fsw in _fsws)
             {
-                _fsw.EnableRaisingEvents = false;
-                _fsw.Changed -= OnEvent;
-                _fsw.Created -= OnEvent;
-                _fsw.Renamed -= OnEvent;
-                _fsw.Dispose();
+                try
+                {
+                    fsw.EnableRaisingEvents = false;
+                    fsw.Changed -= OnEvent;
+                    fsw.Created -= OnEvent;
+                    fsw.Renamed -= OnEvent;
+                    fsw.Dispose();
+                }
+                catch (Exception e)
+                {
+                    Debug.LogWarning($"[CtrlBuild] Watcher dispose: {e.Message}");
+                }
             }
-            catch (Exception e)
-            {
-                Debug.LogWarning($"[CtrlBuild] Watcher dispose: {e.Message}");
-            }
-            _fsw = null;
+            _fsws.Clear();
+            _buildDirs.Clear();
         }
     }
 }

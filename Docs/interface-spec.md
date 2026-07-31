@@ -127,3 +127,14 @@ anything Unity-specific. Only the *target* layer (`targets/sim/sim_main.c`)
 touches the ABI. A future `targets/arduino/` reads real peripherals and calls
 the identical `diffdrive_update()`, which is what makes the same source run in
 sim and on hardware.
+
+## Writing a controller against this spec
+
+`UserScripts/` is the folder for controllers that are not part of the game. One
+subfolder becomes one DLL named after the folder, built by the in-game
+**Build & Reload** button — no CMake edit, no terminal. `UserScripts/guide.html`
+is the illustrated walkthrough; `UserScripts/lib/tt_controller.h` is a
+header-only convenience layer over the structs above (bounds-checked sensor and
+camera reads, a PID, per-manifest motor writes). Nothing in it is required —
+this document remains the contract, and a controller that includes only
+`controller_api.h` is exactly as valid.

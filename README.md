@@ -121,7 +121,13 @@ quadcopter and hardware-in-the-loop over serial are planned follow-ons.
   count** (0 opponents + 0 laps = free drive), and **Results wait** — how long
   after the *first* car finishes before the results screen appears and the
   stragglers are called DNF (default 30 s; 0 waits for the whole field, which
-  a bot stuck against a wall will never satisfy).
+  a bot stuck against a wall will never satisfy). The Free Roam screen carries a
+  **Map** picker of its own — see [Free roam](#free-roam-torque-falls-35-city-props-one-town).
+  Every setup screen also carries a loud, magenta, **temporary Dev mode** toggle
+  that treats every unlockable as owned so the collection can be tested without
+  grinding for it; it overrides the two gates rather than granting anything, so
+  the real profile is untouched and turning it off restores it exactly.
+  *Remove it before shipping* — the removal list is on `Progression.DevUnlockAll`.
   **Multiplayer** — a **2-player split-screen** setup (per-player name, vehicle,
   and device: keyboard or a specific gamepad; shared track; first-to-N-laps race
   or sandbox) plus LAN, **Resume Drive** (saved session snapshots), and
@@ -425,9 +431,9 @@ That screen — and the pause menu, mid-drive — carries a **Build & Reload** p
   No restart, no separate terminal. Pick which CMake target to build from the
   row above; the list is read out of `CMakeLists.txt`, so a controller you add
   yourself shows up without touching any C#.
-- **Rebuild when I save a source file** watches `Controllers/` for `.c`/`.h`
-  saves and does the same automatically, 750 ms after you stop typing.
-  Opt-in, off by default.
+- **Rebuild when I save a source file** watches `Controllers/` *and*
+  `UserScripts/` for `.c`/`.h` saves and does the same automatically, 750 ms
+  after you stop typing. Opt-in, off by default.
 - **Reset the car after a reload** is also off by default, deliberately: the
   value of a hot reload is watching *the same situation* answer to new code.
 
@@ -446,6 +452,68 @@ every panel-triggered build for exactly this reason.
 If the `Controllers/` folder is not next to the game (a standalone build copied
 elsewhere), the panel says so and offers a path field instead of a button that
 would do nothing.
+
+### `UserScripts/` — where the player's own firmware lives
+
+`Controllers/` is the game's C: four shipped controllers, the ABI header, the
+CMake build. `UserScripts/` is everyone else's. It is a sibling folder, and the
+whole convention is one rule:
+
+> **One folder under `UserScripts/` = one controller = one DLL, named after the
+> folder.**
+
+```
+UserScripts/
+  guide.html            illustrated guide — the game can open it for you
+  lib/tt_controller.h   header-only helper library, shared by every script
+  MyController/
+    my_controller.c     a working skeleton, commented as a tutorial
+```
+
+`MyController/` builds to `MyController.dll` and appears in the Simulate
+Controller picker under that name. **Making a second controller is copying the
+folder** — there is no list to join and no build file to edit. The bottom of
+`Controllers/CMakeLists.txt` globs the folders with `CONFIGURE_DEPENDS`, so a new
+folder triggers its own re-configure at the next build; every `.c` in a folder is
+compiled and linked together, and `lib/` plus `Controllers/hal` and `common` are
+on the include path (so `#include "pid.h"` works too). Names are restricted to
+`[A-Za-z0-9_]`, because the same string has to be a CMake target and a Windows
+file name at once.
+
+`lib/tt_controller.h` is a genuine convenience layer, not a copy of the ABI:
+bounds-checked sensor and camera reads that return a fallback rather than running
+off the end of an array, a PID with a clamped integrator and
+derivative-on-measurement, and `tt_drive_volts`/`tt_steer`/`tt_brake` over the
+per-car motor manifest. Everything in it is `static inline`, so there is nothing
+to link, and a controller that ignores it entirely is equally valid —
+`car_sensors.c` is written that way on purpose.
+
+Three things on the C# side make this feel like part of the game rather than a
+folder convention:
+
+- **`UserScriptCatalog`** re-implements the same folder rules the CMake glob uses
+  (cross-referenced in comments at both ends), because the game has to answer
+  "what can I offer to build?" on a fresh clone, before any CMake cache exists.
+  It also dates each folder's sources against its built DLL — including `lib/`,
+  since editing the shared header changes every controller.
+- **The Simulate Controller screen** gained a **YOUR SCRIPTS** block listing every
+  folder as *built and up to date* / *EDITED SINCE THE LAST BUILD* / *never
+  built*, plus **Open the guide**. It is one `GUILayout.Label` over a
+  Layout-built string, not one row per script — a row count that moves between a
+  Layout pass and its Repaint is the census bug the whole UI is written to avoid.
+  The **Controller** picker now drives the **Build** picker (`followDll`), so the
+  screen cannot quietly compile one controller and race another.
+- **A pre-flight check** runs before the compiler, and covers only what a
+  compiler cannot tell you: a folder with no `.c` in it (refused), a `.cpp` that
+  will be silently ignored, and — the one that matters — a source with no
+  `ctrl_step` in it. That last case compiles and links and loads perfectly, and
+  then the car coasts, because the game looks those four names up by hand. It is
+  a substring test and says so in the code: it catches "you have not written it
+  yet", not "you wrote it wrongly", so it warns rather than blocks.
+
+Rebuild-on-save watches **both** roots now. They are siblings rather than nested,
+so one recursive `FileSystemWatcher` cannot see both, and watching their common
+parent would put Unity's `Library/` under a rebuild trigger.
 
 ## The Opus Vector mission (a worked end-to-end example)
 
@@ -1533,19 +1601,26 @@ to the pre-change baseline.
 
 ## Free roam: Torque Falls (35 city props, one town)
 
-A fifth **Mode** on the Single Player page, and the only one whose map is not in
-any track picker. `★ Torque Falls` is a 66 × 66 m town — a port of
+A fifth **Mode** on the Single Player page, and the one whose maps are not in any
+*race* track picker. `★ Torque Falls` is a 66 × 66 m town — a port of
 `tt_25_city_map.py` from the modelling project — with no finish line, no
 checkpoints and no racing line. There is nothing there to race, so it is not
 offered as somewhere to race: `TrackPresets.TrackKind.FreeRoam` keeps it out of
 the single-player, championship, split-screen and LAN lists in one place instead
-of four, and the mode resolves it by name. The Track Builder still lists it, and
-still opens it — it is not a map you can race on, but it is very much a map you
-can edit.
+of four. The Track Builder still lists it, and still opens it — it is not a map
+you can race on, but it is very much a map you can edit.
 
-Picking Free Roam hides the track picker, the lap and score steppers, the
-countdown and the opponents; **R** puts the car back at the nearest of twelve
-street-corner spawns, which is what `TrackRespawn` falls back to when a map has
+Free roam has its own **Map** picker, built from both catalogues by kind
+(`TrackPresets.RoamNames`, `SceneTrackCatalog.RoamNames`): the maps built for
+roaming first — the town, and `▣ Sandbox`, which is a free-roam *scene* track and
+so was previously unreachable from every picker in the game — then every race
+map, circuits and arenas included, because a circuit with the rules taken off is
+a perfectly good place to drive. The choice funnels through the same `SelectTrack`
+as everything else, so all three track sources work.
+
+The mode still hides the lap and score steppers, the countdown and the
+opponents; **R** puts the car back at the nearest spawn — on the town, one of
+twelve street corners, which is what `TrackRespawn` falls back to when a map has
 no racing line to project onto.
 
 ### The kit
@@ -1704,6 +1779,8 @@ Validate with `-executeMethod AIHWSim.TrackTools.TrackStudioValidator.Report` an
 ```
 UnitySim/       Unity 6 project (host: physics, sensors, telemetry, graphs)
 Controllers/    Portable C firmware + CMake build (the code under test)
+UserScripts/    Your own controllers — one folder each, built by the in-game
+                button. Start at UserScripts/guide.html
 Tools/          Interactive HTML tools — hardware→vehicle, control design, calibration
 Blender/        Editable source (parts.blend) + the export scripts for parts,
                 map props and cosmetics

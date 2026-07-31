@@ -1,0 +1,692 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Write your own car firmware — Tiny Torque</title>
+<style>
+  :root{
+    --bg:#f7f7f5; --fg:#1c1c1a; --muted:#6b6b66; --rule:#dcdcd6;
+    --card:#fff; --accent:#b4531f; --code-bg:#f0efeb; --warn-bg:#fdf3e7; --warn-br:#e0a35c;
+    --danger-bg:#fdecec; --danger-br:#d06b6b; --ok:#2f7d4f;
+    --ui-bg:#2a2a2a; --ui-fg:#d6d6d6; --ui-hi:#c8a24a; --ui-rule:#454545; --ui-panel:#333;
+    --wire:#8a8a84;
+  }
+  @media (prefers-color-scheme: dark){
+    :root{
+      --bg:#17171a; --fg:#e6e6e2; --muted:#9a9a94; --rule:#33333a;
+      --card:#1f1f24; --accent:#e08a4c; --code-bg:#26262c; --warn-bg:#2b2317; --warn-br:#8a6428;
+      --danger-bg:#2c1a1a; --danger-br:#8a4a4a; --ok:#63b98a; --wire:#6a6a72;
+    }
+  }
+  :root[data-theme="light"]{
+    --bg:#f7f7f5; --fg:#1c1c1a; --muted:#6b6b66; --rule:#dcdcd6;
+    --card:#fff; --accent:#b4531f; --code-bg:#f0efeb; --warn-bg:#fdf3e7; --warn-br:#e0a35c;
+    --danger-bg:#fdecec; --danger-br:#d06b6b; --ok:#2f7d4f; --wire:#8a8a84;
+  }
+  :root[data-theme="dark"]{
+    --bg:#17171a; --fg:#e6e6e2; --muted:#9a9a94; --rule:#33333a;
+    --card:#1f1f24; --accent:#e08a4c; --code-bg:#26262c; --warn-bg:#2b2317; --warn-br:#8a6428;
+    --danger-bg:#2c1a1a; --danger-br:#8a4a4a; --ok:#63b98a; --wire:#6a6a72;
+  }
+
+  *{box-sizing:border-box}
+  body{
+    margin:0; padding:2.5rem 1.25rem 5rem; background:var(--bg); color:var(--fg);
+    font:16px/1.6 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;
+  }
+  main{max-width:52rem; margin:0 auto}
+  h1{font-size:1.9rem; line-height:1.2; margin:0 0 .4rem}
+  h2{font-size:1.3rem; margin:2.75rem 0 .75rem; padding-top:1.25rem; border-top:1px solid var(--rule)}
+  h3{font-size:1.02rem; margin:1.75rem 0 .5rem}
+  p{margin:.7rem 0}
+  .sub{color:var(--muted); margin:0 0 2rem}
+  code{background:var(--code-bg); padding:.1em .35em; border-radius:3px;
+       font:.87em/1.5 ui-monospace,"Cascadia Code",Consolas,monospace}
+  pre{background:var(--code-bg); padding:.85rem 1rem; border-radius:6px;
+      overflow-x:auto; font:.82rem/1.5 ui-monospace,Consolas,monospace}
+  pre code{background:none; padding:0; font-size:1em}
+  ol,ul{padding-left:1.3rem} li{margin:.4rem 0}
+  a{color:var(--accent)}
+  .note{background:var(--warn-bg); border-left:3px solid var(--warn-br);
+        padding:.75rem 1rem; border-radius:0 5px 5px 0; margin:1.1rem 0; font-size:.94rem}
+  .danger{background:var(--danger-bg); border-left:3px solid var(--danger-br);
+          padding:.75rem 1rem; border-radius:0 5px 5px 0; margin:1.1rem 0; font-size:.94rem}
+  .note b,.danger b{color:var(--fg)}
+  .lede{font-size:1.05rem}
+  .tbl-wrap{overflow-x:auto; margin:1rem 0}
+  table{border-collapse:collapse; width:100%; font-size:.9rem; min-width:30rem}
+  th,td{text-align:left; padding:.5rem .7rem; border-bottom:1px solid var(--rule); vertical-align:top}
+  th{font-weight:600; color:var(--muted); font-size:.8rem; text-transform:uppercase; letter-spacing:.04em}
+  td code{white-space:nowrap}
+
+  .fig{margin:1.4rem 0 1.6rem}
+  .fig svg{max-width:100%; height:auto; display:block; margin:0 auto;
+           background:var(--card); border:1px solid var(--rule); border-radius:6px}
+  .fig figcaption{color:var(--muted); font-size:.82rem; margin-top:.5rem; text-align:center}
+  .tree{background:var(--code-bg); border-radius:6px; padding:1rem 1.1rem;
+        font:.84rem/1.7 ui-monospace,Consolas,monospace; overflow-x:auto}
+  .tree .c{color:var(--muted)}
+  .tree .y{color:var(--accent); font-weight:600}
+
+  .steps{counter-reset:s; list-style:none; padding-left:0}
+  .steps>li{counter-increment:s; position:relative; padding-left:2.4rem; margin:1rem 0}
+  .steps>li::before{
+    content:counter(s); position:absolute; left:0; top:.05rem;
+    width:1.7rem; height:1.7rem; border-radius:50%; background:var(--accent); color:#fff;
+    font-size:.85rem; font-weight:700; display:flex; align-items:center; justify-content:center;
+  }
+  .kbd{background:var(--card); border:1px solid var(--rule); border-bottom-width:2px;
+       border-radius:4px; padding:.05em .4em; font-size:.85em; font-family:inherit}
+  .toc{background:var(--card); border:1px solid var(--rule); border-radius:6px;
+       padding:1rem 1.2rem; margin:1.5rem 0}
+  .toc ol{margin:.3rem 0; columns:2; column-gap:2rem}
+  .toc li{margin:.25rem 0; break-inside:avoid}
+  .ok{color:var(--ok); font-weight:600}
+  .theme{position:fixed; top:.8rem; right:.8rem; font-size:.78rem; background:var(--card);
+         border:1px solid var(--rule); border-radius:5px; padding:.3rem .6rem; cursor:pointer;
+         color:var(--muted)}
+  svg text{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif}
+  svg .mono{font-family:ui-monospace,Consolas,monospace}
+</style>
+</head>
+<body>
+<button class="theme" onclick="
+  var r=document.documentElement;
+  r.dataset.theme = r.dataset.theme==='dark' ? 'light' : 'dark';
+">light / dark</button>
+
+<main>
+
+<h1>Write your own car firmware</h1>
+<p class="sub">Real C, compiled into a real DLL, driving a real car in the game — without
+ever opening a terminal.</p>
+
+<p class="lede">Every car in Tiny Torque can be driven by a piece of C code instead of by
+you. That code is <em>firmware</em>: it reads the car's sensors a hundred times a second and
+decides how much voltage to send the motors, how far to turn the wheels, when to brake.
+This folder is where you write it.</p>
+
+<p>You edit a text file. You press a button in the game. A few seconds later the car is
+driving on your new code — the same car, in the same place, mid-race if you like. Nothing
+restarts. That loop is the whole point, and everything below is in service of it.</p>
+
+<div class="toc">
+  <b>On this page</b>
+  <ol>
+    <li><a href="#quick">The five-minute version</a></li>
+    <li><a href="#folder">What is in this folder</a></li>
+    <li><a href="#loop">The edit → build → drive loop</a></li>
+    <li><a href="#screen">The screen in the game</a></li>
+    <li><a href="#anatomy">Anatomy of a controller</a></li>
+    <li><a href="#inputs">What your code can see</a></li>
+    <li><a href="#outputs">What your code can do</a></li>
+    <li><a href="#sensors">Sensors and the parts list</a></li>
+    <li><a href="#camera">The camera</a></li>
+    <li><a href="#helpers">The helper library</a></li>
+    <li><a href="#debug">Graphs and telemetry</a></li>
+    <li><a href="#second">Making a second controller</a></li>
+    <li><a href="#wrong">When it goes wrong</a></li>
+    <li><a href="#danger">The one real danger</a></li>
+  </ol>
+</div>
+
+
+<h2 id="quick">1. The five-minute version</h2>
+
+<ol class="steps">
+  <li><b>Start the game.</b> <span class="kbd">Single Player</span> →
+      <span class="kbd">Simulate Controller</span>.</li>
+  <li><b>Press <span class="kbd">Build &amp; Reload</span>.</b> The compiler output scrolls
+      past in the pane below it. The first build takes longer than the rest — it is setting
+      up as well as compiling.</li>
+  <li><b>Press <span class="kbd">Run controller ▶</span>.</b> You are on track, and
+      <code>MyController.dll</code> is driving. Hold the throttle; your code decides how to
+      deliver it.</li>
+  <li><b>Open <code>MyController/my_controller.c</code></b> in any text editor. Near the top
+      is a block marked <code>TUNING</code>. Change <code>SPEED_KP</code> from
+      <code>6.0f</code> to <code>30.0f</code> and save.</li>
+  <li><b>Press <span class="kbd">Esc</span> and hit <span class="kbd">Build &amp; Reload</span>
+      again.</b> The same panel is in the pause menu. The car lurches and hunts for its
+      speed instead of settling on it — that is what too much proportional gain feels like,
+      and you just felt it without leaving the track.</li>
+</ol>
+
+<div class="note"><b>No compiler yet?</b> The build pane will say so, and it prints the exact
+command to fix it:
+<code>winget install --id BrechtSanders.WinLibs.POSIX.UCRT --exact</code>. That one package
+brings a 64-bit C compiler, CMake and Ninja. Visual Studio's C++ workload works too, and is
+preferred automatically if you already have it.</div>
+
+
+<h2 id="folder">2. What is in this folder</h2>
+
+<div class="tree"><span class="c">Tiny_Torque/</span>
+├── <span class="y">UserScripts/</span>            <span class="c">← you are here</span>
+│   ├── guide.html          <span class="c">this page</span>
+│   ├── lib/
+│   │   └── tt_controller.h <span class="c">helper library — shared by every script below</span>
+│   └── <span class="y">MyController/</span>       <span class="c">one folder = one controller = one DLL</span>
+│       └── my_controller.c <span class="c">EDIT THIS</span>
+│
+├── Controllers/            <span class="c">the game's own firmware, and the build system</span>
+│   ├── hal/controller_api.h  <span class="c">the actual contract. Worth reading.</span>
+│   ├── car_pid/, car_sensors/, opus_mission/  <span class="c">worked examples</span>
+│   └── build.ps1, CMakeLists.txt
+│
+└── UnitySim/Assets/Plugins/x86_64/   <span class="c">where built DLLs land</span>
+</div>
+
+<p>The rule that makes this work: <b>one folder under <code>UserScripts/</code> becomes one
+DLL, named after the folder.</b> <code>MyController/</code> compiles to
+<code>MyController.dll</code>, which shows up in the game's Controller picker under exactly
+that name. Every <code>.c</code> file in the folder is compiled and linked together, so you
+can split a large controller across several files if you want to.</p>
+
+<p>There is no list to add yourself to. The build system globs the folders, so a new folder
+is a new controller and a deleted folder is gone — you never edit a build file.</p>
+
+<div class="note"><b>Folder names:</b> letters, digits and underscores only. The name has to
+survive being a build target and a Windows file name at once, so
+<code>My Controller</code> and <code>v2.0</code> are skipped — silently by the game's picker,
+with a message by the compiler. <code>My_Controller</code> and <code>v2</code> are fine.</div>
+
+
+<h2 id="loop">3. The edit → build → drive loop</h2>
+
+<figure class="fig">
+<svg viewBox="0 0 720 260" role="img" aria-label="Diagram of the edit, build, reload and drive cycle">
+  <defs>
+    <marker id="ar" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto">
+      <path d="M0,0 L10,5 L0,10 z" fill="currentColor"/>
+    </marker>
+  </defs>
+  <g fill="none" stroke="currentColor" color="var(--wire)" stroke-width="1.6">
+    <path d="M150,62 L232,62" marker-end="url(#ar)"/>
+    <path d="M340,62 L422,62" marker-end="url(#ar)"/>
+    <path d="M530,90 L530,136" marker-end="url(#ar)"/>
+    <path d="M436,178 L296,178" marker-end="url(#ar)"/>
+    <path d="M166,178 L100,178 L100,90" marker-end="url(#ar)"/>
+  </g>
+
+  <g>
+    <rect x="30" y="38" width="120" height="48" rx="6" fill="var(--code-bg)" stroke="var(--rule)"/>
+    <text x="90" y="60" text-anchor="middle" font-size="13" fill="var(--fg)">You edit</text>
+    <text x="90" y="76" text-anchor="middle" font-size="10.5" class="mono" fill="var(--muted)">my_controller.c</text>
+
+    <rect x="232" y="38" width="110" height="48" rx="6" fill="var(--code-bg)" stroke="var(--rule)"/>
+    <text x="287" y="60" text-anchor="middle" font-size="13" fill="var(--fg)">Build &amp;</text>
+    <text x="287" y="76" text-anchor="middle" font-size="13" fill="var(--fg)">Reload</text>
+
+    <rect x="422" y="38" width="118" height="48" rx="6" fill="var(--code-bg)" stroke="var(--rule)"/>
+    <text x="481" y="60" text-anchor="middle" font-size="13" fill="var(--fg)">C compiler</text>
+    <text x="481" y="76" text-anchor="middle" font-size="10.5" class="mono" fill="var(--muted)">MyController.dll</text>
+
+    <rect x="440" y="140" width="180" height="76" rx="6" fill="var(--card)" stroke="var(--accent)" stroke-width="1.6"/>
+    <text x="530" y="164" text-anchor="middle" font-size="13" fill="var(--fg)">The running game</text>
+    <text x="530" y="182" text-anchor="middle" font-size="10.5" fill="var(--muted)">swaps the DLL in place</text>
+    <text x="530" y="199" text-anchor="middle" font-size="10.5" fill="var(--muted)">without stopping</text>
+
+    <rect x="170" y="152" width="120" height="52" rx="6" fill="var(--code-bg)" stroke="var(--rule)"/>
+    <text x="230" y="174" text-anchor="middle" font-size="13" fill="var(--fg)">The car does</text>
+    <text x="230" y="191" text-anchor="middle" font-size="13" fill="var(--fg)">something new</text>
+  </g>
+
+  <text x="360" y="243" text-anchor="middle" font-size="11" fill="var(--muted)">
+    Nothing in this loop restarts the game, reloads the track, or moves the car.
+  </text>
+</svg>
+<figcaption>Figure 1 — the loop. The car keeps driving through the swap, so you are always
+comparing new code against the same situation.</figcaption>
+</figure>
+
+<p>The reason the game can swap a DLL it is currently running is that it never opens the one
+the compiler writes. It copies it to a scratch folder and loads the copy, leaving the
+original free to be overwritten at any moment. When you press Build &amp; Reload, the
+sequence is: compile → <code>ctrl_shutdown()</code> on the old code → load the new DLL →
+<code>ctrl_init()</code> → <code>ctrl_configure()</code> → carry on stepping.</p>
+
+<p><b>Your controller's state is reset; the car's is not.</b> Speed, position, damage,
+lap count all survive. That is deliberate: the value of a hot reload is watching the
+<em>same</em> corner respond to different code. If you would rather start clean, there is a
+<span class="kbd">Reset the car after a reload</span> toggle in the build panel.</p>
+
+<h3>Rebuild when I save</h3>
+
+<p>The build panel has a <span class="kbd">Rebuild when I save a source file</span> toggle.
+With it on, saving any <code>.c</code> or <code>.h</code> under <code>UserScripts/</code> (or
+<code>Controllers/</code>) starts a build by itself, about ¾ of a second after you stop
+typing. Editors write a file two or three times per save and the delay collapses that into
+one build; it also means a half-finished edit is not compiled while you are still typing it.</p>
+
+
+<h2 id="screen">4. The screen in the game</h2>
+
+<figure class="fig">
+<svg viewBox="0 0 640 470" role="img" aria-label="Mock-up of the Simulate Controller screen">
+  <rect x="0" y="0" width="640" height="470" fill="var(--ui-bg)"/>
+  <rect x="24" y="18" width="592" height="434" rx="4" fill="var(--ui-panel)" stroke="var(--ui-rule)"/>
+
+  <text x="44" y="46" font-size="14" font-weight="700" fill="var(--ui-hi)" letter-spacing="1.5">SIMULATE CONTROLLER</text>
+  <text x="44" y="66" font-size="10.5" fill="var(--ui-fg)" opacity=".75">Drive a car with your compiled C controller instead of the keyboard.</text>
+
+  <text x="44" y="96" font-size="11.5" font-weight="700" fill="var(--ui-hi)" letter-spacing="1.2">YOUR SCRIPTS</text>
+  <text x="52" y="115" font-size="10.5" class="mono" fill="var(--ui-fg)">MyController — built and up to date</text>
+  <text x="52" y="131" font-size="10.5" class="mono" fill="var(--ui-fg)">LineFollower — EDITED SINCE THE LAST BUILD.</text>
+  <text x="70" y="145" font-size="10.5" class="mono" fill="var(--ui-fg)" opacity=".7">Your changes are not in the DLL yet.</text>
+
+  <rect x="44" y="156" width="230" height="24" rx="3" fill="var(--ui-bg)" stroke="var(--ui-rule)"/>
+  <text x="159" y="172" text-anchor="middle" font-size="11" fill="var(--ui-fg)">Open the guide (in your browser)</text>
+
+  <text x="44" y="206" font-size="11" fill="var(--ui-fg)">Controller</text>
+  <rect x="128" y="192" width="200" height="22" rx="3" fill="var(--ui-bg)" stroke="var(--ui-rule)"/>
+  <text x="140" y="207" font-size="11" fill="var(--ui-fg)">◀</text>
+  <text x="228" y="207" text-anchor="middle" font-size="11" class="mono" fill="var(--ui-fg)">MyController.dll</text>
+  <text x="316" y="207" font-size="11" fill="var(--ui-fg)">▶</text>
+
+  <line x1="44" y1="228" x2="596" y2="228" stroke="var(--ui-rule)"/>
+  <text x="44" y="248" font-size="11.5" font-weight="700" fill="var(--ui-hi)" letter-spacing="1.2">CONTROLLER</text>
+  <text x="44" y="265" font-size="10.5" class="mono" fill="var(--ui-fg)" opacity=".8">LOADED MyController.dll · built 14:22:07 UTC</text>
+
+  <text x="44" y="288" font-size="11" fill="var(--ui-fg)">Build</text>
+  <rect x="128" y="274" width="200" height="22" rx="3" fill="var(--ui-bg)" stroke="var(--ui-rule)"/>
+  <text x="140" y="289" font-size="11" fill="var(--ui-fg)">◀</text>
+  <text x="228" y="289" text-anchor="middle" font-size="11" class="mono" fill="var(--ui-fg)">MyController</text>
+  <text x="316" y="289" font-size="11" fill="var(--ui-fg)">▶</text>
+
+  <rect x="44" y="306" width="150" height="26" rx="3" fill="var(--ui-hi)" opacity=".9"/>
+  <text x="119" y="323" text-anchor="middle" font-size="11.5" font-weight="700" fill="#1c1c1a">Build &amp; Reload</text>
+  <rect x="202" y="306" width="86" height="26" rx="3" fill="var(--ui-bg)" stroke="var(--ui-rule)" opacity=".45"/>
+  <text x="245" y="323" text-anchor="middle" font-size="11.5" fill="var(--ui-fg)" opacity=".45">Cancel</text>
+  <rect x="296" y="306" width="86" height="26" rx="3" fill="var(--ui-bg)" stroke="var(--ui-rule)"/>
+  <text x="339" y="323" text-anchor="middle" font-size="11.5" fill="var(--ui-fg)">Clear</text>
+
+  <rect x="46" y="344" width="12" height="12" rx="2" fill="var(--ui-bg)" stroke="var(--ui-rule)"/>
+  <text x="66" y="355" font-size="10.5" fill="var(--ui-fg)">Rebuild when I save a source file</text>
+  <rect x="46" y="364" width="12" height="12" rx="2" fill="var(--ui-bg)" stroke="var(--ui-rule)"/>
+  <text x="66" y="375" font-size="10.5" fill="var(--ui-fg)">Reset the car after a reload</text>
+
+  <text x="44" y="398" font-size="11.5" font-weight="700" fill="var(--ui-hi)" letter-spacing="1.2">BUILD OUTPUT</text>
+  <rect x="44" y="406" width="552" height="44" rx="3" fill="var(--ui-bg)" stroke="var(--ui-rule)"/>
+  <text x="52" y="420" font-size="9.5" class="mono" fill="#9fd7ff">&gt; build.ps1 -Config Release -Target MyController</text>
+  <text x="52" y="432" font-size="9.5" class="mono" fill="var(--ui-fg)">[2/2] Linking C shared library MyController.dll</text>
+  <text x="52" y="444" font-size="9.5" class="mono" fill="#9fd7ff">-- build ok · reloaded MyController.dll (built 14:22:07 UTC)</text>
+</svg>
+<figcaption>Figure 2 — Single Player → Simulate Controller. The same
+<b>CONTROLLER</b> panel appears in the pause menu while you are driving, which is where you
+will spend most of your time.</figcaption>
+</figure>
+
+<p>Two pickers, and they are linked on purpose. <b>Controller</b> chooses what will drive
+when you press Run; <b>Build</b> chooses what gets compiled. Changing the first moves the
+second to match, because "I built one controller and raced a different one" is a confusing
+half-hour that nobody needs to have.</p>
+
+<p><b>YOUR SCRIPTS</b> is the honesty line. It reads the folder and the built DLL and tells
+you which is newer, so you find out that you forgot to rebuild <em>here</em>, rather than by
+wondering why your change did nothing on track.</p>
+
+<h3>Once you are driving</h3>
+<div class="tbl-wrap">
+<table>
+<tr><th>Key</th><th>Does</th></tr>
+<tr><td><span class="kbd">M</span></td><td>Hand over between your controller and manual driving. The mode box top-left says which is live.</td></tr>
+<tr><td><span class="kbd">Esc</span></td><td>Pause menu — including the same Build &amp; Reload panel.</td></tr>
+<tr><td><span class="kbd">R</span></td><td>Put the car back on the track, facing the right way.</td></tr>
+</table>
+</div>
+
+
+<h2 id="anatomy">5. Anatomy of a controller</h2>
+
+<p>Five functions. The game looks each one up by name when it loads your DLL; there is no
+registration step and no header you have to implement.</p>
+
+<div class="tbl-wrap">
+<table>
+<tr><th>Function</th><th>Called</th><th>For</th></tr>
+<tr><td><code>ctrl_init(float hz)</code></td><td>once at start, and on every reload</td>
+    <td>Set up your state. <code>hz</code> is the control rate — 100 today. Return 0 for OK.</td></tr>
+<tr><td><code>ctrl_configure(...)</code></td><td>once, right after init</td>
+    <td>The car's parts list arrives here. Optional in the ABI, but you want it — see <a href="#sensors">§8</a>.</td></tr>
+<tr><td><code>ctrl_step(in, out)</code></td><td>100 times a second</td>
+    <td>Read <code>in</code>, write <code>out</code>. This is the controller.</td></tr>
+<tr><td><code>ctrl_shutdown()</code></td><td>at the end, and before every reload</td>
+    <td>Free anything you allocated. Runs once per Build &amp; Reload, so a leak here is a leak per build.</td></tr>
+<tr><td><code>ctrl_get_debug_names()</code></td><td>at load</td>
+    <td>Comma-separated names for your <code>debug[]</code> channels, so the graphs are labelled.</td></tr>
+</table>
+</div>
+
+<div class="note"><b>All five must exist.</b> A DLL missing one still compiles and still loads
+— the game just cannot find the function, so the car coasts with no explanation. The build
+pane checks your sources for the four required names before it compiles and warns you if one
+is missing, because this failure is otherwise completely silent.</div>
+
+
+<h2 id="inputs">6. What your code can see</h2>
+
+<figure class="fig">
+<svg viewBox="0 0 720 250" role="img" aria-label="One control tick: inputs into ctrl_step, outputs to the car">
+  <defs>
+    <marker id="ar2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+      <path d="M0,0 L10,5 L0,10 z" fill="currentColor"/>
+    </marker>
+  </defs>
+
+  <rect x="20" y="30" width="190" height="192" rx="6" fill="var(--code-bg)" stroke="var(--rule)"/>
+  <text x="115" y="52" text-anchor="middle" font-size="12" font-weight="700" fill="var(--fg)" class="mono">CtrlInputs</text>
+  <g font-size="10.5" class="mono" fill="var(--muted)">
+    <text x="34" y="75">time_s, dt_s</text>
+    <text x="34" y="93">gyro[3], accel[3]</text>
+    <text x="34" y="111">wheel_vel[4]</text>
+    <text x="34" y="129">setpoint[4]</text>
+    <text x="34" y="147">sensor_data[…]</text>
+    <text x="34" y="165">cam_pixels</text>
+    <text x="34" y="183">cam_width/height</text>
+  </g>
+  <text x="115" y="207" text-anchor="middle" font-size="9.5" fill="var(--muted)">read-only, this tick only</text>
+
+  <rect x="272" y="76" width="176" height="100" rx="6" fill="var(--card)" stroke="var(--accent)" stroke-width="1.8"/>
+  <text x="360" y="118" text-anchor="middle" font-size="14" font-weight="700" class="mono" fill="var(--fg)">ctrl_step()</text>
+  <text x="360" y="140" text-anchor="middle" font-size="10.5" fill="var(--muted)">your code</text>
+  <text x="360" y="157" text-anchor="middle" font-size="10.5" fill="var(--muted)">100 Hz · 10 ms budget</text>
+
+  <rect x="510" y="30" width="190" height="192" rx="6" fill="var(--code-bg)" stroke="var(--rule)"/>
+  <text x="605" y="52" text-anchor="middle" font-size="12" font-weight="700" fill="var(--fg)" class="mono">CtrlOutputs</text>
+  <g font-size="10.5" class="mono" fill="var(--muted)">
+    <text x="524" y="78">actuator[0..5]</text>
+    <text x="536" y="94" fill="var(--fg)">motor volts</text>
+    <text x="524" y="116">actuator[6]</text>
+    <text x="536" y="132" fill="var(--fg)">steer  -1 … +1</text>
+    <text x="524" y="154">actuator[7]</text>
+    <text x="536" y="170" fill="var(--fg)">brake   0 … 1</text>
+    <text x="524" y="194">debug[16]</text>
+  </g>
+
+  <g fill="none" stroke="currentColor" color="var(--wire)" stroke-width="1.8">
+    <path d="M212,126 L268,126" marker-end="url(#ar2)"/>
+    <path d="M450,126 L506,126" marker-end="url(#ar2)"/>
+  </g>
+  <text x="360" y="241" text-anchor="middle" font-size="10.5" fill="var(--muted)">
+    Outputs are NOT cleared for you — <tspan class="mono">memset(out, 0, sizeof(*out))</tspan> first.
+  </text>
+</svg>
+<figcaption>Figure 3 — one control tick.</figcaption>
+</figure>
+
+<div class="tbl-wrap">
+<table>
+<tr><th>Field</th><th>Units</th><th>Notes</th></tr>
+<tr><td><code>time_s</code></td><td>s</td><td>Since the car was created. Not wall clock, not lap time.</td></tr>
+<tr><td><code>dt_s</code></td><td>s</td><td>This tick's control period. Use it — do not assume 0.01.</td></tr>
+<tr><td><code>gyro[3]</code></td><td>rad/s</td><td>Body angular rate, x y z. <code>gyro[1]</code> is yaw — how fast the car is rotating.</td></tr>
+<tr><td><code>accel[3]</code></td><td>m/s²</td><td>Specific force, body axes. Includes gravity, like a real accelerometer.</td></tr>
+<tr><td><code>wheel_vel[4]</code></td><td>rad/s</td><td>FL, FR, RL, RR. Multiply by wheel radius for ground speed.</td></tr>
+<tr><td><code>setpoint[4]</code></td><td>—</td><td>What the <em>driver</em> is asking for: <code>[0]</code> target speed in m/s, <code>[1]</code> steer −1…+1.</td></tr>
+<tr><td><code>sensor_data</code></td><td>varies</td><td>Flat array; the parts list says which slice belongs to which sensor. <a href="#sensors">§8</a>.</td></tr>
+<tr><td><code>cam_pixels</code></td><td>0–255</td><td>Grayscale frame, or <code>NULL</code>. <a href="#camera">§9</a>.</td></tr>
+</table>
+</div>
+
+<h3>Who is actually driving</h3>
+
+<p><code>setpoint[]</code> deserves a paragraph, because it decides what kind of program you
+are writing.</p>
+
+<p>In a Simulate Controller session <b>you still hold the throttle and steer</b>. Those
+inputs do not reach the wheels — they arrive in <code>setpoint[]</code> as a <em>request</em>,
+and your code decides how to honour it. That makes the default skeleton a driver's aid: a
+speed governor, a traction control, a steering filter. It is the most immediately satisfying
+place to start, because you can feel every change.</p>
+
+<p>To write an autopilot instead, <b>ignore <code>setpoint[]</code></b> and decide from
+sensors alone. The game's own <code>opus_mission</code> controller does exactly that — it
+drives a fixed manoeuvre by dead reckoning with nobody touching the keyboard — and there is a
+worked camera-following example at the bottom of <code>my_controller.c</code>.</p>
+
+
+<h2 id="outputs">7. What your code can do</h2>
+
+<figure class="fig">
+<svg viewBox="0 0 560 300" role="img" aria-label="Top-down car diagram with actuators and sensors">
+  <rect x="176" y="40" width="208" height="220" rx="26" fill="var(--code-bg)" stroke="var(--rule)" stroke-width="1.5"/>
+  <rect x="212" y="96" width="136" height="108" rx="10" fill="var(--card)" stroke="var(--rule)"/>
+  <text x="280" y="146" text-anchor="middle" font-size="12" fill="var(--muted)">your DLL</text>
+  <text x="280" y="166" text-anchor="middle" font-size="10.5" class="mono" fill="var(--muted)">100 Hz</text>
+
+  <g fill="var(--wire)">
+    <rect x="150" y="70" width="30" height="52" rx="6"/>
+    <rect x="380" y="70" width="30" height="52" rx="6"/>
+    <rect x="150" y="182" width="30" height="52" rx="6"/>
+    <rect x="380" y="182" width="30" height="52" rx="6"/>
+  </g>
+  <g font-size="11" font-weight="700" fill="var(--fg)">
+    <text x="122" y="100" text-anchor="end">FL</text>
+    <text x="438" y="100">FR</text>
+    <text x="122" y="212" text-anchor="end">RL</text>
+    <text x="438" y="212">RR</text>
+  </g>
+  <g font-size="9.5" class="mono" fill="var(--muted)">
+    <text x="122" y="114" text-anchor="end">wheel_vel[0]</text>
+    <text x="438" y="114">wheel_vel[1]</text>
+    <text x="122" y="226" text-anchor="end">wheel_vel[2]</text>
+    <text x="438" y="226">wheel_vel[3]</text>
+  </g>
+
+  <path d="M280,40 L280,16" stroke="var(--accent)" stroke-width="2" fill="none"/>
+  <polygon points="280,6 274,18 286,18" fill="var(--accent)"/>
+  <text x="296" y="20" font-size="11" fill="var(--accent)">forward</text>
+
+  <text x="280" y="66" text-anchor="middle" font-size="10" class="mono" fill="var(--muted)">tof_front →  sensor_data</text>
+  <text x="280" y="82" text-anchor="middle" font-size="10" class="mono" fill="var(--muted)">camera  →  cam_pixels</text>
+
+  <g font-size="10.5" class="mono" fill="var(--fg)">
+    <text x="280" y="236" text-anchor="middle">actuator[6] = steer</text>
+    <text x="280" y="252" text-anchor="middle">actuator[7] = brake</text>
+  </g>
+  <text x="280" y="288" text-anchor="middle" font-size="10.5" fill="var(--muted)">
+    Motor slots 0–5 are assigned per car — the parts list tells you which.
+  </text>
+</svg>
+<figcaption>Figure 4 — the car, from above. Front wheels steer; any wheel may or may not have
+a motor behind it.</figcaption>
+</figure>
+
+<p><b>Motors are driven by voltage, not throttle.</b> You write a signed voltage into that
+motor's slot; positive drives forward, negative reverses, and the game clamps it to what the
+motor will actually take. That limit is per motor and is in the parts list, which is why you
+have to be told it rather than assume it.</p>
+
+<pre><code>tt_drive_volts(&amp;g_car, out, 12.0f);   /* 12 V to every drive motor      */
+tt_drive(&amp;g_car, out, 0.5f);          /* or: half of each motor's max    */
+tt_steer(out, -0.3f);                 /* 30% left                        */
+tt_brake(out, 1.0f);                  /* full friction brake             */</code></pre>
+
+<p>Brakes and motors are independent. You can hold both at once; the car will do what a real
+one does, which is get hot and go nowhere.</p>
+
+
+<h2 id="sensors">8. Sensors and the parts list</h2>
+
+<p>Cars in this game are assembled from parts. How many motors there are, which slot each one
+answers to, how many volts it takes, what sensors are bolted where — all of it varies from car
+to car and can be changed in the garage between two runs of the same code.</p>
+
+<p>So the game <em>tells</em> you, once, through <code>ctrl_configure</code>:</p>
+
+<pre><code>CTRL_EXPORT void ctrl_configure(const SensorInfo* sensors, int count) {
+    tt_car_configure(&amp;g_car, sensors, count);   /* copies what it needs */
+}</code></pre>
+
+<p>Each <code>SensorInfo</code> carries a name (the one you typed in the garage), a type, and
+where that sensor's numbers live inside the flat <code>sensor_data</code> array. The helper
+does the lookups:</p>
+
+<pre><code>float d = tt_tof(&amp;g_car, in, "tof_front", -1.0f);
+if (d &gt;= 0.0f &amp;&amp; d &lt; 6.0f) tt_brake(out, 1.0f - d / 6.0f);</code></pre>
+
+<div class="tbl-wrap">
+<table>
+<tr><th>Sensor</th><th>Publishes</th><th>Notes</th></tr>
+<tr><td><code>SENSOR_TOF</code></td><td><code>[distance_m]</code></td><td>Reports its configured <b>max range</b> when it sees nothing — not zero.</td></tr>
+<tr><td><code>SENSOR_ENCODER</code></td><td><code>[ang_vel, ticks]</code></td><td><code>ticks</code> wraps around. Take differences, not absolute values.</td></tr>
+<tr><td><code>SENSOR_MOTOR</code></td><td><code>[volts, amps, Nm]</code></td><td>Its <code>actuator_index</code> is the slot you drive it with; <code>range_max</code> is its voltage limit.</td></tr>
+<tr><td><code>SENSOR_IMU</code></td><td><code>[gx gy gz ax ay az]</code></td><td>Same numbers as <code>gyro[]</code>/<code>accel[]</code>, for cars with more than one.</td></tr>
+<tr><td><code>SENSOR_CAMERA</code></td><td>no floats</td><td>The frame arrives via <code>cam_pixels</code>.</td></tr>
+<tr><td><code>SENSOR_SUSPENSION</code></td><td><code>[force_N, compression, angle]</code></td><td>Per strut. Compression near 1 means the corner is loaded.</td></tr>
+<tr><td><code>SENSOR_BATTERY</code></td><td><code>[volts, amps, soc]</code></td><td>Pack level.</td></tr>
+</table>
+</div>
+
+<div class="note"><b>A car with none of these is legal.</b> If your controller needs a front
+range-finder, check that it found one and behave sensibly when it did not. Every helper in
+<code>tt_controller.h</code> takes a fallback value for exactly this reason — a missing sensor
+should not read as "the road is clear".</div>
+
+
+<h2 id="camera">9. The camera</h2>
+
+<p>A grayscale frame, one byte per pixel, row-major. <b>Row 0 is the top of the image</b> —
+<code>y</code> counts downward like a screen coordinate, so the road ahead is at large
+<code>y</code> and the sky is at small <code>y</code>.</p>
+
+<pre><code>int px = tt_cam_pixel(in, x, y);                    /* 0–255, 0 if off-frame  */
+float lower = tt_cam_brightness(in, 0, 40, 63, 47); /* mean of a rectangle    */
+float bias  = tt_cam_balance(in, 20);               /* −1 left … +1 right     */</code></pre>
+
+<p><code>tt_cam_balance</code> compares the left and right halves of the bottom rows and is
+the shortest path to a car that follows something. Steer toward the bright side to follow a
+pale road across dark ground; negate it to follow a dark line across a pale floor.</p>
+
+<div class="note"><b>Frames are slower than ticks.</b> The camera updates at around 10 Hz
+while <code>ctrl_step</code> runs at 100, so the same frame is handed to you ten times over.
+Do not treat consecutive frames as consecutive moments in time.</div>
+
+
+<h2 id="helpers">10. The helper library</h2>
+
+<p><code>lib/tt_controller.h</code> is header-only — <code>#include "tt_controller.h"</code>
+and there is nothing to link. Everything in it is a thin wrapper over fields that are already
+in the structs, so you can ignore it entirely and write against
+<code>controller_api.h</code> directly. Several of the game's own controllers do.</p>
+
+<div class="tbl-wrap">
+<table>
+<tr><th>Helper</th><th>Does</th></tr>
+<tr><td><code>tt_clamp / tt_clamp1</code></td><td>Clamp to a range, or to −1…+1.</td></tr>
+<tr><td><code>tt_lerp / tt_deadzone</code></td><td>Blend between two values; zero out small ones.</td></tr>
+<tr><td><code>tt_pid_init / _limits / _update / _reset</code></td><td>PID with a clamped integrator and derivative-on-measurement — no wind-up, no kick when the target jumps.</td></tr>
+<tr><td><code>tt_car_configure</code></td><td>Unpack the parts list. Call from <code>ctrl_configure</code>.</td></tr>
+<tr><td><code>tt_sensor_index / _of_type / _value</code></td><td>Find a sensor by name or type; read one of its numbers with a fallback.</td></tr>
+<tr><td><code>tt_tof</code></td><td>Distance from a named range-finder, or your fallback.</td></tr>
+<tr><td><code>tt_speed</code></td><td>Ground speed in m/s from the four wheels.</td></tr>
+<tr><td><code>tt_drive_volts / tt_drive</code></td><td>Same command to every motor, clamped per motor.</td></tr>
+<tr><td><code>tt_steer / tt_brake</code></td><td>Write the steering and brake slots, clamped.</td></tr>
+<tr><td><code>tt_cam_pixel / _brightness / _balance</code></td><td>Camera reads that cannot run off the end of the frame.</td></tr>
+</table>
+</div>
+
+<p>You may also <code>#include "pid.h"</code> — the game's own PID, which its shipped
+controllers use. It is on the include path already.</p>
+
+
+<h2 id="debug">11. Graphs and telemetry</h2>
+
+<p><code>out->debug[16]</code> is sixteen free channels. Whatever you put in them is graphed
+live in the game and written to the telemetry CSV. Name them and they are labelled:</p>
+
+<pre><code>enum { DBG_TARGET = 0, DBG_SPEED, DBG_VOLTS, DBG_COUNT };
+
+CTRL_EXPORT const char* ctrl_get_debug_names(void) {
+    return "target,speed,volts";      /* same order as the enum */
+}
+...
+out-&gt;debug[DBG_SPEED] = speed;</code></pre>
+
+<p>This is the fastest debugging tool you have. There is no printf to a console here, no
+breakpoint to set — but you can put any intermediate value on a graph and watch it against
+what the car did. Plot the thing you think is wrong.</p>
+
+
+<h2 id="second">12. Making a second controller</h2>
+
+<ol class="steps">
+  <li>Copy the whole <code>MyController</code> folder.</li>
+  <li>Rename the copy — letters, digits and underscores. <code>LineFollower</code>.</li>
+  <li>That is the entire procedure. <code>LineFollower</code> is now in the Build picker and
+      <code>LineFollower.dll</code> in the Controller picker after you build it.</li>
+</ol>
+
+<p>The two are completely independent: separate DLLs, separate state, separate everything.
+Keeping a version that works while you break a copy of it is the point.</p>
+
+<p>Both see <code>lib/tt_controller.h</code>, so a change there changes all of them — which is
+either exactly what you want or a nasty surprise, depending on why you edited it.</p>
+
+
+<h2 id="wrong">13. When it goes wrong</h2>
+
+<div class="tbl-wrap">
+<table>
+<tr><th>What you see</th><th>What it is</th></tr>
+<tr><td>Red compiler errors in the pane</td>
+    <td>Normal C errors, with file and line. <b>The old DLL keeps driving</b> — a failed build never replaces a working controller.</td></tr>
+<tr><td><code>no 64-bit C compiler found</code></td>
+    <td>Nothing to compile with. Run the winget command in the message; a 32-bit gcc is rejected on purpose, since the game cannot load a 32-bit DLL.</td></tr>
+<tr><td>Build succeeds, car does nothing</td>
+    <td>Usually a missing export. The pane names which one. Check for a typo in <code>ctrl_step</code>.</td></tr>
+<tr><td><code>reload failed — running open-loop</code></td>
+    <td>The DLL built but would not load. Almost always a missing dependency; the build already links the runtime statically to prevent it, so this is worth reporting.</td></tr>
+<tr><td><code>note: built 'X', but this car runs 'Y'</code></td>
+    <td>Exactly what it says. You compiled a different controller from the one driving.</td></tr>
+<tr><td><code>EDITED SINCE THE LAST BUILD</code></td>
+    <td>You saved and did not rebuild. The DLL is older than your source.</td></tr>
+<tr><td>Nothing happens when you press Build</td>
+    <td>The pane will name the reason — no <code>Controllers</code> folder found, or no <code>.c</code> file in the script folder. There is a path box for the first case.</td></tr>
+<tr><td>Car drives, but ignores your changes</td>
+    <td>Check the <b>Controller</b> picker is on your DLL and not one of the four shipped ones.</td></tr>
+</table>
+</div>
+
+
+<h2 id="danger">14. The one real danger</h2>
+
+<div class="danger"><b>A bad pointer in your C code crashes the whole process.</b>
+Not your controller — the process. In the Unity editor that means the editor, with whatever
+you had unsaved in it. There is no sandbox around a native DLL, and no <code>try/catch</code>
+anywhere in the game can catch an access violation.
+<br><br>
+This is not a reason to be timid; it is a reason to check your indices. Every helper in
+<code>tt_controller.h</code> bounds-checks and returns a fallback rather than reading past the
+end of an array, and that is why. If you index <code>sensor_data</code> or
+<code>cam_pixels</code> by hand, do the same.
+<br><br>
+The game flushes telemetry to disk before every panel-triggered build, so a crash costs you
+the session but not the data.</div>
+
+<p>One more, much smaller: if the crash log names a DLL in your temp folder that does not
+exist, that is expected. The game loads a scratch copy of your DLL so the compiler can
+overwrite the original, and deletes the copy on unload.</p>
+
+
+<h2>Where to read further</h2>
+
+<div class="tbl-wrap">
+<table>
+<tr><th>File</th><th>Why</th></tr>
+<tr><td><code>Controllers/hal/controller_api.h</code></td><td>The actual contract. Every struct field, commented, including the per-sensor data layouts.</td></tr>
+<tr><td><code>Controllers/car_pid/car_control.c</code></td><td>A clean PID speed controller split into portable code plus a thin sim target.</td></tr>
+<tr><td><code>Controllers/car_sensors/car_sensors.c</code></td><td>Sensors, camera and voltage-driven motors in one file, using no helper library at all.</td></tr>
+<tr><td><code>Controllers/opus_mission/opus_mission.c</code></td><td>A real autopilot: a multi-phase manoeuvre driven by dead reckoning, with no driver input.</td></tr>
+<tr><td><code>UserScripts/lib/tt_controller.h</code></td><td>The helpers, with the reasoning for each one next to it.</td></tr>
+</table>
+</div>
+
+<p class="sub" style="margin-top:2.5rem">Everything here compiles as C11 with either MSVC or
+mingw-w64, into a 64-bit DLL. If you can build it on your own machine with your own
+toolchain, the game will load it — the folder convention is a convenience, not a requirement.</p>
+
+</main>
+</body>
+</html>

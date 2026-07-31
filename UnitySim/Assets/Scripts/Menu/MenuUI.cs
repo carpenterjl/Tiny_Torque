@@ -41,6 +41,16 @@ namespace AIHWSim.Menu
         private List<string> _vehicles = new List<string>();
         private List<string> _tracks = new List<string>();
 
+        // Free roam's own map list and index. Separate from _tracks because the
+        // two sets differ at both ends: free roam's own maps are hidden from
+        // _tracks (nothing to race there) and everything in _tracks is drivable
+        // once the rules come off, so this is the roam maps followed by all of
+        // _tracks. _roamBuilt is how many of the head entries are purpose-built,
+        // which is the only thing the page has to say about the choice.
+        private int _roamIdx;
+        private int _roamBuilt;
+        private List<string> _roamMaps = new List<string>();
+
         // Multiplayer setup state. Device choice: 0 = Keyboard, 1+g = Gamepad g.
         private int _mpVeh1, _mpVeh2;
         private int _mpTrackIdx;
@@ -130,6 +140,10 @@ namespace AIHWSim.Menu
             var s = SettingsStore.Current;
             _vehicleIdx = Mathf.Max(0, _vehicles.IndexOf(s.lastVehicle));
             _trackIdx = Mathf.Max(0, _tracks.IndexOf(s.lastTrack));
+            // Max(0, …) lands on the first entry when the saved name is gone or
+            // was never written — which for the roam list is the town, i.e. the
+            // map free roam has always started on.
+            _roamIdx = Mathf.Max(0, _roamMaps.IndexOf(s.lastRoamMap));
             _spLaps = Mathf.Clamp(s.lastLaps, 0, 50);
             _spBots = Mathf.Clamp(s.spBots, 0, 7);
             _spDiff = Mathf.Clamp(s.spDifficulty, 0, 2);
@@ -151,6 +165,8 @@ namespace AIHWSim.Menu
             // progress file), the clamp below lands on a legal entry.
             string prevPick = _vehicles.Count > 0
                 ? _vehicles[Mathf.Clamp(_vehicleIdx, 0, _vehicles.Count - 1)] : null;
+            string prevRoam = _roamMaps.Count > 0
+                ? _roamMaps[Mathf.Clamp(_roamIdx, 0, _roamMaps.Count - 1)] : null;
 
             _vehicles = new List<string> { "" };  // "" = stock default
             foreach (var name in VehiclePresets.DisplayNames())
@@ -164,13 +180,27 @@ namespace AIHWSim.Menu
             _tracks.AddRange(AIHWSim.Track.SceneTrackCatalog.DisplayNames());
             _tracks.AddRange(TrackLibrary.List());
 
+            // Free roam's list: the maps built for it first — those are exactly
+            // the ones _tracks leaves out — then every race map, which is a
+            // perfectly good place to drive once there is nothing to win.
+            _roamMaps = TrackPresets.RoamNames();
+            _roamMaps.AddRange(AIHWSim.Track.SceneTrackCatalog.RoamNames());
+            _roamBuilt = _roamMaps.Count;
+            _roamMaps.AddRange(_tracks);
+
             if (prevPick != null)
             {
                 int found = _vehicles.IndexOf(prevPick);
                 if (found >= 0) _vehicleIdx = found;
             }
+            if (prevRoam != null)
+            {
+                int found = _roamMaps.IndexOf(prevRoam);
+                if (found >= 0) _roamIdx = found;
+            }
             _vehicleIdx = Mathf.Clamp(_vehicleIdx, 0, _vehicles.Count - 1);
             _trackIdx = Mathf.Clamp(_trackIdx, 0, _tracks.Count - 1);
+            _roamIdx = Mathf.Clamp(_roamIdx, 0, _roamMaps.Count - 1);
         }
 
         /// <summary>Resolve a picker vehicle name: "" = stock, ★-preset, or a
@@ -419,11 +449,16 @@ namespace AIHWSim.Menu
             // plus a points table; both drown in the default 430.
             Page.Shop => 620f,
             Page.Championship => 600f,
-            Page.SpController => 620f,
-            Page.SpRace => 600f,
+            // Tallest page in the game: the scripts list, the build panel with its
+            // log, and a full race setup underneath. It scrolls, so this is only
+            // deciding how much is visible without scrolling.
+            Page.SpController => 690f,
+            // The five setup screens all carry the temporary dev row (~90) below
+            // their footer; drop 90 from each of these when it goes.
+            Page.SpRace => 690f,
             Page.Multiplayer => 560f,
-            Page.SpDerby or Page.SpCtf or Page.SpSoccer => 520f,
-            Page.SpFreeRoam => 430f,
+            Page.SpDerby or Page.SpCtf or Page.SpSoccer => 610f,
+            Page.SpFreeRoam => 560f,
             _ => 430f,
         };
 
@@ -639,9 +674,9 @@ namespace AIHWSim.Menu
 
         /// <summary>The arena each mode is built for. Picking a mode moves the
         /// track selection there, because a derby on a race circuit has no spawn
-        /// ring and quietly falls back to a free drive. Free Roam is blank: its
-        /// map is not in the picker at all — it cannot be raced on, so it is not
-        /// offered as somewhere to race.</summary>
+        /// ring and quietly falls back to a free drive. Free Roam is blank: it
+        /// does not use the race track picker at all — it has its own list
+        /// (<see cref="_roamMaps"/>), which is where its maps live.</summary>
         private static readonly string[] ModeArena =
             { "", "Scrapyard Bowl", "Cargo Yard", "Torque Dome", "" };
 
@@ -726,7 +761,12 @@ namespace AIHWSim.Menu
             if (MenuButton("Capture the Flag")) GoToMode(MatchMode.Ctf);
             if (MenuButton("Soccer")) GoToMode(MatchMode.Soccer);
             if (MenuButton("Simulate Controller"))
-                GoTo(Page.SpController, () => { RefreshLists(); RefreshControllerDlls(); });
+                GoTo(Page.SpController, () =>
+                {
+                    RefreshLists();
+                    RefreshControllerDlls();
+                    _scriptsAt = -99f;   // force a fresh scan on the first Layout pass
+                });
             GUILayout.Space(8);
             if (MenuButton("Garage")) LoadIfBuilt(GameFlow.GarageSceneName, GameFlow.LoadGarage);
             if (MenuButton("Track Builder")) LoadIfBuilt(GameFlow.TrackBuilderSceneName, GameFlow.LoadTrackBuilder);
@@ -850,8 +890,56 @@ namespace AIHWSim.Menu
             GUI.enabled = true;
         }
 
+        // ══════════════ TEMPORARY DEV SWITCH — delete before shipping ═════════════
+        /// <summary>Loud enough to be remembered. A test switch that blends in is
+        /// a test switch that ships.</summary>
+        private static readonly Color DevTint = new Color(1f, 0.30f, 0.72f);
+
+        /// <summary>
+        /// Unlock everything, for testing. Drawn on every single-player setup
+        /// screen because that is where the things it unlocks get picked, and in
+        /// exactly one method so removing the feature is removing two call-free
+        /// blocks. See <c>Progression.DevUnlockAll</c> for what it actually does
+        /// and the full removal list.
+        /// </summary>
+        private void DrawDevRow()
+        {
+            var prevColor = GUI.color;
+            GUI.color = DevTint;
+
+            GUILayout.Space(10);
+            GUILayout.Label("▼ ▼ ▼   D E V   —   T E M P O R A R Y   ▼ ▼ ▼", GarageSkin.Header);
+
+            bool was = Persistence.Progression.DevUnlockAll;
+            bool dev = MenuNav.Toggle(was, " Dev mode — unlock every car, cosmetic and paint");
+            if (dev != was)
+            {
+                SettingsStore.Current.devUnlockAll = dev;
+                SettingsStore.Save();
+                // The vehicle picker is built from the gate, so the locked cars
+                // appear (or vanish) on the very next pass. Safe to call from a
+                // draw method: it changes list CONTENTS, and a Cycle row is one
+                // control however many entries it holds.
+                RefreshLists();
+            }
+
+            // Both branches are two lines on purpose — the toggle is consumed on
+            // the Layout pass, so this label's text can differ between Layout and
+            // its Repaint, and only its height has to agree.
+            GUILayout.Label(dev
+                    ? "   ON — nothing is locked anywhere. Your actual collection is\n" +
+                      "   untouched: turn this off and it is exactly as you left it."
+                    : "   Unlocks every car, cosmetic and paint, for testing.\n" +
+                      "   Temporary — remove this row before shipping.",
+                GarageSkin.StatLabel);
+
+            GUI.color = prevColor;
+        }
+        // ═════════════════════════ end temporary dev switch ═══════════════════════
+
         private void DrawSetupFooter(string goLabel, MatchMode mode)
         {
+            DrawDevRow();       // TEMPORARY — goes with the rest of the dev switch
             GUILayout.Space(10);
             if (MenuButton(goLabel)) StartSinglePlayer(mode);
             GUILayout.Space(8);
@@ -894,13 +982,16 @@ namespace AIHWSim.Menu
             GUILayout.Space(6);
 
             DrawVehicleRow(Page.SpFreeRoam);
-            // No track picker at all. The town is the only free-roam map and it is
-            // the only map free roam runs on — offering a choice of one, from a
-            // list that deliberately excludes it, would be a control that does
-            // nothing.
-            GUILayout.Label($"   Map: ★ {TrackPresets.FreeRoamName} — a town to drive around.\n" +
-                            "   No laps, no clock, no opponents. R puts you back on a street.",
-                            GarageSkin.StatLabel);
+            // Free roam's own picker, not DrawTrackRow: the race list deliberately
+            // excludes the maps built for roaming, and this one deliberately
+            // includes both. See _roamMaps.
+            _roamIdx = CyclePicker("Map", _roamMaps, _roamIdx, m => m == "" ? "Classic Oval" : m);
+            GUILayout.Label(_roamIdx < _roamBuilt
+                    ? "   Built for roaming — somewhere to be, nothing to win.\n" +
+                      "   No laps, no clock, no opponents. R puts you back on the road."
+                    : "   A race map with the rules taken off: no laps, no clock,\n" +
+                      "   no opponents. R puts you back at the start.",
+                GarageSkin.StatLabel);
             DrawDrivingRow();
             DrawHandlingRows();
             DrawSetupFooter("Free Roam ▶", MatchMode.FreeRoam);
@@ -951,6 +1042,86 @@ namespace AIHWSim.Menu
         private Vector2 _ctlScroll;
         private Vector2 _raceScroll;
 
+        // ---- the player's own scripts ----------------------------------------
+
+        /// <summary>
+        /// One Layout-built string describing every folder in UserScripts/ and
+        /// whether the DLL beside the game still matches what is on disk.
+        ///
+        /// One Label, not one per script: the list is read off the filesystem and
+        /// can change while this page is open, and a row count that moves between a
+        /// Layout pass and its Repaint is the census bug this whole UI is written to
+        /// avoid. A Label's height may vary; how many controls exist may not.
+        /// </summary>
+        private string _scriptsInfo = "";
+        private float _scriptsAt = -99f;
+
+        /// <summary>Layout-snapshotted, because it is a disk check: doing it inline
+        /// would stat the file twice a frame, and a differing answer across the
+        /// Layout/Repaint pair would leave the pad's focus ring out of step with
+        /// which rows are actually enabled.</summary>
+        private bool _guideDraw;
+
+        /// <summary>The script names as of the last scan, joined. Only used to spot
+        /// that the set changed, so the build picker can be re-derived then and not
+        /// on every poll.</summary>
+        private string _scriptNames = "";
+
+        /// <summary>How often the script list is re-derived from disk. Frequent
+        /// enough that saving a file shows up as "edited since build" while you are
+        /// still looking at the screen; rare enough that it is not a directory walk
+        /// every frame.</summary>
+        private const float ScriptsPollSeconds = 1f;
+
+        private void RefreshScriptsInfo()
+        {
+            _scriptsAt = Time.unscaledTime;
+            AIHWSim.Build.UserScriptCatalog.Invalidate();
+            var all = AIHWSim.Build.UserScriptCatalog.All;
+            _guideDraw = AIHWSim.Build.UserScriptCatalog.GuidePath != null;
+
+            if (AIHWSim.Build.UserScriptCatalog.Root == null)
+            {
+                _scriptsInfo = "   No UserScripts folder found beside the game.\n" +
+                               "   The Controllers folder setting below decides where it is looked for.";
+                return;
+            }
+            if (all.Count == 0)
+            {
+                _scriptsInfo = "   UserScripts/ is empty. A folder with a .c file in it\n" +
+                               "   becomes a controller named after the folder.";
+                return;
+            }
+
+            // A folder created while the game is running should appear in the BUILD
+            // picker too, not just in the list below it — otherwise the page names a
+            // script it cannot offer to compile. Only when the set actually changed:
+            // re-scraping CMakeLists.txt once a second for no reason is not free.
+            var names = new System.Text.StringBuilder();
+            foreach (var s in all) names.Append(s.name).Append('|');
+            if (names.ToString() != _scriptNames)
+            {
+                _scriptNames = names.ToString();
+                AIHWSim.Build.ControllerWorkspace.RefreshTargets();
+            }
+
+            var sb = new System.Text.StringBuilder();
+            foreach (var s in all)
+            {
+                sb.Append("   ").Append(s.name);
+                if (s.sources.Length == 0)
+                    sb.Append(" — no .c file in the folder\n");
+                else if (!AIHWSim.Build.UserScriptCatalog.IsBuilt(s))
+                    sb.Append(" — never built. Build & Reload to compile it.\n");
+                else if (AIHWSim.Build.UserScriptCatalog.IsStale(s))
+                    sb.Append(" — EDITED SINCE THE LAST BUILD. Your changes are not in\n" +
+                              "     the DLL yet; Build & Reload before you drive it.\n");
+                else
+                    sb.Append(" — built and up to date\n");
+            }
+            _scriptsInfo = sb.ToString().TrimEnd('\n');
+        }
+
         private void DrawSpController()
         {
             GUILayout.Label("SIMULATE CONTROLLER", GarageSkin.Header);
@@ -964,14 +1135,29 @@ namespace AIHWSim.Menu
             // ever been. Re-listing changes which rows exist below, so it happens on
             // a Layout pass and nowhere else.
             var build = AIHWSim.Build.ControllerBuildRunner.Instance;
-            if (build != null && Event.current.type == EventType.Layout
-                && _ctlSeenBuild != build.BuildGeneration)
+            if (Event.current.type == EventType.Layout)
             {
-                _ctlSeenBuild = build.BuildGeneration;
-                RefreshControllerDlls();
+                if (build != null && _ctlSeenBuild != build.BuildGeneration)
+                {
+                    _ctlSeenBuild = build.BuildGeneration;
+                    RefreshControllerDlls();
+                }
+                // Layout only, and on a timer: this walks the UserScripts folder, and
+                // the string it produces has to be identical in the paired Repaint.
+                if (Time.unscaledTime - _scriptsAt > ScriptsPollSeconds) RefreshScriptsInfo();
             }
 
             _ctlScroll = GUILayout.BeginScrollView(_ctlScroll);
+
+            // Your own code first — this screen exists for it, and the game's four
+            // shipped controllers are reference material by comparison.
+            GUILayout.Label("YOUR SCRIPTS", GarageSkin.Header);
+            GUILayout.Label(_scriptsInfo, GarageSkin.StatLabel);
+            GUI.enabled = _guideDraw;
+            if (MenuNav.Button("Open the guide (in your browser)")) OpenUserScriptGuide();
+            GUI.enabled = true;
+
+            GUILayout.Space(6);
             if (_ctlDlls.Count == 0)
             {
                 GUILayout.Label("No controller DLL built yet — use Build & Reload below.",
@@ -985,7 +1171,11 @@ namespace AIHWSim.Menu
             GUILayout.Space(6);
             // Compile the C sources and hot-swap the result, without leaving the
             // game. Same panel the pause menu shows mid-drive.
-            ControllerBuildPanel.Draw(logHeight: 120f);
+            //
+            // followDll ties the Build picker to the Run picker: pick the controller
+            // you want to drive and the build target follows it, so the screen cannot
+            // quietly compile one thing and race another.
+            ControllerBuildPanel.Draw(logHeight: 120f, followDll: SelectedControllerDll);
             GUILayout.Space(6);
             DrawVehicleRow(Page.SpController);
             DrawTrackRow(MatchMode.Race);
@@ -1009,6 +1199,22 @@ namespace AIHWSim.Menu
             GUI.enabled = true;
             GUILayout.Space(8);
             if (MenuButton("← Back")) BackFromSetup();
+        }
+
+        /// <summary>
+        /// Open the HTML guide in the system browser. A file path, not a URL:
+        /// Application.OpenURL needs a real file:// URI, and building one by hand
+        /// fails on the first space in "EE Projects".
+        /// </summary>
+        private void OpenUserScriptGuide()
+        {
+            string path = AIHWSim.Build.UserScriptCatalog.GuidePath;
+            if (path == null) return;
+            try { Application.OpenURL(new System.Uri(path).AbsoluteUri); }
+            catch (System.Exception e)
+            {
+                Debug.LogWarning($"[Menu] Could not open the guide: {e.Message}");
+            }
         }
 
         /// <summary>
@@ -1068,6 +1274,8 @@ namespace AIHWSim.Menu
             bool arena = mode != MatchMode.Race && !roam;
             string vehicle = _vehicles[_vehicleIdx];
             string track = _tracks[_trackIdx];
+            string roamMap = _roamMaps.Count > 0
+                ? _roamMaps[Mathf.Clamp(_roamIdx, 0, _roamMaps.Count - 1)] : "";
             int bots = roam ? 0 : _spBots;
             var s = SettingsStore.Current;
 
@@ -1096,10 +1304,11 @@ namespace AIHWSim.Menu
                 GameFlow.ActiveDesign.controllerDll = _pendingControllerDll;
                 _pendingControllerDll = null;
             }
-            // Free roam owns its map: the town is not in the track picker at
-            // all, so it is resolved by name here rather than selected.
-            if (roam) GameFlow.ActiveTrack = TrackPresets.Resolve(TrackPresets.FreeRoamName);
-            else SelectTrack(track);
+            // Free roam picks from its own list, which spans all three track
+            // sources — so it goes through the same funnel as everything else
+            // rather than resolving a preset by name the way it did when the town
+            // was the only place it could go.
+            SelectTrack(roam ? roamMap : track);
 
             // Slot 0 = the human; slots 1..N = AI opponents.
             string pname = string.IsNullOrWhiteSpace(s.player1Name) ? "Player" : s.player1Name;
@@ -1121,6 +1330,7 @@ namespace AIHWSim.Menu
 
             s.lastVehicle = vehicle;
             s.lastTrack = track;
+            s.lastRoamMap = roamMap;
             s.lastLaps = _spLaps;
             s.spBots = _spBots;
             s.spDifficulty = _spDiff;

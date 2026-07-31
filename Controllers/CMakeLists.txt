@@ -65,3 +65,63 @@ add_controller(opus_controller targets/sim/opus_main.c opuslib)
 # ABI v2 configurable-sensor demo      -> car_sensors_controller.dll
 # Standalone (only needs controller_api.h) so it doubles as a v2 reference.
 add_controller(car_sensors_controller car_sensors/car_sensors.c)
+
+# ─────────────────────── User controllers (UserScripts/) ──────────────────────
+#
+# Everything above is the game's own firmware. Everything below belongs to
+# whoever is playing it: each folder under UserScripts/ holding at least one .c
+# becomes its own DLL, named after the folder.
+#
+# GLOBBED, not listed. "Write a new controller" has to be "copy a folder" —
+# the in-game Build button cannot edit this file for the player, and somebody
+# writing C for the first time should not have to learn CMake in the same hour.
+# CONFIGURE_DEPENDS is what makes a NEW folder show up without a manual
+# re-configure: it re-runs the glob at build time and re-configures when the
+# answer changed. Ninja, Makefiles and Visual Studio all honour it; if some
+# future generator does not, deleting Controllers/build/ has the same effect.
+#
+# Kept in sync with UserScriptCatalog.cs on the C# side, which lists the same
+# folders for the in-game picker by the same rules — a folder the game offers to
+# build and CMake declines to build would be a dead button.
+set(USER_SCRIPTS_DIR "${CMAKE_SOURCE_DIR}/../UserScripts"
+    CACHE PATH "Player-written controllers, one DLL per subfolder")
+
+if(IS_DIRECTORY "${USER_SCRIPTS_DIR}")
+    file(GLOB _tt_user_dirs CONFIGURE_DEPENDS "${USER_SCRIPTS_DIR}/*")
+    foreach(_tt_dir ${_tt_user_dirs})
+        if(NOT IS_DIRECTORY "${_tt_dir}")
+            continue()
+        endif()
+        get_filename_component(_tt_name "${_tt_dir}" NAME)
+
+        # lib/ is the shared helper header, not a controller.
+        if(_tt_name STREQUAL "lib")
+            continue()
+        endif()
+
+        # The folder name becomes a CMake target AND a DLL file name, so it has
+        # to survive both. Skipping with a message beats failing the configure
+        # and taking every other controller down with it.
+        if(NOT _tt_name MATCHES "^[A-Za-z0-9_]+$")
+            message(STATUS "UserScripts/${_tt_name}: skipped — use letters, digits and _ only")
+            continue()
+        endif()
+        if(TARGET ${_tt_name})
+            message(WARNING "UserScripts/${_tt_name}: skipped — a controller of that name already exists")
+            continue()
+        endif()
+
+        file(GLOB _tt_user_src CONFIGURE_DEPENDS "${_tt_dir}/*.c")
+        if(NOT _tt_user_src)
+            continue()   # a folder of notes and headers is not a controller
+        endif()
+
+        # pidlib comes along so a user controller can #include "pid.h" and use
+        # the same PID the game's own controllers do. tt_controller.h needs no
+        # linking at all — it is header-only — but the include path does.
+        add_controller(${_tt_name} "${_tt_user_src}" pidlib)
+        target_include_directories(${_tt_name} PRIVATE
+            "${USER_SCRIPTS_DIR}/lib" "${_tt_dir}")
+        message(STATUS "User controller: ${_tt_name} -> ${_tt_name}.dll")
+    endforeach()
+endif()

@@ -54,6 +54,18 @@ namespace AIHWSim.Track
             return list;
         }
 
+        /// <summary>Free-roam scene tracks, prefixed — the rows
+        /// <see cref="DisplayNames"/> drops. The same split
+        /// <c>TrackPresets.RoamNames</c> makes, so free roam's picker is built
+        /// from both catalogues the same way the race picker is.</summary>
+        public static List<string> RoamNames()
+        {
+            var list = new List<string>();
+            foreach (var r in All)
+                if (r.kind == TrackPresets.TrackKind.FreeRoam) list.Add(Prefix + r.label);
+            return list;
+        }
+
         /// <summary>The scene name behind a picker entry, or null if this is not
         /// a scene track. Accepts the prefixed label, the bare label, or the scene
         /// name itself — the wire and snapshots carry the scene name, pickers carry

@@ -167,10 +167,30 @@ namespace AIHWSim.Persistence
             (new Color(1.00f, 0.25f, 0.65f), "Hot pink", "paint_hotpink"),
         };
 
+        // ══════════════ TEMPORARY DEV SWITCH — delete before shipping ═════════════
+        /// <summary>
+        /// Treat every unlockable as owned, so everything can be tested without
+        /// grinding for it.
+        ///
+        /// Deliberately an override of the two GATES rather than a bulk grant:
+        /// nothing is written into the profile's <c>unlocked</c> list, so turning
+        /// it off puts the collection back exactly as it was, and
+        /// <see cref="Grant"/> is untouched — a crate pull still knows what you
+        /// really own and still pays scrap for a real duplicate.
+        ///
+        /// TO REMOVE: delete this property, the two <c>if (DevUnlockAll)</c> lines
+        /// below, <c>MenuUI.DrawDevRow</c> and its call in
+        /// <c>MenuUI.DrawSetupFooter</c>, and <c>GameSettings.devUnlockAll</c>.
+        /// Nothing else reads it.
+        /// </summary>
+        public static bool DevUnlockAll => SettingsStore.Current.devUnlockAll;
+        // ═════════════════════════ end temporary dev switch ═══════════════════════
+
         /// <summary>Unknown ids are unlocked by definition — anything not in
         /// the catalog was never gated (user saves, base styles, the future).</summary>
         public static bool IsUnlocked(string id)
         {
+            if (DevUnlockAll) return true;   // TEMPORARY dev switch
             if (UnlockCatalog.ById(id) == null) return true;
             return Current.unlocked.Contains(id);
         }
@@ -178,6 +198,7 @@ namespace AIHWSim.Persistence
         /// <summary>Is this ★-preset display name locked? (UI pickers only.)</summary>
         public static bool IsCarLocked(string displayName)
         {
+            if (DevUnlockAll) return false;  // TEMPORARY dev switch
             string bare = displayName != null && displayName.StartsWith(VehiclePresets.Prefix)
                 ? displayName.Substring(VehiclePresets.Prefix.Length)
                 : displayName;

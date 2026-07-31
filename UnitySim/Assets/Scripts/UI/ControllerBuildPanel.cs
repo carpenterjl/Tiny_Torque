@@ -47,9 +47,19 @@ namespace AIHWSim.UI
         public static bool IsAvailable => ControllerWorkspace.IsAvailable;
         public static string UnavailableReason => ControllerWorkspace.UnavailableReason;
 
+        /// <summary>Last DLL the host asked us to follow, so the snap below happens
+        /// on the frame it changes and never again — otherwise the player could not
+        /// deliberately build one controller while another is selected to run.</summary>
+        private static string _followedDll = "\0";
+
         /// <summary>Draw inside the caller's existing layout area. The host owns
         /// UIScale and the skin.</summary>
-        public static void Draw(float logHeight = 150f)
+        /// <param name="followDll">A DLL file name whose target this panel should
+        /// select. The Simulate Controller screen passes what it is about to RUN, so
+        /// that Build and Run agree by default: "built one thing, drove another" is
+        /// the most confusing failure this feature has, and two independent pickers
+        /// on one screen is how you get it.</param>
+        public static void Draw(float logHeight = 150f, string followDll = null)
         {
             var runner = ControllerBuildRunner.Instance;
             if (runner == null)
@@ -74,6 +84,14 @@ namespace AIHWSim.UI
                     _logVersion = runner.LineVersion;
                     _logCache = JoinLog(runner);
                     _scroll.y = float.MaxValue;   // follow the tail as it streams
+                }
+
+                // Layout only: this moves the Cycle's index, and its LABEL is what
+                // Repaint has to agree with.
+                if (followDll != _followedDll)
+                {
+                    _followedDll = followDll;
+                    SnapToTarget(followDll);
                 }
             }
 
@@ -136,6 +154,20 @@ namespace AIHWSim.UI
             GUILayout.Label("A bad pointer in your C code crashes the whole process — " +
                             "in the editor, that means Unity. A managed try/catch cannot " +
                             "catch a native access violation.", GarageSkin.StatLabel);
+        }
+
+        /// <summary>Select the target that produces <paramref name="dll"/>, if there
+        /// is one. A DLL with no target behind it (one shipped in the build, say)
+        /// leaves the selection alone — snapping to index 0 would silently retarget
+        /// the Build button at something the player never chose.</summary>
+        private static void SnapToTarget(string dll)
+        {
+            if (string.IsNullOrEmpty(dll)) return;
+            string target = ControllerWorkspace.TargetForDll(dll);
+            if (target == null) return;
+            var targets = ControllerWorkspace.Targets;
+            for (int i = 0; i < targets.Count; i++)
+                if (targets[i] == target) { _targetIdx = i; return; }
         }
 
         /// <summary>No workspace: say why, and offer a path rather than a dead button.</summary>

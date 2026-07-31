@@ -45,6 +45,21 @@ namespace AIHWSim.Build
         public static string BuildScript =>
             Root == null ? null : Path.Combine(Root, "build.ps1");
 
+        /// <summary>
+        /// Where a built DLL must land: beside the RUNNING game, not wherever the
+        /// sources were last compiled from. In the editor those are the same folder
+        /// and this is a no-op — in a player build they are not, and without it the
+        /// compiler cheerfully writes into the repo while the game keeps loading the
+        /// DLL it shipped with.
+        ///
+        /// One definition, because two callers need it for opposite reasons: the
+        /// build passes it to CMake, and the catalogue reads timestamps out of it.
+        /// If they ever disagreed, the game would report a freshly built controller
+        /// as stale forever.
+        /// </summary>
+        public static string PluginDir() =>
+            Path.GetFullPath(Path.Combine(Application.dataPath, "Plugins", "x86_64"));
+
         /// <summary>Re-run the search — call after the user edits the path.</summary>
         public static void Invalidate()
         {
@@ -52,6 +67,42 @@ namespace AIHWSim.Build
             _root = null;
             _reason = "";
             _targets.Clear();
+            // The player's own scripts hang off this root, so they go stale with it.
+            UserScriptCatalog.Invalidate();
+        }
+
+        /// <summary>
+        /// Re-derive the target list without re-resolving the workspace. For the
+        /// case the whole feature exists to serve: a folder created under
+        /// UserScripts/ while the game is running. Cheap enough to call when
+        /// something noticed a change, not cheap enough to call every frame.
+        ///
+        /// Only ever call this from a Layout pass. It changes the CONTENTS of the
+        /// build picker's list, which is census-safe (a Cycle is one control however
+        /// many entries it holds) — but going from an empty list to a non-empty one
+        /// adds a control, and doing that between a Layout pass and its Repaint is
+        /// the one thing this UI must never do.
+        /// </summary>
+        public static void RefreshTargets()
+        {
+            if (!IsAvailable) return;
+            ScrapeTargets();
+        }
+
+        /// <summary>
+        /// Every folder a saved file should trigger a rebuild from: the game's own
+        /// controller sources, and the player's. They are siblings, not nested, so
+        /// one watcher cannot cover both — and a rebuild-on-save that silently
+        /// ignores the folder the player is actually typing in would be worse than
+        /// not offering the feature.
+        /// </summary>
+        public static string[] WatchRoots()
+        {
+            var list = new List<string>(2);
+            if (Root != null) list.Add(Root);
+            string user = UserScriptCatalog.Root;
+            if (user != null) list.Add(user);
+            return list.ToArray();
         }
 
         /// <summary>
@@ -125,10 +176,26 @@ namespace AIHWSim.Build
         /// Read the target list out of CMakeLists.txt rather than keeping a copy
         /// here. A hand-maintained enum rots the moment the user adds their own
         /// controller — which is the exact workflow this whole feature exists for.
+        ///
+        /// The player's own scripts come FIRST, and are not in CMakeLists.txt at all
+        /// — the glob at the bottom of that file generates them, which the regex
+        /// below cannot see. First because the build panel's picker starts at index
+        /// 0, and on the screen built for writing your own controller, "your own
+        /// controller" is the right thing to have already selected.
+        ///
+        /// Safe to reach into UserScriptCatalog from here even though it reads
+        /// <see cref="Root"/>: Resolve set _resolved before calling Accept, and
+        /// Accept set _root before calling this, so the re-entrant Resolve() returns
+        /// immediately with the answer already in place.
         /// </summary>
         private static void ScrapeTargets()
         {
             _targets.Clear();
+
+            UserScriptCatalog.Invalidate();
+            foreach (var s in UserScriptCatalog.All)
+                if (!_targets.Contains(s.name)) _targets.Add(s.name);
+
             try
             {
                 string text = File.ReadAllText(Path.Combine(_root, "CMakeLists.txt"));

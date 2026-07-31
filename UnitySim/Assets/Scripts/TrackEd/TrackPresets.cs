@@ -64,15 +64,18 @@ namespace AIHWSim.TrackEd
             ("Opus Proving Ground", TrackKind.Circuit, OpusProvingGround),
         };
 
-        /// <summary>The name of the one free-roam map, for the mode that owns it.</summary>
-        public static string FreeRoamName
+        /// <summary>
+        /// Every free-roam map, prefixed for a picker — exactly the set
+        /// <see cref="DisplayNames"/> hides. Hidden there because there is
+        /// nothing to race on them; offered here because that is the whole point
+        /// of the mode that calls this.
+        /// </summary>
+        public static List<string> RoamNames()
         {
-            get
-            {
-                foreach (var p in All)
-                    if (p.kind == TrackKind.FreeRoam) return p.name;
-                return null;
-            }
+            var list = new List<string>();
+            foreach (var p in All)
+                if (p.kind == TrackKind.FreeRoam) list.Add(Prefix + p.name);
+            return list;
         }
 
         /// <summary>

@@ -101,6 +101,77 @@ The four `arc_*` props (item box, banana, missile, shield orb) have no
 `ItemDef` at all — the arcade director spawns them — so there is nothing to
 harvest and they take the neutral grey. That is the honest answer, not a bug.
 
+## The circuits
+
+`Circuits/` holds three real Formula 1 tracks — Interlagos, Monza and
+Spa-Francorchamps — with a scene each in `Scenes/Circuits/`. They are not
+authored in Unity and not authored by eye: the centreline is the surveyed
+OpenStreetMap raceway trace, the elevation is a DEM sampled along it, and every
+piece of furniture is placed by a deterministic, hash-seeded layout pass in the
+Blender project next door (`AI_3D_Modeling/TinyTorque_RC`). Read
+`UNITY_EXPORT.md` there for the whole contract; the short version:
+
+```bash
+# in AI_3D_Modeling/TinyTorque_RC
+blender -b --factory-startup -P scripts/export_unity.py -- --all
+```
+
+then **Tools > TinyTorque Assets > Circuits > Rebuild everything**. That runs the
+axis test, copies the FBX and manifests in, and rebuilds all three scenes. The
+export folder is probed automatically; *Set export folder…* is there for when the
+two repositories are not side by side.
+
+| Circuit | Lap | Corners | Trees | Stands | Buildings |
+|---|---|---|---|---|---|
+| Interlagos | 4 305 m | 16 | 847 | 6 | 3 061 |
+| Monza | 5 799 m | 12 | 16 588 | 26 | 251 |
+| Spa | 7 015 m | 22 | 16 626 | 9 | 84 |
+
+**Geometry arrives in three roles**, and the hierarchy in each scene follows
+them. *World* meshes — road, kerbs, run-off, terrain, barriers, the pit complex,
+the batched buildings — have their vertices already in the right place and sit at
+the identity. *Split* bodies are one mesh per grandstand, so a landmark can be
+grabbed on its own. *Instances* are a rigid prototype plus a transform: sausage
+kerbs, marshal posts and braking boards are prefab instances you can select and
+move; trees are combined into one mesh per 250 m cell, because Spa has 16 626 of
+them. The per-tree transforms stay in the manifest either way, so an LOD group or
+a GPU-instanced draw is still reachable from the same data — and *Explode trees to
+GameObjects* gives you one GameObject each when you actually want to move them.
+
+**Nothing here is hand-placed, and the build says so.** Every run reports placed
+against expected for all four roles, counts every drop by reason, and
+`3. Validate circuit scenes` re-measures the built scene against the manifest's
+spine — the one description of the circuit that never went through the FBX
+pipeline. A mirrored or transposed import places exactly the right number of
+everything, so counting is not enough; the road-on-spine check fails it by
+hundreds of metres.
+
+`0. Verify axis convention` runs an L-shaped marker with a different extent on
+each axis through the real pipeline and asserts it lands on a copy Blender baked
+into place itself. It gates the rest, and it has already earned that three times.
+
+**Kerbs are striped in geometry, not in a texture.** The Blender kerb is a
+red/white block pattern driven off the road ribbon's `trk` UV, and a flat
+Standard material can only average it — one dull red, on the most recognisable
+feature of a circuit. So the exporter rebuilds the kerb band at 900 mm station
+spacing and alternates the *material slot*, which needs no UV and no texture and
+matches how the rest of this kit is shaded. It costs about 26 000 triangles a
+circuit.
+
+Both bands are in the scene and **Circuits > Striped kerbs** switches which one
+draws — instantly, no rebuild. The collider stays on the plain band either way,
+so the toggle can never change what a car hits.
+
+**The tree chunk meshes are committed.** `Circuits/*/generated/` holds one
+combined mesh per 250 m cell, baked from the manifest's per-tree transforms.
+They are kept under the 16-bit index ceiling and vertex-compressed, because this
+project serialises assets as text and 32-bit indices are eight hex characters
+each — that one choice is tens of megabytes.
+
+**These scenes are pack scenes.** They are not in Build Settings and the game
+cannot load them yet — see `PackValidator.PromotedScenes` for what promoting one
+involves.
+
 ## Not in the pack's remit
 
 The 24 arena tiles are **pack-only**. They are not registered in

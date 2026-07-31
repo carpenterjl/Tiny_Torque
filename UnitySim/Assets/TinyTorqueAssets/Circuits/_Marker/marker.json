@@ -1,0 +1,40 @@
+{
+ "schema": 1,
+ "kind": "marker",
+ "units": "metres",
+ "axis": "blender_z_up",
+ "arms": [
+  [
+   10.0,
+   0.8,
+   0.8
+  ],
+  [
+   0.8,
+   4.0,
+   0.8
+  ],
+  [
+   0.8,
+   0.8,
+   6.0
+  ]
+ ],
+ "prototype": "marker_proto.fbx",
+ "baked": "marker_placed.fbx",
+ "instance": {
+  "p": [
+   37.0,
+   -21.0,
+   9.0
+  ],
+  "q": [
+   0.9396926207859084,
+   0.0,
+   0.0,
+   0.3420201433256687
+  ],
+  "yaw_deg": 40.0,
+  "scale": 1.0
+ }
+}

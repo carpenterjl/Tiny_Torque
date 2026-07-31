@@ -106,9 +106,22 @@ namespace AIHWSim.Persistence
         /// so an existing install reads as Arcade rather than as false.</summary>
         public bool spArcadeHandling = true;
 
+        /// <summary>Free-roam map last chosen, as a picker display name. Separate
+        /// from <c>lastTrack</c> because the two lists are different: free roam
+        /// offers the maps the race picker hides (no finish line) as well as every
+        /// race map, so one shared index would mean two different maps.</summary>
+        public string lastRoamMap = "";
+
         /// <summary>Controller DLL last chosen on the Simulate Controller screen,
         /// as a bare file name in Assets/Plugins/x86_64.</summary>
         public string simControllerDll = "controller.dll";
+
+        // ══════════════ TEMPORARY DEV SWITCH — delete before shipping ═════════════
+        /// <summary>Backs <c>Progression.DevUnlockAll</c>; see that property for
+        /// what it does and the full removal list. Persisted only so it survives a
+        /// restart while it is in use. Ships false.</summary>
+        public bool devUnlockAll = false;
+        // ═════════════════════════ end temporary dev switch ═══════════════════════
 
         // ---- in-game controller build ----------------------------------------
 
