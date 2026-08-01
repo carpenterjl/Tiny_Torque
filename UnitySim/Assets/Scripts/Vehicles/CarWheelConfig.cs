@@ -51,6 +51,15 @@ namespace AIHWSim.Vehicles
         public float suspTargetPos;     // 0 = the legacy 0.5 (mid-travel)
         public float brakeScale;        // per-wheel brake bias; 1 = unchanged
 
+        /// <summary>Linkage hardpoints. All-zero (the default) means no linkage is
+        /// described: roll centre stays at ground level and the toe link is inert,
+        /// which is exactly what every design did before this existed.</summary>
+        public SuspensionLinkage linkage;
+
+        /// <summary>Tyre rated load (N) — sets where cornering stiffness peaks.
+        /// 0 = the legacy load-independent AlphaPeak.</summary>
+        public float ratedLoadN;
+
         public static CarWheelConfig Default(Vector3 pos, bool steers)
         {
             return new CarWheelConfig

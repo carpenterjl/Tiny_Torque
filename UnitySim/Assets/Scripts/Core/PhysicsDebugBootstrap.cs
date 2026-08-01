@@ -1,3 +1,4 @@
+using AIHWSim.Core.PhysicsTests;
 using AIHWSim.Garage;
 using AIHWSim.Telemetry;
 using AIHWSim.Vehicles;
@@ -58,111 +59,30 @@ namespace AIHWSim.Core
 
         private void Awake()
         {
-            // Normal support only — see the class comment. This is the same
-            // material SimBootstrap builds, for the same reason.
-            var frictionless = new PhysicsMaterial("Frictionless")
-            {
-                dynamicFriction = 0f,
-                staticFriction = 0f,
-                bounciness = 0f,
-                frictionCombine = PhysicsMaterialCombine.Minimum,
-                bounceCombine = PhysicsMaterialCombine.Minimum,
-            };
-
-            BuildLighting();
-            BuildGround(frictionless);
-            BuildSlope(frictionless);
+            // The world — frictionless ground, the slope, lighting, camera and
+            // graph — lives in PhysicsTestEnvironment, so this scene and the ten
+            // measurement scenes cannot drift apart on the surface they measure
+            // against. Assists-off and the telemetry ordering live in
+            // DebugVehicleRig for the same reason.
+            var env = PhysicsTestEnvironment.EnvSpec.Default();
+            env.straightLength = straightLength;
+            env.straightWidth = straightWidth;
+            env.buildSlope = true;
+            env.slopeGrade = slopeGrade;
+            var (cam, graph) = PhysicsTestEnvironment.Build(env);
 
             // Spawn with the wheels' rest drop already applied, so the car settles
             // rather than falling: chassis origin sits loaded-radius + drop up.
             var spawn = new Vector3(0f, DebugVehicles.TiguanChassisRestY, 0f);
-            // Assists-off and the telemetry ordering live in DebugVehicleRig, so
-            // this scene and DebugVehicleSpawner cannot disagree about them.
             var rig = DebugVehicleRig.BuildCar(DebugVehicles.VwTiguan(), spawn,
                                                Quaternion.identity);
             _car = rig.car;
 
-            var (cam, graph) = BuildCameraAndGraph();
             var follow = cam.gameObject.AddComponent<ChaseCamera>();
             follow.target = _car.transform;
 
             DebugVehicleRig.AttachRunner(ref rig, graph, physicsRateHz, controlRateHz, logCsv);
             _runner = rig.runner;
-        }
-
-        private static void BuildLighting()
-        {
-            if (FindFirstObjectByType<Light>() != null) return;
-            var lightGo = new GameObject("Directional Light");
-            var light = lightGo.AddComponent<Light>();
-            light.type = LightType.Directional;
-            light.intensity = 1.1f;
-            lightGo.transform.rotation = Quaternion.Euler(50f, -30f, 0f);
-        }
-
-        /// <summary>
-        /// A scaled Cube, not SimBootstrap's Plane.
-        ///
-        /// A Plane primitive is a 10x10 quad mesh behind a MeshCollider; stretched
-        /// to 2.4 km that is a raycast into a mesh with 240 m quads, per wheel,
-        /// per step, at 400 Hz. A Box is an exact analytic collider, and — the
-        /// part that actually matters — it accepts the per-collider contactOffset
-        /// the Tiguan needs to pair with its own 2 cm chassis offset.
-        ///
-        /// Top face lands exactly at y = 0 by construction.
-        /// </summary>
-        private void BuildGround(PhysicsMaterial mat)
-        {
-            var g = GameObject.CreatePrimitive(PrimitiveType.Cube);
-            g.name = "Ground";
-            const float thick = 2f;
-            g.transform.localScale = new Vector3(straightWidth, thick, straightLength);
-            g.transform.position = new Vector3(0f, -thick * 0.5f, straightLength * 0.5f - 200f);
-            var col = g.GetComponent<Collider>();
-            col.material = mat;
-            col.contactOffset = 0.02f;   // matched to the Tiguan's chassis box
-            g.GetComponent<Renderer>().material.color = new Color(0.20f, 0.22f, 0.25f);
-        }
-
-        /// <summary>A measured grade for the park-brake hold test (P6b), which is
-        /// the only check on whether PhysX's sticky-tyre constraint can actually
-        /// hold 1500 kg. Frictionless like everything else — the holding force
-        /// has to come from the tyre model, or the test proves nothing.</summary>
-        private void BuildSlope(PhysicsMaterial mat)
-        {
-            var s = GameObject.CreatePrimitive(PrimitiveType.Cube);
-            s.name = "Slope";
-            const float thick = 2f;
-            float len = 200f, deg = Mathf.Atan(slopeGrade) * Mathf.Rad2Deg;
-            s.transform.localScale = new Vector3(40f, thick, len);
-            s.transform.rotation = Quaternion.Euler(-deg, 0f, 0f);
-            // Lower end meets y = 0 at z = -150; the surface climbs from there.
-            s.transform.position = new Vector3(0f, len * 0.5f * slopeGrade - thick * 0.5f,
-                                               -150f - len * 0.5f);
-            var col = s.GetComponent<Collider>();
-            col.material = mat;
-            col.contactOffset = 0.02f;
-            s.GetComponent<Renderer>().material.color = new Color(0.26f, 0.24f, 0.22f);
-        }
-
-        private static (Camera, GraphOverlay) BuildCameraAndGraph()
-        {
-            Camera cam = Camera.main;
-            if (cam == null)
-            {
-                var go = new GameObject("Main Camera") { tag = "MainCamera" };
-                cam = go.AddComponent<Camera>();
-                go.AddComponent<AudioListener>();
-            }
-            cam.transform.position = new Vector3(0f, 4f, -10f);
-            cam.transform.rotation = Quaternion.Euler(12f, 0f, 0f);
-            cam.farClipPlane = 3000f;   // the straight is 2.4 km long
-            cam.backgroundColor = new Color(0.08f, 0.09f, 0.11f);
-            cam.clearFlags = CameraClearFlags.SolidColor;
-
-            var graph = cam.gameObject.GetComponent<GraphOverlay>();
-            if (graph == null) graph = cam.gameObject.AddComponent<GraphOverlay>();
-            return (cam, graph);
         }
 
         private void OnGUI()

@@ -74,7 +74,16 @@ namespace AIHWSim.Garage
         private const float AxleZ = 1.3405f;   // = wheelbase/2, pasted from VEHJSON
         private const float HalfTrackF = 0.7925f;
         private const float HalfTrackR = 0.7880f;
-        private const float LoadedRadius = 0.349f;
+        /// <summary>
+        /// MEASURED loaded wheel-centre height (m) — the radius the tyre actually
+        /// rolls on, not the 0.3588 free radius.
+        ///
+        /// Public because the physics tests need it: converting a road speed to a
+        /// wheel ω, or a wheel ω back to a distance, requires exactly this number,
+        /// and a test that used the free radius instead would report a 2.8 % slip
+        /// that is not there.
+        /// </summary>
+        public const float LoadedRadius = 0.349f;
 
         /// <summary>
         /// Chassis-origin height above the GROUND at rest: (0.189 + 1.632)/2, the
@@ -121,11 +130,29 @@ namespace AIHWSim.Garage
         // load split does not come from here — it comes from where the centre of
         // mass is, which is why it survives this change (measured 60.19 %).
         //
-        // 0.0422 leaves ~0.288 m of bump travel and ~0.012 m of droop, and puts
-        // the hub at exactly the measured loaded radius. Bump is the direction
-        // that matters; droop only matters over a crest.
-        private const float TargetF = 0.0422f;
-        private const float TargetR = 0.0422f;
+        // Because there is no sag, this value alone decides where in its travel
+        // the car rests — and HubY is derived from it, so the hub stays at the
+        // measured loaded radius whatever is chosen here. Ride height is NOT
+        // what this number sets; travel headroom is.
+        //
+        // <b>0.5 = mid-travel: 0.15 m of bump and 0.15 m of droop.</b> It used to
+        // be 0.0422, which left ~0.288 m of bump and ~0.012 m of droop, on the
+        // reasoning that "bump is the direction that matters; droop only matters
+        // over a crest". <b>That reasoning was wrong, and the skidpad found it.</b>
+        // In a corner the INSIDE wheels droop, and 12 mm of droop is about 2° of
+        // body roll — roughly 0.35 g. Past that the inner wheels ran off the end
+        // of their travel, the WheelCollider raycast stopped returning a hit, and
+        // the tyre force at those two corners vanished for a step at a time.
+        // Measured in the P4 trace: susp_1 and susp_3 pinned at 1.0000 with
+        // fz_1/fz_3 flicking to exactly 0 about thirty times a second, and a
+        // lateral acceleration chattering ±30 % around its mean. The car had run
+        // out of suspension, not out of grip.
+        //
+        // The intent was always mid-travel — the HubY comment above still derives
+        // -0.4115 from "0.5 * 0.30". The constant had drifted away from it while
+        // the reasoning stayed behind.
+        private const float TargetF = 0.5f;
+        private const float TargetR = 0.5f;
 
         public static VehicleDesign VwTiguan()
         {
@@ -192,6 +219,14 @@ namespace AIHWSim.Garage
                 // and spins the car.
                 maxBrakeTorque = 2400f,
                 handbrakeTorque = 1000f,
+
+                // A 2010s car has EBD. Turning it on is what lets both axles
+                // reach their slip peak together; without it the fixed 0.35 rear
+                // bias below leaves the rears well short under load transfer and
+                // the stop measures the bias rather than the tyres. The RC cars
+                // leave this false, which is also honest — a model car really
+                // does have a fixed split.
+                brakeProportioning = true,
 
                 // No sensors: nothing here needs a camera, and not having one
                 // keeps the debug scene cheap. No batteries = a stiff infinite
@@ -269,6 +304,19 @@ namespace AIHWSim.Garage
                 // at all — see the P5 note in the plan.
                 gripMult = 1.0f,
                 loadSensitivity = 0.15f,
+
+                // DERIVED FROM THE TYRE SIZE, not fitted. 235/50R19 at load index
+                // 99 is 775 kg per tyre = 7603 N. It is where cornering stiffness
+                // peaks, and it is the only thing that can give this tyre model a
+                // non-zero understeer gradient at all: with C_α exactly ∝ F_z the
+                // classic K = W_f/C_f − W_r/C_r cancels to zero for EVERY weight
+                // split. Note what it says about this car — a 3679 N corner load
+                // is 0.48 of rated, so the tyres run well down their stiffness
+                // curve where it is still nearly linear, and the load term alone
+                // stays small. Most of a real car's understeer is suspension, not
+                // tyre load sensitivity, and that is the honest finding here.
+                ratedLoadN = 7603f,
+                linkage = LinkageFor(x, z),
                 // A passenger radial grows <0.5 % at speed. Setting 0 makes the
                 // whole ballooning block (normalised to a hard-coded 250 rad/s,
                 // i.e. an RC rim speed) provably unreachable rather than
@@ -280,6 +328,57 @@ namespace AIHWSim.Garage
 
             if (powered) w.motor = TiguanMotor();
             return w;
+        }
+
+        /// <summary>
+        /// Suspension hardpoints for one corner, chassis-local. <b>ESTIMATE</b> —
+        /// Volkswagen publishes no hardpoint table — but estimated GEOMETRY is a
+        /// very different kind of guess from an estimated roll centre: these are
+        /// lengths and heights anyone can sanity-check against a photograph of the
+        /// subframe, and what comes out of them is checkable too. The derived roll
+        /// centres are <b>87 mm front / 109 mm rear</b>, which is where a strut
+        /// front and a multilink rear on a raised SUV belong (a MacPherson optimum
+        /// is quoted around 40 mm on a low car, and ride height carries it up), and
+        /// rear-above-front is the normal arrangement.
+        ///
+        /// Heights are written GROUND-RELATIVE because that is how suspension
+        /// geometry is quoted, then shifted into the chassis frame. The car rests
+        /// with its origin <see cref="TiguanChassisRestY"/> above the ground.
+        ///
+        /// Front is a MacPherson strut, rear a multilink reduced to its equivalent
+        /// two-arm front-view mechanism — the standard treatment, and all a
+        /// front-view roll-centre construction can use.
+        ///
+        /// The toe links sit BEHIND each axle and are very nearly level, which is
+        /// what a front end designed to minimise bump steer looks like. They are
+        /// the entire source of roll steer in this model; see
+        /// <see cref="Vehicles.SuspensionGeometry.ToeSteerPerMetre"/>.
+        /// </summary>
+        private static SuspensionLinkage LinkageFor(float x, float z)
+        {
+            float s = x >= 0f ? 1f : -1f;          // mirror to this corner's side
+            float g = -TiguanChassisRestY;         // ground plane, chassis-local
+            Vector3 P(float px, float height, float dz) =>
+                new Vector3(s * px, g + height, z + dz);
+
+            return z > 0f
+                ? new SuspensionLinkage            // front: MacPherson strut
+                {
+                    lowerInner = P(0.320f, 0.150f, 0f),
+                    lowerOuter = P(0.735f, 0.130f, 0f),
+                    strutTop = P(0.615f, 0.660f, 0f),
+                    toeInner = P(0.300f, 0.188f, -0.140f),
+                    toeOuter = P(0.700f, 0.186f, -0.140f),
+                }
+                : new SuspensionLinkage            // rear: multilink ≡ two arms
+                {
+                    lowerInner = P(0.300f, 0.155f, 0f),
+                    lowerOuter = P(0.720f, 0.130f, 0f),
+                    upperInner = P(0.380f, 0.400f, 0f),
+                    upperOuter = P(0.680f, 0.445f, 0f),
+                    toeInner = P(0.280f, 0.186f, -0.120f),
+                    toeOuter = P(0.700f, 0.180f, -0.120f),
+                };
         }
 
         /// <summary>

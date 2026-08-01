@@ -131,6 +131,23 @@ namespace AIHWSim.Garage
         /// for every finite x, so this cannot move an existing result.</summary>
         public float brakeScale = 1f;
 
+        /// <summary>Suspension linkage hardpoints (chassis-local metres). All-zero
+        /// = no linkage described, which leaves the roll centre at ground level and
+        /// the toe link inert — the behaviour every design had before this field.
+        /// Roll centre height and roll steer are DERIVED from these rather than
+        /// authored as coefficients; see <see cref="Vehicles.SuspensionLinkage"/>
+        /// for why that distinction was worth the extra fields.</summary>
+        public SuspensionLinkage linkage = default;
+
+        /// <summary>Tyre rated load (N); 0 = the legacy load-independent peak slip
+        /// angle. Real cornering stiffness peaks near the tyre's rated load and
+        /// falls away either side, which is the ONLY thing that can make a
+        /// nose-heavy car understeer in this tyre model: with C_α exactly
+        /// proportional to F_z, the classic K = W_f/C_f − W_r/C_r is identically
+        /// zero for every weight split. Follows from the tyre SIZE, so it is
+        /// derived rather than fitted.</summary>
+        public float ratedLoadN = 0f;
+
         // Drive motor (only used when powered)
         public bool powered = false;
         public MotorParams motor = MotorParams.Default();
@@ -296,6 +313,14 @@ namespace AIHWSim.Garage
         /// <summary>Handbrake torque (N·m). Also the park brake the sticky-tyre
         /// hold applies at rest.</summary>
         public float handbrakeTorque = 1.2f;
+
+        /// <summary>Distribute foot-brake torque with instantaneous wheel load
+        /// (EBD / proportioning valve), instead of the fixed per-wheel
+        /// <see cref="WheelSpec.brakeScale"/>. False on every RC design, which is
+        /// honest as well as bit-safe: a fixed bias IS what a small model car has.
+        /// A fixed ratio can only be correct at one state of load transfer, so
+        /// under threshold braking it leaves one axle short of its slip peak.</summary>
+        public bool brakeProportioning = false;
 
         /// <summary>Anti-roll bar, in newtons per unit of NORMALISED travel
         /// difference — not a roll rate, and not physical. A full-scale car

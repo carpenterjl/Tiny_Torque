@@ -86,9 +86,23 @@ namespace AIHWSim.Vehicles
         public float ackermannPct = 0f;
         public float maxBrakeTorque = 0.8f;       // lock threshold ≈ 0.23 N·m
         public float handbrakeTorque = 1.2f;
+        /// <summary>Distribute foot-brake torque with instantaneous wheel load
+        /// (EBD / proportioning valve). False = the fixed per-wheel
+        /// <c>brakeScale</c> bias, which is what every design had before this.</summary>
+        public bool brakeProportioning = false;
         // Speed (m/s) at which per-tile rolling resistance reaches full strength.
         // Below this it ramps to 0 so it opposes motion instead of parking the car.
+        // A numerical-regularization constant, not scale physics: it is an
+        // absolute speed and means the same thing for a 2.5 kg car and a
+        // 1500 kg one. Same reasoning covers TyreModel.VLow.
         private const float RollResistRampSpeed = 0.3f;
+        // What "at rest" means, everywhere the question is asked (m/s). One
+        // number, in metres per second, so both halves of the sticky-hold gate
+        // — body speed and wheel RIM speed — agree at every scale. (The old
+        // wheel gate was 0.5 rad/s, which is 0.018 m/s of rim speed on an RC
+        // wheel but 0.17 m/s on a full-scale one: a Tiguan wheel could be
+        // turning 8× the body-rest speed and still be called stationary.)
+        private const float RestSpeed = 0.02f;
 
         [Header("Aero / stability")]
         // Aerodynamics: quadratic body drag (per-shape Cd × frontal area) plus
@@ -340,7 +354,8 @@ namespace AIHWSim.Vehicles
             public WheelCollider col;
             public Transform viz;
             public CarWheelConfig cfg;
-            public float currentSteer;   // current servo angle (deg)
+            public float servoSteer;     // steering servo's own angle (deg)
+            public float currentSteer;   // total wheel angle = servo + roll steer (deg)
             public float lastMult = 1f;  // last applied combined friction multiplier (legacy path)
             public float omegaLp;        // low-passed |wheel ω| (tire ballooning)
             public float baseRadius;     // built radius r0 (ballooning reference)
@@ -357,6 +372,15 @@ namespace AIHWSim.Vehicles
             public float patchSpeed;     // contact-patch ground speed (m/s, readout only)
             public bool grounded;        // last step's contact state (readout only)
             public float lastFy;         // last lateral tyre force (N) — servo load
+
+            // ---- derived linkage kinematics (SuspensionLinkage hardpoints) ----
+            // Both are 0 when no linkage is authored, and both are branch-guarded
+            // at their use sites so an unauthored corner takes the identical code
+            // path it did before these existed.
+            public float brakeShare;     // EBD load share (× the commanded torque)
+            public float rollCentreH;    // roll centre height above ground (m)
+            public float toeSteerPerM;   // roll steer: deg of toe per metre of bump
+            public float restCompression; // suspension compression at static rest
         }
 
         /// <summary>Baseline forward friction stiffness (scaled by tile surfaces).</summary>
@@ -1200,10 +1224,29 @@ namespace AIHWSim.Vehicles
                 PartVisualFactory.BuildStrutViz(strut);
             }
 
+            // Linkage kinematics, evaluated once at the STATIC ride position — the
+            // hub hangs (1 − targetPosition) of its travel below the collider
+            // origin, which is where the authored hardpoints were measured. Both
+            // return 0 for an unauthored linkage. (Strut tilt is ignored in
+            // locating the static centre; the only design authoring hardpoints has
+            // suspAngleDeg = 0, and a tilted strut's hub moves in x as well, which
+            // this first-order placement does not track.)
+            float restComp = 1f - spring.targetPosition;
+            Vector3 staticCentre = HubLocal(cfg)
+                                 - Vector3.up * (restComp * wc.suspensionDistance);
+            float rcH = SuspensionGeometry.RollCentreHeight(cfg.linkage, staticCentre, wc.radius);
+            float toePerM = SuspensionGeometry.ToeSteerPerMetre(cfg.linkage, staticCentre);
+
             return new Wheel
             {
                 col = wc, viz = holder, cfg = cfg, baseRadius = wc.radius,
                 strut = strut, mountLocal = cfg.localPos,
+                rollCentreH = rcH,
+                restCompression = restComp,
+                // Stored in DEGREES per metre: currentSteer is a degree angle, and
+                // Unity's y-Euler is left-handed, so the right-handed yaw the
+                // kinematics return is negated here rather than at every use.
+                toeSteerPerM = -toePerM * Mathf.Rad2Deg,
                 // J for the brush-path spin integrator: bare wheel + reflected
                 // drivetrain. Authored when the design says so, because the
                 // legacy ½·m·r² models a solid DISC and a tyre is closer to a
@@ -1434,14 +1477,31 @@ namespace AIHWSim.Vehicles
             bool stickyHold = true;
             if (TyreModel.Enabled)
             {
-                if (_body.linearVelocity.sqrMagnitude > 0.0004f) stickyHold = false;
+                if (_body.linearVelocity.sqrMagnitude > RestSpeed * RestSpeed)
+                    stickyHold = false;
                 else
+                {
+                    // Drive gate: any INTENDED drive must release the parking
+                    // constraint or the car cannot move off. "Intended" is a
+                    // rim force worth a 10⁻³ slice of the per-wheel weight — a
+                    // dimensionless tolerance, so it lands where it should at
+                    // every scale (≈0.2 mN·m on an RC wheel, ≈1.3 N·m on the
+                    // Tiguan) instead of the old absolute 0.005 N·m, which was
+                    // meaningful against an RC lock threshold of 0.23 N·m and
+                    // noise-floor nothing against a full-scale motor. At true
+                    // zero command the motor torque is exactly zero (0 V, ω 0
+                    // → no current), so there is no noise for a small gate to
+                    // false-trigger on.
+                    float driveEpsRimForce = 0.001f * _body.mass *
+                        Mathf.Abs(Physics.gravity.y) / Mathf.Max(1, _wheels.Count);
                     foreach (var w in _wheels)
-                        if (Mathf.Abs(w.omega) > 0.5f || Mathf.Abs(w.driveTorque) > 0.005f)
+                        if (Mathf.Abs(w.omega) * w.col.radius > RestSpeed
+                            || Mathf.Abs(w.driveTorque) > driveEpsRimForce * w.col.radius)
                         {
                             stickyHold = false;
                             break;
                         }
+                }
             }
 
             // Steering assist: limit lock at speed + countersteer toward the
@@ -1476,6 +1536,38 @@ namespace AIHWSim.Vehicles
                 steerRate *= Mathf.Clamp01(1f - tLoad / servoStallNm);
             }
 
+            // Brake proportioning (EBD). Without it the only way to express brake
+            // balance is the fixed per-wheel brakeScale, and a fixed ratio can be
+            // right at exactly one state of load transfer. Under threshold braking
+            // the Tiguan's authored 0.35 rear bias left the rears far below their
+            // slip peak while the fronts sat on theirs — the axle-averaged slip the
+            // test servos to hid it — and the stop measured 0.788 g against a µ of
+            // 1.0. Distributing with instantaneous load lets both axles peak
+            // together, which is the whole job of a proportioning valve.
+            //
+            // Total torque is preserved: the shares are normalised to average 1, so
+            // this redistributes rather than adds. The handbrake is deliberately
+            // excluded below — it is a rear lock on purpose, not something to
+            // balance.
+            bool ebd = brakeProportioning && TyreModel.Enabled
+                       && brake > 0f && _wheels.Count > 0;
+            if (ebd)
+            {
+                float loadSum = 0f;
+                foreach (var w in _wheels)
+                {
+                    w.brakeShare = w.col.GetGroundHit(out WheelHit bh)
+                        ? Mathf.Max(0f, bh.force) : 0f;
+                    loadSum += w.brakeShare;
+                }
+                if (loadSum > 1f)
+                {
+                    float norm = _wheels.Count / loadSum;
+                    foreach (var w in _wheels) w.brakeShare *= norm;
+                }
+                else ebd = false;   // airborne: nothing to proportion against
+            }
+
             foreach (var w in _wheels)
             {
                 // Per-wheel steering servo (slew toward the commanded angle).
@@ -1503,9 +1595,20 @@ namespace AIHWSim.Vehicles
                     }
                     float sgn = w.cfg.reverseSteering ? -1f : 1f;
                     float target = di * sgn;
-                    w.currentSteer = Mathf.MoveTowards(w.currentSteer, target, steerRate * dt);
+                    w.servoSteer = Mathf.MoveTowards(w.servoSteer, target, steerRate * dt);
                 }
-                else w.currentSteer = 0f;
+                else w.servoSteer = 0f;
+
+                // Roll steer, added AFTER the servo rather than slewed toward.
+                // It is geometry, not a command: the toe link swings on an arc as
+                // the hub moves, so the wheel toes whether or not anything is
+                // steering it. That is what lets the REAR wheels steer in roll —
+                // they have no servo at all and used to be pinned to zero — and
+                // it is the dominant real-world understeer term that this model
+                // was missing entirely. Branch-guarded: no toe link authored
+                // leaves currentSteer exactly the servo value it always was.
+                float toeDeg = RollSteerDeg(w);
+                w.currentSteer = toeDeg == 0f ? w.servoSteer : w.servoSteer + toeDeg;
                 w.col.steerAngle = w.currentSteer;
 
                 // Foot brake everywhere; handbrake locks the non-steering wheels.
@@ -1516,8 +1619,13 @@ namespace AIHWSim.Vehicles
                 // rears first and spins it. Branched rather than multiplied
                 // unconditionally — x*1.0f == x is exact in IEEE-754, but the
                 // branch means the bit-identity claim needs no appeal to it.
-                float b = (w.cfg.brakeScale == 1f || w.cfg.brakeScale <= 0f
-                              ? brake : brake * w.cfg.brakeScale)
+                // With EBD on, the load share REPLACES brakeScale — the fixed bias
+                // exists only as a stand-in for the valve, so applying both would
+                // bias an already-balanced distribution.
+                float b = (ebd
+                              ? brake * w.brakeShare
+                              : (w.cfg.brakeScale == 1f || w.cfg.brakeScale <= 0f
+                                    ? brake : brake * w.cfg.brakeScale))
                         + ((_handbrake && !w.cfg.allowsSteering)
                             ? handbrakeTorque * arcadeHandbrakeMult : 0f);
 
@@ -1625,7 +1733,11 @@ namespace AIHWSim.Vehicles
                     {
                         float den = Mathf.Max(Mathf.Abs(vx), TyreModel.VLow);
                         float sx = ((w.omega * r - vx) / den) / TyreModel.KappaPeak;
-                        float sy = ((-vy) / den) / TyreModel.AlphaPeak;
+                        // Same load-dependent peak the force path uses — a readout
+                        // normalised by a different number would be a second
+                        // opinion that disagrees with the physics.
+                        float sy = ((-vy) / den)
+                                 / TyreModel.AlphaPeakAt(fz, w.cfg.ratedLoadN);
                         w.slipNorm = Mathf.Sqrt(sx * sx + sy * sy);
                         w.patchSpeed = Mathf.Sqrt(vx * vx + vy * vy);
                     }
@@ -1645,6 +1757,13 @@ namespace AIHWSim.Vehicles
                             b *= 1f - a.abs * Mathf.Clamp01((-w.slipRatio - absOn) / AssistTuning.AbsBand);
                     }
 
+                    // Hoisted above the tyre-force call: the SAME holding torque
+                    // feeds both the stiction test inside TyreModel.Forces and
+                    // the MoveTowards below — one source of truth, so the force
+                    // clamp and the spin integrator can never disagree about
+                    // whether the wheel is held.
+                    float resist = b + (grounded ? surf.rollingResist * rollScale : 0f);
+
                     float fx = 0f, fy = 0f;
                     if (grounded && fz > 0f)
                     {
@@ -1655,9 +1774,39 @@ namespace AIHWSim.Vehicles
                             _gripStiffness * 0.5f, dt,
                             _wheels.Count / Mathf.Max(0.05f, _body.mass),
                             r * r / Mathf.Max(1e-9f, w.spinInertia),
+                            w.cfg.ratedLoadN, w.driveTorque, resist,
                             out fx, out fy);
-                        _body.AddForceAtPosition(fwdW * fx + rightW * fy,
-                            hit.point, ForceMode.Force);
+
+                        // Where the lateral force reaches the SPRUNG mass. It does
+                        // not arrive at the contact patch: it travels up the
+                        // linkage, which reacts it at the roll centre. Applying it
+                        // at ground level (which this engine did) gives the roll
+                        // moment the full CoM height as its arm instead of the
+                        // height above the roll axis, and overstates body roll —
+                        // measured at ~15 % on the Tiguan, whose derived roll
+                        // centres are 87 mm front / 109 mm rear.
+                        //
+                        // The longitudinal force still acts at the patch: its
+                        // analogue is the anti-dive/anti-squat pitch centre, which
+                        // needs side-view geometry this does not read yet.
+                        //
+                        // rollCentreH == 0 (no linkage authored) MUST take the
+                        // original single-call path. Two AddForceAtPosition calls
+                        // summing to the same vector are not bit-identical to one
+                        // in IEEE-754, and the RC designs' bit-identity should not
+                        // have to appeal to that. Same reasoning as brakeScale's
+                        // branch above.
+                        if (w.rollCentreH == 0f)
+                        {
+                            _body.AddForceAtPosition(fwdW * fx + rightW * fy,
+                                hit.point, ForceMode.Force);
+                        }
+                        else
+                        {
+                            _body.AddForceAtPosition(fwdW * fx, hit.point, ForceMode.Force);
+                            _body.AddForceAtPosition(rightW * fy,
+                                hit.point + transform.up * w.rollCentreH, ForceMode.Force);
+                        }
                     }
                     w.lastFy = fy;   // next step's servo load
 
@@ -1667,7 +1816,6 @@ namespace AIHWSim.Vehicles
                     // under way then skids (κ → −1) until ABS or release.
                     float J = Mathf.Max(1e-9f, w.spinInertia);
                     w.omega += (w.driveTorque - fx * r) / J * dt;
-                    float resist = b + (grounded ? surf.rollingResist * rollScale : 0f);
                     if (resist > 0f)
                         w.omega = Mathf.MoveTowards(w.omega, 0f, resist / J * dt);
                     w.spinAngle = Mathf.Repeat(w.spinAngle + w.omega * dt, Mathf.PI * 2f);
@@ -1923,6 +2071,26 @@ namespace AIHWSim.Vehicles
                 Vector3 f = transform.TransformDirection(liftL * aeroMult + dragL);
                 _body.AddForceAtPosition(f, transform.TransformPoint(ap.localPos), ForceMode.Force);
             }
+        }
+
+        /// <summary>
+        /// Roll-steer toe angle (deg) from this wheel's current suspension position.
+        /// 0 whenever no toe link is authored, which is every design that predates
+        /// <see cref="SuspensionLinkage"/>.
+        ///
+        /// Compression runs 1 = full droop → 0 = fully compressed (the same
+        /// arithmetic <see cref="ApplyAntiRoll"/> and GetSuspensionCompression use),
+        /// so bump — upward hub travel from static rest — is
+        /// (rest − current) × travel, positive as the wheel compresses.
+        /// </summary>
+        private static float RollSteerDeg(Wheel w)
+        {
+            if (w.toeSteerPerM == 0f) return 0f;
+            if (!w.col.GetGroundHit(out WheelHit hit)) return 0f;
+            float comp = Mathf.Clamp01(
+                (-w.col.transform.InverseTransformPoint(hit.point).y - w.col.radius)
+                / w.col.suspensionDistance);
+            return w.toeSteerPerM * ((w.restCompression - comp) * w.col.suspensionDistance);
         }
 
         private void ApplyAntiRoll(WheelCollider left, WheelCollider right)

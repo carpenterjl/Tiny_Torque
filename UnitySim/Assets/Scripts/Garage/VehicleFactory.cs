@@ -85,6 +85,7 @@ namespace AIHWSim.Garage
             // so nothing moves.
             car.maxBrakeTorque = design.maxBrakeTorque;
             car.handbrakeTorque = design.handbrakeTorque;
+            car.brakeProportioning = design.brakeProportioning;
             car.antiRoll = design.antiRoll;
             car.linearDampingOverride = design.linearDamping;
             car.angularDampingOverride = design.angularDamping;
@@ -133,6 +134,8 @@ namespace AIHWSim.Garage
                     brushEps = w.brushEps,
                     suspTargetPos = w.suspTargetPos,
                     brakeScale = w.brakeScale,
+                    linkage = w.linkage,
+                    ratedLoadN = w.ratedLoadN,
                     // Reflected drivetrain inertia J·gear² for powered wheels
                     // (0 on old JSON / unpowered wheels = legacy spin inertia).
                     extraSpinInertia = w.powered && w.motor.rotorInertia > 0f

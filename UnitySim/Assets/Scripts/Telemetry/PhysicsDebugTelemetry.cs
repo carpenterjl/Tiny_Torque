@@ -30,7 +30,7 @@ namespace AIHWSim.Telemetry
         private SimulationRunner _runner;
         private CarVehicle _car;
         private Rigidbody _body;
-        private Vector3 _lastVelLocal;
+        private Vector3 _lastVelWorld;
         private bool _havePrev;
 
         /// <summary>The chassis origin's height above the wheel-centre plane, so
@@ -85,19 +85,35 @@ namespace AIHWSim.Telemetry
             hub.SetValue("veh/roll_deg", Wrap180(e.z));
             hub.SetValue("veh/pitch_deg", Wrap180(e.x));
 
-            // Body-frame acceleration. Differencing the body-frame velocity is
-            // the honest form: it excludes gravity (which a real accelerometer
-            // would include) and it is what "0.9 g of lateral acceleration"
-            // conventionally means.
-            Vector3 velLocal = _car.transform.InverseTransformDirection(_body.linearVelocity);
+            // Body-frame acceleration: difference the velocity in the WORLD
+            // frame, then rotate the answer into the body frame. It excludes
+            // gravity (which a real accelerometer would include) and it is what
+            // "0.9 g of lateral acceleration" conventionally means.
+            //
+            // The order is the whole measurement. Differencing the body-frame
+            // velocity instead — (v_local − v_local_prev)/dt — silently subtracts
+            // the transport term ω × v, because the frame the components are
+            // expressed in is itself rotating. In a steady-state corner the
+            // body-frame velocity is very nearly CONSTANT: same speed, still
+            // pointing along its own nose. The entire lateral acceleration lives
+            // in ω × v, so that form reports approximately nothing for a car
+            // pulling its maximum g.
+            //
+            // It survived as long as it did because every straight-line test
+            // agrees with it: at ω ≈ 0 the two forms are identical, so the
+            // coastdown, the braking run and the timestep sweep were right either
+            // way. Only the skidpad could see it, and it read 0.36 g where the
+            // tyre model was delivering close to 1.
+            Vector3 velWorld = _body.linearVelocity;
             if (_havePrev && Time.fixedDeltaTime > 0f)
             {
-                Vector3 a = (velLocal - _lastVelLocal) / Time.fixedDeltaTime;
+                Vector3 aWorld = (velWorld - _lastVelWorld) / Time.fixedDeltaTime;
+                Vector3 a = _car.transform.InverseTransformDirection(aWorld);
                 hub.SetValue("veh/a_long", a.z);
                 hub.SetValue("veh/a_lat", a.x);
                 hub.SetValue("veh/a_vert", a.y);
             }
-            _lastVelLocal = velLocal;
+            _lastVelWorld = velWorld;
             _havePrev = true;
 
             int n = _car.WheelCount;
