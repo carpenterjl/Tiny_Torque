@@ -67,7 +67,7 @@ namespace AIHWSim.Core.PhysicsTests
     /// lateral capability. The car slows as it corners, which is fine — every
     /// sample uses its own instantaneous speed.
     /// </summary>
-    public abstract class SteadyCorneringTest : PhysicsTest
+    public abstract class SteadyCorneringTest : CarPhysicsTest
     {
         [Header("Steady cornering")]
         [Tooltip("Entry speed (m/s). The car coasts from here, so start high "

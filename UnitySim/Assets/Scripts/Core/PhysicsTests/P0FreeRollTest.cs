@@ -29,7 +29,7 @@ namespace AIHWSim.Core.PhysicsTests
     /// here would have QUADRUPLED the drag instead of removing it, and the test
     /// would have failed while looking like it was measuring something else.
     /// </summary>
-    public sealed class P0FreeRollTest : PhysicsTest
+    public sealed class P0FreeRollTest : CarPhysicsTest
     {
         protected override string TestId => "P0";
         protected override string Title => "Free-roll residual (drag off)";

@@ -28,7 +28,7 @@ namespace AIHWSim.Core.PhysicsTests
     /// test rewrites it between sub-runs. It is the only test that does, and it
     /// is why nothing else may run in the same scene.
     /// </summary>
-    public sealed class P9TimestepTest : PhysicsTest
+    public sealed class P9TimestepTest : CarPhysicsTest
     {
         protected override string TestId => "P9";
         protected override string Title => "Timestep sensitivity";

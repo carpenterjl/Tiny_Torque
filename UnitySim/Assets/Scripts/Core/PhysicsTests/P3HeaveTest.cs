@@ -26,7 +26,7 @@ namespace AIHWSim.Core.PhysicsTests
     /// consequence of the declared-fiction 0.30 m travel, and it is the sharpest
     /// illustration of what that fiction costs.
     /// </summary>
-    public sealed class P3HeaveTest : PhysicsTest
+    public sealed class P3HeaveTest : CarPhysicsTest
     {
         protected override string TestId => "P3";
         protected override string Title => "Heave frequency & damping";

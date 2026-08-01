@@ -37,7 +37,7 @@ namespace AIHWSim.Core.PhysicsTests
     /// same window, so it is reported as this test's band rather than as a scene
     /// of its own.
     /// </summary>
-    public sealed class P2StaticTest : PhysicsTest
+    public sealed class P2StaticTest : CarPhysicsTest
     {
         protected override string TestId => "P2";
         protected override string Title => "Static weight & ride height";

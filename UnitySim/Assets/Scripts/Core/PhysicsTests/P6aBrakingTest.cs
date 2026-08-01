@@ -49,7 +49,7 @@ namespace AIHWSim.Core.PhysicsTests
     /// The driveline is disconnected for the same reason as P1: a motor at zero
     /// volts is a short, and its braking would be counted as tyre grip.
     /// </summary>
-    public sealed class P6aBrakingTest : PhysicsTest
+    public sealed class P6aBrakingTest : CarPhysicsTest
     {
         protected override string TestId => "P6a";
         protected override string Title => "Threshold braking 100 → 0 km/h";

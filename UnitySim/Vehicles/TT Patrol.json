@@ -47,6 +47,49 @@
             "loadSensitivity": 0.0,
             "balloonPct": 0.0,
             "massKg": 0.0,
+            "unsprungMassKg": 0.05000000074505806,
+            "spinInertiaKgM2": 0.0,
+            "brushEps": 0.0,
+            "suspTargetPos": 0.0,
+            "brakeScale": 1.0,
+            "linkage": {
+                "lowerInner": {
+                    "x": 0.0,
+                    "y": 0.0,
+                    "z": 0.0
+                },
+                "lowerOuter": {
+                    "x": 0.0,
+                    "y": 0.0,
+                    "z": 0.0
+                },
+                "upperInner": {
+                    "x": 0.0,
+                    "y": 0.0,
+                    "z": 0.0
+                },
+                "upperOuter": {
+                    "x": 0.0,
+                    "y": 0.0,
+                    "z": 0.0
+                },
+                "strutTop": {
+                    "x": 0.0,
+                    "y": 0.0,
+                    "z": 0.0
+                },
+                "toeInner": {
+                    "x": 0.0,
+                    "y": 0.0,
+                    "z": 0.0
+                },
+                "toeOuter": {
+                    "x": 0.0,
+                    "y": 0.0,
+                    "z": 0.0
+                }
+            },
+            "ratedLoadN": 0.0,
             "powered": false,
             "motor": {
                 "maxVoltage": 7.400000095367432,
@@ -63,6 +106,7 @@
                 "escDeadbandV": 0.10000000149011612,
                 "escTimeConstMs": 5.0,
                 "escSlewVPerS": 0.0,
+                "escMovingOmega": 0.0,
                 "escDragBrakePct": 0.0,
                 "escBrakeStrengthPct": 100.0,
                 "escReverseLockMs": 150.0
@@ -98,6 +142,49 @@
             "loadSensitivity": 0.0,
             "balloonPct": 0.0,
             "massKg": 0.0,
+            "unsprungMassKg": 0.05000000074505806,
+            "spinInertiaKgM2": 0.0,
+            "brushEps": 0.0,
+            "suspTargetPos": 0.0,
+            "brakeScale": 1.0,
+            "linkage": {
+                "lowerInner": {
+                    "x": 0.0,
+                    "y": 0.0,
+                    "z": 0.0
+                },
+                "lowerOuter": {
+                    "x": 0.0,
+                    "y": 0.0,
+                    "z": 0.0
+                },
+                "upperInner": {
+                    "x": 0.0,
+                    "y": 0.0,
+                    "z": 0.0
+                },
+                "upperOuter": {
+                    "x": 0.0,
+                    "y": 0.0,
+                    "z": 0.0
+                },
+                "strutTop": {
+                    "x": 0.0,
+                    "y": 0.0,
+                    "z": 0.0
+                },
+                "toeInner": {
+                    "x": 0.0,
+                    "y": 0.0,
+                    "z": 0.0
+                },
+                "toeOuter": {
+                    "x": 0.0,
+                    "y": 0.0,
+                    "z": 0.0
+                }
+            },
+            "ratedLoadN": 0.0,
             "powered": false,
             "motor": {
                 "maxVoltage": 7.400000095367432,
@@ -114,6 +201,7 @@
                 "escDeadbandV": 0.10000000149011612,
                 "escTimeConstMs": 5.0,
                 "escSlewVPerS": 0.0,
+                "escMovingOmega": 0.0,
                 "escDragBrakePct": 0.0,
                 "escBrakeStrengthPct": 100.0,
                 "escReverseLockMs": 150.0
@@ -149,6 +237,49 @@
             "loadSensitivity": 0.0,
             "balloonPct": 0.0,
             "massKg": 0.0,
+            "unsprungMassKg": 0.05000000074505806,
+            "spinInertiaKgM2": 0.0,
+            "brushEps": 0.0,
+            "suspTargetPos": 0.0,
+            "brakeScale": 1.0,
+            "linkage": {
+                "lowerInner": {
+                    "x": 0.0,
+                    "y": 0.0,
+                    "z": 0.0
+                },
+                "lowerOuter": {
+                    "x": 0.0,
+                    "y": 0.0,
+                    "z": 0.0
+                },
+                "upperInner": {
+                    "x": 0.0,
+                    "y": 0.0,
+                    "z": 0.0
+                },
+                "upperOuter": {
+                    "x": 0.0,
+                    "y": 0.0,
+                    "z": 0.0
+                },
+                "strutTop": {
+                    "x": 0.0,
+                    "y": 0.0,
+                    "z": 0.0
+                },
+                "toeInner": {
+                    "x": 0.0,
+                    "y": 0.0,
+                    "z": 0.0
+                },
+                "toeOuter": {
+                    "x": 0.0,
+                    "y": 0.0,
+                    "z": 0.0
+                }
+            },
+            "ratedLoadN": 0.0,
             "powered": true,
             "motor": {
                 "maxVoltage": 7.400000095367432,
@@ -165,6 +296,7 @@
                 "escDeadbandV": 0.10000000149011612,
                 "escTimeConstMs": 5.0,
                 "escSlewVPerS": 0.0,
+                "escMovingOmega": 0.0,
                 "escDragBrakePct": 0.0,
                 "escBrakeStrengthPct": 100.0,
                 "escReverseLockMs": 150.0
@@ -200,6 +332,49 @@
             "loadSensitivity": 0.0,
             "balloonPct": 0.0,
             "massKg": 0.0,
+            "unsprungMassKg": 0.05000000074505806,
+            "spinInertiaKgM2": 0.0,
+            "brushEps": 0.0,
+            "suspTargetPos": 0.0,
+            "brakeScale": 1.0,
+            "linkage": {
+                "lowerInner": {
+                    "x": 0.0,
+                    "y": 0.0,
+                    "z": 0.0
+                },
+                "lowerOuter": {
+                    "x": 0.0,
+                    "y": 0.0,
+                    "z": 0.0
+                },
+                "upperInner": {
+                    "x": 0.0,
+                    "y": 0.0,
+                    "z": 0.0
+                },
+                "upperOuter": {
+                    "x": 0.0,
+                    "y": 0.0,
+                    "z": 0.0
+                },
+                "strutTop": {
+                    "x": 0.0,
+                    "y": 0.0,
+                    "z": 0.0
+                },
+                "toeInner": {
+                    "x": 0.0,
+                    "y": 0.0,
+                    "z": 0.0
+                },
+                "toeOuter": {
+                    "x": 0.0,
+                    "y": 0.0,
+                    "z": 0.0
+                }
+            },
+            "ratedLoadN": 0.0,
             "powered": true,
             "motor": {
                 "maxVoltage": 7.400000095367432,
@@ -216,6 +391,7 @@
                 "escDeadbandV": 0.10000000149011612,
                 "escTimeConstMs": 5.0,
                 "escSlewVPerS": 0.0,
+                "escMovingOmega": 0.0,
                 "escDragBrakePct": 0.0,
                 "escBrakeStrengthPct": 100.0,
                 "escReverseLockMs": 150.0
@@ -449,5 +625,26 @@
             "mirrorGroup": -1,
             "massKg": 0.0
         }
-    ]
+    ],
+    "cosTopper": "",
+    "cosRim": "",
+    "cosOrnament": "",
+    "cosBobble": "",
+    "cosWing": "",
+    "maxBrakeTorque": 0.800000011920929,
+    "handbrakeTorque": 1.2000000476837159,
+    "brakeProportioning": false,
+    "antiRoll": 8.0,
+    "linearDamping": 0.019999999552965165,
+    "angularDamping": 0.5,
+    "maxDepenetrationVel": 2.0,
+    "stickyPhantomNm": 0.05000000074505806,
+    "contactOffset": 0.0,
+    "dragCd": 0.0,
+    "frontalAreaM2": 0.0,
+    "chassisCoM": {
+        "x": 0.0,
+        "y": -0.029999999329447748,
+        "z": 0.0
+    }
 }

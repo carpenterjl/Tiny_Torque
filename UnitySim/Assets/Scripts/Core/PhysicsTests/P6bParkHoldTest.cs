@@ -41,7 +41,7 @@ namespace AIHWSim.Core.PhysicsTests
     /// else in this suite, so the holding force has to come from the tyre model
     /// or the test proves nothing.
     /// </summary>
-    public sealed class P6bParkHoldTest : PhysicsTest
+    public sealed class P6bParkHoldTest : CarPhysicsTest
     {
         protected override string TestId => "P6b";
         protected override string Title => "Park hold on 10 % slope";

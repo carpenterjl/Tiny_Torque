@@ -35,7 +35,7 @@ namespace AIHWSim.Core.PhysicsTests
     /// from a 110 kW crank — an 81 % driveline, which is plausible. That
     /// self-consistency is what makes this the test worth trusting most.
     /// </summary>
-    public sealed class P1CoastdownTest : PhysicsTest
+    public sealed class P1CoastdownTest : CarPhysicsTest
     {
         protected override string TestId => "P1";
         protected override string Title => "Coastdown → Cd·A";

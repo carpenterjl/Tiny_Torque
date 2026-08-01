@@ -354,6 +354,111 @@ Slide Yard, Workshop Grand Prix, Neon Vortex II, Boardwalk Cove, Foundry
 Descent — still load from saved copies and render exactly as before; only the
 preset rows are gone.)
 
+## RC airplane (debug-only)
+
+A .40-size sport trainer — 1.4 m span, 2 kg, 10×6 propeller — built from primitives
+and flown from the keyboard or a gamepad. Like the full-scale Tiguan it is a **debug
+vehicle**: it is not a `VehicleDesign`, no picker enumerates it, and there is no path
+by which a race, a save file or a LAN session can reach it.
+
+**To fly it:** `Tools > AIHWSim > Create RC Plane Scene`, then Play.
+
+| | gamepad (Mode 2) | keyboard |
+|---|---|---|
+| Throttle | left stick Y (**ratcheted** — it holds where you leave it) | `W` / `S` |
+| Rudder | left stick X | `A` / `D` |
+| Elevator | right stick Y (down = nose up) | `↓` / `↑` |
+| Aileron | right stick X | `←` / `→` |
+| Idle / full cut | `LB` / `RB` | `Shift`+`S` / `Shift`+`W` |
+| View · Reset | `Select` · `North` | `V` · `R` |
+
+Throttle integrates stick deflection as a *rate* because a real Mode 2 throttle has no
+centring spring. Tracking the stick directly would idle the engine the moment you let
+go, and hands-off flight would be impossible.
+
+`V` cycles three views. It opens on the **ground station** — standing beside the strip,
+watching the model — because that is how RC is actually flown, and it is the only view
+in which the control reversal on a toward-you pass is real. A chase camera hides that
+completely, and it is the single hardest thing about flying RC.
+
+### How the aerodynamics works
+
+Every lifting surface is cut into spanwise strips, and each strip asks one question per
+step: *what is the air doing here?* The answer comes from `v_cm + ω × r`, so a strip on
+a rolling wing sees a different vertical velocity — and therefore a different angle of
+attack — than the one on the other side.
+
+**That is the whole design.** Roll damping, pitch damping, weathercock stability, the
+dihedral effect, adverse yaw and tip stall are not modelled; they are consequences of
+where the strips are and which way they point. There is no authored damping coefficient
+anywhere in `PanelAero.cs`, and there must never be one — the moment a rate-damping term
+is added by hand, every test that measures a rate becomes a test of that number.
+
+The propeller is coupled to the same `MotorModel` the cars use: the throttle sets a
+voltage, the motor makes torque against its own back-EMF, and the prop takes torque away
+as a function of shaft speed and airspeed. **RPM is never commanded** — it is the
+equilibrium of those two, which is why thrust sags as the aeroplane accelerates and why
+top speed is a consequence rather than a number anyone chose.
+
+### The `[AERO]` gate
+
+```bash
+"E:/Unity Hub/Editor/6000.1.15f1/Editor/Unity.exe" -batchmode -projectPath UnitySim -executeMethod AIHWSim.EditorTools.FlightValidationRunner.RunHeadless -logFile aero.log -physSuite
+```
+
+Five scripted flights, each run twice, greppable as `[AERO]`. Separate from the car's
+`[PHYS]` gate on purpose: appending to it would change the summary line a build gate
+watches even on a clean run.
+
+| test | checks | result |
+|---|---|---|
+| A0 ballistic drop | aero off, must fall at exactly `½·g·t·(t+dt)` | PASS — **1.5 mm** error over 3 s |
+| A1 static thrust | motor/prop equilibrium, no aerodynamics at all | PASS — 11.207 N vs 11.21 predicted |
+| A2 level turn | `n = cos γ / cos φ`, trigonometry only | PASS — **2.0007 g** vs exactly 2.000 |
+| A4 glide ratio | self-consistent with the model's own C_L/C_D | PASS — 9.37 vs 9.49, 1.2 % |
+| A5 phugoid | `T = π√2·V/g` | INFO — see below |
+
+A0's expected distance is **not** ½gt². Unity integrates semi-implicitly, which puts the
+answer 36.8 mm further at 400 Hz over 3 s. Predicting that offset rather than widening a
+tolerance around it is what lets the test pass to the millimetre.
+
+A2 enforces the turn kinematically. The row's claim is narrow — *given an aircraft in a
+banked level turn, does the modelled accelerometer read `cos γ / cos φ`?* — and that is a
+question about the instrument, not the aerodynamics. It is the specific guard against
+deriving body-frame acceleration the wrong way: differencing body-frame velocity drops
+the ω×v transport term, which in a 60° turn is the entire 2 g. The car suite learned this
+when its skidpad read 0.36 g against tyres delivering 1 g.
+
+**⚠ Two things this model is knowingly wrong or unproven about**, both recorded rather
+than tuned away:
+
+- **The phugoid damps about twice as hard as classical theory expects.** Measured
+  ζ ≈ 0.16 implies a cruise L/D of 4.4; the glide test measures 9.4. Either the panel
+  model's pitch damping is leaking into the mode, or the 0.7 s short period and 7 s
+  phugoid are too close together on a 2 kg airframe for the standard two-mode split to
+  hold. Unresolved, so A5 reports Info rather than gating.
+- **The airframe cannot sustain a 60° level turn under its own power** — it needs about
+  4.2 N and the propeller supplies under 3. That is a real performance limit of a 0.57
+  thrust-to-weight trainer, not a defect.
+
+Declared omissions are listed in the class comments: quasi-steady aerodynamics (no
+dynamic stall), no stall hysteresis, no Reynolds dependence, no fuselage aerodynamics
+(so the model is ~5 % of chord more stable than the real aeroplane), no ground effect,
+no propeller slipstream or P-factor, and ground handling well below the standard of the
+car's tyre model — which is why every scripted flight test starts in the air.
+
+### It does not touch the controller ABI
+
+`PlaneVehicle` uses actuator slots `[0]`–`[3]` for throttle, aileron, elevator and
+rudder. **This is an internal agreement between two components in this repository and is
+not part of the versioned C ABI.** Slots `[6]` and `[7]` are left deliberately empty
+because `controller_api.h` publishes them as `CTRL_STEER_ACTUATOR` and
+`CTRL_BRAKE_ACTUATOR`, and putting an aileron in a slot whose published name says
+"steer" is how a convention quietly becomes a lie. `controller_api.h`,
+`tt_controller.h`, `ControllerInterop.cs` and `Docs/interface-spec.md` are all unchanged;
+the aeroplane runs with `loadControllerDll = false`, so no controller can observe those
+slots today.
+
 ## High-fidelity mode (real-world controller validation)
 
 The sim can model a physical 1/10-scale car closely enough to tune closed-loop
@@ -2014,7 +2119,19 @@ faces the raw physics.
 
 ## Roadmap
 
-- Quadcopter vehicle + attitude/rate PID cascade and motor mixer.
+- Quadcopter vehicle + attitude/rate PID cascade and motor mixer. The RC airplane
+  already lays most of the groundwork: `AirData`, `PropellerModel` (four of them, plus
+  the motor coupling and torque reaction), `IPilotInputSource`, `FlightTelemetry`,
+  `FlightCameraRig`, `FlightTestEnvironment` and the `[AERO]` runner all transfer. A
+  quadcopter needs no lifting surfaces, which is exactly why those live in their own
+  files.
+- Finish the flight test set: A3 (stall speed and root-before-tip progression — the one
+  test that justifies a spanwise model over a single coefficient), A6 (panel convergence
+  and roll rate), A7 (timestep sweep).
+- Propeller slipstream by momentum theory. Without it the aeroplane has no elevator or
+  rudder authority at zero airspeed, which is the whole reason a real model can lift its
+  tail on the take-off roll; it also makes the neutral point move with throttle, which is
+  the throttle-dependent pitch trim every tractor-prop aircraft has.
 - Hardware-in-the-loop: stream sensor data to a real MCU over serial, read back
   actuator commands.
 - `Controllers/targets/arduino/` PlatformIO project reusing `common/` sources.

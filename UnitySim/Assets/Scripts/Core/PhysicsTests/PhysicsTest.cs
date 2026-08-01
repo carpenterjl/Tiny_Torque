@@ -8,9 +8,16 @@ using UnityEngine;
 namespace AIHWSim.Core.PhysicsTests
 {
     /// <summary>
-    /// Base class for a single physics measurement: builds the world and the
-    /// full-scale Tiguan, drives the car from a script, watches one quantity,
-    /// and reports a verdict against a stated reference.
+    /// Base class for a single physics measurement: stands a subject up, drives it
+    /// from a script, watches one quantity, and reports a verdict against a stated
+    /// reference.
+    ///
+    /// <b>This layer knows nothing about what it is measuring.</b> The settle /
+    /// arm / sync / run machine, the verdict, the result JSON, the HUD and the
+    /// headless plumbing are the same whether the subject has wheels or wings.
+    /// <see cref="CarPhysicsTest"/> supplies the Tiguan and its wheel-shaped
+    /// helpers; a flight subject supplies an aircraft. Neither inherits the
+    /// other's vocabulary, and this class never learns which it has.
     ///
     /// <b>Scripted, not driven.</b> A coastdown whose start speed depends on a
     /// human releasing the throttle near 32 m/s is not repeatable, and a number
@@ -24,10 +31,12 @@ namespace AIHWSim.Core.PhysicsTests
     /// from one place, so the headless validator cannot report something the
     /// screen disagrees with.
     ///
-    /// <b>Ordering that matters.</b> The car is built, then the camera, then the
-    /// runner — <see cref="DebugVehicleRig"/>'s class comment explains why, and
+    /// <b>Ordering that matters.</b> The vehicle is built, then the camera, then
+    /// the runner — <see cref="DebugVehicleRig"/>'s class comment explains why, and
     /// it is load-bearing: CsvLogger snapshots its column list once, so the
     /// telemetry component must exist before the runner's Start enables logging.
+    /// That whole sequence lives inside <see cref="BuildSubject"/>, so it cannot be
+    /// split across a hook boundary by accident.
     /// </summary>
     [DefaultExecutionOrder(-4000)]
     public abstract class PhysicsTest : MonoBehaviour
@@ -41,25 +50,9 @@ namespace AIHWSim.Core.PhysicsTests
         /// <summary>The reference this test is judged against, as text — shown on
         /// the HUD beside the live value so a number is never read without it.</summary>
         protected abstract string Expected { get; }
-        /// <summary>The world this test needs. Default is the plain straight.</summary>
-        protected virtual PhysicsTestEnvironment.EnvSpec Environment =>
-            PhysicsTestEnvironment.EnvSpec.Default();
-
-        /// <summary>Where the car starts. Flat ground at the measured rest height
-        /// by default; <see cref="OnSurfaceAt"/> puts it on the slope instead.</summary>
-        protected virtual (Vector3 pos, Quaternion rot) SpawnPose() =>
-            (new Vector3(0f, DebugVehicles.TiguanChassisRestY, 0f), Quaternion.identity);
-
-        /// <summary>What the driver holds before the run begins. Neutral for
-        /// almost everything — but a test that parks on a slope has to hold the
-        /// handbrake through its own settle, or it slides away before it arms.</summary>
-        protected virtual void Idle(ScriptedDriver d) => d.Neutral();
 
         /// <summary>Set the initial condition. Called once, after the settle.</summary>
         protected virtual void Arm() { }
-        /// <summary>Write this tick's inputs. <paramref name="t"/> is seconds
-        /// since the run phase began.</summary>
-        protected abstract void Drive(ScriptedDriver d, float t);
         /// <summary>Accumulate a sample. Called every fixed step during the run.</summary>
         protected abstract void Sample(float dt);
         /// <summary>Return the verdict, or <c>null</c> to keep running until the
@@ -68,13 +61,57 @@ namespace AIHWSim.Core.PhysicsTests
 
         /// <summary>Extra HUD lines, drawn under the standard block.</summary>
         protected virtual void DrawExtra() { }
-        /// <summary>Graph panes for this test. Default shows speed and the three
-        /// body-frame accelerations.</summary>
-        protected virtual void ConfigureGraph(GraphOverlay g)
-        {
-            g.AddPane("speed (m/s)", "veh/speed");
-            g.AddPane("accel (m/s²)", "veh/a_long", "veh/a_lat", "veh/a_vert");
-        }
+        /// <summary>Graph panes for this test. The subject layer supplies the
+        /// default, because which channels are worth watching depends entirely on
+        /// what is being measured.</summary>
+        protected virtual void ConfigureGraph(GraphOverlay g) { }
+
+        // ---- what a SUBJECT layer supplies -------------------------------
+        //
+        // Everything above is about measuring; everything here is about what is
+        // being measured. CarPhysicsTest fills these in for the Tiguan, and a
+        // flight test fills them in for an aircraft — neither one inherits the
+        // other's helpers, and the phase machine below never learns which it has.
+
+        /// <summary>Build the world, the vehicle, the camera and the runner. Must
+        /// leave <see cref="Body"/> and <see cref="Runner"/> assigned.</summary>
+        protected abstract void BuildSubject();
+
+        /// <summary>Swap the scripted controller in, replacing the human one.</summary>
+        protected abstract void InstallScriptedInput();
+
+        /// <summary>Hand the controls back to a person. One line, but it is the
+        /// one line that differs between a steering wheel and a stick.</summary>
+        protected abstract void HandControlsToHuman();
+
+        /// <summary>Hold whatever the subject holds before the run begins.</summary>
+        protected abstract void IdleInputs();
+
+        /// <summary>Write this tick's inputs. <paramref name="t"/> is seconds since
+        /// the run phase began.</summary>
+        protected abstract void DriveInputs(float t);
+
+        /// <summary>
+        /// Whether the launch condition has been reached. A car waits for its
+        /// wheels to spin up to road speed; an aircraft waits to settle at a trim
+        /// airspeed. Same phase, same 10 s patience, same Invalid verdict if it
+        /// never arrives — only the question differs.
+        /// </summary>
+        protected virtual bool SyncReady(out string why) { why = ""; return true; }
+
+        /// <summary>Set by a subject that launched into a condition worth waiting
+        /// for. Reproduces the original gate exactly: the sync phase was entered
+        /// when a launch speed had been requested, and not otherwise.</summary>
+        protected bool WantsSync { get; set; }
+
+        /// <summary>Prefix on the console row and the result filename. Keeps a
+        /// flight suite's output from being collected by the physics gate, and vice
+        /// versa, without either runner needing to know the other exists.</summary>
+        protected virtual string ResultFamily => "phys";
+
+        /// <summary>The one-line reminder under the HUD of what this world is.</summary>
+        protected virtual string HudFooter =>
+            "frictionless ground · assists OFF · tyre model only";
 
         // ---- inspector ----
 
@@ -157,42 +194,24 @@ namespace AIHWSim.Core.PhysicsTests
 
         protected enum Phase { Settle, Arm, Sync, Run, Done }
 
-        protected CarVehicle Car { get; private set; }
-        protected Rigidbody Body { get; private set; }
-        protected SimulationRunner Runner { get; private set; }
+        protected Rigidbody Body { get; set; }
+        protected SimulationRunner Runner { get; set; }
         protected TelemetryHub Hub => Runner != null ? Runner.Hub : null;
-        protected ScriptedDriver Driver { get; private set; }
         protected Phase CurrentPhase { get; private set; } = Phase.Settle;
         /// <summary>Seconds since the run phase began. Zero before it does.</summary>
         protected float RunTime { get; private set; }
 
-        private CarInput _input;
         private float _phaseT;
         private Result _result;
         private bool _manual;
-        private float _syncTargetSpeed = -1f;
-        private bool _syncNeedsSpeed;
 
         // ---- build ----
 
         private void Awake()
         {
-            var (cam, graph) = PhysicsTestEnvironment.Build(Environment);
-
-            // Colliders were created moments ago in Build(); queries read the
-            // physics scene, which has not been told about them yet.
-            Physics.SyncTransforms();
-            var (spawn, spawnRot) = SpawnPose();
-            var rig = DebugVehicleRig.BuildCar(DebugVehicles.VwTiguan(), spawn, spawnRot);
-            Car = rig.car;
-            Body = Car.GetComponent<Rigidbody>();
-            _input = rig.input;
-
-            var follow = cam.gameObject.AddComponent<ChaseCamera>();
-            follow.target = Car.transform;
-
-            DebugVehicleRig.AttachRunner(ref rig, graph, physicsRateHz, controlRateHz, logCsv);
-            Runner = rig.runner;
+            // World, vehicle, camera, runner — the subject layer owns all four,
+            // and the order inside it is load-bearing. See CarPhysicsTest.
+            BuildSubject();
 
             // A per-test CSV, and it must be set before the runner's Start:
             // CsvLogger.Begin fixes the filename and the column list there.
@@ -204,8 +223,7 @@ namespace AIHWSim.Core.PhysicsTests
             // meaning.
             Runner.allowModeToggle = false;
 
-            Driver = new ScriptedDriver();
-            _input.source = Driver;
+            InstallScriptedInput();
 
             _result = new Result
             {
@@ -242,7 +260,7 @@ namespace AIHWSim.Core.PhysicsTests
         private void TakeOverManually()
         {
             _manual = true;
-            _input.source = new PlayerInputSource(InputDeviceKind.MergedKeyboardGamepad);
+            HandControlsToHuman();
             Finish(new Verdict
             {
                 kind = Kind.Invalid,
@@ -262,7 +280,7 @@ namespace AIHWSim.Core.PhysicsTests
             switch (CurrentPhase)
             {
                 case Phase.Settle:
-                    Idle(Driver);
+                    IdleInputs();
                     // The static probe settles 5 s before reading anything, and
                     // its numbers are this suite's baseline. Same wait, same
                     // starting state.
@@ -270,32 +288,27 @@ namespace AIHWSim.Core.PhysicsTests
                     break;
 
                 case Phase.Arm:
-                    Idle(Driver);
+                    IdleInputs();
                     Arm();
-                    Enter(_syncTargetSpeed > 0f ? Phase.Sync : Phase.Run);
+                    Enter(WantsSync ? Phase.Sync : Phase.Run);
                     break;
 
                 case Phase.Sync:
-                    Idle(Driver);
-                    // Wheels rolling true, and — only when the caller launched
-                    // deliberately fast — back down to the speed the window is
-                    // defined at. Waiting for a speed that was never overshot
-                    // would hang forever in exactly the tests that coast without
-                    // losing any (P0 runs with drag disabled on purpose).
-                    if (WheelsSynced()
-                        && (!_syncNeedsSpeed || Speed <= _syncTargetSpeed))
+                    IdleInputs();
+                    // Wait for the subject's own launch condition — see SyncReady.
+                    if (SyncReady(out string why))
                         Enter(Phase.Run);
                     else if (_phaseT > 10f)
                         Finish(new Verdict
                         {
                             kind = Kind.Invalid,
-                            detail = "wheels never synced after launch — " + WheelStateText(),
+                            detail = why,
                         });
                     break;
 
                 case Phase.Run:
                     RunTime = _phaseT;
-                    Drive(Driver, RunTime);
+                    DriveInputs(RunTime);
                     Sample(dt);
                     var v = Evaluate();
                     if (v.HasValue) { Finish(v.Value); break; }
@@ -314,144 +327,6 @@ namespace AIHWSim.Core.PhysicsTests
             CurrentPhase = p;
             _phaseT = 0f;
             if (p == Phase.Run) RunTime = 0f;
-        }
-
-        // ---- launching at speed ----
-
-        /// <summary>
-        /// Start the run already moving, without driving up to speed.
-        ///
-        /// The powertrain on this vehicle is declared fiction — no gearbox, no
-        /// torque curve — so a test that accelerates first is measuring the
-        /// fiction. Setting the body's velocity alone is not enough either: the
-        /// wheels would still be stationary, the tyres would see slip ratio −1,
-        /// and the run would open with a locked-wheel skid.
-        ///
-        /// So set the body's velocity and let the tyres spin the wheels up
-        /// naturally, then start measuring. Against J ≈ 1.8 kg·m² the tyre torque
-        /// is ~700 rad/s², so they sync in a fraction of a second.
-        ///
-        /// <paramref name="overshootMps"/> is for tests whose window is defined
-        /// at an exact speed (P1 measures 32 → 22): launch above it and the run
-        /// begins when the car falls back through the target with the wheels
-        /// already true. Leave it at zero when the test simply needs to be
-        /// moving — waiting for a speed that was never overshot never arrives in
-        /// a test that coasts without losing speed, which is precisely what P0
-        /// is built to do.
-        /// </summary>
-        protected void LaunchAt(float targetMps, float overshootMps = 0f)
-        {
-            _syncTargetSpeed = targetMps;
-            _syncNeedsSpeed = overshootMps > 0f;
-            Body.linearVelocity = Car.transform.forward * (targetMps + overshootMps);
-            Body.angularVelocity = Vector3.zero;
-        }
-
-        /// <summary>Per-wheel slip / ω / contact, for a diagnostic that says what
-        /// went wrong rather than only that something did.</summary>
-        protected string WheelStateText()
-        {
-            var sb = new System.Text.StringBuilder();
-            sb.Append($"v {Speed:0.000} ");
-            for (int i = 0; i < Car.WheelCount; i++)
-                sb.Append($"[{i} slip {Car.WheelSlipRatio(i):0.0000} "
-                          + $"ω {Car.WheelOmega(i):0.00} "
-                          + $"{(Car.WheelGrounded(i) ? "gnd" : "AIR")}] ");
-            return sb.ToString().TrimEnd();
-        }
-
-        /// <summary>
-        /// Disconnect the driveline — the model's equivalent of coasting in
-        /// neutral. <b>Any coasting test needs this, and the reason is not
-        /// obvious.</b>
-        ///
-        /// At zero throttle the ESC state machine falls through to
-        /// <c>MotorModel.WheelTorque(0 V)</c>, and a DC motor at zero volts is
-        /// not disconnected — it is a SHORT. Back-EMF drives
-        /// <c>I = −Kt·ω/R</c> through the winding and the motor becomes a brake.
-        /// For an RC car that is right: a brushed ESC at neutral really does
-        /// brake. For a 1500 kg car it is wrong, because a real one has a clutch
-        /// or a torque converter and coasts freely.
-        ///
-        /// Measured here, it is worth about <b>1.7 m/s² at 10 m/s</b> — six times
-        /// the whole aerodynamic drag at that speed. A coastdown run with the
-        /// driveline live measures the motor's winding resistance and reports it
-        /// as Cd·A.
-        ///
-        /// The disconnect is physical rather than a flag: raising the winding
-        /// resistance is an open circuit, so the current, and with it the torque,
-        /// goes to zero through the model's own equation instead of around it.
-        /// </summary>
-        protected void SetFreewheel(bool on)
-        {
-            var motors = Car.Motors;
-            if (_motorResistance == null)
-            {
-                _motorResistance = new float[motors.Count];
-                for (int i = 0; i < motors.Count; i++)
-                    _motorResistance[i] = motors[i] != null ? motors[i].motor.resistance : 0f;
-            }
-            for (int i = 0; i < motors.Count; i++)
-            {
-                var m = motors[i];
-                if (m == null) continue;
-                var p = m.motor;
-                p.resistance = on ? 1e6f : _motorResistance[i];
-                m.motor = p;
-            }
-        }
-
-        private float[] _motorResistance;
-
-        /// <summary>
-        /// A spawn pose sitting on whatever surface is under (x, z), aligned to
-        /// it. Found by raycast rather than by arithmetic: the slope's height at
-        /// a given z is a function of its rotation, position and scale, and three
-        /// chances to get a sign wrong is three too many for a placement whose
-        /// failure mode is a car quietly starting 10 cm inside the ground.
-        /// </summary>
-        protected static (Vector3 pos, Quaternion rot) OnSurfaceAt(
-            float x, float z, Vector3 facing)
-        {
-            var origin = new Vector3(x, 500f, z);
-            if (!Physics.Raycast(origin, Vector3.down, out var hit, 2000f,
-                                 ~0, QueryTriggerInteraction.Ignore))
-                return (new Vector3(x, DebugVehicles.TiguanChassisRestY, z),
-                        Quaternion.identity);
-
-            // Rest height is measured perpendicular to the ground, so it goes
-            // along the surface normal, not along world up.
-            var pos = hit.point + hit.normal * DebugVehicles.TiguanChassisRestY;
-            var fwd = Vector3.ProjectOnPlane(facing, hit.normal).normalized;
-            if (fwd.sqrMagnitude < 1e-6f) fwd = Vector3.forward;
-            return (pos, Quaternion.LookRotation(fwd, hit.normal));
-        }
-
-        /// <summary>
-        /// Put the car at a speed and start measuring immediately, with no wait
-        /// for the wheels to spin up.
-        ///
-        /// For a test that drives — rather than coasts — the launch transient is
-        /// harmless and the wait is actively wrong: a driven wheel carries real
-        /// motor torque, so it holds a steady slip of a couple of percent
-        /// forever, and a sync gate gets stuck waiting for a zero that a working
-        /// car never reaches.
-        /// </summary>
-        protected void SetSpeedNow(float mps)
-        {
-            Body.linearVelocity = Car.transform.forward * mps;
-            Body.angularVelocity = Vector3.zero;
-        }
-
-        /// <summary>Every grounded wheel rolling within 1 % of the road speed.</summary>
-        private bool WheelsSynced()
-        {
-            for (int i = 0; i < Car.WheelCount; i++)
-            {
-                if (!Car.WheelGrounded(i)) return false;
-                if (Mathf.Abs(Car.WheelSlipRatio(i)) > 0.01f) return false;
-            }
-            return true;
         }
 
         // ---- channels ----
@@ -484,7 +359,7 @@ namespace AIHWSim.Core.PhysicsTests
             // 8 significant places, not 5: P6b's drift is micrometres and "0.#####"
             // printed it as a bare "0", which in a gate line reads as "exactly
             // zero" rather than "far below the limit".
-            string line = $"[PHYS] {TestId} {v.kind.ToString().ToUpperInvariant()} "
+            string line = $"{LogTag} {TestId} {v.kind.ToString().ToUpperInvariant()} "
                           + $"{v.value:0.########} {_result.units} (expect {Expected})"
                           + (string.IsNullOrEmpty(_result.detail) ? "" : $" — {_result.detail}");
             if (v.kind == Kind.Fail) Debug.LogError(line);
@@ -512,8 +387,21 @@ namespace AIHWSim.Core.PhysicsTests
             }
         }
 
-        public static string ResultPathFor(string testId) =>
-            Path.Combine(ResultDir, $"phys_{testId}.json");
+        /// <summary>Result path for a physics test. Kept as the one-argument form
+        /// the two editor runners already call, so neither of them changes.</summary>
+        public static string ResultPathFor(string testId) => ResultPathFor("phys", testId);
+
+        /// <summary>Result path for any suite. A flight test writes
+        /// <c>aero_A1.json</c> beside the car's <c>phys_P1.json</c>, so the two
+        /// gates can share a result directory without collecting each other's
+        /// output.</summary>
+        public static string ResultPathFor(string family, string testId) =>
+            Path.Combine(ResultDir, $"{family}_{testId}.json");
+
+        /// <summary>Console prefix. <c>[PHYS]</c> for the car suite; a flight suite
+        /// overrides it so a build gate grepping one block never picks up the
+        /// other's rows.</summary>
+        protected virtual string LogTag => "[PHYS]";
 
         /// <summary>True when the whole suite is being walked in ONE editor
         /// session (<c>-physSuite</c>). A finished test must then leave play mode
@@ -535,13 +423,13 @@ namespace AIHWSim.Core.PhysicsTests
         {
             try
             {
-                string path = ResultPathFor(TestId);
+                string path = ResultPathFor(ResultFamily, TestId);
                 Directory.CreateDirectory(Path.GetDirectoryName(path));
                 File.WriteAllText(path, JsonUtility.ToJson(_result, true));
             }
             catch (Exception e)
             {
-                Debug.LogWarning($"[PHYS] {TestId} could not write result: {e.Message}");
+                Debug.LogWarning($"{LogTag} {TestId} could not write result: {e.Message}");
             }
         }
 
@@ -595,7 +483,7 @@ namespace AIHWSim.Core.PhysicsTests
                 GUILayout.Label(_manual ? "manual" : "M — take over (voids the result)");
             }
 
-            GUILayout.Label("frictionless ground · assists OFF · tyre model only");
+            GUILayout.Label(HudFooter);
             GUILayout.EndArea();
         }
 
