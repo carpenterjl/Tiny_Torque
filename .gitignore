@@ -63,6 +63,13 @@ UnitySim/Assets/Plugins/x86_64/*.dll
 UnitySim/Assets/Plugins/x86_64/*.dll.meta
 UnitySim/Assets/Plugins/x86_64/*.pdb
 
+# Asset Studio preview staging — copies of Blender exports made only so Unity
+# has something to render before anyone has decided to commit them. Scratch by
+# construction: the file of record is the export folder, the commit pipeline
+# copies from THERE, and "Clear preview staging" empties this. Committing a
+# staged copy would put a second, silently diverging original in the repo.
+UnitySim/Assets/TinyTorqueAssets/AssetStudio/Staging/
+
 # Runtime output / personal data (settings, profiles, session snapshots)
 UnitySim/TelemetryLogs/
 UnitySim/Saves/

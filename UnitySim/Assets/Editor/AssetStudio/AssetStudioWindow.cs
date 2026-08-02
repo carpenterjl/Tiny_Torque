@@ -8,20 +8,26 @@ namespace AIHWSim.AssetTools
 {
     /// <summary>
     /// The Asset Studio front end: browse everything the game can load beside
-    /// everything Blender has exported, and see what stands between the two.
+    /// everything Blender has exported, see it rendered the way the game will
+    /// build it, and see what stands between the two.
     ///
-    /// Read-only in this milestone, deliberately. The window's first job is to make
-    /// the invisible failure visible — an export whose object names carry no token
-    /// binds nothing and arrives as a correctly shaped car in one flat colour, with
-    /// no error anywhere — and being able to SEE that is worth shipping before
-    /// anything can be written.
+    /// Still read-only about the ASSETS. The one thing it writes is a preview
+    /// staging copy, and only when asked (see <see cref="AssetStudioStaging"/>):
+    /// Unity cannot render a mesh it has not imported, so a picture of an
+    /// un-imported export is the single part of this window that a copy is the
+    /// price of. Nothing under <c>Resources/</c> is touched.
     ///
-    /// Every action the window grows will also be a menu item, because the pipeline
-    /// has to be runnable headlessly; the window exists to put the state of an asset
-    /// in front of the author, which a menu cannot do. Authoring itself stays
-    /// interactive: "assign M_Police_Chrome to Police_Handles slot 0" is not a menu
-    /// item in any useful sense, and the draft asset is what carries an authored
-    /// decision across to the headless half.
+    /// The window's first job is to make the invisible failure visible — an
+    /// export whose object names carry no token binds nothing and arrives as a
+    /// correctly shaped car in one flat colour, with no error anywhere. The
+    /// preview is where that stops being a paragraph and becomes a picture.
+    ///
+    /// Every action the window grows will also be a menu item, because the
+    /// pipeline has to be runnable headlessly; the window exists to put the state
+    /// of an asset in front of the author, which a menu cannot do. Authoring
+    /// itself stays interactive: "assign M_Police_Chrome to Police_Handles slot 0"
+    /// is not a menu item in any useful sense, and the draft asset is what carries
+    /// an authored decision across to the headless half.
     /// </summary>
     public sealed class AssetStudioWindow : EditorWindow
     {
@@ -37,9 +43,30 @@ namespace AIHWSim.AssetTools
         [SerializeField] private Vector2 _listScroll, _detailScroll;
         [SerializeField] private List<string> _expanded = new List<string>();
         [SerializeField] private bool _showFixes, _showObjects = true;
+        [SerializeField] private bool _showPreview = true;
+        [SerializeField] private float _previewHeight = 300f;
+        [SerializeField] private PreviewOptions _preview = new PreviewOptions();
+
+        // The rig itself cannot be serialized — a PreviewRenderUtility owns a
+        // scene and a render texture, neither of which survives a domain reload.
+        // It is rebuilt on demand and disposed in OnDisable, which is the call
+        // that runs BEFORE a reload.
+        private AssetStudioPreview _rig;
+        private bool _orbiting, _dragged, _resizing;
+
+        /// <summary>True only while the rig is showing the SELECTED asset. The rig
+        /// keeps the last thing it loaded when the preview is collapsed or an
+        /// export has nothing staged, and listing that asset's renderers under a
+        /// different row would be a quietly wrong list.</summary>
+        private bool _previewLive;
+
+        private int _hoverRenderer = -1, _hoverSlot = -1;
 
         private const float ListWidth = 280f;
         private const float RowHeight = 18f;
+
+        private static readonly Color SelectionTint = new Color(0.24f, 0.38f, 0.58f, 0.55f);
+        private static readonly Color HoverTint = new Color(0.24f, 0.38f, 0.58f, 0.22f);
 
         private static readonly string[] KindNames =
             { "All kinds", "Car body", "Wheel", "Cosmetic", "Prop", "Fitting", "Unassigned" };
@@ -74,16 +101,35 @@ namespace AIHWSim.AssetTools
                                  + " — nothing will list as External.");
         }
 
+        private void OnEnable() => wantsMouseMove = true;
         private void OnFocus() => AssetStudioCatalog.Refresh();
+
+        // Both, and both idempotent. OnDisable runs before a domain reload and
+        // when the tab is merely hidden; OnDestroy runs when it is closed. Miss
+        // either and Unity reports a leaked PreviewRenderUtility.
+        private void OnDisable() => Release();
+        private void OnDestroy() => Release();
+
+        private void Release()
+        {
+            _rig?.Dispose();
+            _rig = null;
+        }
 
         private void OnGUI()
         {
+            // Hover is discovered by the rows themselves during Repaint, so it
+            // has to start each repaint empty — otherwise the last row the mouse
+            // crossed stays lit after the pointer has left the list entirely.
+            if (Event.current.type == EventType.Repaint) _hoverRenderer = _hoverSlot = -1;
+
             DrawToolbar();
             using (new EditorGUILayout.HorizontalScope())
             {
                 DrawList();
                 DrawDetail();
             }
+            if (Event.current.type == EventType.MouseMove) Repaint();
         }
 
         // ==================== toolbar ====================
@@ -102,6 +148,8 @@ namespace AIHWSim.AssetTools
                                                       GUILayout.Width(90f));
                 if (GUILayout.Button("Refresh", EditorStyles.toolbarButton, GUILayout.Width(60f)))
                     AssetStudioCatalog.Refresh();
+                _showPreview = GUILayout.Toggle(_showPreview, "Preview",
+                                                EditorStyles.toolbarButton, GUILayout.Width(60f));
                 GUILayout.FlexibleSpace();
                 if (GUILayout.Button("Set export folder...", EditorStyles.toolbarButton))
                     SetSourceFolder();
@@ -162,7 +210,7 @@ namespace AIHWSim.AssetTools
             bool selected = IsSelected(r);
 
             if (Event.current.type == EventType.Repaint && selected)
-                EditorGUI.DrawRect(rect, new Color(0.24f, 0.38f, 0.58f, 0.55f));
+                EditorGUI.DrawRect(rect, SelectionTint);
 
             var label = new Rect(rect.x, rect.y, rect.width - 58f, rect.height);
             var kind = new Rect(rect.xMax - 58f, rect.y, 58f, rect.height);
@@ -171,12 +219,22 @@ namespace AIHWSim.AssetTools
 
             if (Event.current.type == EventType.MouseDown && rect.Contains(Event.current.mousePosition))
             {
-                _selectedKey = r.key;
-                _selectedExportDir = r.exportDir;
+                Select(r);
                 GUI.FocusControl(null);
                 Event.current.Use();
                 Repaint();
             }
+        }
+
+        /// <summary>Selecting a different asset drops the mesh selection with it —
+        /// "renderer 17" means nothing once the car underneath it changed.</summary>
+        private void Select(AssetRow r)
+        {
+            _selectedKey = r.key;
+            _selectedExportDir = r.exportDir;
+            _preview.selectedRenderer = -1;
+            _preview.selectedSlot = -1;
+            _hoverRenderer = _hoverSlot = -1;
         }
 
         private bool IsSelected(AssetRow r) =>
@@ -193,7 +251,7 @@ namespace AIHWSim.AssetTools
             _ => "?",
         };
 
-        // ==================== right: the detail ====================
+        // ==================== right: preview + detail ====================
 
         private void DrawDetail()
         {
@@ -210,10 +268,13 @@ namespace AIHWSim.AssetTools
                     return;
                 }
 
+                TtExport x = r.Export;
+                _previewLive = false;
+                if (_showPreview) DrawPreview(r, x);
+
                 _detailScroll = EditorGUILayout.BeginScrollView(_detailScroll);
 
                 DrawIdentity(r);
-                TtExport x = r.Export;
                 if (r.status == RowStatus.Broken)
                     EditorGUILayout.HelpBox("This export could not be read: " + r.problem,
                                             MessageType.Error);
@@ -228,8 +289,269 @@ namespace AIHWSim.AssetTools
                 DrawObjects(r, x);
 
                 EditorGUILayout.EndScrollView();
+
+                // Hover is computed against Repaint-time rects, so a change is
+                // known one repaint after the mouse moved. Asking for another
+                // repaint is what makes the highlight land where the pointer
+                // stopped rather than one row behind it.
+                if (_hoverRenderer != _preview.hoverRenderer || _hoverSlot != _preview.hoverSlot)
+                {
+                    _preview.hoverRenderer = _hoverRenderer;
+                    _preview.hoverSlot = _hoverSlot;
+                    Repaint();
+                }
             }
         }
+
+        // ---- the viewport ----
+
+        private void DrawPreview(AssetRow r, TtExport x)
+        {
+            string path = PreviewPath(r, x, out string why);
+
+            if (string.IsNullOrEmpty(path))
+            {
+                EditorGUILayout.HelpBox(why, MessageType.Info);
+                using (new EditorGUI.DisabledScope(x == null))
+                    if (GUILayout.Button("Stage for preview", GUILayout.Height(22f)))
+                    {
+                        string staged = AssetStudioStaging.Stage(x, out string p);
+                        if (string.IsNullOrEmpty(staged)) AssetStudio.Error(p);
+                        _rig?.Invalidate();
+                    }
+                EditorGUILayout.Space(4f);
+                return;
+            }
+
+            _rig ??= new AssetStudioPreview();
+
+            Rect view = GUILayoutUtility.GetRect(
+                10f, 100000f, _previewHeight, _previewHeight, GUILayout.ExpandWidth(true));
+            HandleViewport(view);
+            _rig.Draw(view, r, _preview, path, x);
+            _previewLive = _rig.Renderers.Count > 0;
+            DrawViewportLabels(view, r);
+            DrawSplitter();
+            DrawPreviewControls(r, x);
+        }
+
+        /// <summary>
+        /// Where the mesh Unity can actually render lives. Three answers, and the
+        /// third is the interesting one: an export that is not in the project has
+        /// no mesh object at all, and no amount of preview code changes that —
+        /// the AssetDatabase does not reach outside <c>Assets/</c>.
+        /// </summary>
+        private static string PreviewPath(AssetRow r, TtExport x, out string why)
+        {
+            why = "";
+            if (r.HasProject) return r.fbxAssetPath;
+            if (x == null)
+            {
+                why = "Nothing to preview: this row has no imported model and no "
+                    + "readable export.";
+                return "";
+            }
+            if (AssetStudioStaging.IsStaged(x)) return AssetStudioStaging.PathFor(x);
+
+            why = "This export is not in the project, and Unity can only render a mesh "
+                + "it has imported.\n\n\"Stage for preview\" copies just the FBX into "
+                + AssetStudio.StagingDir + " — outside Resources/, so it cannot become "
+                + "a key the game finds, and Tools > Asset Studio > Clear preview "
+                + "staging removes it again. Committing the asset later copies from "
+                + "the export, never from staging.";
+            return "";
+        }
+
+        private void HandleViewport(Rect view)
+        {
+            Event e = Event.current;
+            bool inside = view.Contains(e.mousePosition);
+
+            switch (e.type)
+            {
+                case EventType.MouseDown when inside && e.button == 0:
+                    _orbiting = true;
+                    _dragged = false;
+                    GUI.FocusControl(null);
+                    e.Use();
+                    break;
+
+                case EventType.MouseDrag when _orbiting:
+                    _preview.yaw -= e.delta.x * 0.6f;
+                    _preview.pitch = Mathf.Clamp(_preview.pitch + e.delta.y * 0.6f, -89f, 89f);
+                    if (e.delta.sqrMagnitude > 1f) _dragged = true;
+                    Repaint();
+                    e.Use();
+                    break;
+
+                case EventType.MouseUp when _orbiting:
+                    // A click that did not turn the camera is a pick. Bounds
+                    // level: PartModelPostprocessor leaves isReadable off for
+                    // everything but shells, props and the Tiguan's wheels, so
+                    // there is no CPU mesh to test triangles against.
+                    if (!_dragged && inside && _rig != null)
+                    {
+                        int hit = _rig.Pick(_rig.RayThrough(view, e.mousePosition));
+                        _preview.selectedRenderer =
+                            hit == _preview.selectedRenderer ? -1 : hit;
+                        _preview.selectedSlot = -1;
+                    }
+                    _orbiting = false;
+                    Repaint();
+                    e.Use();
+                    break;
+
+                case EventType.ScrollWheel when inside:
+                    _preview.zoom = Mathf.Clamp(_preview.zoom * (1f - e.delta.y * 0.05f),
+                                                0.15f, 14f);
+                    Repaint();
+                    e.Use();
+                    break;
+            }
+        }
+
+        private void DrawViewportLabels(Rect view, AssetRow r)
+        {
+            if (Event.current.type != EventType.Repaint || !_previewLive) return;
+
+            Vector3 size = _rig.WorldBounds.size;
+            float target = AssetStudioPreview.RulerLength(r);
+            string kindLine = r.kind == AssetKind.Wheel
+                ? $"ruler {target * 1000f:0} mm diameter"
+                : $"ruler {target:0.###} m";
+
+            var box = new Rect(view.x + 6f, view.yMax - 38f, view.width - 12f, 32f);
+            EditorGUI.DropShadowLabel(box,
+                $"{Fmt(size)} m rendered      {kindLine}      "
+                + $"{_rig.Renderers.Count} renderers / {_rig.SlotCount} slots");
+        }
+
+        private void DrawSplitter()
+        {
+            Rect sp = GUILayoutUtility.GetRect(10f, 100000f, 5f, 5f);
+            EditorGUI.DrawRect(sp, new Color(0f, 0f, 0f, 0.20f));
+            EditorGUIUtility.AddCursorRect(sp, MouseCursor.ResizeVertical);
+
+            Event e = Event.current;
+            if (e.type == EventType.MouseDown && sp.Contains(e.mousePosition))
+            {
+                _resizing = true;
+                e.Use();
+            }
+            else if (_resizing && e.type == EventType.MouseDrag)
+            {
+                _previewHeight = Mathf.Clamp(_previewHeight + e.delta.y, 140f, 1200f);
+                Repaint();
+                e.Use();
+            }
+            else if (_resizing && e.type == EventType.MouseUp)
+            {
+                _resizing = false;
+                e.Use();
+            }
+        }
+
+        // ---- the controls under it ----
+
+        private void DrawPreviewControls(AssetRow r, TtExport x)
+        {
+            using (new EditorGUILayout.HorizontalScope(EditorStyles.toolbar))
+            {
+                _preview.table = (TokenTable)EditorGUILayout.EnumPopup(
+                    _preview.table, EditorStyles.toolbarPopup, GUILayout.Width(110f));
+
+                bool canCorrect = x != null && x.UnityDims != Vector3.zero;
+                using (new EditorGUI.DisabledScope(!canCorrect))
+                    _preview.applyCorrection = GUILayout.Toggle(
+                        canCorrect && _preview.applyCorrection, "Apply correction",
+                        EditorStyles.toolbarButton, GUILayout.Width(110f));
+
+                _preview.showRuler = GUILayout.Toggle(_preview.showRuler, "Ruler",
+                    EditorStyles.toolbarButton, GUILayout.Width(48f));
+                _preview.isolate = GUILayout.Toggle(_preview.isolate, "Isolate",
+                    EditorStyles.toolbarButton, GUILayout.Width(54f));
+
+                if (GUILayout.Button("Reset view", EditorStyles.toolbarButton,
+                                     GUILayout.Width(76f)))
+                {
+                    _preview.yaw = 135f;
+                    _preview.pitch = 16f;
+                    _preview.zoom = 1f;
+                }
+
+                GUILayout.FlexibleSpace();
+
+                if (x != null && !r.HasProject
+                    && GUILayout.Button("Re-stage", EditorStyles.toolbarButton,
+                                        GUILayout.Width(70f)))
+                {
+                    AssetStudioStaging.Stage(x, out string p);
+                    if (!string.IsNullOrEmpty(p)) AssetStudio.Error(p);
+                    _rig?.Invalidate();
+                }
+            }
+
+            using (new EditorGUILayout.HorizontalScope())
+            {
+                if (r.kind == AssetKind.Wheel)
+                {
+                    EditorGUILayout.LabelField("Radius", GUILayout.Width(48f));
+                    _preview.wheelRadius = EditorGUILayout.Slider(
+                        _preview.wheelRadius, 0.01f, 0.5f);
+                    _preview.rightSide = GUILayout.Toggle(_preview.rightSide,
+                        _preview.rightSide ? "R" : "L", EditorStyles.miniButton,
+                        GUILayout.Width(26f));
+                    if (GUILayout.Button("Author", EditorStyles.miniButton, GUILayout.Width(56f)))
+                        _preview.wheelRadius = AssetStudioPreview.AuthorRadiusFor(r.key);
+                }
+                else
+                {
+                    EditorGUILayout.LabelField("bodySize", GUILayout.Width(58f));
+                    _preview.bodySize = EditorGUILayout.Vector3Field(GUIContent.none,
+                                                                    _preview.bodySize);
+                    if (GUILayout.Button("Nominal", EditorStyles.miniButton, GUILayout.Width(60f)))
+                        _preview.bodySize = CarVehicle.BodyMeshAuthorSize;
+                    _preview.bodyColor = EditorGUILayout.ColorField(GUIContent.none,
+                        _preview.bodyColor, false, false, false, GUILayout.Width(44f));
+                }
+            }
+
+            DrawPreviewNotes(r, x);
+            EditorGUILayout.Space(2f);
+        }
+
+        /// <summary>
+        /// The two things the preview cannot promise, said where they matter
+        /// rather than buried in a doc comment: which assets bind through a table
+        /// the preview actually has, and what a null material slot means.
+        /// </summary>
+        private void DrawPreviewNotes(AssetRow r, TtExport x)
+        {
+            if (!AssetStudioPreview.TableIsExact(r.kind))
+                EditorGUILayout.HelpBox(
+                    "Approximate binding. Bodies, wheels and cosmetics bind through the "
+                    + "tables the preview is showing; the battery, antennas, light bars "
+                    + "and track props bind from small tables written inline at their own "
+                    + "call sites, which are not exposed. Shape and scale are exact "
+                    + "either way.", MessageType.None);
+
+            if (_rig != null && _rig.RenderersWithEmptySlots > 0)
+                EditorGUILayout.HelpBox(
+                    $"{_rig.RenderersWithEmptySlots} of {_rig.Renderers.Count} renderers "
+                    + "still have an empty material slot. The token binder assigns "
+                    + "sharedMaterial — slot 0 and slot 0 only — so a multi-submesh "
+                    + "object gets its first material and nothing else. Binding per slot "
+                    + "is what the manifest path is for.", MessageType.Warning);
+
+            if (_preview.applyCorrection && x != null)
+                EditorGUILayout.HelpBox(
+                    "Showing the export WITH the proposed uniform scale and quarter turn "
+                    + "pre-applied. That correction is a proposal about the mesh — nothing "
+                    + "on disk has changed, and the game would still render this asset the "
+                    + "way it looks with the toggle off.", MessageType.None);
+        }
+
+        // ==================== detail sections ====================
 
         private void DrawIdentity(AssetRow r)
         {
@@ -341,7 +663,8 @@ namespace AIHWSim.AssetTools
                                    + "builds every car facing +Z");
                     msg.Append("\n\nRecorded as authorSize " + Fmt(after)
                                + " and applied at load, so the FBX keeps agreeing "
-                               + "with the .blend.");
+                               + "with the .blend. \"Apply correction\" above the "
+                               + "viewport shows the result.");
                     EditorGUILayout.HelpBox(msg.ToString(), MessageType.Warning);
                 }
                 else
@@ -451,10 +774,15 @@ namespace AIHWSim.AssetTools
         /// the export SAYS the asset is made of, and what Unity actually imported.
         /// Showing both is how a renamed or dropped object becomes visible before
         /// it becomes a hole in a car.
+        ///
+        /// The imported list drives the preview. Hovering a row lights that mesh
+        /// up in the viewport, clicking pins it, and a multi-submesh object opens
+        /// into one row per SLOT — which is the granularity a car binds at and the
+        /// granularity the token binder cannot reach.
         /// </summary>
         private void DrawObjects(AssetRow r, TtExport x)
         {
-            List<Renderer> rends = r.Renderers();
+            IReadOnlyList<Renderer> rends = LiveRenderers(r);
             List<string> declared = x?.AllObjects() ?? new List<string>();
             if (rends.Count == 0 && declared.Count == 0) return;
 
@@ -468,14 +796,7 @@ namespace AIHWSim.AssetTools
                 if (rends.Count > 0)
                 {
                     EditorGUILayout.LabelField("Imported", EditorStyles.miniBoldLabel);
-                    foreach (Renderer rd in rends)
-                    {
-                        int slots = rd.sharedMaterials?.Length ?? 0;
-                        string mats = slots == 0 ? "no material slots"
-                            : slots == 1 ? Name(rd.sharedMaterials[0])
-                            : slots + " slots: " + string.Join(", ", Names(rd.sharedMaterials));
-                        EditorGUILayout.LabelField(rd.gameObject.name, mats);
-                    }
+                    for (int i = 0; i < rends.Count; i++) DrawMeshRow(i, rends[i]);
                     EditorGUILayout.HelpBox(
                         "Slot ORDER can only be read here, off the imported FBX — "
                         + "export.json names an object's materials but not which "
@@ -498,14 +819,64 @@ namespace AIHWSim.AssetTools
             }
         }
 
-        private static string Name(Material m) => m == null ? "(none)" : m.name;
+        /// <summary>
+        /// The renderers to list: the preview's instance when one is up, because
+        /// those carry the materials BINDING produced, and the imported prefab's
+        /// otherwise. Both walk the same hierarchy with the same call, so index i
+        /// means the same mesh either way — which is what lets a row select into
+        /// the viewport.
+        /// </summary>
+        private IReadOnlyList<Renderer> LiveRenderers(AssetRow r) =>
+            _previewLive ? _rig.Renderers : r.Renderers();
 
-        private static List<string> Names(Material[] ms)
+        private void DrawMeshRow(int i, Renderer rd)
         {
-            var list = new List<string>();
-            foreach (Material m in ms) list.Add(Name(m));
-            return list;
+            if (rd == null) return;
+            Material[] mats = _previewLive ? _rig.BoundMaterials(i) : rd.sharedMaterials;
+            if (mats == null || mats.Length == 0) mats = new Material[] { null };
+
+            bool multi = mats.Length > 1;
+            string summary = multi ? mats.Length + " slots" : Name(mats[0]);
+            Row(i, -1, rd.gameObject.name, summary, EditorStyles.label);
+
+            if (!multi) return;
+            for (int s = 0; s < mats.Length; s++)
+                Row(i, s, "    slot " + s, Name(mats[s]), EditorStyles.miniLabel);
         }
+
+        private void Row(int rendererIndex, int slot, string label, string value, GUIStyle style)
+        {
+            Rect rect = EditorGUILayout.GetControlRect(false, RowHeight);
+            bool pinned = _preview.selectedRenderer == rendererIndex
+                          && _preview.selectedSlot == slot;
+
+            if (Event.current.type == EventType.Repaint)
+            {
+                if (pinned) EditorGUI.DrawRect(rect, SelectionTint);
+                if (rect.Contains(Event.current.mousePosition))
+                {
+                    if (!pinned) EditorGUI.DrawRect(rect, HoverTint);
+                    _hoverRenderer = rendererIndex;
+                    _hoverSlot = slot;
+                }
+            }
+
+            float half = Mathf.Max(120f, rect.width * 0.45f);
+            EditorGUI.LabelField(new Rect(rect.x, rect.y, half, rect.height), label, style);
+            EditorGUI.LabelField(new Rect(rect.x + half, rect.y, rect.width - half, rect.height),
+                                 value, EditorStyles.miniLabel);
+
+            if (Event.current.type == EventType.MouseDown
+                && rect.Contains(Event.current.mousePosition))
+            {
+                if (pinned) { _preview.selectedRenderer = -1; _preview.selectedSlot = -1; }
+                else { _preview.selectedRenderer = rendererIndex; _preview.selectedSlot = slot; }
+                Event.current.Use();
+                Repaint();
+            }
+        }
+
+        private static string Name(Material m) => m == null ? "(no material)" : m.name;
 
         private static string Fmt(Vector3 v) =>
             $"{v.x:0.####} x {v.y:0.####} x {v.z:0.####}";

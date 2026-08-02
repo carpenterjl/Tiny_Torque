@@ -941,6 +941,11 @@ namespace AIHWSim.Vehicles
         /// SetBodyMaterial touch nothing else); every other token gets its
         /// shared accent material; an unmatched name falls back to the body
         /// material so a renamed export shows up as tintable, not magenta.
+        ///
+        /// The loop itself lives in <see cref="PartVisualFactory.BindByToken"/>
+        /// so Asset Studio's preview can bind a shell through the same code
+        /// rather than a copy of it. This method keeps only the decision that is
+        /// the car's to make: which table.
         /// </summary>
         private void AssignBodyAccents(GameObject inst)
         {
@@ -951,20 +956,7 @@ namespace AIHWSim.Vehicles
             var accents = bodyShape == BodyShape.Tiguan
                 ? PartVisualFactory.TiguanTokens
                 : PartVisualFactory.AccentTokens;
-            foreach (var r in inst.GetComponentsInChildren<MeshRenderer>(true))
-            {
-                string n = r.gameObject.name.ToLowerInvariant();
-                Material hit = null;
-                if (!n.StartsWith("paint"))
-                    foreach (var (token, mat) in accents)
-                        if (n.Contains(token)) { hit = mat; break; }
-                if (hit != null) r.sharedMaterial = hit;
-                else
-                {
-                    r.sharedMaterial = _bodyMat;
-                    _bodyRenderers.Add(r);
-                }
-            }
+            PartVisualFactory.BindByToken(inst, accents, _bodyMat, _bodyRenderers);
         }
 
         /// <summary>The renderers driven by the tintable body material — the

@@ -1,3 +1,4 @@
+using System.Collections.Generic;
 using UnityEngine;
 
 namespace AIHWSim.Vehicles
@@ -268,6 +269,47 @@ namespace AIHWSim.Vehicles
         /// </summary>
         public static (string, Material)[] TiguanTokens => TiguanMaterials.Tokens;
 
+        /// <summary>
+        /// Bind a body shell's renderers by object-name token: the tintable
+        /// <paramref name="paintMat"/> for anything named "paint*", the first
+        /// <paramref name="accents"/> token contained in the name otherwise, and
+        /// <paramref name="paintMat"/> again for a name that matches nothing —
+        /// so a renamed export shows up as tintable, not magenta. Every renderer
+        /// that ends up on <paramref name="paintMat"/> is added to
+        /// <paramref name="paintRenderers"/> (may be null), which is what makes
+        /// bodyColor, livery and SetBodyMaterial touch the paint panels only.
+        ///
+        /// Lifted verbatim out of <c>CarVehicle.AssignBodyAccents</c>, which now
+        /// calls it, so that Asset Studio's preview binds a shell through the
+        /// SAME code the car does. A preview with its own copy of this loop would
+        /// be a preview that can quietly disagree with Play about which panel is
+        /// chrome — and disagreeing about exactly that is the failure the tool
+        /// exists to catch.
+        ///
+        /// The paint check is StartsWith and the accent check is Contains, and
+        /// that asymmetry is deliberate: it is what lets "coupepaint" be an
+        /// accent while "paint_3" is the tintable channel.
+        /// </summary>
+        public static void BindByToken(GameObject inst, (string, Material)[] accents,
+            Material paintMat, ICollection<MeshRenderer> paintRenderers = null)
+        {
+            if (inst == null) return;
+            foreach (var r in inst.GetComponentsInChildren<MeshRenderer>(true))
+            {
+                string n = r.gameObject.name.ToLowerInvariant();
+                Material hit = null;
+                if (!n.StartsWith("paint") && accents != null)
+                    foreach (var (token, mat) in accents)
+                        if (n.Contains(token)) { hit = mat; break; }
+                if (hit != null) r.sharedMaterial = hit;
+                else
+                {
+                    r.sharedMaterial = paintMat;
+                    paintRenderers?.Add(r);
+                }
+            }
+        }
+
         // ---- primitive helper ----
 
         private static Transform Piece(PrimitiveType type, Transform parent, Material mat,
@@ -291,6 +333,17 @@ namespace AIHWSim.Vehicles
         /// Public because cosmetic rims are baked to the same radius and scale
         /// by the same factor (see CosmeticMounts).</summary>
         public const float WheelAuthorRadius = 0.033f;
+
+        /// <summary>
+        /// The tyre material <see cref="BuildWheelViz"/> hands
+        /// <c>AssignByName</c> as the fallback on every wheel mesh.
+        ///
+        /// Exposed so Asset Studio's preview can pass the SAME fallback rather
+        /// than a look-alike black. A wheel piece that matches no token coming
+        /// out tyre-coloured is a fact about the token table, and a preview that
+        /// invented its own grey would turn that fact into a shrug.
+        /// </summary>
+        public static Material TyreMaterial => Tire;
 
         /// <summary>Map a wheel-style index to its authored FBX key. Styles
         /// 6-8 are FINISHES, not meshes: the slick re-tinted chrome/gold/neon
