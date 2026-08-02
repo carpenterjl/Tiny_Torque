@@ -53,7 +53,15 @@ namespace AIHWSim.Vehicles
         public string meshKey;
 
         /// <summary>Drag coefficient and built-in downforce area (m²), per
-        /// silhouette. A design's own <c>dragCdOverride</c> still wins.</summary>
+        /// silhouette. A design's own <c>dragCdOverride</c>/<c>frontalAreaM2</c>
+        /// still wins, which is how the Tiguan uses its published figures
+        /// instead of the 0.80 sitting in its row.
+        ///
+        /// <b>ClA is what the shell does WITHOUT parts.</b> Wings, splitters and
+        /// canards add their own on top, so a car that carries its downforce as
+        /// authored geometry has a small number here and a large one after
+        /// <c>TotalClA</c> — which is why the two race cars' 0.007/0.008 look
+        /// modest beside their actual behaviour.</summary>
         public float cd, clA;
 
         /// <summary>Whether the garage's paint mode can work on this body — i.e.
@@ -147,6 +155,15 @@ namespace AIHWSim.Vehicles
 
             // The four Legendary cars. Their wings, booms and face rigs are
             // folded out of the cosmetic mount box.
+            //
+            // Cd read off the silhouettes (this reasoning came over from
+            // AeroDynamics.BodyCd at K3b, which is where it used to live): a
+            // slab-sided wrecker with a boom in the airstream is the draggiest
+            // thing in the game; the two race cars are clean noses spoiled by
+            // exposed wings; the Autopia is a 1955 pontoon body with an upright
+            // wraparound screen and no roof. Both race cars carry their wing as
+            // authored geometry, which is the whole of their downforce; the
+            // wrecker and the ride car have none, like every other bluff shape.
             F(B("body_rattle",   BodyShape.Rattle,   "body_rattle",   0.95f, 0f,     false, BodyTokens.Accent)),
             F(B("body_redline",  BodyShape.Redline,  "body_redline",  0.52f, 0.007f, true,  BodyTokens.Accent)),
             F(B("body_highwing", BodyShape.Highwing, "body_highwing", 0.58f, 0.008f, true,  BodyTokens.Accent)),

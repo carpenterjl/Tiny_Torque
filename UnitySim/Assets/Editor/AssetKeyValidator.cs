@@ -82,10 +82,13 @@ namespace AIHWSim.EditorTools
                 if (d.meshKey != null && d.id != d.meshKey)
                     why += $" id '{d.id}' should be the mesh key '{d.meshKey}'";
 
-                float liveCd = AeroDynamics.BodyCd(d.legacy);
-                if (!Same(d.cd, liveCd)) why += $" cd {N(d.cd)} != BodyCd {N(liveCd)}";
-                float liveClA = AeroDynamics.BodyClA(d.legacy);
-                if (!Same(d.clA, liveClA)) why += $" clA {N(d.clA)} != BodyClA {N(liveClA)}";
+                // cd/clA were compared against AeroDynamics until K3b, which now
+                // reads them; deleted rather than kept as self-agreement. What
+                // remains is the one thing a table can still be wrong about on
+                // its own: a drag coefficient outside anything a car body can be.
+                // 0.15 is a teardrop, 1.2 is a flat plate broadside.
+                if (d.cd < 0.15f || d.cd > 1.2f) why += $" cd {N(d.cd)} is not a car";
+                if (d.clA < 0f || d.clA > 0.05f) why += $" clA {N(d.clA)} is not a shell";
 
                 // Now that the catalogue decides, "paintable" can only be checked
                 // for INTERNAL sense: a body with no mesh has nothing to paint,

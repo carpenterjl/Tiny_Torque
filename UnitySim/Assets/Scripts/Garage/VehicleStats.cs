@@ -110,8 +110,8 @@ namespace AIHWSim.Garage
                         yawDeg = a.yawDeg,
                         sizeScale = Mathf.Clamp(a.sizeScale <= 0f ? 1f : a.sizeScale, 0.6f, 1.6f),
                     });
-            float cdA = AeroDynamics.TotalCdA(d.bodyShape, d.bodySize, parts);
-            float clA = AeroDynamics.TotalClA(d.bodyShape, parts);
+            float cdA = AeroDynamics.TotalCdA(d.Body, d.bodySize, parts);
+            float clA = AeroDynamics.TotalClA(d.Body, parts);
 
             // Aero balance: straight-line downforce share ahead of the CoM (the
             // body's built-in downforce acts at the CoM → splits half/half).
@@ -119,7 +119,7 @@ namespace AIHWSim.Garage
             if (r.hasAeroParts)
             {
                 float comZ = r.composite ? r.com.z : 0f;
-                float bodyClA = AeroDynamics.BodyClA(d.bodyShape);
+                float bodyClA = AeroDynamics.BodyClA(d.Body);
                 float front = bodyClA * 0.5f, total = bodyClA;
                 foreach (var p in parts)
                 {

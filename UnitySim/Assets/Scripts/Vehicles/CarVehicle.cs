@@ -2185,10 +2185,11 @@ namespace AIHWSim.Vehicles
         /// </summary>
         public void EffectiveAero(out float cd, out float frontalArea, out float clA)
         {
-            cd = dragCdOverride > 0f ? dragCdOverride : AeroDynamics.BodyCd(bodyShape);
+            BodyDef def = Body;
+            cd = dragCdOverride > 0f ? dragCdOverride : AeroDynamics.BodyCd(def);
             frontalArea = frontalAreaOverride > 0f
                 ? frontalAreaOverride : AeroDynamics.FrontalArea(bodySize);
-            clA = AeroDynamics.BodyClA(bodyShape);
+            clA = AeroDynamics.BodyClA(def);
         }
 
         /// <summary>

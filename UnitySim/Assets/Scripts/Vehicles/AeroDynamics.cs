@@ -37,50 +37,20 @@ namespace AIHWSim.Vehicles
         /// <summary>Effective frontal area of the body box (m²).</summary>
         public static float FrontalArea(Vector3 bodySize) => bodySize.x * bodySize.y * 0.9f;
 
-        /// <summary>Drag coefficient per body silhouette.</summary>
-        public static float BodyCd(BodyShape shape)
-        {
-            switch (shape)
-            {
-                case BodyShape.Wedge: return 0.65f;
-                case BodyShape.Buggy: return 0.80f;
-                case BodyShape.Box: return 0.90f;
-                case BodyShape.Shell: return 0.45f;
-                case BodyShape.LowRacer: return 0.55f;
-                case BodyShape.Coupe: return 0.48f;
-                case BodyShape.Baja: return 0.85f;
-                case BodyShape.Patrol: return 0.55f;
-                // The four Legendary cars, read off their silhouettes: a
-                // slab-sided wrecker with a boom in the airstream is the
-                // draggiest thing in the game; the two race cars are clean
-                // noses spoiled by exposed wings; the Autopia is a 1955 pontoon
-                // body with an upright wraparound screen and no roof.
-                case BodyShape.Rattle: return 0.95f;
-                case BodyShape.Redline: return 0.52f;
-                case BodyShape.Highwing: return 0.58f;
-                case BodyShape.Autopia: return 0.72f;
-                default: return 0.80f;
-            }
-        }
+        /// <summary>
+        /// Drag coefficient per body silhouette. The numbers, and the reasoning
+        /// behind each one, live in <see cref="BodyCatalog"/> — a body's drag is
+        /// a property of the shell, and keeping it in a second switch keyed on
+        /// the same shape was how the two could disagree.
+        ///
+        /// The 0.80 for a missing row is the old <c>default:</c> arm verbatim:
+        /// an unknown silhouette has always been priced as a buggy.
+        /// </summary>
+        public static float BodyCd(BodyDef def) => def == null ? 0.80f : def.cd;
 
-        /// <summary>Built-in body downforce area ClA (m²) — 0 for bluff shapes.</summary>
-        public static float BodyClA(BodyShape shape)
-        {
-            switch (shape)
-            {
-                case BodyShape.Wedge: return 0.002f;
-                case BodyShape.Shell: return 0.004f;
-                case BodyShape.LowRacer: return 0.006f;
-                case BodyShape.Coupe: return 0.004f;
-                case BodyShape.Patrol: return 0.003f;
-                // Both race cars carry their wing as authored geometry, which
-                // is the whole of their downforce; the wrecker and the ride car
-                // have none, like every other bluff shape here.
-                case BodyShape.Redline: return 0.007f;
-                case BodyShape.Highwing: return 0.008f;
-                default: return 0f;
-            }
-        }
+        /// <summary>Built-in body downforce area ClA (m²) — 0 for bluff shapes,
+        /// and 0 for a body with no row, which is the old default arm.</summary>
+        public static float BodyClA(BodyDef def) => def == null ? 0f : def.clA;
 
         /// <summary>
         /// Effective areas for one part at sizeScale 1: <paramref name="clA"/> =
@@ -190,10 +160,10 @@ namespace AIHWSim.Vehicles
         }
 
         /// <summary>Total drag area (m²) of a body + parts set (stats/top-speed solver).</summary>
-        public static float TotalCdA(BodyShape shape, Vector3 bodySize,
+        public static float TotalCdA(BodyDef def, Vector3 bodySize,
             System.Collections.Generic.IReadOnlyList<AeroConfig> parts)
         {
-            float cdA = BodyCd(shape) * FrontalArea(bodySize);
+            float cdA = BodyCd(def) * FrontalArea(bodySize);
             if (parts != null)
                 for (int i = 0; i < parts.Count; i++)
                 {
@@ -204,10 +174,10 @@ namespace AIHWSim.Vehicles
         }
 
         /// <summary>Total downforce area (m²) of a body + parts set.</summary>
-        public static float TotalClA(BodyShape shape,
+        public static float TotalClA(BodyDef def,
             System.Collections.Generic.IReadOnlyList<AeroConfig> parts)
         {
-            float clA = BodyClA(shape);
+            float clA = BodyClA(def);
             if (parts != null)
                 for (int i = 0; i < parts.Count; i++)
                 {
