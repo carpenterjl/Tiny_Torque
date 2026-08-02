@@ -56,6 +56,41 @@ namespace AIHWSim.AssetTools
         /// files.</summary>
         public const string DraftDir = "Assets/TinyTorqueAssets/AssetStudio/Drafts";
 
+        /// <summary>
+        /// Where an external export's FBX is copied so it can be RENDERED before
+        /// anyone has decided to commit it.
+        ///
+        /// This exists because Unity cannot render a mesh it has not imported,
+        /// and it cannot import a file outside <c>Assets/</c> — so a preview of
+        /// the police car sitting in the Blender export folder is not a matter of
+        /// writing better preview code, it is a matter of the file being
+        /// somewhere the AssetDatabase can see. The copy is explicit and
+        /// user-pressed, never automatic.
+        ///
+        /// Outside <c>Resources/</c>, which is the safety property: a staged FBX
+        /// is unreachable by <c>Resources.Load</c>, so nothing here can become a
+        /// key the game accidentally finds. Staging is scratch — "Clear preview
+        /// staging" empties it, and the commit pipeline copies into
+        /// <c>Resources/</c> from the EXPORT, never from here.
+        /// </summary>
+        public const string StagingDir = "Assets/TinyTorqueAssets/AssetStudio/Staging";
+
+        /// <summary>Project-relative path a given export stages to. Flat, one FBX
+        /// per asset name, so re-staging overwrites rather than accumulating.</summary>
+        public static string StagedPathFor(string assetName) =>
+            StagingDir + "/" + SafeName(assetName) + ".fbx";
+
+        /// <summary>An asset name reduced to what is safe in a file name. Blender
+        /// object names allow spaces and punctuation that a path does not.</summary>
+        public static string SafeName(string s)
+        {
+            if (string.IsNullOrEmpty(s)) return "unnamed";
+            var sb = new System.Text.StringBuilder(s.Length);
+            foreach (char c in s)
+                sb.Append(char.IsLetterOrDigit(c) || c == '_' || c == '-' ? c : '_');
+            return sb.ToString();
+        }
+
         /// <summary>The manifest that rides beside an asset's FBX. Sibling rather
         /// than a <c>Manifests/</c> subfolder because <c>PartModelPostprocessor</c>
         /// has to find it by path arithmetic DURING import, where it cannot call
@@ -148,6 +183,7 @@ namespace AIHWSim.AssetTools
         /// </summary>
         public const int PrioWindow = 20;
         public const int PrioSetSource = 21;
+        public const int PrioClearStaging = 22;
         public const int PrioSync = 100;
         public const int PrioCommit = 101;
         public const int PrioRefreshImports = 102;

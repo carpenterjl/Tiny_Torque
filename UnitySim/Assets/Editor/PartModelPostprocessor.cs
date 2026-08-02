@@ -22,7 +22,22 @@ namespace AIHWSim.EditorTools
             string p = path.Replace('\\', '/');
             return p.Contains("Resources/PartModels/")   // vehicle parts
                 || p.Contains("Resources/TrackProps/")   // track scenery + arcade props
-                || p.Contains("Resources/Cosmetics/");   // unlockable cosmetics + crates
+                || p.Contains("Resources/Cosmetics/")    // unlockable cosmetics + crates
+                // Asset Studio's preview staging: an external Blender export
+                // copied in so it can be rendered before anyone decides to
+                // commit it. It gets these settings for the whole point of the
+                // preview — an FBX imported on Unity's defaults would arrive at
+                // the file's own unit scale and carrying its own materials, so
+                // the preview would show a different car from the one the game
+                // would build, which is the one thing the preview exists to
+                // rule out. Staged files are outside Resources/ and unreachable
+                // by Resources.Load; see AssetStudioStaging.
+                //
+                // No GetVersion() bump: this widens WHICH assets are in scope
+                // and changes nothing about the settings any existing asset
+                // already has, so there is nothing to propagate — and a bump
+                // would reimport 200+ FBX for a folder that starts out empty.
+                || p.StartsWith(AssetTools.AssetStudio.StagingDir + "/");
         }
 
         private void OnPreprocessModel()
