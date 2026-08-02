@@ -59,9 +59,12 @@ namespace AIHWSim.Combat
 
             // Aim. Old-input mouse axes — the flight scene already reads
             // KeyCode directly, and the turret follows the house style.
+            // The turret follows the mouse DIRECTLY: mouse up aims up. A gunner
+            // is pointing a gun, not flying a stick, so the pilot's pull-back-
+            // for-nose-up convention does not carry across into this seat.
             Yaw = Mathf.Clamp(Yaw + Input.GetAxis("Mouse X") * mouseSensitivity,
                               -160f, 160f);
-            Pitch = Mathf.Clamp(Pitch - Input.GetAxis("Mouse Y") * mouseSensitivity,
+            Pitch = Mathf.Clamp(Pitch + Input.GetAxis("Mouse Y") * mouseSensitivity,
                                 -80f, 10f);
             _pivot.localRotation = Quaternion.Euler(-Pitch, Yaw, 0f);
 

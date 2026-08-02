@@ -1,0 +1,409 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Tiny Torque — Controls</title>
+<style>
+  :root{
+    --bg:#f6f7f9; --panel:#ffffff; --ink:#14181d; --muted:#5d6874; --line:#e2e6ea;
+    --accent:#0b6bcb; --accent-soft:#e8f1fc;
+    --cap-face:#fdfdfe; --cap-edge:#c8cfd7; --cap-ink:#1d2329;
+    --warn-bg:#fff6e5; --warn-ink:#7a5200; --warn-line:#f0d9a8;
+  }
+  @media (prefers-color-scheme: dark){
+    :root{
+      --bg:#0f1216; --panel:#161b21; --ink:#e7ecf2; --muted:#96a2b0; --line:#252c35;
+      --accent:#5fa8ff; --accent-soft:#12243a;
+      --cap-face:#232a33; --cap-edge:#0d1116; --cap-ink:#e9eef4;
+      --warn-bg:#2a2313; --warn-ink:#e9c66a; --warn-line:#4a3d1c;
+    }
+  }
+  *{box-sizing:border-box}
+  body{
+    margin:0; background:var(--bg); color:var(--ink);
+    font:15px/1.55 ui-sans-serif,-apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+  }
+  .wrap{max-width:1080px; margin:0 auto; padding:40px 22px 90px}
+  header.top{margin-bottom:28px}
+  h1{font-size:30px; margin:0 0 6px; letter-spacing:-.02em}
+  .sub{color:var(--muted); max-width:62ch}
+  h2{font-size:20px; margin:0; letter-spacing:-.01em}
+  h3{font-size:14px; text-transform:uppercase; letter-spacing:.09em; color:var(--muted); margin:22px 0 8px}
+
+  /* ---------- key caps ---------- */
+  .k{
+    display:inline-flex; align-items:center; justify-content:center;
+    min-width:26px; height:26px; padding:0 7px; margin:2px 1px;
+    background:var(--cap-face); color:var(--cap-ink);
+    border:1px solid var(--cap-edge); border-bottom-width:3px; border-radius:6px;
+    font:600 12px/1 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+    white-space:nowrap; vertical-align:middle;
+  }
+  .k.wide{min-width:64px}
+  .k.mouse{border-radius:9px 9px 7px 7px; min-width:30px}
+  .sep{color:var(--muted); padding:0 3px; font-size:12px}
+
+  /* ---------- gamepad glyphs ---------- */
+  .p{
+    display:inline-flex; align-items:center; justify-content:center;
+    height:24px; min-width:24px; padding:0 6px; margin:2px 1px;
+    border-radius:999px; font:700 11px/1 ui-sans-serif,system-ui,sans-serif;
+    color:#0d1116; vertical-align:middle; white-space:nowrap;
+    box-shadow:inset 0 -2px 0 rgba(0,0,0,.18);
+  }
+  .p.a{background:#5bc46b} .p.b{background:#e8635f} .p.x{background:#5aa0e8} .p.y{background:#e8c95a}
+  .p.sh{background:#aab4c0; border-radius:8px; min-width:34px}
+  .p.tr{background:#8f9aa8; border-radius:8px 8px 12px 12px; min-width:34px; color:#fff}
+  .p.st{background:#7f8a98; color:#fff; border-radius:999px; min-width:34px}
+  .p.dp{background:#525c68; color:#fff; border-radius:6px; min-width:30px}
+  .p.sel{background:#6b7482; color:#fff; border-radius:6px; min-width:44px}
+  .p.none{background:none; box-shadow:none; color:var(--muted); font-weight:400}
+
+  /* ---------- cards & tables ---------- */
+  .card{
+    background:var(--panel); border:1px solid var(--line); border-radius:14px;
+    padding:20px 22px 8px; margin:0 0 20px;
+  }
+  .card > .head{display:flex; align-items:baseline; gap:12px; flex-wrap:wrap; margin-bottom:4px}
+  .tag{
+    font:600 11px/1 ui-sans-serif,system-ui,sans-serif; text-transform:uppercase; letter-spacing:.07em;
+    padding:5px 9px; border-radius:999px; background:var(--accent-soft); color:var(--accent);
+  }
+  .lede{color:var(--muted); margin:6px 0 14px; max-width:78ch}
+  .scroll{overflow-x:auto; -webkit-overflow-scrolling:touch; margin:0 -22px; padding:0 22px}
+  table{border-collapse:collapse; width:100%; min-width:640px}
+  th{
+    text-align:left; font:600 11px/1 ui-sans-serif,system-ui,sans-serif; text-transform:uppercase;
+    letter-spacing:.08em; color:var(--muted); padding:0 10px 8px 0; border-bottom:1px solid var(--line);
+  }
+  td{padding:9px 10px 9px 0; border-bottom:1px solid var(--line); vertical-align:top}
+  tr:last-child td{border-bottom:none}
+  td.act{font-weight:600; width:24%; min-width:150px}
+  td.kb{width:27%; min-width:170px}
+  td.pad{width:21%; min-width:130px}
+  td.note{color:var(--muted); font-size:13.5px}
+  .note code{font:12px/1 ui-monospace,Menlo,Consolas,monospace; background:var(--accent-soft); padding:2px 5px; border-radius:4px}
+
+  .callout{
+    background:var(--warn-bg); border:1px solid var(--warn-line); color:var(--warn-ink);
+    border-radius:10px; padding:12px 14px; margin:14px 0 18px; font-size:13.5px;
+  }
+  .callout b{color:inherit}
+  .legend{display:flex; flex-wrap:wrap; gap:10px 26px; margin-top:10px}
+  .legend div{font-size:13px; color:var(--muted)}
+  .toc{display:flex; flex-wrap:wrap; gap:8px; margin:18px 0 30px}
+  .toc a{
+    text-decoration:none; color:var(--ink); background:var(--panel); border:1px solid var(--line);
+    padding:7px 12px; border-radius:999px; font-size:13px;
+  }
+  .toc a:hover{border-color:var(--accent); color:var(--accent)}
+  footer{color:var(--muted); font-size:13px; border-top:1px solid var(--line); padding-top:18px; margin-top:30px}
+  .grid2{display:grid; grid-template-columns:1fr; gap:0}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header class="top">
+  <h1>Tiny Torque — control reference</h1>
+  <p class="sub">Every binding in the project, grouped by the scene or mode it belongs to.
+  Only the <b>car</b> controls are rebindable; everything else is a fixed key, on purpose —
+  the flight, editor and overlay keys are tools rather than player controls, and documenting
+  a fixed key is only honest if it is one.</p>
+
+  <div class="legend">
+    <div><span class="k">W</span> keyboard key</div>
+    <div><span class="k mouse">LMB</span> mouse</div>
+    <div><span class="p a">A</span><span class="p b">B</span><span class="p x">X</span><span class="p y">Y</span> face buttons (south / east / west / north)</div>
+    <div><span class="p sh">LB</span><span class="p tr">RT</span> shoulders &amp; triggers</div>
+    <div><span class="p dp">▲</span> d-pad</div>
+    <div><span class="p st">L3</span> stick click</div>
+  </div>
+
+  <nav class="toc">
+    <a href="#menus">Menus</a>
+    <a href="#car">Car — Track scene</a>
+    <a href="#arcade">Arcade &amp; mini-games</a>
+    <a href="#plane">RC airplane</a>
+    <a href="#jet">VTOL jet</a>
+    <a href="#weapons">Weapons</a>
+    <a href="#turret">Turret</a>
+    <a href="#garage">Garage editor</a>
+    <a href="#builder">Track builder</a>
+    <a href="#overlays">Dev overlays</a>
+    <a href="#tests">Test scenes</a>
+  </nav>
+</header>
+
+<!-- ============================ MENUS ============================ -->
+<section class="card" id="menus">
+  <div class="head"><h2>Menus, pause and front end</h2><span class="tag">every scene</span></div>
+  <p class="lede">Every menu is fully pad-navigable. The gamepad claims the focus ring as soon as
+  you touch it, and the mouse takes it straight back.</p>
+  <div class="scroll">
+  <table>
+    <tr><th>Action</th><th>Keyboard / mouse</th><th>Gamepad</th><th>Notes</th></tr>
+    <tr><td class="act">Move focus</td><td class="kb"><span class="k">↑</span><span class="k">↓</span><span class="k">←</span><span class="k">→</span></td><td class="pad"><span class="p dp">✚</span><span class="sep">or</span>left stick</td><td class="note">Mouse hover also moves the focus ring.</td></tr>
+    <tr><td class="act">Select</td><td class="kb"><span class="k">Enter</span><span class="sep">/</span><span class="k mouse">LMB</span></td><td class="pad"><span class="p a">A</span></td><td class="note">South button.</td></tr>
+    <tr><td class="act">Back</td><td class="kb"><span class="k">Esc</span></td><td class="pad"><span class="p b">B</span></td><td class="note">East button.</td></tr>
+    <tr><td class="act">Pause / unpause</td><td class="kb"><span class="k">Esc</span></td><td class="pad"><span class="p sel">Start</span></td><td class="note"><b>Escape always pauses</b>, whatever <code>Pause</code> is rebound to — pause is the only route back to the screen that holds the bindings.</td></tr>
+    <tr><td class="act">Submit code field</td><td class="kb"><span class="k">Enter</span><span class="sep">/</span><span class="k">Num Enter</span></td><td class="pad"><span class="p none">—</span></td><td class="note">Redeem box on the cosmetics page.</td></tr>
+    <tr><td class="act">Leave attract mode</td><td class="kb">any key</td><td class="pad">any button or stick</td><td class="note">The idle full-screen attract loop breaks on any activity.</td></tr>
+  </table>
+  </div>
+</section>
+
+<!-- ============================ CAR ============================ -->
+<section class="card" id="car">
+  <div class="head"><h2>Driving the car</h2><span class="tag">Track scene · rebindable</span></div>
+  <p class="lede">Defaults for the <b>WASD</b> layout. These are the only controls in the project
+  that rebind — from <b>Options</b> or <b>Esc ▸ Settings ▸ Controls</b>, with a WASD layout, an
+  Arrows layout and a reset. On a gamepad only the <b>digital</b> actions rebind: throttle and
+  steering stay welded to the triggers and the left stick, because binding an analog axis to a
+  button is offering to make the controller worse.</p>
+  <div class="scroll">
+  <table>
+    <tr><th>Action</th><th>Keyboard</th><th>Gamepad</th><th>Notes</th></tr>
+    <tr><td class="act">Accelerate</td><td class="kb"><span class="k">W</span><span class="sep">or</span><span class="k">↑</span></td><td class="pad"><span class="p tr">RT</span></td><td class="note">Analog on the trigger.</td></tr>
+    <tr><td class="act">Reverse / brake</td><td class="kb"><span class="k">S</span><span class="sep">or</span><span class="k">↓</span></td><td class="pad"><span class="p tr">LT</span></td><td class="note">Held at a standstill it selects reverse.</td></tr>
+    <tr><td class="act">Steer left</td><td class="kb"><span class="k">A</span><span class="sep">or</span><span class="k">←</span></td><td class="pad">left stick X</td><td class="note" rowspan="2">The four driving axes each keep an <b>alternate</b> binding, because W-or-↑ both worked before rebinding existed.</td></tr>
+    <tr><td class="act">Steer right</td><td class="kb"><span class="k">D</span><span class="sep">or</span><span class="k">→</span></td><td class="pad">left stick X</td></tr>
+    <tr><td class="act">Foot brake</td><td class="kb"><span class="k wide">Left Ctrl</span></td><td class="pad"><span class="p b">B</span></td><td class="note">East button.</td></tr>
+    <tr><td class="act">Handbrake / drift</td><td class="kb"><span class="k wide">Space</span></td><td class="pad"><span class="p a">A</span></td><td class="note">Held. The drift entry in arcade handling.</td></tr>
+    <tr><td class="act">Respawn</td><td class="kb"><span class="k">R</span></td><td class="pad"><span class="p y">Y</span></td><td class="note">To the nearest point on the track.</td></tr>
+    <tr><td class="act">Use item</td><td class="kb"><span class="k wide">Left Shift</span></td><td class="pad"><span class="p x">X</span></td><td class="note">Arcade mode only.</td></tr>
+    <tr><td class="act">Look back</td><td class="kb"><span class="k">C</span></td><td class="pad"><span class="p st">R3</span></td><td class="note">Held.</td></tr>
+    <tr><td class="act">Horn</td><td class="kb"><span class="k">H</span></td><td class="pad"><span class="p st">L3</span></td><td class="note">Held.</td></tr>
+    <tr><td class="act">Manual ⇄ Auto</td><td class="kb"><span class="k">M</span></td><td class="pad"><span class="p sel">Select</span></td><td class="note">Hands the stick to <code>car_controller.dll</code>; you still steer.</td></tr>
+    <tr><td class="act">Pause</td><td class="kb"><span class="k">Esc</span></td><td class="pad"><span class="p sel">Start</span></td><td class="note">Never unbindable.</td></tr>
+  </table>
+  </div>
+
+  <h3>The Arrows layout, for comparison</h3>
+  <div class="scroll">
+  <table>
+    <tr><th>Action</th><th>Keyboard</th><th>Action</th><th>Keyboard</th></tr>
+    <tr><td class="act">Drive / steer</td><td class="kb"><span class="k">↑</span><span class="k">↓</span><span class="k">←</span><span class="k">→</span></td><td class="act">Respawn</td><td class="kb"><span class="k wide">Delete</span></td></tr>
+    <tr><td class="act">Foot brake</td><td class="kb"><span class="k wide">Right Ctrl</span></td><td class="act">Use item</td><td class="kb"><span class="k">Num 0</span></td></tr>
+    <tr><td class="act">Handbrake</td><td class="kb"><span class="k wide">Right Shift</span></td><td class="act">Look back</td><td class="kb"><span class="k">Num 1</span></td></tr>
+    <tr><td class="act">Manual ⇄ Auto</td><td class="kb"><span class="k">End</span></td><td class="act">Horn</td><td class="kb"><span class="k">Num 2</span></td></tr>
+  </table>
+  </div>
+  <p class="lede">Arrows moves the whole control set to the right of the keyboard and drops the
+  alternates, so the letter keys are free. Any hand edit makes the layout <b>Custom</b> — the two
+  named layouts are shortcuts, not cages. Conflicting bindings are <em>reported</em>, not
+  prevented: a deliberate double-bind is a legitimate thing to want, and the only difference
+  between that and a typo is whether you meant it.</p>
+</section>
+
+<!-- ============================ ARCADE ============================ -->
+<section class="card" id="arcade">
+  <div class="head"><h2>Arcade extras &amp; mini-games</h2><span class="tag">soccer · CTF · demolition</span></div>
+  <p class="lede">Two extra actions exist only where a mode enables them. Space and Left Shift
+  would be the natural pair, but handbrake and use-item already hold them, and a duplicate
+  default would read as a broken binding table.</p>
+  <div class="scroll">
+  <table>
+    <tr><th>Action</th><th>Keyboard</th><th>Gamepad</th><th>Notes</th></tr>
+    <tr><td class="act">Jump</td><td class="kb"><span class="k">E</span></td><td class="pad"><span class="p sh">LB</span></td><td class="note">Soccer mode. Rebindable like the rest.</td></tr>
+    <tr><td class="act">Boost</td><td class="kb"><span class="k">Q</span></td><td class="pad"><span class="p sh">RB</span></td><td class="note">Soccer mode.</td></tr>
+    <tr><td class="act">Use item</td><td class="kb"><span class="k wide">Left Shift</span></td><td class="pad"><span class="p x">X</span></td><td class="note">Fires the held pickup — missile, mine, smoke, oil.</td></tr>
+  </table>
+  </div>
+</section>
+
+<!-- ============================ PLANE ============================ -->
+<section class="card" id="plane">
+  <div class="head"><h2>RC airplane</h2><span class="tag">Create RC Plane Scene · fixed keys</span></div>
+  <p class="lede">The layout is <b>Kerbal Space Program's</b>, not a Mode 2 transmitter's. Mode 2 is
+  what RC pilots actually fly, and it was right while the aeroplane was a flying test article —
+  but a transmitter's value is two proportional sticks, and a key is a switch. The gamepad keeps
+  proportional sticks; only the assignment changed.</p>
+
+  <div class="callout"><b>The throttle is a ratchet.</b> It integrates your input as a <em>rate</em>
+  rather than tracking it, because a real throttle lever has no centring spring and a key and a
+  trigger both do. Tracking directly would idle the engine the moment you let go, and hands-off
+  flight would be impossible. The trigger is read analog, so a light pull trims and a hard one sweeps.</div>
+
+  <div class="scroll">
+  <table>
+    <tr><th>Action</th><th>Keyboard</th><th>Gamepad</th><th>Notes</th></tr>
+    <tr><td class="act">Pitch</td><td class="kb"><span class="k">W</span><span class="sep">/</span><span class="k">S</span></td><td class="pad">left stick Y</td><td class="note"><b>W is forward, and forward on a stick is nose DOWN.</b> On the pad, pulling back raises the nose.</td></tr>
+    <tr><td class="act">Yaw</td><td class="kb"><span class="k">A</span><span class="sep">/</span><span class="k">D</span></td><td class="pad">right stick X</td><td class="note">Rudder.</td></tr>
+    <tr><td class="act">Roll</td><td class="kb"><span class="k">Q</span><span class="sep">/</span><span class="k">E</span></td><td class="pad">left stick X</td><td class="note">Ailerons. Keyboard axes ramp rather than snap — a step input on a control surface is not a manoeuvre any pilot can make.</td></tr>
+    <tr><td class="act">Throttle up / down</td><td class="kb"><span class="k wide">Left Shift</span><span class="sep">/</span><span class="k wide">Left Ctrl</span></td><td class="pad"><span class="p tr">RT</span><span class="sep">/</span><span class="p tr">LT</span></td><td class="note">Ratcheted: it holds where you leave it. Full sweep in about a second.</td></tr>
+    <tr><td class="act">Throttle full / cut</td><td class="kb"><span class="k">Z</span><span class="sep">/</span><span class="k">X</span></td><td class="pad"><span class="p sh">RB</span><span class="sep">/</span><span class="p sh">LB</span></td><td class="note">Applied after the ratchet, so holding Ctrl and tapping Z gives full power rather than a fight. A go-around needs power <em>now</em>.</td></tr>
+    <tr><td class="act">SAS on / off</td><td class="kb"><span class="k">T</span></td><td class="pad"><span class="p dp">▲</span></td><td class="note">Stability assist. Lives on the input side — the aeroplane itself declares no stability augmentation.</td></tr>
+    <tr><td class="act">SAS hold-off</td><td class="kb"><span class="k">F</span></td><td class="pad"><span class="p none">—</span></td><td class="note"><b>Held.</b> Momentary override; the panel dims so the reason it stopped holding attitude is on screen.</td></tr>
+    <tr><td class="act">SAS mode</td><td class="kb"><span class="k">1</span>…<span class="k">6</span></td><td class="pad"><span class="p dp">◀</span><span class="p dp">▶</span></td><td class="note">Pad cycles; keys pick directly. Choosing the mode already running turns SAS <b>off</b> — a radio button that is also a toggle has to behave that way.</td></tr>
+    <tr><td class="act">Camera view</td><td class="kb"><span class="k">V</span></td><td class="pad"><span class="p sel">Select</span></td><td class="note">Cycles chase / pilot / free.</td></tr>
+    <tr><td class="act">Reset</td><td class="kb"><span class="k">R</span></td><td class="pad"><span class="p y">Y</span></td><td class="note">Re-launch. Throttle closes and the sticks centre.</td></tr>
+  </table>
+  </div>
+
+  <h3>The six SAS modes</h3>
+  <div class="scroll">
+  <table>
+    <tr><th>Key</th><th>Mode</th><th>What it holds</th><th></th></tr>
+    <tr><td class="act"><span class="k">1</span></td><td class="kb">Stability Assist</td><td class="note" colspan="2">Kills rates and holds the attitude you had when you engaged it.</td></tr>
+    <tr><td class="act"><span class="k">2</span></td><td class="kb">Prograde</td><td class="note" colspan="2">Points the nose down the velocity vector.</td></tr>
+    <tr><td class="act"><span class="k">3</span></td><td class="kb">Retrograde</td><td class="note" colspan="2">Points it back up the velocity vector.</td></tr>
+    <tr><td class="act"><span class="k">4</span></td><td class="kb">Target</td><td class="note" colspan="2">Chases the scene target — and, on the jet, whatever the seeker has locked. Greyed out with no target.</td></tr>
+    <tr><td class="act"><span class="k">5</span></td><td class="kb">Wings Level</td><td class="note" colspan="2">Rolls level and leaves pitch to you.</td></tr>
+    <tr><td class="act"><span class="k">6</span></td><td class="kb">Altitude Hold</td><td class="note" colspan="2">Holds the altitude you engaged at, through a vertical-speed cascade.</td></tr>
+  </table>
+  </div>
+  <p class="lede">A stick deflection past 10 % takes that axis back outright, so you never have to
+  switch SAS off to fly.</p>
+</section>
+
+<!-- ============================ JET ============================ -->
+<section class="card" id="jet">
+  <div class="head"><h2>VTOL jet</h2><span class="tag">Create VTOL Jet Scene</span></div>
+  <p class="lede">Everything above still applies — the jet flies on the same panel model as the
+  trainer and takes the same stick. It adds exactly one axis: the <b>nozzles</b>. The scene spawns
+  you <b>hovering</b> at 40 m, nozzles down, SAS holding attitude and the throttle preset to the
+  predicted hover fraction.</p>
+  <div class="scroll">
+  <table>
+    <tr><th>Action</th><th>Keyboard</th><th>Gamepad</th><th>Notes</th></tr>
+    <tr><td class="act">Nozzles aft</td><td class="kb"><span class="k">Num 8</span></td><td class="pad"><span class="p b">B</span></td><td class="note">Toward forward flight. Num 8 / Num 2 is the San Andreas Hydra's own map.</td></tr>
+    <tr><td class="act">Nozzles down</td><td class="kb"><span class="k">Num 2</span></td><td class="pad"><span class="p dp">▼</span></td><td class="note">Toward the hover, and past the vertical for braking and backing up. Push forward to go faster, like everything else in a cockpit.</td></tr>
+  </table>
+  </div>
+  <div class="callout"><b>The nozzle lever is a second ratchet</b>, for the same reason the throttle
+  is one, and it sweeps its full travel in two seconds — slow enough that a transition is a
+  manoeuvre rather than a mode flip. It deliberately survives a reset: a respawning VTOL wants the
+  configuration it crashed in, not a surprise transition.</div>
+  <p class="lede"><b>At the hover the control surfaces are dead</b> — no airspeed, and no slipstream,
+  because a jet's tail is not in a propeller wake. Control comes from puffers bleeding engine
+  thrust to nose, tail and wingtip stations, driven by the same stick the panels take. The bleed is
+  subtracted from the lift thrust, so <em>full stick in the hover genuinely costs height</em>.
+  Puffer authority fades to zero as the nozzles swing aft, so there is no mode switch anywhere.</p>
+</section>
+
+<!-- ============================ WEAPONS ============================ -->
+<section class="card" id="weapons">
+  <div class="head"><h2>Weapons</h2><span class="tag">jet only</span></div>
+  <p class="lede">Three weapons on one fire key. <b>Press</b> for a missile or a bomb stick,
+  <b>hold</b> for the cannon. Weapons never enter the actuator vector and never touch the pilot
+  input seam — they are not plant inputs.</p>
+  <div class="scroll">
+  <table>
+    <tr><th>Action</th><th>Keyboard</th><th>Gamepad</th><th>Notes</th></tr>
+    <tr><td class="act">Swap weapon</td><td class="kb"><span class="k wide">Tab</span></td><td class="pad"><span class="p x">X</span></td><td class="note">Missiles → cannon → bombs. The seeker only hunts while missiles are up.</td></tr>
+    <tr><td class="act">Fire missile</td><td class="kb"><span class="k wide">Space</span></td><td class="pad"><span class="p a">A</span></td><td class="note">Press. 8 rounds, 0.7 s between launches.</td></tr>
+    <tr><td class="act">Fire cannon</td><td class="kb"><span class="k wide">Space</span></td><td class="pad"><span class="p a">A</span></td><td class="note"><b>Held.</b> Runs on heat, not ammo — hold it too long and it locks out until it cools past half.</td></tr>
+    <tr><td class="act">Drop bombs</td><td class="kb"><span class="k wide">Space</span></td><td class="pad"><span class="p a">A</span></td><td class="note">Press. A stick of six at 0.15 s intervals, released on its own clock whether or not you keep the key down.</td></tr>
+    <tr><td class="act">Lock on</td><td class="kb" colspan="2"><em>automatic</em></td><td class="note">No scan key to hold — pointing the aeroplane is already a full-time job. The nearest valid target inside a 15° forward cone starts acquiring on its own: a twelve-segment circle fills <b>green</b>, then goes <b>solid red, pulsing</b>, with a confirmation chirp. Air targets out to 700 m, ground to 450 m.</td></tr>
+  </table>
+  </div>
+  <p class="lede">The Hydra's hidden speed modifier is here in the open: missiles fired at
+  <b>air</b> targets fly at twice the base speed. Guidance is lead pursuit at ~120°/s that drops to
+  a crawl inside the commit range, so a hard break still defeats it — a missile that cannot be
+  missed is a hitscan with theatrics.</p>
+</section>
+
+<!-- ============================ TURRET ============================ -->
+<section class="card" id="turret">
+  <div class="head"><h2>Turret</h2><span class="tag">jet only</span></div>
+  <p class="lede">The "passenger" gun, flown solo: you drop into a free-aim belly turret while SAS
+  holds the aeroplane. The flight keys keep working — SAS only holds attitude — so you can creep a
+  hover sideways while hosing the range.</p>
+  <div class="scroll">
+  <table>
+    <tr><th>Action</th><th>Keyboard / mouse</th><th>Gamepad</th><th>Notes</th></tr>
+    <tr><td class="act">Enter / leave turret</td><td class="kb"><span class="k">C</span></td><td class="pad"><span class="p st">R3</span></td><td class="note">Forces SAS to Stability Assist on the way in and restores camera, SAS and cursor exactly on the way out.</td></tr>
+    <tr><td class="act">Aim</td><td class="kb">mouse</td><td class="pad"><span class="p none">—</span></td><td class="note">±160° in yaw, +10° to −80° in pitch. Direct — mouse up aims up, not the pilot's pull-back-for-nose-up. The cursor locks while you are in the seat.</td></tr>
+    <tr><td class="act">Fire</td><td class="kb"><span class="k mouse">LMB</span><span class="sep">or</span><span class="k wide">Space</span></td><td class="pad"><span class="p a">A</span></td><td class="note">Held. Same heat-limited cannon.</td></tr>
+  </table>
+  </div>
+</section>
+
+<!-- ============================ GARAGE ============================ -->
+<section class="card" id="garage">
+  <div class="head"><h2>Garage editor</h2><span class="tag">fixed keys</span></div>
+  <div class="scroll">
+  <table>
+    <tr><th>Action</th><th>Keyboard / mouse</th><th>Gamepad</th><th>Notes</th></tr>
+    <tr><td class="act">Place / drag part</td><td class="kb"><span class="k mouse">LMB</span></td><td class="pad"><span class="p a">A</span></td><td class="note">Pad ⓐ cycles the selection instead of pointing.</td></tr>
+    <tr><td class="act">Move selection</td><td class="kb">drag</td><td class="pad">left stick</td><td class="note">In the camera plane.</td></tr>
+    <tr><td class="act">Rotate held part</td><td class="kb">scroll</td><td class="pad"><span class="p sh">LB</span><span class="p sh">RB</span></td><td class="note">15° per notch.</td></tr>
+    <tr><td class="act">Raise / lower</td><td class="kb"><span class="k none">—</span></td><td class="pad"><span class="p tr">LT</span><span class="p tr">RT</span></td><td class="note"></td></tr>
+    <tr><td class="act">Pitch part</td><td class="kb"><span class="k none">—</span></td><td class="pad">right stick</td><td class="note">Sensor aim, antenna tilt, wing angle.</td></tr>
+    <tr><td class="act">Zoom camera</td><td class="kb"><span class="k wide">Ctrl</span>+scroll</td><td class="pad"><span class="p none">—</span></td><td class="note">Ctrl is needed only <em>during</em> a drag — plain scroll belongs to the ghost's yaw then.</td></tr>
+    <tr><td class="act">Orbit / pan camera</td><td class="kb"><span class="k mouse">RMB</span><span class="sep">/</span><span class="k mouse">MMB</span></td><td class="pad"><span class="p none">—</span></td><td class="note">Stay live while holding a part; only the UI panels block them.</td></tr>
+    <tr><td class="act">Mirror mode</td><td class="kb"><span class="k">X</span></td><td class="pad"><span class="p x">X</span></td><td class="note">Places a twin on the other side.</td></tr>
+    <tr><td class="act">Grid snap</td><td class="kb"><span class="k">N</span></td><td class="pad"><span class="p none">—</span></td><td class="note">Works during a drag too.</td></tr>
+    <tr><td class="act">Frame selection</td><td class="kb"><span class="k">F</span></td><td class="pad"><span class="p y">Y</span></td><td class="note"></td></tr>
+    <tr><td class="act">Eyedropper</td><td class="kb"><span class="k wide">Alt</span>+<span class="k mouse">LMB</span></td><td class="pad"><span class="p none">—</span></td><td class="note">Paint tab: samples the colour under the cursor.</td></tr>
+    <tr><td class="act">Undo / redo</td><td class="kb"><span class="k wide">Ctrl+Z</span><span class="k wide">Ctrl+Y</span></td><td class="pad"><span class="p none">—</span></td><td class="note"></td></tr>
+    <tr><td class="act">Cancel drag / leave</td><td class="kb"><span class="k">Esc</span></td><td class="pad"><span class="p b">B</span></td><td class="note">Cancels the drag if one is running, otherwise leaves the scene.</td></tr>
+  </table>
+  </div>
+</section>
+
+<!-- ============================ BUILDER ============================ -->
+<section class="card" id="builder">
+  <div class="head"><h2>Track builder</h2><span class="tag">fixed keys</span></div>
+  <div class="scroll">
+  <table>
+    <tr><th>Action</th><th>Keyboard / mouse</th><th>Gamepad</th><th>Notes</th></tr>
+    <tr><td class="act">Place / select</td><td class="kb"><span class="k mouse">LMB</span></td><td class="pad"><span class="p a">A</span></td><td class="note">Pad ⓐ cycles the selection.</td></tr>
+    <tr><td class="act">Move item</td><td class="kb">drag</td><td class="pad">left stick</td><td class="note">Props auto-drop to the ground.</td></tr>
+    <tr><td class="act">Rotate</td><td class="kb">scroll</td><td class="pad"><span class="p sh">LB</span><span class="p sh">RB</span></td><td class="note"></td></tr>
+    <tr><td class="act">Scale</td><td class="kb"><span class="k wide">Shift</span>+scroll</td><td class="pad"><span class="p tr">LT</span><span class="p tr">RT</span></td><td class="note">The triggers scale here rather than lifting, because props drop by themselves.</td></tr>
+    <tr><td class="act">Orbit camera</td><td class="kb"><span class="k mouse">RMB</span></td><td class="pad">right stick</td><td class="note"></td></tr>
+    <tr><td class="act">Top-down map view</td><td class="kb"><span class="k">T</span></td><td class="pad"><span class="p none">—</span></td><td class="note"></td></tr>
+    <tr><td class="act">Frame selection</td><td class="kb"><span class="k">F</span></td><td class="pad"><span class="p y">Y</span></td><td class="note"></td></tr>
+    <tr><td class="act">Delete</td><td class="kb"><span class="k wide">Delete</span></td><td class="pad"><span class="p none">—</span></td><td class="note"></td></tr>
+    <tr><td class="act">Undo / redo</td><td class="kb"><span class="k wide">Ctrl+Z</span><span class="k wide">Ctrl+Y</span></td><td class="pad"><span class="p none">—</span></td><td class="note"></td></tr>
+    <tr><td class="act">Cancel / deselect</td><td class="kb"><span class="k">Esc</span></td><td class="pad"><span class="p b">B</span></td><td class="note"></td></tr>
+  </table>
+  </div>
+</section>
+
+<!-- ============================ OVERLAYS ============================ -->
+<section class="card" id="overlays">
+  <div class="head"><h2>Developer overlays</h2><span class="tag">any scene · pinned</span></div>
+  <p class="lede">Deliberately not rebindable. They are tools rather than controls, and every one of
+  them is routed through the input layer rather than reading the legacy Input class directly — so
+  the project keeps working under any Active Input Handling setting.</p>
+  <div class="scroll">
+  <table>
+    <tr><th>Key</th><th>Overlay</th><th></th><th></th></tr>
+    <tr><td class="act"><span class="k">G</span></td><td class="kb">Telemetry graph</td><td class="note" colspan="2">Live channel plots.</td></tr>
+    <tr><td class="act"><span class="k">J</span></td><td class="kb">Metrics</td><td class="note" colspan="2">Frame and step statistics.</td></tr>
+    <tr><td class="act"><span class="k">K</span></td><td class="kb">Mission</td><td class="note" colspan="2">Mission / objective state.</td></tr>
+    <tr><td class="act"><span class="k">P</span></td><td class="kb">Freeze the graph</td><td class="note" colspan="2">Pauses the plot without pausing the sim.</td></tr>
+    <tr><td class="act"><span class="k">[</span> <span class="k">]</span></td><td class="kb">Window size</td><td class="note" colspan="2">Shrink / grow the overlay window.</td></tr>
+  </table>
+  </div>
+</section>
+
+<!-- ============================ TESTS ============================ -->
+<section class="card" id="tests">
+  <div class="head"><h2>Physics &amp; flight test scenes</h2><span class="tag">P0–P9 · A0–A7</span></div>
+  <p class="lede">These scenes drive themselves — a scripted driver or pilot runs the manoeuvre and
+  writes a result. There is exactly one control.</p>
+  <div class="scroll">
+  <table>
+    <tr><th>Action</th><th>Keyboard</th><th>Gamepad</th><th>Notes</th></tr>
+    <tr><td class="act">Take over manually</td><td class="kb"><span class="k">M</span></td><td class="pad"><span class="p none">—</span></td><td class="note">Abandons the script and hands you the vehicle. The test stops reporting from that moment, which is the point.</td></tr>
+  </table>
+  </div>
+</section>
+
+<footer>
+  Generated from the source of record: <code>Core/KeyBindings.cs</code>,
+  <code>Core/InputReader.cs</code>, <code>Core/Flight/PilotInputSource.cs</code>,
+  <code>Core/Flight/SasController.cs</code>, <code>Combat/WeaponsController.cs</code>,
+  <code>Combat/TurretController.cs</code>, <code>Garage/GarageUI.cs</code>,
+  <code>TrackEd/TrackBuilderUI.cs</code>. If a binding here disagrees with the game, the
+  code wins — and this page is wrong.
+</footer>
+
+</div>
+</body>
+</html>
