@@ -884,8 +884,23 @@ namespace AIHWSim.Vehicles
             }
         }
 
-        /// <summary>Nominal dimensions the body FBX shells are authored at (m).</summary>
-        private static readonly Vector3 BodyMeshAuthorSize = new Vector3(0.20f, 0.10f, 0.42f);
+        /// <summary>
+        /// Nominal dimensions the body FBX shells are authored at (m).
+        ///
+        /// <b>A divisor, not a measurement.</b> No shipped shell is 0.20 x 0.10 x
+        /// 0.42: the exporter scaled each car to length 0.420 with ONE uniform
+        /// factor, so the real widths land between 0.17 and 0.20 and the heights
+        /// wherever the body happens to be. That is why
+        /// <c>PartModelValidator</c> pins those bodies' length and leaves their
+        /// width free. Comparing an authored mesh to this constant axis by axis
+        /// therefore reads as distortion where there is none — the per-axis divide
+        /// below exists so a DESIGN can stretch a shell by changing bodySize, not to
+        /// fit a mesh to a box.
+        ///
+        /// Public so Asset Studio can state the contract it checks an import
+        /// against rather than keeping its own copy of 0.420.
+        /// </summary>
+        public static readonly Vector3 BodyMeshAuthorSize = new Vector3(0.20f, 0.10f, 0.42f);
 
         /// <summary>FBX key for the shapes that have an authored shell, else null.</summary>
         public static string BodyMeshKey(BodyShape s) => s switch
