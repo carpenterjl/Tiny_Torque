@@ -46,6 +46,7 @@ namespace AIHWSim.AssetTools
         [SerializeField] private bool _showPreview = true;
         [SerializeField] private float _previewHeight = 300f;
         [SerializeField] private PreviewOptions _preview = new PreviewOptions();
+        [SerializeField] private AssetStudioDraftEditor _draftEditor = new AssetStudioDraftEditor();
 
         // The rig itself cannot be serialized — a PreviewRenderUtility owns a
         // scene and a render texture, neither of which survives a domain reload.
@@ -101,8 +102,28 @@ namespace AIHWSim.AssetTools
                                  + " — nothing will list as External.");
         }
 
-        private void OnEnable() => wantsMouseMove = true;
+        private void OnEnable()
+        {
+            wantsMouseMove = true;
+            Undo.undoRedoPerformed += OnUndoRedo;
+        }
+
         private void OnFocus() => AssetStudioCatalog.Refresh();
+
+        /// <summary>Persist the draft when attention moves elsewhere. SetDirty
+        /// alone leaves it in memory, and "restart the editor, the draft is
+        /// intact" is the property drafts are for.</summary>
+        private void OnLostFocus() =>
+            AssetStudioDrafts.Save(AssetStudioDrafts.Find(Current()));
+
+        /// <summary>An undo rewrites the draft without passing through this
+        /// window, so the preview's "has the draft changed" token misses it. Force
+        /// the rebind rather than trust the token.</summary>
+        private void OnUndoRedo()
+        {
+            _rig?.InvalidateBinding();
+            Repaint();
+        }
 
         // Both, and both idempotent. OnDisable runs before a domain reload and
         // when the tab is merely hidden; OnDestroy runs when it is closed. Miss
@@ -112,9 +133,13 @@ namespace AIHWSim.AssetTools
 
         private void Release()
         {
+            Undo.undoRedoPerformed -= OnUndoRedo;
             _rig?.Dispose();
             _rig = null;
         }
+
+        private AssetRow Current() =>
+            AssetStudioCatalog.Find(_selectedKey, _selectedExportDir);
 
         private void OnGUI()
         {
@@ -269,12 +294,13 @@ namespace AIHWSim.AssetTools
                 }
 
                 TtExport x = r.Export;
+                AssetStudioDraft draft = AssetStudioDrafts.Find(r);
                 _previewLive = false;
-                if (_showPreview) DrawPreview(r, x);
+                if (_showPreview) DrawPreview(r, x, draft);
 
                 _detailScroll = EditorGUILayout.BeginScrollView(_detailScroll);
 
-                DrawIdentity(r);
+                DrawIdentity(r, draft);
                 if (r.status == RowStatus.Broken)
                     EditorGUILayout.HelpBox("This export could not be read: " + r.problem,
                                             MessageType.Error);
@@ -284,9 +310,27 @@ namespace AIHWSim.AssetTools
                     DrawVerification(x);
                     DrawContract(r, x);
                     DrawNotes(x);
-                    DrawMaterials(x);
                 }
-                DrawObjects(r, x);
+
+                if (draft != null)
+                {
+                    // The draft owns materials and meshes once it exists. Showing
+                    // the read-only export lists beside it would be two answers to
+                    // the same question, and the one you cannot edit is the one
+                    // that looks authoritative.
+                    _draftEditor.Draw(draft, r, _preview, LiveRenderers(r));
+                    if (Event.current.type == EventType.Repaint
+                        && _draftEditor.HoverRenderer >= 0)
+                    {
+                        _hoverRenderer = _draftEditor.HoverRenderer;
+                        _hoverSlot = _draftEditor.HoverSlot;
+                    }
+                }
+                else
+                {
+                    if (x != null) DrawMaterials(x);
+                    DrawObjects(r, x);
+                }
 
                 EditorGUILayout.EndScrollView();
 
@@ -305,7 +349,7 @@ namespace AIHWSim.AssetTools
 
         // ---- the viewport ----
 
-        private void DrawPreview(AssetRow r, TtExport x)
+        private void DrawPreview(AssetRow r, TtExport x, AssetStudioDraft draft)
         {
             string path = PreviewPath(r, x, out string why);
 
@@ -325,14 +369,18 @@ namespace AIHWSim.AssetTools
 
             _rig ??= new AssetStudioPreview();
 
-            Rect view = GUILayoutUtility.GetRect(
-                10f, 100000f, _previewHeight, _previewHeight, GUILayout.ExpandWidth(true));
+            // Ask by option, not by a huge maxWidth. GetRect's min/max form hands
+            // the request straight back on the Layout pass, and a preview that
+            // said "up to 100000 wide" then tried to allocate a render texture
+            // that size filled the console with driver errors.
+            Rect view = GUILayoutUtility.GetRect(0f, _previewHeight,
+                GUILayout.ExpandWidth(true), GUILayout.Height(_previewHeight));
             HandleViewport(view);
-            _rig.Draw(view, r, _preview, path, x);
+            _rig.Draw(view, r, _preview, path, x, draft);
             _previewLive = _rig.Renderers.Count > 0;
             DrawViewportLabels(view, r);
             DrawSplitter();
-            DrawPreviewControls(r, x);
+            DrawPreviewControls(r, x, draft);
         }
 
         /// <summary>
@@ -428,7 +476,8 @@ namespace AIHWSim.AssetTools
 
         private void DrawSplitter()
         {
-            Rect sp = GUILayoutUtility.GetRect(10f, 100000f, 5f, 5f);
+            Rect sp = GUILayoutUtility.GetRect(0f, 5f,
+                GUILayout.ExpandWidth(true), GUILayout.Height(5f));
             EditorGUI.DrawRect(sp, new Color(0f, 0f, 0f, 0.20f));
             EditorGUIUtility.AddCursorRect(sp, MouseCursor.ResizeVertical);
 
@@ -453,12 +502,19 @@ namespace AIHWSim.AssetTools
 
         // ---- the controls under it ----
 
-        private void DrawPreviewControls(AssetRow r, TtExport x)
+        private void DrawPreviewControls(AssetRow r, TtExport x, AssetStudioDraft draft)
         {
             using (new EditorGUILayout.HorizontalScope(EditorStyles.toolbar))
             {
-                _preview.table = (TokenTable)EditorGUILayout.EnumPopup(
-                    _preview.table, EditorStyles.toolbarPopup, GUILayout.Width(110f));
+                // With a draft up, the choice that matters is draft-versus-game,
+                // not which legacy table — so the table popup only appears when
+                // the legacy path is what is being shown.
+                if (draft != null)
+                    _preview.useDraft = GUILayout.Toggle(_preview.useDraft, "Draft",
+                        EditorStyles.toolbarButton, GUILayout.Width(52f));
+                if (draft == null || !_preview.useDraft)
+                    _preview.table = (TokenTable)EditorGUILayout.EnumPopup(
+                        _preview.table, EditorStyles.toolbarPopup, GUILayout.Width(110f));
 
                 bool canCorrect = x != null && x.UnityDims != Vector3.zero;
                 using (new EditorGUI.DisabledScope(!canCorrect))
@@ -516,7 +572,7 @@ namespace AIHWSim.AssetTools
                 }
             }
 
-            DrawPreviewNotes(r, x);
+            DrawPreviewNotes(r, x, draft);
             EditorGUILayout.Space(2f);
         }
 
@@ -525,8 +581,34 @@ namespace AIHWSim.AssetTools
         /// rather than buried in a doc comment: which assets bind through a table
         /// the preview actually has, and what a null material slot means.
         /// </summary>
-        private void DrawPreviewNotes(AssetRow r, TtExport x)
+        private void DrawPreviewNotes(AssetRow r, TtExport x, AssetStudioDraft draft)
         {
+            bool byDraft = draft != null && _preview.useDraft;
+
+            if (byDraft)
+            {
+                if (_rig != null && _rig.RenderersWithEmptySlots > 0)
+                    EditorGUILayout.HelpBox(
+                        $"{_rig.RenderersWithEmptySlots} renderer"
+                        + (_rig.RenderersWithEmptySlots == 1 ? " has" : "s have")
+                        + " a slot the draft has not mapped — those show magenta. "
+                        + "Assign them in the child-mesh list below.", MessageType.Warning);
+
+                if (_rig != null && _rig.MissingMaps.Count > 0)
+                    EditorGUILayout.HelpBox(
+                        "Textures the export names but the folder does not have: "
+                        + string.Join(", ", _rig.MissingMaps), MessageType.Error);
+
+                EditorGUILayout.HelpBox(
+                    "Draft binding: per submesh SLOT, from the draft's own mapping — "
+                    + "what the manifest path will do. The materials are built here in "
+                    + "the editor from the export's PNGs, which R2 replaces with the "
+                    + "runtime loader; normal maps are loaded raw rather than through a "
+                    + "NormalMap import, so judge shape by them, not sharpness.",
+                    MessageType.None);
+                return;
+            }
+
             if (!AssetStudioPreview.TableIsExact(r.kind))
                 EditorGUILayout.HelpBox(
                     "Approximate binding. Bodies, wheels and cosmetics bind through the "
@@ -553,7 +635,7 @@ namespace AIHWSim.AssetTools
 
         // ==================== detail sections ====================
 
-        private void DrawIdentity(AssetRow r)
+        private void DrawIdentity(AssetRow r, AssetStudioDraft draft)
         {
             EditorGUILayout.LabelField(r.label, EditorStyles.boldLabel);
             using (new EditorGUI.IndentLevelScope())
@@ -568,7 +650,7 @@ namespace AIHWSim.AssetTools
                     EditorGUILayout.LabelField("Export folder", r.exportDir);
             }
 
-            if (r.status == RowStatus.Imported)
+            if (r.status == RowStatus.Imported && draft == null)
                 EditorGUILayout.HelpBox(
                     "Bound by the legacy substring token tables — its object names are "
                     + "matched case-insensitively, first match wins, against "
@@ -584,7 +666,28 @@ namespace AIHWSim.AssetTools
                 using (new EditorGUI.DisabledScope(!r.HasExport))
                     if (GUILayout.Button("Show export folder", GUILayout.Height(22f)))
                         EditorUtility.RevealInFinder(r.exportDir);
+
+                // A draft is only meaningful with an export behind it — it is the
+                // authored form of what export.json says, and there is nothing to
+                // sync a draft of body_patrol from.
+                if (draft == null)
+                    using (new EditorGUI.DisabledScope(r.Export == null))
+                        if (GUILayout.Button("Create draft", GUILayout.Height(22f)))
+                        {
+                            AssetStudioDrafts.Create(r);
+                            _rig?.InvalidateBinding();
+                        }
             }
+
+            if (draft == null && r.HasExport && r.Export != null)
+                EditorGUILayout.HelpBox(
+                    "No draft yet. A draft is where this export becomes an ASSET: "
+                    + "which material goes in which submesh slot, what each mesh is for "
+                    + "when it takes damage, and the scale and yaw correction. It is a "
+                    + "ScriptableObject under " + AssetStudio.DraftDir + ", so every "
+                    + "edit is a Ctrl+Z and nothing is written to Resources/ until it "
+                    + "is committed.", MessageType.Info);
+
             EditorGUILayout.Space();
         }
 

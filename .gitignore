@@ -69,6 +69,7 @@ UnitySim/Assets/Plugins/x86_64/*.pdb
 # copies from THERE, and "Clear preview staging" empties this. Committing a
 # staged copy would put a second, silently diverging original in the repo.
 UnitySim/Assets/TinyTorqueAssets/AssetStudio/Staging/
+UnitySim/Assets/TinyTorqueAssets/AssetStudio/Staging.meta
 
 # Runtime output / personal data (settings, profiles, session snapshots)
 UnitySim/TelemetryLogs/

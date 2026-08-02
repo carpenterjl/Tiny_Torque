@@ -55,6 +55,13 @@ namespace AIHWSim.AssetTools
 
         public bool showRuler = true;
         public bool isolate;
+
+        /// <summary>Bind from the draft's per-slot mapping instead of the legacy
+        /// token tables. Only meaningful when a draft exists; turning it off is
+        /// how you compare "what I am authoring" against "what the game does with
+        /// this mesh today".</summary>
+        public bool useDraft = true;
+
         public TokenTable table = TokenTable.Auto;
         public Color bodyColor = new Color(0.80f, 0.20f, 0.22f);
 
@@ -114,7 +121,8 @@ namespace AIHWSim.AssetTools
         // divide can then scale, which is exactly the order a committed asset
         // will apply them in.
         private GameObject _root, _design, _correction, _inst, _ruler;
-        private Material _bodyMat, _highlightMat, _rulerMat, _tickMat;
+        private Material _bodyMat, _highlightMat, _rulerMat, _tickMat, _unboundMat;
+        private AssetStudioDraftMaterials _baker;
 
         private readonly List<Renderer> _rends = new List<Renderer>();
         private readonly List<Material[]> _bound = new List<Material[]>();
@@ -169,6 +177,12 @@ namespace AIHWSim.AssetTools
 
         /// <summary>Drop the loaded asset. Cheap to call — the next Draw rebuilds.</summary>
         public void Invalidate() => _builtPath = "";
+
+        /// <summary>Force the next Draw to re-bind without reloading the mesh. What
+        /// an undo needs: <c>Undo</c> rolls the draft back without going through
+        /// SetDirty in an order this class can observe, so the revision token it
+        /// watches is not enough on its own.</summary>
+        public void InvalidateBinding() => _bindKey = "";
 
         private void Load(string prefabPath)
         {
@@ -246,10 +260,17 @@ namespace AIHWSim.AssetTools
             kind == AssetKind.CarBody || kind == AssetKind.Wheel
             || kind == AssetKind.Cosmetic || kind == AssetKind.Unassigned;
 
-        private void Bind(AssetRow row, PreviewOptions o)
+        private void Bind(AssetRow row, PreviewOptions o, AssetStudioDraft draft)
         {
+            bool byDraft = o.useDraft && draft != null;
             TokenTable table = Resolve(o.table, row);
-            string key = table + "|" + ColorUtility.ToHtmlStringRGB(o.bodyColor);
+
+            // GetDirtyCount ticks on every SetDirty, so it is exactly "the draft
+            // changed" without this class knowing which field. Editing a
+            // smoothness therefore rebuilds the materials and nothing else.
+            int rev = draft != null ? EditorUtility.GetDirtyCount(draft) : 0;
+            string key = (byDraft ? "draft" + rev : table.ToString())
+                         + "|" + ColorUtility.ToHtmlStringRGB(o.bodyColor);
             if (key == _bindKey) return;
             _bindKey = key;
 
@@ -263,7 +284,8 @@ namespace AIHWSim.AssetTools
                 _bodyMat = new Material(Shader.Find("Standard")) { hideFlags = HideAndDont };
             _bodyMat.color = o.bodyColor;
 
-            switch (table)
+            if (byDraft) BindFromDraft(draft, o.bodyColor);
+            else switch (table)
             {
                 // The shell path, verbatim: "paint*" takes the tintable material,
                 // everything else takes the first token its name contains.
@@ -300,10 +322,59 @@ namespace AIHWSim.AssetTools
                 _bound.Add(mats);
                 SlotCount += mats.Length;
                 foreach (Material m in mats)
-                    if (m == null) { RenderersWithEmptySlots++; break; }
+                    if (m == null || m == _unboundMat) { RenderersWithEmptySlots++; break; }
             }
             _overlayKey = "";
         }
+
+        /// <summary>
+        /// Bind every renderer per SLOT from the draft — the thing the token
+        /// tables structurally cannot do, since <c>AssignByName</c> writes
+        /// <c>sharedMaterial</c> and that is slot 0.
+        ///
+        /// A slot the draft has not mapped gets a loud unbound material rather
+        /// than null. Null renders as Unity's pink error shader in some paths and
+        /// as nothing in others; neither says "you have not assigned this yet",
+        /// and this is the one screen where that sentence is the whole message.
+        /// </summary>
+        private void BindFromDraft(AssetStudioDraft draft, Color tint)
+        {
+            _baker ??= new AssetStudioDraftMaterials();
+            _baker.ClearMaterials();
+
+            if (_unboundMat == null)
+            {
+                _unboundMat = new Material(Shader.Find("Standard"))
+                {
+                    name = "(unbound slot)",
+                    color = new Color(0.85f, 0.10f, 0.75f),
+                    hideFlags = HideAndDont,
+                };
+                _unboundMat.SetFloat("_Glossiness", 0.1f);
+            }
+
+            foreach (Renderer r in _rends)
+            {
+                if (r == null) continue;
+                DraftObject o = draft.Object(r.gameObject.name);
+                int slots = Mathf.Max(1, r.sharedMaterials?.Length ?? 1);
+                var mats = new Material[slots];
+                for (int s = 0; s < slots; s++)
+                {
+                    string name = o != null && s < o.slots.Count ? o.slots[s] : "";
+                    DraftMaterial dm = string.IsNullOrEmpty(name) ? null : draft.Material(name);
+                    mats[s] = dm != null
+                        ? _baker.Get(dm, draft.sourceDir, tint)
+                        : _unboundMat;
+                }
+                r.sharedMaterials = mats;
+            }
+        }
+
+        /// <summary>Textures the draft names that its export folder does not
+        /// have. Empty until a draft bind has run.</summary>
+        public IReadOnlyList<string> MissingMaps =>
+            _baker != null ? _baker.MissingMaps : System.Array.Empty<string>();
 
         /// <summary>Put every renderer back the way binding left it.</summary>
         private void ClearOverlay()
@@ -479,22 +550,35 @@ namespace AIHWSim.AssetTools
         // ==================== draw ====================
 
         /// <summary>
-        /// Render <paramref name="row"/> into <paramref name="rect"/>. Returns the
-        /// camera ray for the current mouse position, so the window can pick
-        /// without knowing anything about the rig.
+        /// Bring the rig up to date with <paramref name="o"/>, and — on a Repaint
+        /// only — render it into <paramref name="rect"/>.
+        ///
+        /// <b>The Repaint gate is not tidiness.</b> IMGUI runs this method on
+        /// every event, and on the Layout pass GUILayout has not resolved widths
+        /// yet, so the rect it hands back still carries the layout request rather
+        /// than a measurement. Feeding that to <c>BeginPreview</c> asks for a
+        /// render texture of whatever the request said, which is how a 100000-wide
+        /// preview and a console full of "requested size is too large for the
+        /// current maxRenderTextureSize" happen. Repaint is the one pass where the
+        /// rect is a fact.
+        ///
+        /// The state above the gate still runs every pass, because picking and
+        /// the ruler read <see cref="WorldBounds"/> and a MouseUp must not be
+        /// answered from bounds computed for a different zoom.
         /// </summary>
         public void Draw(Rect rect, AssetRow row, PreviewOptions o, string prefabPath,
-                         TtExport export)
+                         TtExport export, AssetStudioDraft draft)
         {
             EnsureUtility();
             if (prefabPath != _builtPath) Load(prefabPath);
             if (_root == null)
             {
-                EditorGUI.HelpBox(rect, Problem, MessageType.Warning);
+                if (Event.current.type == EventType.Repaint)
+                    EditorGUI.HelpBox(rect, Problem, MessageType.Warning);
                 return;
             }
 
-            Bind(row, o);
+            Bind(row, o, draft);
             Overlay(o);
             float target = RulerLength(row);
             Transform(row, o, export, target);
@@ -510,6 +594,21 @@ namespace AIHWSim.AssetTools
             cam.transform.SetPositionAndRotation(eye, look);
             cam.nearClipPlane = Mathf.Max(1e-4f, dist * 0.01f);
             cam.farClipPlane = dist * 12f;
+
+            if (Event.current.type != EventType.Repaint) return;
+
+            // A second belt on top of the Repaint gate. A docked window mid-drag,
+            // a collapsed pane or a zero-height layout can all hand over a rect
+            // that is real and still not renderable, and the failure mode is a
+            // driver-level allocation error rather than a blank box.
+            if (rect.width < 4f || rect.height < 4f) return;
+            if (rect.width > 8192f || rect.height > 8192f)
+            {
+                EditorGUI.HelpBox(rect, "Preview area is " + (int)rect.width + " x "
+                    + (int)rect.height + " px, which is past what a render texture "
+                    + "can be. Resize the window.", MessageType.Warning);
+                return;
+            }
 
             _prev.BeginPreview(rect, GUIStyle.none);
             _prev.Render(true);
@@ -571,6 +670,9 @@ namespace AIHWSim.AssetTools
             Kill(ref _highlightMat);
             Kill(ref _rulerMat);
             Kill(ref _tickMat);
+            Kill(ref _unboundMat);
+            _baker?.Dispose();
+            _baker = null;
             _rends.Clear();
             _bound.Clear();
             SlotCount = 0;
