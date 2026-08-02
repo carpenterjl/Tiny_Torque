@@ -4,6 +4,17 @@ using UnityEngine;
 namespace AIHWSim.Vehicles
 {
     /// <summary>
+    /// A rim re-tint applied over an existing wheel mesh, as opposed to a wheel
+    /// that is its own mesh.
+    ///
+    /// Named so the wheel path can stop asking "is the style between 6 and 8".
+    /// That range test is the reason a Legendary wheel nearly shipped neon pink,
+    /// and it is the one thing about wheel styles that an FBX key cannot carry —
+    /// three of them share the slick's mesh and differ only here.
+    /// </summary>
+    public enum WheelFinish { None, Chrome, Gold, Neon }
+
+    /// <summary>
     /// Runtime builder for stylized, compound-primitive part visuals — the single
     /// visual source shared by the garage preview and the driving track. Every
     /// piece is a collider-stripped Unity primitive placed on the built-in
@@ -384,8 +395,11 @@ namespace AIHWSim.Vehicles
 
         /// <summary>Map a wheel-style index to its authored FBX key. Styles
         /// 6-8 are FINISHES, not meshes: the slick re-tinted chrome/gold/neon
-        /// (append-only ints, so old saves never shift).</summary>
-        private static string WheelStyleKey(int style) => style switch
+        /// (append-only ints, so old saves never shift).
+        ///
+        /// Public so <c>[AKEY]</c> can check <c>WheelCatalog</c>'s transcription
+        /// against the switch while the switch is still the live path.</summary>
+        public static string WheelStyleKey(int style) => style switch
         {
             1 => "knobby",
             2 => "rally",
@@ -428,9 +442,34 @@ namespace AIHWSim.Vehicles
         public const float TiguanWheelAuthorRadius = 0.349f;
 
         public static float AuthorRadiusFor(int wheelStyle) =>
-            wheelStyle == 13 || wheelStyle == 14
-                ? TiguanWheelAuthorRadius
-                : WheelAuthorRadius;
+            IsFullScale(wheelStyle) ? TiguanWheelAuthorRadius : WheelAuthorRadius;
+
+        /// <summary>
+        /// Whether this style is one of the Tiguan's two full-scale wheels.
+        ///
+        /// One test, three consumers — the author radius above, the token table
+        /// and the finish pass in <see cref="BuildWheelViz"/> — because they are
+        /// one fact: this wheel came from a different pipeline. Writing it out
+        /// three times is how two of them end up agreeing and the third does not.
+        /// </summary>
+        public static bool IsFullScale(int wheelStyle) =>
+            wheelStyle == 13 || wheelStyle == 14;
+
+        /// <summary>
+        /// The rim finish a style applies over the slick, or
+        /// <see cref="WheelFinish.None"/>.
+        ///
+        /// 6-8 are FINISHES; 9-12 are their own authored meshes with their own
+        /// authored materials and must fall through untouched — a bare
+        /// "style &lt; 6" would have painted all four Legendary wheels neon pink.
+        /// </summary>
+        public static WheelFinish FinishFor(int wheelStyle) => wheelStyle switch
+        {
+            6 => WheelFinish.Chrome,
+            7 => WheelFinish.Gold,
+            8 => WheelFinish.Neon,
+            _ => WheelFinish.None,
+        };
 
         // Neon rim: hot-pink emissive, the one wheel that glows in the dark maps.
         private static Material _neonRim;
@@ -554,12 +593,10 @@ namespace AIHWSim.Vehicles
         /// primitive fallback (shared Rim/Hub/Stud materials).</summary>
         private static void ApplyWheelFinish(GameObject root, int style)
         {
-            // 6-8 are FINISHES over the slick. 9-12 are their own authored
-            // meshes with their own authored materials, and must fall through
-            // untouched — a bare "style < 6" would have painted all four
-            // Legendary wheels neon pink.
-            if (style < 6 || style > 8) return;
-            Material finish = style == 6 ? Chrome : style == 7 ? Gold : NeonRim;
+            WheelFinish which = FinishFor(style);
+            if (which == WheelFinish.None) return;
+            Material finish = which == WheelFinish.Chrome ? Chrome
+                            : which == WheelFinish.Gold ? Gold : NeonRim;
             foreach (var r in root.GetComponentsInChildren<Renderer>())
             {
                 string n = r.gameObject.name.ToLowerInvariant();
@@ -614,7 +651,7 @@ namespace AIHWSim.Vehicles
                 // instead: its pieces carry "tig*" names that match nothing in
                 // WheelTokens, so it would otherwise take the tyre fallback on
                 // every piece and arrive as a solid black wheel.
-                bool tiguan = style == 13 || style == 14;
+                bool tiguan = IsFullScale(style);
                 PartMeshLibrary.AssignByName(mesh, tiguan ? null : Tire,
                                              tiguan ? TiguanTokens : WheelTokens);
                 if (!tiguan) ApplyWheelFinish(mesh, style);

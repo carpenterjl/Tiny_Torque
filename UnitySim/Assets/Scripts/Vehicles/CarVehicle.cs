@@ -870,23 +870,7 @@ namespace AIHWSim.Vehicles
                 if (inst != null)
                 {
                     _bodyMeshInstance = inst.transform;
-                    // Every arcade shell is exported scaled to length 0.420, so
-                    // one author size served them all and bodySize/authorSize is
-                    // the ratio that renders it undistorted.
-                    //
-                    // The Tiguan takes no scale at all, and not merely because
-                    // it is already 1:1. Its renderer bounds (2.099 x 1.472,
-                    // carrying the door mirrors and the roof rails) are
-                    // deliberately NOT its collision box (1.839 x 1.443, the
-                    // published body) — neither mirrors nor rails are solid.
-                    // Routing it through this divide would force those two to be
-                    // the same number and squash the car to make them agree.
-                    inst.transform.localScale = bodyShape == BodyShape.Tiguan
-                        ? Vector3.one
-                        : new Vector3(
-                            bodySize.x / BodyMeshAuthorSize.x,
-                            bodySize.y / BodyMeshAuthorSize.y,
-                            bodySize.z / BodyMeshAuthorSize.z);
+                    inst.transform.localScale = BodyRenderScale(bodyShape, bodySize);
                     // Painted livery (decoded by VehicleFactory): the texture
                     // carries the colours, so the material tint goes white.
                     if (liveryTex != null)
@@ -934,6 +918,30 @@ namespace AIHWSim.Vehicles
         /// against rather than keeping its own copy of 0.420.
         /// </summary>
         public static readonly Vector3 BodyMeshAuthorSize = new Vector3(0.20f, 0.10f, 0.42f);
+
+        /// <summary>
+        /// The local scale an authored shell is instantiated at.
+        ///
+        /// Every arcade shell is exported scaled to length 0.420, so one author
+        /// size served them all and bodySize/authorSize is the ratio that renders
+        /// it undistorted.
+        ///
+        /// The Tiguan takes no scale at all, and not merely because it is already
+        /// 1:1. Its renderer bounds (2.099 x 1.472, carrying the door mirrors and
+        /// the roof rails) are deliberately NOT its collision box (1.839 x 1.443,
+        /// the published body) — neither mirrors nor rails are solid. Routing it
+        /// through this divide would force those two to be the same number and
+        /// squash the car to make them agree.
+        ///
+        /// Named rather than inlined so <c>[AKEY]</c> can check the catalogue's
+        /// "authored 1:1" flag against the branch that is still the live one.
+        /// </summary>
+        public static Vector3 BodyRenderScale(BodyShape s, Vector3 bodySize) =>
+            s == BodyShape.Tiguan
+                ? Vector3.one
+                : new Vector3(bodySize.x / BodyMeshAuthorSize.x,
+                              bodySize.y / BodyMeshAuthorSize.y,
+                              bodySize.z / BodyMeshAuthorSize.z);
 
         /// <summary>FBX key for the shapes that have an authored shell, else null.</summary>
         public static string BodyMeshKey(BodyShape s) => s switch

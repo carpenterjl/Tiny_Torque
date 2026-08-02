@@ -202,7 +202,9 @@ namespace AIHWSim.Garage
             "tooth", "gum", "tongue", "maw", "sclera", "pupil", "iris", "em_spec",
         };
 
-        private static bool HasFoldedAppendages(BodyShape s) =>
+        /// <summary>Public so <c>[AKEY]</c> can check <c>BodyCatalog</c>'s
+        /// transcription against the branch that is still the live one.</summary>
+        public static bool HasFoldedAppendages(BodyShape s) =>
             s == BodyShape.Rattle || s == BodyShape.Redline ||
             s == BodyShape.Highwing || s == BodyShape.Autopia;
 
