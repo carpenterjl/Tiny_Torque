@@ -396,6 +396,13 @@ namespace AIHWSim.Vehicles
         /// Held for one reason: it is the only thing that knows which SLOT of a
         /// multi-material object is the paint channel.</summary>
         private PartManifestBinding _bodyBinding;
+
+        /// <summary>The "BodyMesh" holder, and the authored shell instantiated
+        /// inside it — null on the primitive path, which is the difference
+        /// between the two. Held so the appearance dump can MEASURE what the
+        /// body resolved to instead of re-running <see cref="BodyMeshKey"/> and
+        /// proving only that the dumper agrees with itself.</summary>
+        private Transform _bodyVisual, _bodyMeshInstance;
         // Tune "Grip (side)" knob. Legacy path: sideways friction stiffness.
         // Brush path: lateral grip scale (× 0.5, so 2.0 = neutral).
         private float _gripStiffness = 2.0f;
@@ -457,6 +464,23 @@ namespace AIHWSim.Vehicles
         /// <summary>The wheel i visual holder (for hiding it during a drag), or null.</summary>
         public Transform GetWheelVisual(int i) =>
             (i >= 0 && i < _wheels.Count) ? _wheels[i].viz : null;
+
+        /// <summary>The authored wheel-style index at wheel i, read back off the
+        /// built car. Design data, but asked of the CAR: what a design says and
+        /// what the wheel was built with are the same number only as long as
+        /// nothing in between drops it.</summary>
+        public int WheelStyle(int i) =>
+            (i >= 0 && i < _wheels.Count) ? _wheels[i].cfg.wheelStyle : 0;
+
+        /// <summary>The "BodyMesh" holder — the primitive builders' parent, and
+        /// the frame the shell is measured in.</summary>
+        public Transform BodyVisual => _bodyVisual;
+
+        /// <summary>The instantiated authored shell, or null when this body
+        /// fell through to the primitive builders. The distinction is not
+        /// derivable from <see cref="bodyShape"/>: a shape WITH a mesh key
+        /// still lands here as null on a machine where the FBX did not ship.</summary>
+        public Transform BodyMeshInstance => _bodyMeshInstance;
 
         /// <summary>Whether wheel i steers (network ghost wheel visuals).</summary>
         public bool WheelAllowsSteering(int i) =>
@@ -829,6 +853,7 @@ namespace AIHWSim.Vehicles
             var holder = new GameObject("BodyMesh").transform;
             holder.SetParent(transform, false);
             holder.localPosition = Vector3.zero;
+            _bodyVisual = holder;
 
             _bodyMat = new Material(Shader.Find("Standard")) { color = bodyColor };
 
@@ -844,6 +869,7 @@ namespace AIHWSim.Vehicles
                 var inst = PartMeshLibrary.TryInstantiate(meshKey, holder, gameObject.layer);
                 if (inst != null)
                 {
+                    _bodyMeshInstance = inst.transform;
                     // Every arcade shell is exported scaled to length 0.420, so
                     // one author size served them all and bodySize/authorSize is
                     // the ratio that renders it undistorted.
@@ -2126,6 +2152,34 @@ namespace AIHWSim.Vehicles
         }
 
         /// <summary>
+        /// The three body-aero numbers this car will actually fly with: the
+        /// design's overrides resolved against the built-in tables.
+        ///
+        /// Cd and reference area are authored when the real car has published
+        /// ones. The built-in <see cref="AeroDynamics.BodyCd"/> table and the
+        /// width*height*0.9 estimate are reasonable guesses for a stylised
+        /// arcade shell and no substitute for a measured figure — and a
+        /// coastdown against a published Cd*A is the single strongest check
+        /// available on this whole aero model, so the numbers have to be the
+        /// real ones.
+        ///
+        /// <b>Public because the design dump reads it.</b> Those two branches
+        /// are the entire difference between a design that authors its drag and
+        /// one that inherits it from its silhouette, which makes them exactly
+        /// what a shape→key migration could break — and a dumper carrying its
+        /// own copy of the branch would go on agreeing with itself after the
+        /// call site stopped agreeing with either. <paramref name="clA"/> is the
+        /// bare table value: <c>aeroMult</c> scales it at the force, not here.
+        /// </summary>
+        public void EffectiveAero(out float cd, out float frontalArea, out float clA)
+        {
+            cd = dragCdOverride > 0f ? dragCdOverride : AeroDynamics.BodyCd(bodyShape);
+            frontalArea = frontalAreaOverride > 0f
+                ? frontalAreaOverride : AeroDynamics.FrontalArea(bodySize);
+            clA = AeroDynamics.BodyClA(bodyShape);
+        }
+
+        /// <summary>
         /// Quadratic aero: body drag applied at the geometric body centre (a few
         /// cm above the CoM, so hard braking from speed pitches the nose a touch),
         /// body lift/downforce at the CoM, and each aero part's downforce + drag
@@ -2140,19 +2194,10 @@ namespace AIHWSim.Vehicles
             Vector3 vDir = v / Mathf.Sqrt(sp2);
             float q = 0.5f * AeroDynamics.AirDensity * sp2;   // dynamic pressure
 
-            // Cd and reference area are authored when the real car has published
-            // ones. The built-in BodyCd table and the width*height*0.9 estimate
-            // are reasonable guesses for a stylised arcade shell and no
-            // substitute for a measured figure — and a coastdown against a
-            // published Cd*A is the single strongest check available on this
-            // whole aero model, so the numbers have to be the real ones.
-            float cd = dragCdOverride > 0f ? dragCdOverride : AeroDynamics.BodyCd(bodyShape);
-            float area = frontalAreaOverride > 0f
-                ? frontalAreaOverride : AeroDynamics.FrontalArea(bodySize);
+            EffectiveAero(out float cd, out float area, out float clA);
             float cdA = cd * area;
             _body.AddForceAtPosition(-vDir * (q * cdA), transform.position, ForceMode.Force);
 
-            float clA = AeroDynamics.BodyClA(bodyShape);
             if (clA > 0f)
                 _body.AddForce(-transform.up * (q * clA * aeroMult), ForceMode.Force);
 
