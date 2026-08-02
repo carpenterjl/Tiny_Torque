@@ -70,14 +70,38 @@ namespace AIHWSim.Core.Flight
             DebugPlaneRig.AttachRunner(ref _rig, graph, physicsRateHz, controlRateHz, logCsv);
             _rig.runner.logLabel = "RcPlane";
 
+            // Stability assist is attached HERE and nowhere else. DebugPlaneRig
+            // builds the aeroplane for the scripted tests too, and an autopilot
+            // quietly flying those would turn the [AERO] gate into a measurement of
+            // this file.
+            var sas = _rig.root.AddComponent<SasController>();
+            sas.plane = _rig.plane;
+            sas.target = FarPylon();
+            _rig.input.sas = sas;
+
             var hud = gameObject.AddComponent<FlightHud>();
-            hud.Bind(_rig.plane, _cameras);
+            hud.Bind(_rig.plane, _cameras, sas, sas.target);
 
             _rig.input.ResetRequested += Respawn;
             _rig.input.ViewToggleRequested += () => _cameras.Cycle();
             if (_rig.input.Human != null) _rig.input.Human.invertElevator = invertElevator;
 
             Launch();
+        }
+
+        /// <summary>The pylon at the far end of the strip, as something for the SAS
+        /// target mode and the navball's target marker to point at. Found by name
+        /// because the environment builder does not hand its scenery back; a miss
+        /// is harmless — target mode greys itself out and the marker disappears.</summary>
+        private static Transform FarPylon()
+        {
+            var pylons = GameObject.Find("Pylons");
+            if (pylons == null) return null;
+
+            Transform best = null;
+            foreach (Transform t in pylons.transform)
+                if (best == null || t.position.z > best.position.z) best = t;
+            return best;
         }
 
         private void Start()

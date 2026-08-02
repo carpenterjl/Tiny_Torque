@@ -24,6 +24,12 @@ namespace AIHWSim.Core.Flight
         /// <summary>Swap this for a scripted pilot in a test.</summary>
         public IPilotInputSource source;
 
+        /// <summary>Optional stability assist, layered over the pilot's commands.
+        /// Attached by the free-flight bootstrap and by nothing else — every
+        /// scripted test leaves it null, so the [AERO] gate measures the aeroplane
+        /// rather than an autopilot flying it.</summary>
+        public SasController sas;
+
         /// <summary>Reset is a scene-level concern, so the bootstrap subscribes
         /// rather than this class knowing where the runway is.</summary>
         public System.Action ResetRequested;
@@ -82,6 +88,13 @@ namespace AIHWSim.Core.Flight
             actuatorOut[PlaneVehicle.AileronActuator] = Mathf.Clamp(source.Roll(), -1f, 1f);
             actuatorOut[PlaneVehicle.ElevatorActuator] = Mathf.Clamp(source.Pitch(), -1f, 1f);
             actuatorOut[PlaneVehicle.RudderActuator] = Mathf.Clamp(source.Yaw(), -1f, 1f);
+
+            // Stability assist gets the last word on aileron and elevator, and it
+            // reads what the pilot asked for to decide whether to take them at all.
+            // This runs here rather than in Update because the simulation runner
+            // calls ReadManualCommands from FixedUpdate — which is the rate the
+            // hold loops these gains came from were tuned at.
+            sas?.Apply(actuatorOut);
 
             // Slots 6 and 7 are named steer and brake by the published C ABI. An
             // aeroplane has neither, and writing anything there would be a claim

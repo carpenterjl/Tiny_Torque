@@ -47,8 +47,11 @@ namespace AIHWSim.EditorTools
             EditorUtility.DisplayDialog(
                 "RC Plane scene",
                 $"Created {ScenePath}. Press Play to fly.\n\n"
-                + "Mode 2 sticks — left: throttle + rudder, right: elevator + aileron.\n"
-                + "Keyboard: W/S throttle, A/D rudder, arrows for elevator and aileron.\n"
+                + "KSP layout. Keyboard: W/S pitch, A/D yaw, Q/E roll; Shift/Ctrl run "
+                + "the throttle, X cuts it, Z is full.\n"
+                + "Gamepad: triggers throttle, left stick rolls and pitches, right "
+                + "stick yaws, LB/RB cut and full.\n"
+                + "[T] toggles SAS, [F] holds it off, 1-6 pick a mode.\n"
                 + "[V] cycles ground station / chase / boresight, [R] resets.\n\n"
                 + "NOTE: the inspector values on RcPlaneBootstrap are saved INTO this "
                 + "scene. Changing a C# default later will not change them — re-run "

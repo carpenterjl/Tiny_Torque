@@ -363,18 +363,76 @@ by which a race, a save file or a LAN session can reach it.
 
 **To fly it:** `Tools > AIHWSim > Create RC Plane Scene`, then Play.
 
-| | gamepad (Mode 2) | keyboard |
-|---|---|---|
-| Throttle | left stick Y (**ratcheted** — it holds where you leave it) | `W` / `S` |
-| Rudder | left stick X | `A` / `D` |
-| Elevator | right stick Y (down = nose up) | `↓` / `↑` |
-| Aileron | right stick X | `←` / `→` |
-| Idle / full cut | `LB` / `RB` | `Shift`+`S` / `Shift`+`W` |
-| View · Reset | `Select` · `North` | `V` · `R` |
+Controls follow **Kerbal Space Program**, and the panel does too — navball, altimeter,
+throttle gauge and six stability-assist modes.
 
-Throttle integrates stick deflection as a *rate* because a real Mode 2 throttle has no
-centring spring. Tracking the stick directly would idle the engine the moment you let
-go, and hands-off flight would be impossible.
+| | keyboard | gamepad |
+|---|---|---|
+| Pitch | `W` / `S` (W is forward, and forward is nose down) | left stick Y (back = nose up) |
+| Yaw | `A` / `D` | right stick X |
+| Roll | `Q` / `E` | left stick X |
+| Throttle | `Shift` / `Ctrl` (**ratcheted** — it holds where you leave it) | `RT` / `LT`, analog |
+| Cut · full | `X` · `Z` | `LB` · `RB` |
+| SAS on/off · hold off | `T` · `F` (held) | D-pad up · — |
+| SAS mode | `1`–`6` | D-pad left/right |
+| View · Reset | `V` · `R` | `Select` · `North` |
+
+Throttle integrates its input as a *rate* rather than tracking it, because a throttle
+lever has no centring spring and a key and a trigger both do. Tracking directly would
+idle the engine the moment you let go, and hands-off flight would be impossible. The
+trigger is read as an analog value, so a light pull trims and a hard one sweeps.
+
+**The previous map was a Mode 2 transmitter** (left stick throttle + rudder, right stick
+elevator + aileron), which is what RC pilots actually fly and was right while the
+aeroplane was purely a flying test article. It is a poor fit for a keyboard: a
+transmitter's value is two proportional sticks, and a key is a switch.
+
+### The panel
+
+The **navball** is a real textured sphere — a hidden unlit ball on its own layer,
+photographed each frame by a dedicated orthographic camera into a 256² RenderTexture.
+The flat artificial horizon it replaces was honest only near level: it slid a quad by
+pitch, so it had nothing to say about vertical flight, inverted flight, or heading at
+all. A sphere has no such regions, because every attitude is just a rotation.
+
+Nothing about it is authored. The ball carries the inverse of the aircraft's attitude,
+so the nose is the centre of the disc by construction; markers project orthographically
+(drop the z) and are **hidden when they fall on the far side** rather than mirrored to
+the wrong place — the classic navball bug, and one that only shows itself in an attitude
+you have to fly to reach. Even the skin's alignment to the mesh is *measured*: the
+sphere's UV seam is read off its own vertices at build time (−90.47° as it happens)
+rather than guessed and nudged until it looks right.
+
+Because a navball is made almost entirely of sign conventions, they are pinned by a
+bench rather than by eye — `[NAVB]`, 18 checks, all of which run headless in a second.
+It asserts the things that look almost right when they are backwards: that the nose sits
+dead centre across 24 attitudes, that astern is hidden, that 10° above the nose draws
+*above* centre, that a nose-up aircraft in level flight shows prograde *below* centre,
+and that 45° of bank swings the markers exactly 45°.
+
+**Stability assist** offers six modes: Stability Assist (hold attitude), Prograde,
+Retrograde, Target, Wings Level and Altitude Hold. `T` toggles, `F` suspends it while
+held, `1`–`6` select. Deflect a stick past 10 % and you own that axis; let go and it
+re-holds wherever you left it.
+
+It lives on the **input** side, layered over the pilot's commands by `PlaneInput`, and
+is attached only by the free-flight scene. `PlaneVehicle` states in its own summary that
+it has no stability augmentation — the damping and stiffness are supposed to emerge from
+panel geometry — so an autopilot hidden inside the vehicle would turn every row of the
+`[AERO]` gate into a measurement of the autopilot. The scripted tests never build one.
+Its gains are not new either: they are copied from the hold loops in `FlightTest.cs`,
+tuned against this airframe, with their counter-intuitive signs restated at the copy.
+Only two gains are new — bank-per-degree of heading error, and climb-per-metre of
+altitude error — and both are marked as such. **SAS never touches the throttle**, as in
+KSP: the ratchet is the pilot's, and an autopilot quietly moving it would make the gauge
+a liar. It never touches the rudder either, because no tuned yaw loop exists anywhere in
+this project and inventing one here would be authoring a coefficient by feel.
+
+One honest limitation, reported rather than hidden: **an aeroplane cannot truly hold
+prograde.** Putting the nose exactly on the velocity vector means flying at zero angle
+of attack, and a wing at zero alpha is not carrying its weight — so prograde hold settles
+into a shallow descent until the pitch clamp catches it. That is a property of a wing,
+not a defect in the loop.
 
 `V` cycles three views. It opens on the **ground station** — standing beside the strip,
 watching the model — because that is how RC is actually flown, and it is the only view
