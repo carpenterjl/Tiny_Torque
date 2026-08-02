@@ -150,5 +150,33 @@ namespace AIHWSim.Vehicles
             foreach (var d in All) if (d.legacy == style) return d;
             return null;
         }
+
+        private static HashSet<string> _warned;
+
+        /// <summary>
+        /// What a saved wheel means, from the pair it carries: the key if it has
+        /// one this build knows, else the legacy int, else the slick.
+        /// <b>Never null.</b> See <see cref="BodyCatalog.Resolve"/> — same rules,
+        /// same reasons, and the key wins for the same reason.
+        ///
+        /// The last fallback is where this and <see cref="ByLegacy"/> part
+        /// company on purpose: the table declines to say what style 47 is, and
+        /// this says "the slick", because that is what
+        /// <c>WheelStyleKey</c> has always rendered for it.
+        /// </summary>
+        public static WheelDef Resolve(string key, int legacy)
+        {
+            if (!string.IsNullOrEmpty(key))
+            {
+                WheelDef byKey = ById(key);
+                if (byKey != null) return byKey;
+                _warned ??= new HashSet<string>();
+                if (_warned.Add(key))
+                    UnityEngine.Debug.LogWarning(
+                        $"[WheelCatalog] Unknown wheel key '{key}'; falling back to wheelStyle " +
+                        $"{legacy}. A newer build may have saved this design.");
+            }
+            return ByLegacy(legacy) ?? All[0];
+        }
     }
 }

@@ -191,5 +191,41 @@ namespace AIHWSim.Vehicles
             foreach (var d in All) if (d.legacy == s) return d;
             return null;
         }
+
+        private static HashSet<string> _warned;
+
+        /// <summary>
+        /// What a saved design means, from the pair it carries: the key if it has
+        /// one this build knows, else the legacy enum, else the box.
+        /// <b>Never null</b> — a design always renders as something.
+        ///
+        /// The key WINS when both are present and disagree. That is the whole
+        /// point of the pair: <see cref="BodyDef.legacy"/> can only name a shape
+        /// that was compiled in, so a body added by Asset Studio has to be able
+        /// to override it.
+        ///
+        /// An unknown key is warned about once per key and then ignored, which is
+        /// the downgrade case: a newer build saved a body this one has never
+        /// heard of. The legacy int it also wrote is the best remaining answer,
+        /// and for a genuinely new asset that answer is Box — there was no enum
+        /// value to write. Nothing can fix that; the warning is so it is not a
+        /// silent box.
+        ///
+        /// The final fallback matches <see cref="CarVehicle.BodyMeshKey"/>'s
+        /// <c>_ => null</c>: an out-of-range enum has always built the primitive.
+        /// </summary>
+        public static BodyDef Resolve(string key, BodyShape legacy)
+        {
+            if (!string.IsNullOrEmpty(key))
+            {
+                BodyDef byKey = ById(key);
+                if (byKey != null) return byKey;
+                _warned ??= new HashSet<string>();
+                if (_warned.Add(key))
+                    Debug.LogWarning($"[BodyCatalog] Unknown body key '{key}'; falling back to " +
+                                     $"bodyShape {legacy}. A newer build may have saved this design.");
+            }
+            return ByLegacy(legacy) ?? ById("box");
+        }
     }
 }

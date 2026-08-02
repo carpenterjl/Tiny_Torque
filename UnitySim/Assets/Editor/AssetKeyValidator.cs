@@ -43,6 +43,7 @@ namespace AIHWSim.EditorTools
             int fail = 0;
             fail += Bodies();
             fail += Wheels();
+            fail += Migration();
             Debug.Log($"{Tag} RESULT {(fail == 0 ? "ALL PASS" : fail + " FAILED")} " +
                       $"({BodyCatalog.All.Length} bodies, {WheelCatalog.All.Length} wheels)");
         }
@@ -226,6 +227,172 @@ namespace AIHWSim.EditorTools
 
             return fail;
         }
+
+        // ---- migration (K2) --------------------------------------------------
+
+        /// <summary>
+        /// The K2 checks, and the only evidence K2 has: the design dump cannot
+        /// see this milestone at all, because nothing reads the new properties
+        /// yet, so an empty diff there proves only that K2 did not break K1.
+        ///
+        /// What is actually being claimed is a round trip — that a design written
+        /// before the keys existed still means the same car, that the key wins
+        /// when the pair disagrees, and that an OLD build reading a NEW file
+        /// still gets the right shape out of the int beside it. All three are
+        /// exercised through <c>JsonUtility</c> rather than in memory, because
+        /// what a field does to a save file is the entire subject.
+        ///
+        /// Unlike the sections above, these checks do <b>not</b> expire at K3:
+        /// they compare the catalogue against the save format, not against a
+        /// switch that is about to be deleted.
+        /// </summary>
+        private static int Migration()
+        {
+            int fail = 0;
+
+            foreach (BodyDef d in BodyCatalog.All)
+            {
+                string why = "";
+
+                // 1. A design written before K2: the int, no key. Through JSON,
+                //    because "absent" and "empty string" have to be the same
+                //    thing here and only JsonUtility can say whether they are.
+                var old = Round(new VehicleDesign { bodyShape = d.legacy, bodyKey = "" });
+                if (old.Body != d) why += $" legacy-only design resolves to '{old.BodyKey}'";
+
+                // 2. The key wins. The wrong int is a real other shape, so this
+                //    cannot pass by both sides happening to say the same thing.
+                BodyShape wrong = d.legacy == BodyShape.Wedge ? BodyShape.Box : BodyShape.Wedge;
+                var mixed = Round(new VehicleDesign { bodyShape = wrong, bodyKey = d.id });
+                if (mixed.Body != d) why += $" key '{d.id}' lost to bodyShape {wrong}";
+
+                // 3. Migrate fills the key in and leaves the int alone — the
+                //    no-op half, which is every design that exists today.
+                old.Migrate();
+                if (old.bodyKey != d.id) why += $" Migrate wrote bodyKey '{old.bodyKey}'";
+                if (old.bodyShape != d.legacy)
+                    why += $" Migrate moved bodyShape to {old.bodyShape}";
+
+                // 4. ...and derives the int back from the key — the half that
+                //    stops a saved file's two readers seeing two different cars.
+                mixed.Migrate();
+                if (mixed.bodyShape != d.legacy)
+                    why += $" Migrate left bodyShape {mixed.bodyShape}, not {d.legacy}";
+
+                // 5. Idempotent: saving twice must not walk.
+                string once = JsonUtility.ToJson(mixed);
+                mixed.Migrate();
+                if (JsonUtility.ToJson(mixed) != once) why += " Migrate is not idempotent";
+
+                // 6. The downgrade. An old build has no bodyKey member, so
+                //    JsonUtility drops it; what is left must still be this body.
+                var downgraded = JsonUtility.FromJson<VehicleDesign>(Strip(once, "bodyKey"));
+                if (downgraded.bodyKey.Length != 0) why += " strip did not remove bodyKey";
+                else if (downgraded.Body != d)
+                    why += $" old build reads this design as '{downgraded.BodyKey}'";
+
+                if (why.Length == 0) Debug.Log($"{Tag} PASS migrate:{d.id}");
+                else { Debug.LogError($"{Tag} FAIL migrate:{d.id} -{why}"); fail++; }
+            }
+
+            foreach (WheelDef d in WheelCatalog.All)
+            {
+                string why = "";
+
+                var old = Round(OneWheel(d.legacy, ""));
+                if (old.wheels[0].Wheel != d)
+                    why += $" legacy-only wheel resolves to '{old.wheels[0].WheelKey}'";
+
+                int wrong = d.legacy == 1 ? 2 : 1;
+                var mixed = Round(OneWheel(wrong, d.id));
+                if (mixed.wheels[0].Wheel != d) why += $" key '{d.id}' lost to wheelStyle {wrong}";
+
+                old.Migrate();
+                if (old.wheels[0].wheelKey != d.id)
+                    why += $" Migrate wrote wheelKey '{old.wheels[0].wheelKey}'";
+                if (old.wheels[0].wheelStyle != d.legacy)
+                    why += $" Migrate moved wheelStyle to {old.wheels[0].wheelStyle}";
+
+                mixed.Migrate();
+                if (mixed.wheels[0].wheelStyle != d.legacy)
+                    why += $" Migrate left wheelStyle {mixed.wheels[0].wheelStyle}, not {d.legacy}";
+
+                string once = JsonUtility.ToJson(mixed);
+                mixed.Migrate();
+                if (JsonUtility.ToJson(mixed) != once) why += " Migrate is not idempotent";
+
+                var downgraded = JsonUtility.FromJson<VehicleDesign>(Strip(once, "wheelKey"));
+                if (downgraded.wheels[0].wheelKey.Length != 0) why += " strip did not remove wheelKey";
+                else if (downgraded.wheels[0].Wheel != d)
+                    why += $" old build reads this wheel as '{downgraded.wheels[0].WheelKey}'";
+
+                if (why.Length == 0) Debug.Log($"{Tag} PASS migrate:{d.id}");
+                else { Debug.LogError($"{Tag} FAIL migrate:{d.id} -{why}"); fail++; }
+            }
+
+            fail += Fallbacks();
+            return fail;
+        }
+
+        /// <summary>
+        /// What happens when neither half of the pair is a thing this build
+        /// knows. Resolution must never return null and must never throw: a
+        /// design that cannot be read is still a design somebody has to drive.
+        ///
+        /// The two LogWarnings this provokes are expected — they are the point of
+        /// the unknown-key rows.
+        /// </summary>
+        private static int Fallbacks()
+        {
+            int fail = 0;
+            string why = "";
+
+            // Unknown key, good int: the downgrade case. The int is the answer.
+            if (BodyCatalog.Resolve("body_from_the_future", BodyShape.Coupe) !=
+                BodyCatalog.ByLegacy(BodyShape.Coupe)) why += " unknown body key ignored the int";
+            if (WheelCatalog.Resolve("wheel_from_the_future", 3) != WheelCatalog.ByLegacy(3))
+                why += " unknown wheel key ignored the int";
+
+            // Nothing usable at all. These match what the live switches have
+            // always built for an out-of-range value: BodyMeshKey's `_ => null`
+            // is the primitive box, WheelStyleKey's `_ => "slick"` is the slick.
+            if (BodyCatalog.Resolve("", (BodyShape)999) != BodyCatalog.ById("box"))
+                why += " out-of-range bodyShape does not fall back to the box";
+            if (WheelCatalog.Resolve("", 47) != WheelCatalog.ById("wheel_slick"))
+                why += " out-of-range wheelStyle does not fall back to the slick";
+            if (BodyCatalog.Resolve(null, BodyShape.Box) == null) why += " null body key threw or returned null";
+            if (WheelCatalog.Resolve(null, 0) == null) why += " null wheel key threw or returned null";
+
+            // And a corrupt int is REWRITTEN, not preserved. 47 has always
+            // rendered as the slick; after a save the file says so.
+            var corrupt = OneWheel(47, "");
+            corrupt.Migrate();
+            if (corrupt.wheels[0].wheelStyle != 0 || corrupt.wheels[0].wheelKey != "wheel_slick")
+                why += $" corrupt wheelStyle 47 migrated to {corrupt.wheels[0].wheelStyle}" +
+                       $"/'{corrupt.wheels[0].wheelKey}'";
+
+            if (why.Length == 0) Debug.Log($"{Tag} PASS migrate:<fallbacks>");
+            else { Debug.LogError($"{Tag} FAIL migrate:<fallbacks> -{why}"); fail++; }
+            return fail;
+        }
+
+        private static VehicleDesign Round(VehicleDesign d) =>
+            JsonUtility.FromJson<VehicleDesign>(JsonUtility.ToJson(d));
+
+        private static VehicleDesign OneWheel(int style, string key)
+        {
+            var d = new VehicleDesign();
+            d.wheels.Add(new WheelSpec { wheelStyle = style, wheelKey = key });
+            return d;
+        }
+
+        /// <summary>Delete a string member from compact JSON, the way an older
+        /// build's <c>JsonUtility</c> would: it has no member to bind it to, so
+        /// the field is simply gone on the next write. Neither key is the last
+        /// field of its object, so the trailing comma always exists.</summary>
+        private static string Strip(string json, string field) =>
+            System.Text.RegularExpressions.Regex.Replace(
+                json, "\"" + field + "\":\"[^\"]*\",", "");
 
         // ---- helpers ---------------------------------------------------------
 

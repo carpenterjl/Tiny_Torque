@@ -63,6 +63,15 @@ namespace AIHWSim.Garage
         public float yaw = 0f;                // heading (deg about up)
         public float radius = 0.033f;         // 66 mm RC tire
         public int wheelStyle = 0;            // cosmetic tyre mesh: 0 slick / 1 knobby / 2 rally
+
+        /// <summary>The <see cref="WheelCatalog"/> key this wheel wears, and the
+        /// field that OUTRANKS <see cref="wheelStyle"/> once both are present.
+        /// Empty on every design written before K2, and on every design that
+        /// arrives over LAN from a peer that predates it — see
+        /// <see cref="WheelKey"/>, which is why nothing needs to fill it in on
+        /// load.</summary>
+        public string wheelKey = "";
+
         public int mirrorGroup = -1;          // shared id links mirror twins; -1 = unlinked
 
         // Steering
@@ -153,6 +162,33 @@ namespace AIHWSim.Garage
         public MotorParams motor = MotorParams.Default();
         public MotorDatasheet motorDatasheet;
         public int motorEntryMode = 0;        // 0=Constants, 1=Datasheet
+
+        /// <summary>
+        /// The wheel style this spec actually means. Reads the pair, key first;
+        /// never null, never throws, and never writes anything back.
+        ///
+        /// A PROPERTY rather than a field filled in on load, because there is no
+        /// one load: designs arrive from <c>VehicleLibrary</c>, from presets,
+        /// from snapshots, from LAN payloads, from <c>Clone</c>, from the
+        /// showroom and from <c>DesignHistory&lt;T&gt;</c> — which is generic
+        /// over <c>T</c> and structurally cannot call a migration hook. A hook on
+        /// nine-plus ingress sites is a hook that gets forgotten on the tenth;
+        /// resolving on read cannot be.
+        /// </summary>
+        public WheelDef Wheel => WheelCatalog.Resolve(wheelKey, wheelStyle);
+
+        /// <summary>Shorthand for <c>Wheel.id</c>.</summary>
+        public string WheelKey => Wheel.id;
+
+        /// <summary>Write the resolved key into <see cref="wheelKey"/> and derive
+        /// <see cref="wheelStyle"/> back FROM it. See
+        /// <see cref="VehicleDesign.Migrate"/>.</summary>
+        public void Migrate()
+        {
+            WheelDef d = Wheel;
+            wheelKey = d.id;
+            wheelStyle = d.legacy;
+        }
 
         public WheelSpec Clone() => (WheelSpec)MemberwiseClone();
     }
@@ -249,6 +285,31 @@ namespace AIHWSim.Garage
     {
         public string name = "New Vehicle";
         public BodyShape bodyShape = BodyShape.Box;
+
+        /// <summary>
+        /// The <see cref="BodyCatalog"/> key this design wears. Written alongside
+        /// <see cref="bodyShape"/>, and OUTRANKS it — a body committed by Asset
+        /// Studio has no enum value to be named by, so the string has to be the
+        /// authority wherever the two disagree.
+        ///
+        /// <b>Both are written, and the int is not vestigial:</b> an older build
+        /// reading this file has only the int, the hand-editable JSON under
+        /// <c>UnitySim/Vehicles/</c> stays legible, and <c>[AKEY]</c> keeps a
+        /// witness to compare the key against for as long as the enum exists.
+        ///
+        /// <b>One data-loss path is unclosable and is documented rather than
+        /// defended against.</b> A new build writes <c>{bodyKey, bodyShape}</c>;
+        /// an OLD build loads it, sees no <c>bodyKey</c>, and re-saves —
+        /// <c>JsonUtility</c> silently drops fields it has no member for, so the
+        /// key is gone and the design is permanently whatever the int said. For a
+        /// body that predates K2 the int is correct and nothing is lost; for one
+        /// Asset Studio added, the int is Box and the design is permanently a
+        /// box. There is no version of this that <c>JsonUtility</c> plus
+        /// downgrade survives, and machinery built against it would only move
+        /// where the loss happens.
+        /// </summary>
+        public string bodyKey = "";
+
         public Vector3 bodySize = new Vector3(0.20f, 0.10f, 0.42f);
         public Color bodyColor = new Color(0.20f, 0.55f, 0.95f);
         // Painted livery: base64 PNG (256×256) stamped onto the body shell's UVs
@@ -429,6 +490,48 @@ namespace AIHWSim.Garage
             d.antennas.Add(new AntennaSpec { name = "ant_l", localPos = new Vector3(-0.05f, 0.09f, -0.15f), yawDeg = -12f, tiltDeg = 16f, mirrorGroup = 1 });
             d.antennas.Add(new AntennaSpec { name = "ant_r", localPos = new Vector3(0.05f, 0.09f, -0.15f), yawDeg = 12f, tiltDeg = 16f, mirrorGroup = 1 });
             return d;
+        }
+
+        /// <summary>
+        /// The body this design actually means. Reads the pair, key first; never
+        /// null, never throws, never writes anything back. See
+        /// <see cref="WheelSpec.Wheel"/> for why this is a property.
+        /// </summary>
+        public BodyDef Body => BodyCatalog.Resolve(bodyKey, bodyShape);
+
+        /// <summary>Shorthand for <c>Body.id</c>.</summary>
+        public string BodyKey => Body.id;
+
+        /// <summary>
+        /// Fill in the string keys and derive the legacy int and enum back FROM
+        /// them, for this design and every wheel on it.
+        ///
+        /// <b>The direction is the point.</b> Resolution already prefers the key,
+        /// so writing the int back is what keeps the pair in a saved file from
+        /// disagreeing with what the game builds — an int that says Box beside a
+        /// key that says <c>body_police</c> is a file whose two readers see two
+        /// different cars.
+        ///
+        /// Called from <see cref="VehicleLibrary.Save"/> and nowhere else. Not
+        /// from load: resolution on read already covers every ingress, and a
+        /// migration that fires on load would rewrite designs nobody edited.
+        /// Idempotent, and a no-op on any design that already agrees with itself
+        /// — which, for every design that existed before K2, means it writes the
+        /// same int back that it read.
+        ///
+        /// It is NOT a no-op on a corrupt one: a <c>wheelStyle</c> of 47 resolves
+        /// to the slick and is rewritten as 0. That is what the game has always
+        /// RENDERED for it, so this makes the file say what was already true.
+        ///
+        /// Mutates in place rather than returning a copy, so the design the
+        /// garage holds carries the key it just saved.
+        /// </summary>
+        public void Migrate()
+        {
+            BodyDef b = Body;
+            bodyKey = b.id;
+            bodyShape = b.legacy;
+            for (int i = 0; i < wheels.Count; i++) wheels[i]?.Migrate();
         }
 
         public VehicleDesign Clone()

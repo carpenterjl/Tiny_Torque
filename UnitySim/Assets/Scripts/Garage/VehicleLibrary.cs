@@ -69,8 +69,17 @@ namespace AIHWSim.Garage
             }
         }
 
+        /// <summary>
+        /// Write a design to disk, filling in its string keys first.
+        ///
+        /// This is the ONLY caller of <see cref="VehicleDesign.Migrate"/>, and
+        /// deliberately: writing a file is the one moment a design's on-disk form
+        /// is being decided, so it is the one moment the pair can be brought into
+        /// agreement without rewriting anything the player did not touch.
+        /// </summary>
         public static string Save(VehicleDesign design)
         {
+            design.Migrate();
             Directory.CreateDirectory(Dir);
             string path = PathFor(design.name);
             File.WriteAllText(path, JsonUtility.ToJson(design, true));
