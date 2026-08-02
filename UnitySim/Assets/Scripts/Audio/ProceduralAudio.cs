@@ -63,6 +63,13 @@ namespace AIHWSim.Audio
         public const string UiDeny = "ui_deny";
         public const string UiUnlock = "ui_unlock";
         public const string UiLevelUp = "ui_levelup";
+        // Aircraft weapons (flight debug scene).
+        /// <summary>Loopable seeker tone: steady while the lock-on is acquiring.</summary>
+        public const string LockSeek = "lock_seek";
+        /// <summary>Two-note confirmation chirp on transition to LOCKED.</summary>
+        public const string LockConfirm = "lock_confirm";
+        public const string CannonFire = "cannon_fire";
+        public const string BombDrop = "bomb_drop";
         // Horns — all loops, played hold-to-sound by VehicleAudio.
         public const string HornNormal = "horn_normal";
         public const string HornSiren = "horn_siren";
@@ -104,6 +111,10 @@ namespace AIHWSim.Audio
             ShieldUp => BuildShieldUp(),
             ShieldBlock => BuildShieldBlock(),
             WarnBeep => BuildWarnBeep(),
+            LockSeek => BuildLockSeek(),
+            LockConfirm => BuildLockConfirm(),
+            CannonFire => BuildCannonFire(),
+            BombDrop => BuildBombDrop(),
             Engine => BuildEngine(),
             Skid => BuildSkid(),
             Impact => BuildImpact(),
@@ -723,6 +734,89 @@ namespace AIHWSim.Audio
             }
             Normalize(d, 0.75f);
             return Make(WarnBeep, d);
+        }
+
+        /// <summary>Seeker tone: an 800 Hz sine pulsed at 6 Hz, whole cycles of
+        /// both so it loops seamlessly — played looped for as long as the
+        /// lock-on is acquiring. Softer than WarnBeep on purpose: this one is
+        /// YOUR radar working, not someone else's missile.</summary>
+        private static AudioClip BuildLockSeek()
+        {
+            const float secs = 0.5f;                // 3 whole 6 Hz pulses
+            int n = Samples(secs);
+            var d = new float[n];
+            float cyc = LoopCycles(800f, secs);
+            for (int i = 0; i < n; i++)
+            {
+                float t = i / (float)n;
+                float carrier = Mathf.Sin(2f * Mathf.PI * cyc * t);
+                float gate = Mathf.Sin(2f * Mathf.PI * 3f * t) > 0f ? 1f : 0.15f;
+                d[i] = carrier * gate * 0.5f;
+            }
+            Normalize(d, 0.55f);
+            return Make(LockSeek, d);
+        }
+
+        /// <summary>Lock confirmation: two rising square-ish notes — the seeker
+        /// tone's urgent cousin, played once at the moment the circle goes red.</summary>
+        private static AudioClip BuildLockConfirm()
+        {
+            int n = Samples(0.28f);
+            var d = new float[n];
+            for (int i = 0; i < n; i++)
+            {
+                float t = i / (float)n;
+                float hz = t < 0.45f ? 900f : 1350f;
+                float s = Mathf.Sin(2f * Mathf.PI * hz * i / Rate);
+                float env = t < 0.45f ? Env(t / 0.45f, 0.10f, 0.5f)
+                                      : Env((t - 0.45f) / 0.55f, 0.05f, 1.2f);
+                d[i] = Mathf.Sign(s) * 0.5f * env;
+            }
+            Normalize(d, 0.8f);
+            return Make(LockConfirm, d);
+        }
+
+        /// <summary>One cannon round: a sharp noise crack with a low thump under
+        /// it. Fired at 15 rounds a second, so it is SHORT — overlapping tails
+        /// would smear into a buzz.</summary>
+        private static AudioClip BuildCannonFire()
+        {
+            int n = Samples(0.07f);
+            var d = new float[n];
+            var rng = new Rng(9127u);
+            for (int i = 0; i < n; i++)
+            {
+                float t = i / (float)n;
+                float crack = rng.Next() * Env(t, 0.01f, 3.0f);
+                float thump = Mathf.Sin(2f * Mathf.PI * 110f * i / Rate)
+                              * Env(t, 0.02f, 1.6f) * 0.8f;
+                d[i] = crack * 0.7f + thump;
+            }
+            LowPass(d, 0.55f);
+            Normalize(d, 0.85f);
+            return Make(CannonFire, d);
+        }
+
+        /// <summary>A bomb leaving the rack: a dull mechanical clunk and a short
+        /// falling whistle onset. The EXPLOSION belongs to the impact, not here.</summary>
+        private static AudioClip BuildBombDrop()
+        {
+            int n = Samples(0.30f);
+            var d = new float[n];
+            var rng = new Rng(4451u);
+            for (int i = 0; i < n; i++)
+            {
+                float t = i / (float)n;
+                float clunk = (Mathf.Sin(2f * Mathf.PI * 70f * i / Rate)
+                               + rng.Next() * 0.3f) * Env(t, 0.02f, 4.0f);
+                float hz = Mathf.Lerp(1800f, 1200f, t);   // the whistle starts to fall
+                float whistle = Mathf.Sin(2f * Mathf.PI * hz * i / Rate)
+                                * Env(t, 0.30f, 0.8f) * 0.25f;
+                d[i] = clunk + whistle;
+            }
+            LowPass(d, 0.6f);
+            Normalize(d, 0.7f);
+            return Make(BombDrop, d);
         }
 
         private static AudioClip BuildEngine()

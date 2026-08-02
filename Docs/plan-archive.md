@@ -8,8 +8,106 @@ describe is documented in [README.md](../README.md).
 Active work lives in the session plan file, not here; a plan moves into this archive
 once its milestones are done.
 
-Covering the project bootstrap through the Track Studio pass (596507 chars, 41 plans).
-Last updated 2026-07-30.
+Covering the project bootstrap through the KSP flight HUD pass (42 plans).
+Last updated 2026-08-01. (The RC-airplane F0–F9 and slipstream/phugoid G-series plans
+completed between Track Studio and the HUD pass but their session files were
+overwritten before archiving; their results live in README's RC-airplane section and
+the [AERO]/[ABENCH] gates.)
+
+---
+
+# KSP-style flight HUD + controls: navball, SAS modes, throttle gauge, WASDQE (2026-08-01)
+
+## Context
+
+The RC airplane flies, validates ([AERO] 8×2, [ABENCH] 79 checks), and had a minimal
+dev-tier HUD. The flight GUI and controls were reworked to feel like Kerbal Space
+Program: a real 3D **navball**, a top-center **altimeter**, **clickable SAS mode
+buttons** flanking the ball, a **throttle gauge** with Shift/Ctrl ratcheted throttle,
+and **WASDQE** = pitch/yaw/roll.
+
+### Decisions taken with the user
+
+| | |
+|---|---|
+| SAS set | **Plane-appropriate**: Stability Assist, Prograde, Retrograde, Target, Wings-Level, Altitude Hold (no orbit-frame modes) |
+| Key map | **Replace keyboard AND gamepad** with KSP-like layouts (no coexist toggle) |
+| Navball | **Real 3D sphere + RenderTexture** via hidden camera (not 2D IMGUI) |
+
+### Standing constraints
+
+Zero diff on the four ABI files, ProjectSettings, PhysicsTuning, FlightTest + A0–A7,
+car-side files; [AERO] and [PHYS] byte-identical. Flight keys stay out of
+KeyBindings/DriveAction; InputReader's static smoothers untouched. Actuator slots 6/7
+empty. No SAS inside PlaneVehicle (it declares "no stability augmentation"); SAS on
+the input side. No new aerodynamic coefficients; SAS gains copied from the tuned
+FlightTest hold loops with sources cited.
+
+### Design facts
+
+`PlaneInput.ReadManualCommands` is called from `SimulationRunner.ControlStep` inside
+FixedUpdate at controlRateHz — hooking SAS there puts it on the control-rate path the
+FlightTest loops were tuned at. Tuned loops copied verbatim: wings-level
+`roll = bank*0.030 + rollRate*0.004` (both POSITIVE — +z-euler = banked LEFT);
+vertical-speed cascade `wanted = clamp(−vsErr*1.2, −14, 10)` deg then
+`pitch = (pitchDeg − wanted)*0.06 + rate*0.010` (+x-euler = nose DOWN; never close
+vspeed→elevator directly — documented PIO, −3.9 g). MenuNav must NOT wrap the SAS
+buttons (BeginFrame claims the gamepad; Poll reads the exact sticks the aircraft
+flies with) — plain GUI.Button + discrete bindings. Navball layer 31 raw unnamed
+(zero TagManager diff); `PartVisualFactory.VizLayer` unusable (flight camera renders
+every layer).
+
+## Milestones (all ✅)
+
+- **H1 — Controls remap.** KSP keyboard (W/S pitch — W is forward, forward is nose
+  down; A/D yaw, Q/E roll, Shift/Ctrl ratchet, X/Z snap) + gamepad (analog triggers
+  drive the throttle RATE, left stick roll/pitch, right stick X yaw). [ABENCH] 79
+  unchanged.
+- **H2 — HUD skeleton, game-facing tier.** Altimeter, throttle gauge, six SAS
+  buttons; GarageSkin + UIScale; engineering panel left dev-tier and unscaled.
+- **H3 — Navball.** Procedural equirect texture (sky/ground, pitch ladder, heading
+  band, 3×5 glyphs extended with digits) + unlit sphere on layer 31 through an
+  on-demand ortho camera into a 256² RT + prograde/retrograde/target markers with
+  far-side HIDING (never mirroring). **The seam is measured, not authored**:
+  `MeasureSeam` reads the primitive sphere's own UVs → −90.466°, no magic constant
+  to drift. **Added beyond plan: [NAVB], 18 headless checks** — nose dead centre
+  across 24 attitudes, astern hidden, 10° above the nose above centre, nose-up level
+  flight puts prograde BELOW centre, 45° of bank swings markers exactly 45°.
+  Writing it caught `AngleAxis(θ)*att` (world-axis roll — rolls about the velocity
+  vector itself, which is invariant, so the check passed vacuously at zero) vs
+  `att*AngleAxis(θ)` (body-axis); both forms now asserted, the degenerate one
+  deliberately. A visibility test at exactly 90° from the nose is ill-posed (z==0
+  coin toss) — 80° and 91° instead.
+- **H4/H5 — SAS, six modes** (landed together — same shape). Applied from
+  `PlaneInput.ReadManualCommands` (control-rate by construction), attached only by
+  RcPlaneBootstrap. T toggle, F momentary, 1–6 select, d-pad on pad. Per-axis stick
+  breakout at 0.10 with continuous re-capture — deflect to steer, release to
+  re-hold. Never touches throttle (KSP-accurate; the gauge must not lie) or rudder
+  (no tuned yaw loop exists; inventing one is authoring a coefficient by feel).
+  Exactly two NEW gains, both marked: headingToBank 0.8, altitudeToClimb 0.25.
+  **Prograde hold is physically impossible for an aeroplane** — nose-on-velocity is
+  zero alpha, zero alpha is no lift — so the mode settles into a shallow descent
+  until the pitch clamp catches it; reported, not tuned away.
+- **H6 — Regression + proof.** [AERO] 8×2 **byte-identical** to the F9 baseline
+  (A0 44.25671387 · A1 11.20665359 · A2 2.0007081 · A3 8.89444828 · A4 9.44067669 ·
+  A5 −0.31484383 · A6 0.73810291 · A7 0.25063953) — the SAS layer provably absent
+  from the scripted tests. [PHYS] 10×2 byte-identical (P1 0.76573724 ·
+  P6a 46.97132874 · P7 5.99544668 · P5 0.85303092 · P9 0.01400405). [NAVB] 18,
+  [ABENCH] 79. Zero diff proven on every frozen file. Diff exactly 5 modified +
+  4 new files, all flight-tree.
+
+## Post-plan additions (same change-set)
+
+The throttle gauge became an **arc wrapped round the navball** (KSP's layout): 44
+tangent quads under a hand-composed GUI matrix — `GUIUtility.RotateAroundPivot`
+composes OUTSIDE `GUI.matrix` and reads its pivot in screen pixels, which inside a
+UIScale block turned the arc about the wrong point and scaled it twice (v1 slid off
+the bottom of the screen on a radius of its own); `saved * TRS(centre,rot) *
+TRS(−centre)` instead, and the same trap awaits `ScaleAroundPivot`. The dark square
+behind the ball was deleted (the RT already clears transparent; it was framing
+nothing) and replaced with a procedural soft-edged bezel annulus following the limb —
+one texture, because a circle is the one shape IMGUI draws badly and a texture draws
+for free.
 
 ---
 

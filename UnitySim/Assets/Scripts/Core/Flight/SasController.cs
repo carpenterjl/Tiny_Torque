@@ -74,6 +74,22 @@ namespace AIHWSim.Core.Flight
         /// the autopilot for control.</summary>
         public float stickBreakout = 0.10f;
 
+        // ---- loop gains. The DEFAULTS are the FlightTest hold-loop values,
+        // tuned on the SportRc trainer, verbatim — promoting them to fields
+        // changes nothing for the trainer (same numbers) and the [AERO] gate
+        // never attaches a SAS at all. They are fields so a different airframe
+        // (the VTOL jet, whose hover has no aerodynamic damping to lean on) can
+        // be given its own values by its bootstrap, marked TUNED at the call.
+        /// <summary>Aileron per degree of bank error. FlightTest.HoldWingsLevel.</summary>
+        public float bankGain = 0.030f;
+        /// <summary>Aileron per deg/s of roll rate. FlightTest.HoldWingsLevel.</summary>
+        public float rollRateGain = 0.004f;
+        /// <summary>Elevator per degree of pitch-attitude error.
+        /// FlightTest.HoldVerticalSpeed's inner loop.</summary>
+        public float pitchGain = 0.06f;
+        /// <summary>Elevator per deg/s of pitch rate. Same inner loop.</summary>
+        public float pitchRateGain = 0.010f;
+
         private const KeyCode KeyToggle = KeyCode.T;
         private const KeyCode KeyOverride = KeyCode.F;
 
@@ -254,7 +270,7 @@ namespace AIHWSim.Core.Flight
             float bank = Wrap180(plane.transform.eulerAngles.z) - targetBankDeg;
             float rollRate = _body.transform.InverseTransformDirection(_body.angularVelocity).z
                              * Mathf.Rad2Deg;
-            return Mathf.Clamp(bank * 0.030f + rollRate * 0.004f, -1f, 1f);
+            return Mathf.Clamp(bank * bankGain + rollRate * rollRateGain, -1f, 1f);
         }
 
         /// <summary>Elevator to hold a pitch attitude — the INNER loop of
@@ -264,7 +280,8 @@ namespace AIHWSim.Core.Flight
             float pitchDeg = Wrap180(plane.transform.eulerAngles.x);
             float rate = _body.transform.InverseTransformDirection(_body.angularVelocity).x
                          * Mathf.Rad2Deg;
-            return Mathf.Clamp((pitchDeg - wantedDeg) * 0.06f + rate * 0.010f, -1f, 1f);
+            return Mathf.Clamp((pitchDeg - wantedDeg) * pitchGain + rate * pitchRateGain,
+                               -1f, 1f);
         }
 
         /// <summary>Elevator to hold a climb rate — the full cascade from

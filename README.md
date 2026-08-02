@@ -628,17 +628,119 @@ no slipstream swirl or P-factor, no wake at all from a windmilling propeller, an
 handling well below the standard of the car's tyre model — which is why every scripted
 flight test starts in the air.
 
+### The authored scene
+
+`Create RC Plane Scene` no longer produces one bootstrap GameObject that builds the
+world at Play — it builds the world at **edit time**, with the same code the runtime
+path uses. Every object — runway, pylons, aircraft, cameras, runner, SAS — is in the
+hierarchy before you press Play, so the pilot's standing position, a SAS gain, a pylon
+or a drone's circuit is an inspector edit rather than a script edit.
+
+One builder serves both worlds through a small `SceneBuildContext`: its `default` IS
+the old runtime behaviour (every branch reduces to the statement the builders already
+contained), while the editor hands in `DestroyImmediate`, asset-backed shared materials
+and a saved PhysicsMaterial — the four things that are illegal or leaky about doing at
+edit time what `Awake` used to do at Play. `RcPlaneBootstrap` adopts an authored scene
+through a `FlightSceneDescriptor` (serialized references — `GameObject.Find` survives
+only as the fallback), **fills nulls only**, and still builds everything from code when
+no descriptor exists, so the old one-object scene and every scripted test are
+untouched. Re-running the menu item asks before overwriting, because the scene now
+holds hand edits worth losing.
+
+### The VTOL jet
+
+`Tools > AIHWSim > Create VTOL Jet Scene`: the same airfield, a **Harrier-class
+vectored-thrust jet** at roughly half scale — 4.6 m span, 600 kg, swept wing with
+anhedral, bicycle-and-outrigger gear — flying on the **same measured panel model** as
+the trainer. Nothing aerodynamic was authored to make it a jet: `JetSpec` holds a
+thrust rating, a spool time constant, two nozzle stations, a travel range (0–98.5°,
+the Harrier's, so it can brake and back up past the vertical) and four
+reaction-control stations. Thrust is a force with a direction; the airframe is still
+strips.
+
+It spawns **hovering**, nozzles down, SAS holding attitude, throttle preset to the
+predicted hover fraction — W/T from the mass table and the thrust rating, 0.654, the
+first prediction the scene itself tests. `Num8`/`Num2` swing the nozzles aft and down
+as a second ratchet (a nozzle lever has no centring spring either); everything else
+flies exactly like the trainer.
+
+Two physical honesty points. **At the hover the control surfaces are dead** — no
+airspeed, no slipstream (a jet's tail is not in a propeller wake) — so control comes
+from **puffers**, the Harrier's actual answer: a bleed budget of engine thrust ducted
+to nose, tail and wingtip stations, driven by the same pilot commands the panels take,
+moment = force × authored arm. The bleed is *subtracted* from the lift thrust, so full
+stick in the hover genuinely costs height. And the balanced hover is a property of
+**geometry** — the nozzles sit symmetric about the CG — not of a trim constant; move
+the CG and the hover pitches, as it should. Authority fades to zero as the nozzles go
+aft, so forward flight is pure panel control with no mode switch anywhere.
+
+Declared validity edge: the panel model is incompressible and carries no Mach number,
+so the jet is honest to about M 0.3 ≈ 100 m/s and merely silent beyond it. The engine
+could push past that; the model does not stop it, it just stops being right — stated,
+like the trainer's missing fuselage aero, rather than papered over with a fake drag
+rise. Every `PlaneVehicle` change is behind `spec.IsJet` — a thrust-rating sentinel,
+not a null check, because Unity deserializes a `[Serializable]` class field as a
+non-null default — and the `[AERO]` gate came back **byte-identical** to prove the
+trainer path gained nothing but the branch test.
+
+### Weapons
+
+The jet carries three, swapped with `Tab`, fired with `Space` (press for a missile or
+a bomb stick, held for the cannon):
+
+- **Homing missiles** with the Hydra's lock-on, automated: while missiles are
+  selected, the nearest valid target inside a 15° forward cone starts acquiring on its
+  own. The HUD draws a large twelve-segment circle over it — green and filling while
+  the seeker works, then **solid red pulsing at 2 Hz** with a confirmation chirp.
+  Guidance is lead pursuit at ~120°/s, dropping to a crawl inside the commit range so
+  a hard break still defeats it — a missile that cannot be missed is a hitscan with
+  theatrics. And the Hydra's hidden speed modifier is here in the open: missiles
+  fired at **air** targets fly at twice the base speed. At 180 m/s and 400 Hz each
+  step also carries a segment raycast, because a head-on drone closes faster than a
+  trigger sphere can promise to notice.
+- **A fixed cannon** — kinematic tracers, not hitscan, for the reason the arcade
+  missile file states: a projectile that takes time to arrive can be dodged, led and
+  watched. Heat-based: hold it too long and it locks out until it cools.
+- **Carpet bombs** — a stick of six at 0.15 s intervals, pure ballistics seeded with
+  the aircraft's velocity, which is all carpet bombing is: the line on the ground is
+  the line you were flying. Splash falls off radially, `Landmine.cs`'s shape.
+
+The **turret** is the "passenger" gun flown solo: `C` drops you into a free-aim belly
+turret (mouse, ±160° yaw, down to −80°) while SAS holds the aeroplane; `C` again and
+you are the pilot, camera and SAS restored exactly. The flight keys keep working in
+the turret — SAS only holds attitude — so you can creep a hover sideways while hosing
+the range. The seam is deliberately the one a LAN gunner would plug into later.
+
+The **targets** live under an authored `Targets` group: three orange drones circling
+at stacked altitudes, three trucks lapping closed Catmull-Rom loops whose waypoints
+are draggable `wp*` handles in the hierarchy — their "dodging" is an authored weave
+plus a ±30 % speed wander — and a cluster of barrels by the far pylons. All kinematic,
+deliberately: a second `SimulationRunner` would fight over the global
+`Time.fixedDeltaTime`, and the whole airfield is frictionless, so a physical truck
+would slide like soap. Damage is a scene-local `WeaponTarget` component — health,
+category, a death event — rather than the arena stack, which is car- and
+match-coupled. Everything respawns, because a range with all its targets dead is a
+range you have to restart.
+
+The seeker's cone and selection rules are pure statics pinned by **`[LOCK]`** — the
+`[NAVB]` treatment: the boundary is walked at 14° and 16°, never at exactly 15°
+(on the line both answers are right and the check would gate on float noise), a
+dead-heat tie is asserted stable, and the guidance closed forms (turn radius v/ω,
+lateral reach inside the commit window) are checked so nobody can quietly retune the
+missile into un-dodgeability.
+
 ### It does not touch the controller ABI
 
 `PlaneVehicle` uses actuator slots `[0]`–`[3]` for throttle, aileron, elevator and
-rudder. **This is an internal agreement between two components in this repository and is
-not part of the versioned C ABI.** Slots `[6]` and `[7]` are left deliberately empty
-because `controller_api.h` publishes them as `CTRL_STEER_ACTUATOR` and
-`CTRL_BRAKE_ACTUATOR`, and putting an aileron in a slot whose published name says
-"steer" is how a convention quietly becomes a lie. `controller_api.h`,
-`tt_controller.h`, `ControllerInterop.cs` and `Docs/interface-spec.md` are all unchanged;
-the aeroplane runs with `loadControllerDll = false`, so no controller can observe those
-slots today.
+rudder, and the jet adds `[4]` for the nozzle-tilt target — slots the internal layout
+note declares free. **This is an internal agreement between two components in this
+repository and is not part of the versioned C ABI.** Slots `[6]` and `[7]` are left
+deliberately empty because `controller_api.h` publishes them as `CTRL_STEER_ACTUATOR`
+and `CTRL_BRAKE_ACTUATOR`, and putting an aileron in a slot whose published name says
+"steer" is how a convention quietly becomes a lie. Weapons never enter the actuator
+vector at all — firing is not a plant input. `controller_api.h`, `tt_controller.h`,
+`ControllerInterop.cs` and `Docs/interface-spec.md` are all unchanged; the aeroplane
+runs with `loadControllerDll = false`, so no controller can observe those slots today.
 
 ## High-fidelity mode (real-world controller validation)
 

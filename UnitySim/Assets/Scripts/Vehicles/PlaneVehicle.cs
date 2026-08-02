@@ -43,6 +43,11 @@ namespace AIHWSim.Vehicles
         public const int AileronActuator = 1;    // [-1,1]
         public const int ElevatorActuator = 2;   // [-1,1]
         public const int RudderActuator = 3;     // [-1,1]
+        /// <summary>[0,1] nozzle tilt TARGET: 0 = full aft (forward flight),
+        /// 1 = full down-and-past (hover / viffing). Read only when
+        /// <see cref="AircraftSpec.IsJet"/>; a propeller aircraft ignores it, and
+        /// slots 6/7 stay empty per the note above.</summary>
+        public const int NozzleActuator = 4;
 
         [Header("Airframe")]
         /// <summary>Set by the builder before the object is activated.</summary>
@@ -86,6 +91,9 @@ namespace AIHWSim.Vehicles
         private float _propOmega;
         private float _propThrust, _propLoadTorque, _propCurrent;
         private SlipstreamState _slip;
+        private float _cmdNozzle;    // [0,1] target, jet only
+        private float _nozzleDeg;    // actuator state, slewed toward the target
+        private float _jetThrust;    // N, after the spool lag
 
         private Vector3 _spawnPos;
         private Quaternion _spawnRot;
@@ -99,6 +107,11 @@ namespace AIHWSim.Vehicles
         public float Thrust => _propThrust;
         /// <summary>The propeller wake as momentum theory resolved it this step.</summary>
         public SlipstreamState Slipstream => _slip;
+        /// <summary>Nozzle angle (deg): 0 aft, 90 straight down. Always 0 on a
+        /// propeller aircraft.</summary>
+        public float NozzleDeg => _nozzleDeg;
+        /// <summary>Nozzle tilt as commanded, [0,1] of the travel range.</summary>
+        public float NozzleCommand => _cmdNozzle;
 
         /// <summary>Lift from one lifting surface in the last solve (N). Index into
         /// <c>spec.surfaces</c>; the wing is <c>spec.wingIndex</c>.</summary>
@@ -221,6 +234,7 @@ namespace AIHWSim.Vehicles
             _body.angularVelocity = Vector3.zero;
             _propOmega = 0f;
             _propThrust = 0f;
+            _jetThrust = 0f;
             _lastWorldVel = Vector3.zero;
             BodyAcceleration = Vector3.zero;
             LoadFactor = 1f;
@@ -256,6 +270,10 @@ namespace AIHWSim.Vehicles
             _cmdAileron = Mathf.Clamp(a[AileronActuator], -1f, 1f);
             _cmdElevator = Mathf.Clamp(a[ElevatorActuator], -1f, 1f);
             _cmdRudder = Mathf.Clamp(a[RudderActuator], -1f, 1f);
+            // Guarded so the trainer path gains nothing but this branch test —
+            // the [AERO] gate's byte-identity depends on that.
+            if (spec != null && spec.IsJet)
+                _cmdNozzle = Mathf.Clamp01(a[NozzleActuator]);
         }
 
         public void StepPhysics(float dt)
@@ -278,9 +296,17 @@ namespace AIHWSim.Vehicles
             {
                 _propOmega = 0f;
                 _propThrust = 0f;
+                _jetThrust = 0f;
                 _slip = default;
                 return;
             }
+
+            // A jet is a different machine from here down: no shaft to integrate,
+            // no torque reaction, no gyroscopic term, and no wake over the tail —
+            // all physically correct absences, and exactly why a jet needs
+            // puffers at the hover where a prop aircraft still has its wake.
+            // The trainer path gains only this branch test.
+            if (spec.IsJet) { StepJet(dt); return; }
 
             // Axial inflow is the component along the shaft, so a climbing or
             // sideslipping aircraft loads the prop correctly without a special case.
@@ -331,6 +357,117 @@ namespace AIHWSim.Vehicles
             Vector3 hWorld = transform.rotation
                              * PropellerModel.AngularMomentumBody(spec.propeller, _propOmega);
             _body.AddTorque(-Vector3.Cross(_body.angularVelocity, hWorld), ForceMode.Force);
+        }
+
+        /// <summary>
+        /// Vectored-thrust jet propulsion. Runs only when
+        /// <see cref="AircraftSpec.IsJet"/>; the propeller path above is untouched.
+        ///
+        /// <b>What is deliberately absent.</b> No shaft integration (a turbofan's
+        /// spool is the first-order lag below, not a torque balance we could
+        /// honestly author), no torque reaction or gyroscopic term (the engine's
+        /// angular momentum is real but its inertia is not in the parts list, and
+        /// inventing one would be authoring a coefficient), and no slipstream —
+        /// a jet's tail does not sit in a propeller wake, so the panels lose
+        /// their zero-airspeed authority. That loss is physically correct and it
+        /// is why the puffers below exist.
+        ///
+        /// <b>Thrust geometry.</b> The force is split 50/50 between the two
+        /// authored nozzle stations and rotated about body X by the nozzle angle
+        /// (0° = aft, 90° = straight down, past 90° = the Harrier's braking
+        /// range). Stations symmetric about the CG make a balanced hover a
+        /// property of geometry rather than of a trim constant.
+        ///
+        /// <b>Puffers.</b> Reaction control driven by the SAME pilot commands the
+        /// panels take — an actuator, not stabilisation, so the vehicle's
+        /// "no stability augmentation" declaration stands. Force = per-axis
+        /// budget × command, moment = force × authored arm, and the bleed is
+        /// SUBTRACTED from the lift thrust, so full stick in the hover genuinely
+        /// costs height. Authority fades with nozzle angle (full at 90°, zero
+        /// aft) so forward flight is pure panel control with no mode switch.
+        /// </summary>
+        private void StepJet(float dt)
+        {
+            JetSpec j = spec.jet;
+
+            // Slot 0 carries volts by the layout note above; the jet's motor
+            // stub sets maxVoltage = 1 so this is the pilot's [0,1] again. The
+            // division rather than a raw read keeps a scripted pilot that writes
+            // real volts honest too.
+            float throttle = spec.motor.maxVoltage > 0f
+                ? Mathf.Clamp01(_cmdThrottle / spec.motor.maxVoltage) : 0f;
+
+            // Spool: exact exponential first-order lag, rate-independent — the
+            // same discretisation the ESC ramp uses.
+            float k = 1f - Mathf.Exp(-dt / Mathf.Max(1e-3f, j.spoolTau));
+            _jetThrust += (throttle * j.maxThrustN - _jetThrust) * k;
+
+            // Nozzle: a slew-rate actuator. The slot carries the TARGET; the
+            // vehicle owns the actuator dynamics, exactly as it owns the ESC's.
+            float wantDeg = Mathf.Lerp(j.nozzleMinDeg, j.nozzleMaxDeg, _cmdNozzle);
+            _nozzleDeg = Mathf.MoveTowards(_nozzleDeg, wantDeg, j.nozzleRateDegPerS * dt);
+
+            // Puffer bleed first, so it can rob the lift thrust below.
+            // Authority scales with nozzle angle: aft = panels' job.
+            float blend = Mathf.Clamp01(_nozzleDeg / 90f);
+            float budget = j.pufferBudgetFrac * _jetThrust * blend;
+            float bleedUsed = 0f;
+            if (budget > 0f)
+            {
+                Vector3 up = transform.up;
+                Vector3 right = transform.right;
+
+                // Pitch: vertical pair at nose and tail. Up-force at the nose is
+                // a nose-UP moment (−x torque), matching +elevator = nose up.
+                float pitchF = _cmdElevator * budget * 0.5f;
+                _body.AddForceAtPosition(up * pitchF,
+                    transform.TransformPoint(j.pufferNoseLocal), ForceMode.Force);
+                _body.AddForceAtPosition(-up * pitchF,
+                    transform.TransformPoint(j.pufferTailLocal), ForceMode.Force);
+
+                // Roll: vertical pair at the tips. +aileron = roll RIGHT
+                // (−z torque; +z-Euler is banked left in this project), so the
+                // right tip takes the down-force.
+                float rollF = _cmdAileron * budget * 0.5f;
+                _body.AddForceAtPosition(-up * rollF,
+                    transform.TransformPoint(j.pufferTipRightLocal), ForceMode.Force);
+                _body.AddForceAtPosition(up * rollF,
+                    transform.TransformPoint(j.pufferTipLeftLocal), ForceMode.Force);
+
+                // Yaw: lateral pair on the same nose/tail stations. Rightward
+                // force at the nose is nose-right (+y), matching +rudder.
+                float yawF = _cmdRudder * budget * 0.5f;
+                _body.AddForceAtPosition(right * yawF,
+                    transform.TransformPoint(j.pufferNoseLocal), ForceMode.Force);
+                _body.AddForceAtPosition(-right * yawF,
+                    transform.TransformPoint(j.pufferTailLocal), ForceMode.Force);
+
+                // Each axis exhausts |cmd| × budget of engine air.
+                bleedUsed = (Mathf.Abs(_cmdElevator) + Mathf.Abs(_cmdAileron)
+                             + Mathf.Abs(_cmdRudder)) * budget;
+            }
+
+            float applied = Mathf.Max(0f, _jetThrust - bleedUsed);
+
+            // 0° = +Z (aft nozzles, forward force); AngleAxis(−90°, right) turns
+            // +Z to +Y — nozzles down, force up. Past 90° the vector points
+            // slightly forward-of-up: braking thrust, as on the real aircraft.
+            Vector3 dirBody = Quaternion.AngleAxis(-_nozzleDeg, Vector3.right)
+                              * Vector3.forward;
+            Vector3 half = transform.rotation * (dirBody * (applied * 0.5f));
+            _body.AddForceAtPosition(half,
+                transform.TransformPoint(j.nozzleForeLocal), ForceMode.Force);
+            _body.AddForceAtPosition(half,
+                transform.TransformPoint(j.nozzleAftLocal), ForceMode.Force);
+
+            // Read-through: the HUD's throttle/thrust instruments and telemetry
+            // read _propThrust; a jet reports its jet thrust there. The shaft
+            // stays at rest — there is no shaft.
+            _propThrust = applied;
+            _propOmega = 0f;
+            _propLoadTorque = 0f;
+            _propCurrent = 0f;
+            _slip = default;
         }
 
         private void StepAerodynamics()

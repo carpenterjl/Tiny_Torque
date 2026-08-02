@@ -29,5 +29,13 @@ namespace AIHWSim.Core.Flight
         bool ResetPressed();
         /// <summary>Edge: cycle ground station / chase / boresight.</summary>
         bool ViewTogglePressed();
+
+        /// <summary>[0,1] nozzle tilt target for a vectored-thrust aircraft:
+        /// 0 = full aft, 1 = full down. A DEFAULT member rather than an abstract
+        /// one, deliberately: only the human source has nozzles to command, and a
+        /// default keeps <c>ScriptedPilot</c> — and therefore every scripted
+        /// flight test — at a zero-line diff. A propeller aircraft never reads
+        /// the slot it feeds.</summary>
+        float NozzleTarget() => 0f;
     }
 }

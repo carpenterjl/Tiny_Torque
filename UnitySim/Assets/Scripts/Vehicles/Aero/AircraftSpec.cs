@@ -56,6 +56,18 @@ namespace AIHWSim.Vehicles.Aero
         /// thrust line produces a pitching moment without anyone asking it to.</summary>
         public Vector3 propPosLocal;
 
+        /// <summary>Vectored-thrust jet, or the all-zero sentinel meaning "this
+        /// aircraft has a propeller". See <see cref="IsJet"/> for why the test is
+        /// a thrust rating and not a null check.</summary>
+        public JetSpec jet;
+
+        /// <summary>Whether this aircraft is jet-propelled. Deliberately NOT
+        /// <c>jet != null</c>: Unity deserializes a [Serializable] class field as
+        /// a non-null default object, so a trainer that has been through a scene
+        /// file comes back with an all-zero <see cref="JetSpec"/> — the sentinel.
+        /// A jet is a jet because its engine has a thrust rating.</summary>
+        public bool IsJet => jet != null && jet.maxThrustN > 0f;
+
         /// <summary>
         /// Parasitic drag area (m²) for everything that is NOT a lifting surface:
         /// fuselage, landing gear, interference. The wing's and tail's own profile

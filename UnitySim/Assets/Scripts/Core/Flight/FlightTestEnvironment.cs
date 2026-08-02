@@ -78,15 +78,24 @@ namespace AIHWSim.Core.Flight
             }
         }
 
-        public static (Camera cam, GraphOverlay graph) Build(EnvSpec spec)
+        /// <summary>The Play-mode entry every scripted test calls. Kept verbatim
+        /// as a forwarder so those call sites cannot drift: with
+        /// <see cref="SceneBuildContext.Runtime"/> every branch below reduces to
+        /// the statements this method used to contain.</summary>
+        public static (Camera cam, GraphOverlay graph) Build(EnvSpec spec) =>
+            Build(spec, SceneBuildContext.Runtime);
+
+        public static (Camera cam, GraphOverlay graph) Build(EnvSpec spec,
+                                                             SceneBuildContext ctx)
         {
-            PhysicsMaterial frictionless = PhysicsTestEnvironment.Frictionless();
+            PhysicsMaterial frictionless = ctx.surface != null
+                ? ctx.surface : PhysicsTestEnvironment.Frictionless();
             BuildLighting();
-            BuildGround(spec, frictionless);
-            if (spec.runwayLength > 0f) BuildRunway(spec, frictionless);
-            if (spec.pylonOffset > 0f) BuildPylons(spec);
-            if (spec.horizonRingPoles > 0) BuildHorizonRing(spec);
-            return BuildCameraAndGraph(spec);
+            BuildGround(spec, frictionless, ctx);
+            if (spec.runwayLength > 0f) BuildRunway(spec, frictionless, ctx);
+            if (spec.pylonOffset > 0f) BuildPylons(spec, ctx);
+            if (spec.horizonRingPoles > 0) BuildHorizonRing(spec, ctx);
+            return BuildCameraAndGraph(spec, ctx);
         }
 
         /// <summary>Where the aircraft starts a hand launch: a little way down the
@@ -116,7 +125,8 @@ namespace AIHWSim.Core.Flight
         /// <summary>A scaled Cube for the same reason the car's ground is one: an
         /// analytic box collider rather than a stretched quad mesh. Top face at
         /// y = 0 by construction.</summary>
-        private static void BuildGround(EnvSpec spec, PhysicsMaterial mat)
+        private static void BuildGround(EnvSpec spec, PhysicsMaterial mat,
+                                        SceneBuildContext ctx)
         {
             var g = GameObject.CreatePrimitive(PrimitiveType.Cube);
             g.name = "Ground";
@@ -126,10 +136,11 @@ namespace AIHWSim.Core.Flight
             g.transform.position = new Vector3(0f, -thick * 0.5f, 0f);
             var col = g.GetComponent<Collider>();
             col.material = mat;
-            g.GetComponent<Renderer>().material.color = new Color(0.26f, 0.34f, 0.22f);
+            ctx.Paint(g.GetComponent<Renderer>(), new Color(0.26f, 0.34f, 0.22f));
         }
 
-        private static void BuildRunway(EnvSpec spec, PhysicsMaterial mat)
+        private static void BuildRunway(EnvSpec spec, PhysicsMaterial mat,
+                                        SceneBuildContext ctx)
         {
             var r = GameObject.CreatePrimitive(PrimitiveType.Cube);
             r.name = "Runway";
@@ -139,7 +150,7 @@ namespace AIHWSim.Core.Flight
             r.transform.position = new Vector3(0f, thick * 0.5f, 0f);
             var col = r.GetComponent<Collider>();
             col.material = mat;
-            r.GetComponent<Renderer>().material.color = new Color(0.20f, 0.20f, 0.21f);
+            ctx.Paint(r.GetComponent<Renderer>(), new Color(0.20f, 0.20f, 0.21f));
 
             // Centreline stripes. These are the instrument: without something of
             // known spacing passing underneath, a model at 100 m has no readable
@@ -151,17 +162,17 @@ namespace AIHWSim.Core.Flight
                 float z = -spec.runwayLength * 0.5f + i * spec.stripeSpacing;
                 var s = GameObject.CreatePrimitive(PrimitiveType.Cube);
                 s.name = "stripe";
-                Object.Destroy(s.GetComponent<Collider>());
+                ctx.Destroy(s.GetComponent<Collider>());
                 s.transform.SetParent(parent, false);
                 s.transform.localScale = new Vector3(0.6f, 0.02f, 4f);
                 s.transform.position = new Vector3(0f, thick + 0.01f, z);
-                s.GetComponent<Renderer>().material.color = new Color(0.85f, 0.85f, 0.82f);
+                ctx.Paint(s.GetComponent<Renderer>(), new Color(0.85f, 0.85f, 0.82f));
             }
         }
 
         /// <summary>The RC "box": two pairs of poles marking the ends of the strip,
         /// which is how a pilot judges where a pass starts and finishes.</summary>
-        private static void BuildPylons(EnvSpec spec)
+        private static void BuildPylons(EnvSpec spec, SceneBuildContext ctx)
         {
             var parent = new GameObject("Pylons").transform;
             float half = spec.runwayLength * 0.5f;
@@ -175,11 +186,11 @@ namespace AIHWSim.Core.Flight
                 {
                     var p = GameObject.CreatePrimitive(PrimitiveType.Cylinder);
                     p.name = "pylon";
-                    Object.Destroy(p.GetComponent<Collider>());
+                    ctx.Destroy(p.GetComponent<Collider>());
                     p.transform.SetParent(parent, false);
                     p.transform.localScale = new Vector3(0.35f, 2.5f, 0.35f);
                     p.transform.position = new Vector3(sx * spec.pylonOffset, 2.5f, sz * half);
-                    p.GetComponent<Renderer>().material.color = tint[k++ % tint.Length];
+                    ctx.Paint(p.GetComponent<Renderer>(), tint[k++ % tint.Length]);
                 }
         }
 
@@ -190,7 +201,7 @@ namespace AIHWSim.Core.Flight
         /// a range. It is also the only ground reference that stays visible when
         /// the aircraft is above the horizon.
         /// </summary>
-        private static void BuildHorizonRing(EnvSpec spec)
+        private static void BuildHorizonRing(EnvSpec spec, SceneBuildContext ctx)
         {
             var parent = new GameObject("HorizonRing").transform;
             for (int i = 0; i < spec.horizonRingPoles; i++)
@@ -198,7 +209,7 @@ namespace AIHWSim.Core.Flight
                 float a = i * Mathf.PI * 2f / spec.horizonRingPoles;
                 var p = GameObject.CreatePrimitive(PrimitiveType.Cube);
                 p.name = "pole";
-                Object.Destroy(p.GetComponent<Collider>());
+                ctx.Destroy(p.GetComponent<Collider>());
                 p.transform.SetParent(parent, false);
                 p.transform.localScale = new Vector3(1.2f, 14f, 1.2f);
                 p.transform.position = new Vector3(
@@ -206,13 +217,14 @@ namespace AIHWSim.Core.Flight
                     Mathf.Cos(a) * spec.horizonRingRadius);
                 // Cardinal poles are lighter, so heading is readable at a glance.
                 bool cardinal = i % (Mathf.Max(1, spec.horizonRingPoles / 4)) == 0;
-                p.GetComponent<Renderer>().material.color = cardinal
+                ctx.Paint(p.GetComponent<Renderer>(), cardinal
                     ? new Color(0.85f, 0.85f, 0.88f)
-                    : new Color(0.45f, 0.47f, 0.50f);
+                    : new Color(0.45f, 0.47f, 0.50f));
             }
         }
 
-        private static (Camera, GraphOverlay) BuildCameraAndGraph(EnvSpec spec)
+        private static (Camera, GraphOverlay) BuildCameraAndGraph(EnvSpec spec,
+                                                                  SceneBuildContext ctx)
         {
             Camera cam = Camera.main;
             if (cam == null)
@@ -233,7 +245,12 @@ namespace AIHWSim.Core.Flight
                 // Skybox/Procedural resolves and GraphOverlay's OnPostRender still
                 // fires. A gradient sky is what makes attitude readable.
                 Shader sky = Shader.Find("Skybox/Procedural");
-                if (sky != null)
+                if (ctx.skybox != null)
+                {
+                    RenderSettings.skybox = ctx.skybox;
+                    cam.clearFlags = CameraClearFlags.Skybox;
+                }
+                else if (sky != null)
                 {
                     RenderSettings.skybox = new Material(sky);
                     cam.clearFlags = CameraClearFlags.Skybox;

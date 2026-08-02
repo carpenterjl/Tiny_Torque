@@ -58,6 +58,13 @@ namespace AIHWSim.Core.Flight
         private const KeyCode KeyThrottleCut = KeyCode.X;
         private const KeyCode KeyReset = KeyCode.R;
         private const KeyCode KeyView = KeyCode.V;
+        // VTOL nozzles, on the keypad as an homage to the aircraft these mimic
+        // (San Andreas flew the Hydra's nozzles on Num8/Num2). Keypad keys
+        // collide with nothing in this map or the debug overlays. 8 = nozzles
+        // AFT (toward forward flight), 2 = nozzles DOWN (toward the hover) —
+        // push forward to go faster, like everything else in a cockpit.
+        private const KeyCode KeyNozzleAft = KeyCode.Keypad8;
+        private const KeyCode KeyNozzleDown = KeyCode.Keypad2;
 
         /// <summary>Throttle stick travel per second at full deflection. One second
         /// from idle to full is about how fast a thumb moves a real stick.</summary>
@@ -71,7 +78,13 @@ namespace AIHWSim.Core.Flight
         public bool invertElevator = false;
 
         private float _throttle;
+        private float _nozzle;      // [0,1] ratchet, same physical logic as _throttle
         private float _kbRoll, _kbPitch, _kbYaw;
+
+        /// <summary>Nozzle travel per second of held key. Full sweep in two
+        /// seconds — the real nozzle lever's pace, and slow enough that a
+        /// transition is a manoeuvre rather than a mode flip.</summary>
+        public float nozzleRate = 0.5f;
 
         /// <summary>Keyboard control axes ramp instead of snapping — a real stick
         /// has mass and a thumb has a speed limit, and a step input on a control
@@ -79,6 +92,8 @@ namespace AIHWSim.Core.Flight
         private const float KeyAxisRate = 4.0f;
 
         public float Throttle() => _throttle;
+
+        public float NozzleTarget() => _nozzle;
 
         public float Roll() => Axis(PadStickX(right: false), _kbRoll);
 
@@ -123,18 +138,40 @@ namespace AIHWSim.Core.Flight
             if (KeyTable.Held(KeyThrottleFull) || PadTable.HeldAny(PadButton.RightShoulder))
                 _throttle = 1f;
 
+            // ---- nozzle: the second ratchet. Same physical argument as the
+            // throttle — a nozzle lever has no centring spring — and it costs a
+            // propeller aircraft nothing, because nothing reads it there.
+            // Pad: D-pad down = toward the hover, East = nozzles aft (D-pad up
+            // is SAS's toggle and stays SAS's).
+            float nozzleCmd = KeyAxis(KeyNozzleDown, KeyNozzleAft);
+            if (PadTable.HeldAny(PadButton.DpadDown)) nozzleCmd += 1f;
+            if (PadTable.HeldAny(PadButton.East)) nozzleCmd -= 1f;
+            _nozzle = Mathf.Clamp01(_nozzle + nozzleCmd * nozzleRate * dt);
+
             // ---- keyboard control axes: ramp toward the key state ----
             _kbRoll = Ramp(_kbRoll, KeyAxis(KeyRollRight, KeyRollLeft), dt);
             _kbPitch = Ramp(_kbPitch, KeyAxis(KeyPitchUp, KeyPitchDown), dt);
             _kbYaw = Ramp(_kbYaw, KeyAxis(KeyYawRight, KeyYawLeft), dt);
         }
 
-        /// <summary>Reset to a cold cockpit — throttle closed, sticks centred.</summary>
+        /// <summary>Reset to a cold cockpit — throttle closed, sticks centred.
+        /// The nozzle lever deliberately stays where it was: a respawning VTOL
+        /// wants the configuration it crashed in, not a surprise transition.</summary>
         public void ResetState()
         {
             _throttle = 0f;
             _kbRoll = _kbPitch = _kbYaw = 0f;
         }
+
+        /// <summary>Set the nozzle lever directly — how the jet bootstrap starts
+        /// the aircraft in the hover without ghost-holding a key for two seconds.</summary>
+        public void SetNozzle(float target) => _nozzle = Mathf.Clamp01(target);
+
+        /// <summary>Set the throttle ratchet directly — the jet bootstrap presets
+        /// the predicted hover fraction so the aircraft spawns hovering rather
+        /// than falling while the pilot winds the lever up. Setting initial
+        /// lever positions is rigging the cockpit, not flying the aeroplane.</summary>
+        public void SetThrottle(float v) => _throttle = Mathf.Clamp01(v);
 
         // ---- plumbing ----
 

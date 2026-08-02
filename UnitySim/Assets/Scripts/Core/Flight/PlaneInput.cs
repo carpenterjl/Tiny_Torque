@@ -88,6 +88,11 @@ namespace AIHWSim.Core.Flight
             actuatorOut[PlaneVehicle.AileronActuator] = Mathf.Clamp(source.Roll(), -1f, 1f);
             actuatorOut[PlaneVehicle.ElevatorActuator] = Mathf.Clamp(source.Pitch(), -1f, 1f);
             actuatorOut[PlaneVehicle.RudderActuator] = Mathf.Clamp(source.Yaw(), -1f, 1f);
+            // Nozzle tilt target. Slot 4 is free by the layout note in
+            // PlaneVehicle; a propeller aircraft never reads it, and the default
+            // interface member returns 0 for every scripted pilot — so this line
+            // is provably inert for the whole test fleet.
+            actuatorOut[PlaneVehicle.NozzleActuator] = Mathf.Clamp01(source.NozzleTarget());
 
             // Stability assist gets the last word on aileron and elevator, and it
             // reads what the pilot asked for to decide whether to take them at all.

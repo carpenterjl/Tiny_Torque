@@ -37,7 +37,16 @@ namespace AIHWSim.Core.Flight
 
         private const float SurfaceThickness = 0.010f;
 
-        public static Rig BuildPlane(AircraftSpec spec, Vector3 pos, Quaternion rot)
+        /// <summary>The Play-mode entry every scripted test calls — a verbatim
+        /// forwarder, for the same reason as
+        /// <see cref="FlightTestEnvironment.Build(FlightTestEnvironment.EnvSpec)"/>:
+        /// with the default context every substitution below reduces to the old
+        /// statement.</summary>
+        public static Rig BuildPlane(AircraftSpec spec, Vector3 pos, Quaternion rot) =>
+            BuildPlane(spec, pos, rot, SceneBuildContext.Runtime);
+
+        public static Rig BuildPlane(AircraftSpec spec, Vector3 pos, Quaternion rot,
+                                     SceneBuildContext ctx)
         {
             var root = new GameObject(spec.name);
             // Deactivate while building so PlaneVehicle.Awake cannot run before the
@@ -48,13 +57,18 @@ namespace AIHWSim.Core.Flight
             root.transform.SetPositionAndRotation(pos, rot);
 
             var body = root.AddComponent<Rigidbody>();
-            BuildFuselage(spec, root.transform);
-            foreach (LiftingSurface s in spec.surfaces) BuildSurface(s, root.transform);
-            BuildGear(spec, root.transform);
-            BuildProp(spec, root.transform);
+            BuildFuselage(spec, root.transform, ctx);
+            foreach (LiftingSurface s in spec.surfaces) BuildSurface(s, root.transform, ctx);
+            BuildGear(spec, root.transform, ctx);
+            BuildProp(spec, root.transform, ctx);
 
             var plane = root.AddComponent<PlaneVehicle>();
             plane.spec = spec;
+
+            // The nozzle visuals were built before the vehicle existed; hand
+            // them the component they follow. Empty for a propeller aircraft.
+            foreach (var nv in root.GetComponentsInChildren<JetNozzleVisual>(true))
+                nv.plane = plane;
 
             var input = root.AddComponent<PlaneInput>();
             input.plane = plane;
@@ -86,21 +100,36 @@ namespace AIHWSim.Core.Flight
         {
             var runnerGo = new GameObject("SimulationRunner");
             var runner = runnerGo.AddComponent<SimulationRunner>();
-            runner.physicsRateHz = physicsRateHz;
-            runner.controlRateHz = controlRateHz;
-            runner.logCsv = logCsv;
-            runner.vehicleBehaviour = rig.plane;
-            runner.inputBehaviour = rig.input;
-            runner.sensorRig = null;
-            runner.graph = graph;
-            runner.startInManual = true;
-            runner.loadControllerDll = false;
-            runner.allowModeToggle = false;
+            ConfigureRunner(runner, rig.plane, rig.input, graph,
+                            physicsRateHz, controlRateHz, logCsv);
 
             var tele = runnerGo.AddComponent<FlightTelemetry>();
             tele.Bind(runner, rig.plane);
 
             rig.runner = runner;
+        }
+
+        /// <summary>The field assignments alone, shared with the editor scene
+        /// builder so an authored runner and a runtime one cannot drift — any
+        /// future setting is added HERE or it exists in only one of the two
+        /// worlds. Binding telemetry stays with the caller: channel registration
+        /// is a runtime act.</summary>
+        public static void ConfigureRunner(SimulationRunner runner,
+                                           PlaneVehicle plane, PlaneInput input,
+                                           GraphOverlay graph,
+                                           int physicsRateHz, int controlRateHz,
+                                           bool logCsv)
+        {
+            runner.physicsRateHz = physicsRateHz;
+            runner.controlRateHz = controlRateHz;
+            runner.logCsv = logCsv;
+            runner.vehicleBehaviour = plane;
+            runner.inputBehaviour = input;
+            runner.sensorRig = null;
+            runner.graph = graph;
+            runner.startInManual = true;
+            runner.loadControllerDll = false;
+            runner.allowModeToggle = false;
         }
 
         /// <summary>Lowest point of the gear below the body origin — what the
@@ -115,7 +144,8 @@ namespace AIHWSim.Core.Flight
 
         // ---- primitives --------------------------------------------------
 
-        private static void BuildFuselage(AircraftSpec spec, Transform parent)
+        private static void BuildFuselage(AircraftSpec spec, Transform parent,
+                                          SceneBuildContext ctx)
         {
             var f = GameObject.CreatePrimitive(PrimitiveType.Cube);
             f.name = "Fuselage";
@@ -124,10 +154,11 @@ namespace AIHWSim.Core.Flight
             f.transform.localScale = spec.fuselageSize;
             // The fuselage IS the crash body. Lifting surfaces are visual only —
             // a wing-strike model is not in scope and is declared, not implied.
-            f.GetComponent<Renderer>().material.color = new Color(0.88f, 0.88f, 0.90f);
+            ctx.Paint(f.GetComponent<Renderer>(), new Color(0.88f, 0.88f, 0.90f));
         }
 
-        private static void BuildSurface(LiftingSurface s, Transform parent)
+        private static void BuildSurface(LiftingSurface s, Transform parent,
+                                         SceneBuildContext ctx)
         {
             int sides = s.mirrored ? 2 : 1;
             for (int i = 0; i < sides; i++)
@@ -148,7 +179,7 @@ namespace AIHWSim.Core.Flight
 
                 var g = GameObject.CreatePrimitive(PrimitiveType.Cube);
                 g.name = s.name + (s.mirrored ? (side > 0 ? "_R" : "_L") : "");
-                Object.Destroy(g.GetComponent<Collider>());
+                ctx.Destroy(g.GetComponent<Collider>());
                 g.transform.SetParent(parent, false);
 
                 // LookRotation(chordDir, normal) puts +Z along the chord and +Y
@@ -159,13 +190,14 @@ namespace AIHWSim.Core.Flight
 
                 float chord = 0.5f * (s.rootChord + s.tipChord);
                 g.transform.localScale = new Vector3(s.semiSpan, SurfaceThickness, chord);
-                g.GetComponent<Renderer>().material.color = s.vertical
+                ctx.Paint(g.GetComponent<Renderer>(), s.vertical
                     ? new Color(0.85f, 0.30f, 0.20f)
-                    : new Color(0.92f, 0.72f, 0.20f);
+                    : new Color(0.92f, 0.72f, 0.20f));
             }
         }
 
-        private static void BuildGear(AircraftSpec spec, Transform parent)
+        private static void BuildGear(AircraftSpec spec, Transform parent,
+                                      SceneBuildContext ctx)
         {
             foreach (Vector3 p in spec.gearLocal)
             {
@@ -178,22 +210,73 @@ namespace AIHWSim.Core.Flight
                 // DECLARED simplification: no brakes, no steerable nosewheel, no
                 // slip. Scripted tests hand-launch precisely so that none of them
                 // depends on it.
-                w.GetComponent<Renderer>().material.color = new Color(0.15f, 0.15f, 0.16f);
+                ctx.Paint(w.GetComponent<Renderer>(), new Color(0.15f, 0.15f, 0.16f));
             }
         }
 
-        private static void BuildProp(AircraftSpec spec, Transform parent)
+        private static void BuildProp(AircraftSpec spec, Transform parent,
+                                      SceneBuildContext ctx)
         {
+            // A jet has no disc to draw. It gets nozzles instead — and they are
+            // wired to the LIVE nozzle state, so the visual cannot disagree with
+            // the physics any more than the wings can.
+            if (spec.IsJet) { BuildJetVisual(spec, parent, ctx); return; }
+
             var p = GameObject.CreatePrimitive(PrimitiveType.Cylinder);
             p.name = "Propeller";
-            Object.Destroy(p.GetComponent<Collider>());
+            ctx.Destroy(p.GetComponent<Collider>());
             p.transform.SetParent(parent, false);
             p.transform.localPosition = spec.propPosLocal;
             // Cylinder axis is local Y; lay it along the thrust line.
             p.transform.localRotation = Quaternion.Euler(90f, 0f, 0f);
             float d = spec.propeller.diameterM;
             p.transform.localScale = new Vector3(d, 0.004f, d);
-            p.GetComponent<Renderer>().material.color = new Color(0.22f, 0.22f, 0.24f);
+            ctx.Paint(p.GetComponent<Renderer>(), new Color(0.22f, 0.22f, 0.24f));
+        }
+
+        /// <summary>Intake cheeks and the two swivelling nozzle pairs, at the
+        /// authored nozzle stations. The nozzle cylinders carry
+        /// <see cref="JetNozzleVisual"/>, which turns them with the live
+        /// <see cref="PlaneVehicle.NozzleDeg"/> once the vehicle exists — the
+        /// component's <c>plane</c> is wired by <see cref="BuildPlane"/>'s
+        /// caller-visible ordering (the vehicle is added right after the
+        /// visuals), via the wire-up at the end of this method's parent call.
+        /// At edit time it simply sits at 0° until Play.</summary>
+        private static void BuildJetVisual(AircraftSpec spec, Transform parent,
+                                           SceneBuildContext ctx)
+        {
+            // Intake cheeks either side of the fuselage, forward of the wing.
+            for (int side = -1; side <= 1; side += 2)
+            {
+                var intake = GameObject.CreatePrimitive(PrimitiveType.Cube);
+                intake.name = side > 0 ? "Intake_R" : "Intake_L";
+                ctx.Destroy(intake.GetComponent<Collider>());
+                intake.transform.SetParent(parent, false);
+                intake.transform.localPosition = new Vector3(
+                    side * (spec.fuselageSize.x * 0.5f + 0.18f), 0.05f, 1.10f);
+                intake.transform.localScale = new Vector3(0.36f, 0.55f, 1.30f);
+                ctx.Paint(intake.GetComponent<Renderer>(), new Color(0.30f, 0.31f, 0.34f));
+            }
+
+            // One nozzle pair per authored station, hung outboard of the
+            // fuselage like the Pegasus'.
+            Vector3[] stations = { spec.jet.nozzleForeLocal, spec.jet.nozzleAftLocal };
+            for (int i = 0; i < stations.Length; i++)
+                for (int side = -1; side <= 1; side += 2)
+                {
+                    var n = GameObject.CreatePrimitive(PrimitiveType.Cylinder);
+                    n.name = (i == 0 ? "NozzleFore" : "NozzleAft")
+                             + (side > 0 ? "_R" : "_L");
+                    ctx.Destroy(n.GetComponent<Collider>());
+                    n.transform.SetParent(parent, false);
+                    Vector3 p = stations[i];
+                    p.x = side * (spec.fuselageSize.x * 0.5f + 0.10f);
+                    n.transform.localPosition = p;
+                    n.transform.localRotation = Quaternion.Euler(90f, 0f, 0f);
+                    n.transform.localScale = new Vector3(0.26f, 0.22f, 0.26f);
+                    ctx.Paint(n.GetComponent<Renderer>(), new Color(0.20f, 0.20f, 0.22f));
+                    n.AddComponent<JetNozzleVisual>();
+                }
         }
     }
 }

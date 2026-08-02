@@ -20,7 +20,11 @@ namespace AIHWSim.Core.Flight
     /// </summary>
     public sealed class FlightCameraRig : MonoBehaviour
     {
-        public enum View { GroundStation = 0, Chase = 1, Boresight = 2 }
+        /// <summary>Turret is deliberately OUTSIDE <see cref="Cycle"/>'s reach —
+        /// V still walks the original three. It is entered only through
+        /// <see cref="Apply"/> by the turret controller, which owns the pivot
+        /// and the way back out.</summary>
+        public enum View { GroundStation = 0, Chase = 1, Boresight = 2, Turret = 3 }
 
         public Transform target;
 
@@ -40,6 +44,11 @@ namespace AIHWSim.Core.Flight
 
         [Header("Boresight")]
         public Vector3 boresightOffset = new Vector3(0f, 0.9f, -3.5f);
+
+        [Header("Turret")]
+        /// <summary>Set by the turret controller before applying View.Turret:
+        /// the belly pivot the camera hangs from while gunning.</summary>
+        public Transform turretPivot;
 
         public View Current { get; private set; } = View.GroundStation;
 
@@ -78,6 +87,14 @@ namespace AIHWSim.Core.Flight
             {
                 transform.SetParent(target, false);
                 transform.localPosition = boresightOffset;
+                transform.localRotation = Quaternion.identity;
+            }
+            else if (v == View.Turret && turretPivot != null)
+            {
+                // Same single-camera discipline as boresight: parent, don't
+                // clone. The pivot aims; the camera just rides it.
+                transform.SetParent(turretPivot, false);
+                transform.localPosition = new Vector3(0f, 0.15f, -0.6f);
                 transform.localRotation = Quaternion.identity;
             }
             else
