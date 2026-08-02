@@ -50,6 +50,11 @@ namespace AIHWSim.Garage
 
             var car = root.AddComponent<CarVehicle>();
             car.bodyShape = design.bodyShape;
+            // Both halves of the pair, unresolved. The car re-runs the same
+            // Resolve the design would have: handing over an already-resolved
+            // key would mean a car built by any other route (the debug spawner,
+            // the physics scenes, a preset) went through different rules.
+            car.bodyKey = design.bodyKey;
             car.bodySize = design.bodySize;
             car.bodyColor = design.bodyColor;
             car.bodyMass = design.mass;

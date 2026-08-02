@@ -66,9 +66,15 @@ namespace AIHWSim.EditorTools
                 if (BodyCatalog.ByLegacy(d.legacy) != d) why += " ByLegacy does not resolve to this row";
 
                 // --- the transcriptions, against the still-live switches ---
-
-                string liveKey = CarVehicle.BodyMeshKey(d.legacy);
-                if (d.meshKey != liveKey) why += $" meshKey '{d.meshKey}' != BodyMeshKey '{liveKey}'";
+                //
+                // K3a retired four of these: meshKey, tokens, unscaled and
+                // paintable were compared against BodyMeshKey, BodyAccentTable,
+                // BodyRenderScale's Tiguan test and HasPaintableBody's five-name
+                // list. Those switches are gone — the catalogue IS the live path
+                // now, so the checks would have proved only that it agrees with
+                // itself. What is left below is the transcription that still has
+                // a second source (cd/clA at K3b, foldedAppendages at K3d) plus
+                // the internal consistency, which never expires.
 
                 // The id IS the mesh key wherever there is a mesh. Checked rather
                 // than assumed: it is what lets Asset Studio commit an asset
@@ -81,25 +87,28 @@ namespace AIHWSim.EditorTools
                 float liveClA = AeroDynamics.BodyClA(d.legacy);
                 if (!Same(d.clA, liveClA)) why += $" clA {N(d.clA)} != BodyClA {N(liveClA)}";
 
-                // HasPaintableBody answers two questions at once — "does this
-                // shape have a tintable channel" and "did the FBX ship" — so the
-                // asset check is folded back in before comparing.
-                bool present = d.meshKey == null || PartMeshLibrary.Has(d.meshKey);
-                bool livePaint = CarVehicle.HasPaintableBody(d.legacy);
-                if ((d.paintable && present) != livePaint)
-                    why += $" paintable {d.paintable} (asset present {present})" +
-                           $" != HasPaintableBody {livePaint}";
+                // Now that the catalogue decides, "paintable" can only be checked
+                // for INTERNAL sense: a body with no mesh has nothing to paint,
+                // and one whose manifest is verbatim keeps the FBX's materials.
+                // Neither is a transcription — both are conditions the table must
+                // not contradict, whoever wrote the row.
+                if (d.paintable && d.meshKey == null)
+                    why += " paintable with no mesh key";
+                if (d.paintable && !CarVehicle.HasPaintableBody(d) &&
+                    d.meshKey != null && PartMeshLibrary.Has(d.meshKey))
+                    why += " paintable but HasPaintableBody says no with the asset present";
 
-                BodyTokens liveTokens = TokensOf(CarVehicle.BodyAccentTable(d.legacy));
-                if (d.tokens != liveTokens)
-                    why += $" tokens {d.tokens} != BodyAccentTable {liveTokens}";
+                // The token table must resolve to something BindByToken can use.
+                // Not a comparison any more — a reachability check: an unnamed
+                // BodyTokens value would silently flatten every renderer onto the
+                // body material, which renders as a correctly shaped grey car.
+                if (d.tokens != BodyTokens.None && CarVehicle.BodyAccentTable(d) == null)
+                    why += $" tokens {d.tokens} resolves to no table";
 
-                // A probe size that would scale every axis, so "unscaled" cannot
-                // pass by the design happening to be the author size.
-                var probe = new Vector3(0.31f, 0.17f, 0.53f);
-                bool liveUnscaled = CarVehicle.BodyRenderScale(d.legacy, probe) == Vector3.one;
-                if (d.unscaled != liveUnscaled)
-                    why += $" unscaled {d.unscaled} != BodyRenderScale {liveUnscaled}";
+                // No "unscaled" check at all after K3a. BodyRenderScale now READS
+                // this field, so comparing the two is the definition of a check
+                // that proves nothing; deleting it is the honest move, not
+                // rewriting it into something that still passes.
 
                 bool liveFolded = CosmeticMounts.HasFoldedAppendages(d.legacy);
                 if (d.foldedAppendages != liveFolded)
@@ -138,24 +147,11 @@ namespace AIHWSim.EditorTools
             return fail;
         }
 
-        /// <summary>Identify a token table by its content, not its reference —
-        /// <c>AccentTokens</c> is a property that builds a fresh array on every
-        /// call, so <c>==</c> would report every table as different.</summary>
-        private static BodyTokens TokensOf((string, Material)[] table)
-        {
-            if (table == null) return BodyTokens.None;
-            if (SameTokens(table, PartVisualFactory.AccentTokens)) return BodyTokens.Accent;
-            if (SameTokens(table, PartVisualFactory.TiguanTokens)) return BodyTokens.Tiguan;
-            return (BodyTokens)(-1);   // a table that is neither: never equal to a field
-        }
-
-        private static bool SameTokens((string, Material)[] a, (string, Material)[] b)
-        {
-            if (a == null || b == null || a.Length != b.Length) return false;
-            for (int i = 0; i < a.Length; i++)
-                if (!string.Equals(a[i].Item1, b[i].Item1, StringComparison.Ordinal)) return false;
-            return true;
-        }
+        // TokensOf/SameTokens lived here until K3a. They identified a token table
+        // by its CONTENT because AccentTokens builds a fresh array per call — a
+        // real problem, worth remembering if anything ever needs to compare two
+        // tables again, and no longer one this file has: BodyAccentTable is now
+        // a switch on the field it used to be compared against.
 
         // ---- wheels ----------------------------------------------------------
 

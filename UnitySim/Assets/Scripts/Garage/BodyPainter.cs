@@ -37,7 +37,7 @@ namespace AIHWSim.Garage
         private string _syncedPng;               // design.liveryPng our texture mirrors
 
         public static bool CanPaint(VehicleDesign d) =>
-            d != null && CarVehicle.HasPaintableBody(d.bodyShape);
+            d != null && CarVehicle.HasPaintableBody(d.Body);
 
         // ---- lifecycle ----
 

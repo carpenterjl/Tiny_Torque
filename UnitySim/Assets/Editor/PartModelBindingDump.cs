@@ -107,15 +107,21 @@ namespace AIHWSim.EditorTools
             int rows = 0;
             try
             {
+                // Still enumerated from the ENUM, not from BodyCatalog, and after
+                // K3a that is the point: it is what makes "every shape a saved
+                // design can carry is covered" true rather than "every row the
+                // table happens to have". The catalogue is looked up per shape,
+                // which is exactly what a car does.
                 foreach (BodyShape shape in Enum.GetValues(typeof(BodyShape)))
                 {
-                    string key = CarVehicle.BodyMeshKey(shape);
+                    BodyDef def = BodyCatalog.ByLegacy(shape);
+                    string key = def?.meshKey;
                     if (key == null) continue;      // Box/Wedge are pure primitives
                     var holder = Holder(parent, "body");
                     var paint = new HashSet<MeshRenderer>();
                     var inst = PartMeshLibrary.TryInstantiate(key, holder, holder.gameObject.layer);
                     if (inst != null)
-                        CarVehicle.BindBodyMesh(inst, shape, paintMat, paint);
+                        CarVehicle.BindBodyMesh(inst, def, paintMat, paint);
                     rows += Emit(sb, $"body:{shape} key={key}", holder, paint);
                     UnityEngine.Object.DestroyImmediate(holder.gameObject);
                 }

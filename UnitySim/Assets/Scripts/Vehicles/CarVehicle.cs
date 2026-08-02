@@ -56,6 +56,24 @@ namespace AIHWSim.Vehicles
         // ~13 mm of the 30 mm travel (targetPosition 0.5), damper 15 ≈ 0.68·crit.
         [Header("Body (m)")]
         public BodyShape bodyShape = BodyShape.Box;
+
+        /// <summary>
+        /// The <see cref="BodyCatalog"/> key this car wears, or empty to be read
+        /// off <see cref="bodyShape"/>. Set by <c>VehicleFactory</c> from the
+        /// design; left empty by every car built in code (the debug spawner, the
+        /// physics scenes, the flight scenes), which is why
+        /// <see cref="BodyCatalog.Resolve"/> takes the pair and not the key.
+        /// </summary>
+        public string bodyKey = "";
+
+        /// <summary>
+        /// Everything this car's shell is: mesh, token table, render scale,
+        /// paintability, drag. Read through <see cref="BodyCatalog.Resolve"/>
+        /// on every access, never cached — the garage edits <c>bodyShape</c> on
+        /// a live car and rebuilds, so a cache would be one rebuild stale.
+        /// </summary>
+        public BodyDef Body => BodyCatalog.Resolve(bodyKey, bodyShape);
+
         public Vector3 bodySize = new Vector3(0.20f, 0.10f, 0.42f);
         public Color bodyColor = new Color(0.20f, 0.55f, 0.95f);
         public float bodyMass = 1.6f;
@@ -863,14 +881,15 @@ namespace AIHWSim.Vehicles
             // the primitive shape builders when the asset is absent (and always for
             // Box/Wedge). The body stays on the car's own layer (not the viz layer) so
             // the on-car camera sees it exactly as with the primitive body.
-            string meshKey = BodyMeshKey(bodyShape);
+            BodyDef def = Body;
+            string meshKey = def.meshKey;
             if (meshKey != null)
             {
                 var inst = PartMeshLibrary.TryInstantiate(meshKey, holder, gameObject.layer);
                 if (inst != null)
                 {
                     _bodyMeshInstance = inst.transform;
-                    inst.transform.localScale = BodyRenderScale(bodyShape, bodySize);
+                    inst.transform.localScale = BodyRenderScale(def, bodySize);
                     // Painted livery (decoded by VehicleFactory): the texture
                     // carries the colours, so the material tint goes white.
                     if (liveryTex != null)
@@ -878,7 +897,7 @@ namespace AIHWSim.Vehicles
                         _bodyMat.mainTexture = liveryTex;
                         _bodyMat.color = Color.white;
                     }
-                    BindBodyMesh(inst, bodyShape, _bodyMat, _bodyRenderers);
+                    BindBodyMesh(inst, def, _bodyMat, _bodyRenderers);
                     // Kept so SetBodyMaterial can repaint the right SLOT. Null for
                     // every shipped shell — none of them ships a manifest — which
                     // is what leaves the legacy repaint path untouched.
@@ -891,7 +910,12 @@ namespace AIHWSim.Vehicles
                 }
             }
 
-            switch (bodyShape)
+            // The primitive builders are GEOMETRY, not data — five hand-built
+            // compounds, not five rows — so this stays a switch. It reads the
+            // resolved legacy value rather than the field so that a catalogue
+            // body whose FBX did not ship falls back to the primitive its own
+            // row nominates, not to whatever int happened to be beside the key.
+            switch (def.legacy)
             {
                 case BodyShape.Wedge:    BuildWedgeBody(holder); break;
                 case BodyShape.Buggy:    BuildBuggyBody(holder); break;
@@ -933,32 +957,16 @@ namespace AIHWSim.Vehicles
         /// through this divide would force those two to be the same number and
         /// squash the car to make them agree.
         ///
-        /// Named rather than inlined so <c>[AKEY]</c> can check the catalogue's
-        /// "authored 1:1" flag against the branch that is still the live one.
+        /// It was a <c>== BodyShape.Tiguan</c> test until K3a; it now reads
+        /// <see cref="BodyDef.unscaled"/>, which is what makes "authored 1:1" a
+        /// property an asset can declare rather than a name compiled in here.
         /// </summary>
-        public static Vector3 BodyRenderScale(BodyShape s, Vector3 bodySize) =>
-            s == BodyShape.Tiguan
+        public static Vector3 BodyRenderScale(BodyDef def, Vector3 bodySize) =>
+            def != null && def.unscaled
                 ? Vector3.one
                 : new Vector3(bodySize.x / BodyMeshAuthorSize.x,
                               bodySize.y / BodyMeshAuthorSize.y,
                               bodySize.z / BodyMeshAuthorSize.z);
-
-        /// <summary>FBX key for the shapes that have an authored shell, else null.</summary>
-        public static string BodyMeshKey(BodyShape s) => s switch
-        {
-            BodyShape.Shell    => "body_shell",
-            BodyShape.LowRacer => "body_lowracer",
-            BodyShape.Buggy    => "body_buggy",
-            BodyShape.Coupe    => "body_coupe",
-            BodyShape.Baja     => "body_baja",
-            BodyShape.Patrol   => "body_patrol",
-            BodyShape.Rattle   => "body_rattle",
-            BodyShape.Redline  => "body_redline",
-            BodyShape.Highwing => "body_highwing",
-            BodyShape.Autopia  => "body_autopia",
-            BodyShape.Tiguan   => "body_tiguan",
-            _                  => null,
-        };
 
         /// <summary>
         /// The token→material table a body shell binds against, or <c>null</c>
@@ -975,14 +983,13 @@ namespace AIHWSim.Vehicles
         /// shared table every renderer would miss and fall through to the body
         /// material — a correctly shaped 4.5 m grey car.
         /// </summary>
-        public static (string, Material)[] BodyAccentTable(BodyShape s) => s switch
-        {
-            BodyShape.Tiguan => PartVisualFactory.TiguanTokens,
-            BodyShape.Coupe or BodyShape.Baja or BodyShape.Patrol or
-            BodyShape.Rattle or BodyShape.Redline or BodyShape.Highwing or
-            BodyShape.Autopia => PartVisualFactory.AccentTokens,
-            _ => null,
-        };
+        public static (string, Material)[] BodyAccentTable(BodyDef def) =>
+            def == null ? null : def.tokens switch
+            {
+                BodyTokens.Tiguan => PartVisualFactory.TiguanTokens,
+                BodyTokens.Accent => PartVisualFactory.AccentTokens,
+                _ => null,
+            };
 
         /// <summary>
         /// Bind an instantiated body shell's renderers.
@@ -1005,9 +1012,9 @@ namespace AIHWSim.Vehicles
         /// author picks, so it has no BodyShape to ask about. It shares the loop
         /// below, not this decision.)
         /// </summary>
-        public static MaterialBindings BindBodyMesh(GameObject inst, BodyShape shape,
+        public static MaterialBindings BindBodyMesh(GameObject inst, BodyDef def,
             Material bodyMat, ICollection<MeshRenderer> paintRenderers) =>
-            PartVisualFactory.BindByToken(inst, BodyAccentTable(shape),
+            PartVisualFactory.BindByToken(inst, BodyAccentTable(def),
                                           bodyMat, paintRenderers);
 
         /// <summary>The renderers driven by the tintable body material — the
@@ -1016,33 +1023,30 @@ namespace AIHWSim.Vehicles
         public IReadOnlyList<MeshRenderer> PaintRenderers => _bodyRenderers;
 
         /// <summary>
-        /// Whether this shape shows an authored UV-mapped shell — i.e. the garage
-        /// paint mode can work on it (Box/Wedge compounds have no sane UVs).
+        /// Whether this body shows an authored UV-mapped shell that the garage's
+        /// paint mode can work on.
+        ///
+        /// <b>Two questions with one answer, and they stay separate here.</b>
+        /// <see cref="BodyDef.paintable"/> is the design fact — does this shell
+        /// have a tintable channel at all — and the rest of this function is the
+        /// machine fact: did the FBX ship, and if it ships a manifest, what does
+        /// the manifest say. Only the first moved into the catalogue at K3a;
+        /// asking a table whether a file exists would be a table that goes stale
+        /// the moment somebody deletes one.
+        ///
+        /// The five bodies that answer false on the design fact do so for one
+        /// reason between them: their paint IS the artwork. The three TinyTorque
+        /// show cars (candy crimson and stripes, acid lime and bands, the police
+        /// black-and-white) and the Rattletrap's rust are baked textures, and the
+        /// Tiguan's painted panel is named "tigpaint_1", which does not
+        /// <c>StartsWith("paint")</c> — so every renderer binds an accent and
+        /// <see cref="PaintRenderers"/> comes back empty. Offering paint mode on
+        /// any of them would be a mode that silently does nothing.
         /// </summary>
-        public static bool HasPaintableBody(BodyShape s)
+        public static bool HasPaintableBody(BodyDef def)
         {
-            // The three TinyTorque show cars joined Rattletrap in the baked
-            // camp: their authored liveries (candy crimson + stripes, acid
-            // lime + bands, the police black-and-white) are procedural in the
-            // source and now ship as textures. A baked shell has no tintable
-            // panel — the livery IS the finish — so paint mode stands down for
-            // them exactly as it does for the Rattletrap.
-            if (s == BodyShape.Coupe || s == BodyShape.Baja || s == BodyShape.Patrol)
-                return false;
-            // Rattletrap has a shell and good UVs, but not one tintable panel:
-            // its paint is the baked rust texture (see PartVisualFactory
-            // .RustPaint), so every renderer binds an accent and PaintRenderers
-            // comes back empty. Offering paint mode there would be a mode that
-            // silently does nothing.
-            if (s == BodyShape.Rattle) return false;
-            // The Tiguan is in the same position for the same reason: after the
-            // exporter separates by material its painted panel is named
-            // "tigpaint_1", which does not StartsWith("paint"), so it binds an
-            // accent like everything else and PaintRenderers comes back empty.
-            // That is the requirement, not a shortfall — the point of this car
-            // is that its Blender materials survive untouched.
-            if (s == BodyShape.Tiguan) return false;
-            string key = BodyMeshKey(s);
+            if (def == null || !def.paintable) return false;
+            string key = def.meshKey;
             if (key == null) return false;
 
             // A manifest asset answers this itself instead of being guessed at.
@@ -1111,13 +1115,13 @@ namespace AIHWSim.Vehicles
             bool verbatim = _bodyBinding != null && _bodyBinding.Manifest != null
                             && _bodyBinding.Manifest.IsVerbatim;
             Debug.LogWarning(
-                $"[CarVehicle] {what} on {name} ({bodyShape}) changes nothing: " +
+                $"[CarVehicle] {what} on {name} ({Body.id}) changes nothing: " +
                 (verbatim
                     ? "this body is in Verbatim material mode, so it keeps the FBX's own " +
                       "materials and has no tintable channel by design."
                     : "this shell registered no paint renderer — its finish is baked or " +
                       "token-bound.") +
-                $" HasPaintableBody({bodyShape}) already answers false.");
+                $" HasPaintableBody({Body.id}) already answers false.");
         }
 
         private bool _noPaintWarned;
