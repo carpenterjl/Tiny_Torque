@@ -85,7 +85,8 @@ patrolpaint_1  chrome_1..6  dark_1..10  decal_1..6  gold_1..4
 glass_1  gunmetal_1  white_1  barwhite_1  barwhite_2
 ```
 
-Binding rules, in `CarVehicle.AssignBodyAccents`:
+Binding rules, in `CarVehicle.BindBodyMesh` (which picks the table via
+`CarVehicle.BodyAccentTable` and runs `PartVisualFactory.BindByToken`):
 
 - A name starting with `paint` gets the **tintable body material** and is
   registered in `PaintRenderers` (bodyColor, livery, garage paint mode).

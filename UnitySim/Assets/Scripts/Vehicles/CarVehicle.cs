@@ -863,13 +863,7 @@ namespace AIHWSim.Vehicles
                         _bodyMat.mainTexture = liveryTex;
                         _bodyMat.color = Color.white;
                     }
-                    if (HasAccentTokens(bodyShape)) AssignBodyAccents(inst);
-                    else
-                        foreach (var r in inst.GetComponentsInChildren<MeshRenderer>(true))
-                        {
-                            r.sharedMaterial = _bodyMat;
-                            _bodyRenderers.Add(r);
-                        }
+                    BindBodyMesh(inst, bodyShape, _bodyMat, _bodyRenderers);
                     return;
                 }
             }
@@ -920,44 +914,54 @@ namespace AIHWSim.Vehicles
         };
 
         /// <summary>
-        /// The TinyTorque show cars (build_vehicles.py) carry per-material
-        /// accent tokens in their object names: only the "paint" panels take
-        /// the tintable body material; chrome/gold/glass/emissive lights keep
-        /// their authored look. The three legacy shells stay on the flatten-
-        /// everything path, bit for bit.
+        /// The token→material table a body shell binds against, or <c>null</c>
+        /// for the shapes that flatten every renderer onto the body material.
+        ///
+        /// Both questions in one answer, because they were always the same
+        /// question: "does this shape have accents" is just "is there a table",
+        /// and <see cref="PartVisualFactory.BindByToken"/> already reads a null
+        /// table as flatten-everything — which is bit-for-bit the loop the three
+        /// legacy shells used to have written out beside it.
+        ///
+        /// The Tiguan binds against its own manifest-built table. Its pieces are
+        /// named "tig*" and match nothing in <c>AccentTokens</c>, so on the
+        /// shared table every renderer would miss and fall through to the body
+        /// material — a correctly shaped 4.5 m grey car.
         /// </summary>
-        private static bool HasAccentTokens(BodyShape s) =>
-            s == BodyShape.Coupe || s == BodyShape.Baja || s == BodyShape.Patrol ||
-            s == BodyShape.Rattle || s == BodyShape.Redline ||
-            s == BodyShape.Highwing || s == BodyShape.Autopia ||
-            // The Tiguan carries 29 authored materials. Without this it takes
-            // the flatten-everything path and arrives as a 4.5 m grey car.
-            s == BodyShape.Tiguan;
+        public static (string, Material)[] BodyAccentTable(BodyShape s) => s switch
+        {
+            BodyShape.Tiguan => PartVisualFactory.TiguanTokens,
+            BodyShape.Coupe or BodyShape.Baja or BodyShape.Patrol or
+            BodyShape.Rattle or BodyShape.Redline or BodyShape.Highwing or
+            BodyShape.Autopia => PartVisualFactory.AccentTokens,
+            _ => null,
+        };
 
         /// <summary>
-        /// Bind renderers of an accent-token body by object-name token: "paint"
-        /// panels get the tintable body material and are the only renderers
-        /// registered in <see cref="_bodyRenderers"/> (so bodyColor, livery and
+        /// Bind an instantiated body shell's renderers.
+        ///
+        /// On an accent-token body: "paint" panels get the tintable body
+        /// material and are the only renderers registered in
+        /// <paramref name="paintRenderers"/> (so bodyColor, livery and
         /// SetBodyMaterial touch nothing else); every other token gets its
         /// shared accent material; an unmatched name falls back to the body
-        /// material so a renamed export shows up as tintable, not magenta.
+        /// material so a renamed export shows up as tintable, not magenta. On
+        /// the three legacy shells every renderer flattens onto the body
+        /// material instead.
         ///
-        /// The loop itself lives in <see cref="PartVisualFactory.BindByToken"/>
-        /// so Asset Studio's preview can bind a shell through the same code
-        /// rather than a copy of it. This method keeps only the decision that is
-        /// the car's to make: which table.
+        /// <b>Static, and public, because it is the whole of what a car does to
+        /// a body mesh.</b> <c>PartModelBindingDump</c> calls this rather than
+        /// transcribing the branch — a dumper with its own copy of a call site
+        /// keeps passing after that call site changes, which would make its
+        /// empty diff worth nothing. (Asset Studio's preview deliberately does
+        /// NOT come through here: it binds an arbitrary FBX against a table the
+        /// author picks, so it has no BodyShape to ask about. It shares the loop
+        /// below, not this decision.)
         /// </summary>
-        private void AssignBodyAccents(GameObject inst)
-        {
-            // The Tiguan binds against its own manifest-built table. Its pieces
-            // are named "tig*" and match nothing in AccentTokens, so on the
-            // shared table every renderer would miss and fall through to
-            // _bodyMat — a correctly-shaped car in one flat colour.
-            var accents = bodyShape == BodyShape.Tiguan
-                ? PartVisualFactory.TiguanTokens
-                : PartVisualFactory.AccentTokens;
-            PartVisualFactory.BindByToken(inst, accents, _bodyMat, _bodyRenderers);
-        }
+        public static MaterialBindings BindBodyMesh(GameObject inst, BodyShape shape,
+            Material bodyMat, ICollection<MeshRenderer> paintRenderers) =>
+            PartVisualFactory.BindByToken(inst, BodyAccentTable(shape),
+                                          bodyMat, paintRenderers);
 
         /// <summary>The renderers driven by the tintable body material — the
         /// paint panels on an accent body, every body renderer otherwise. The

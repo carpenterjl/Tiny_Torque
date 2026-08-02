@@ -97,18 +97,34 @@ namespace AIHWSim.Vehicles
         /// materials so lighting/theme/recolour stay one system; the FBX's own
         /// materials are ignored. Renderers matching no token keep the first mat as a
         /// default when <paramref name="fallback"/> is supplied.
+        ///
+        /// Returns the <see cref="MaterialBindings"/> the walk produced — which
+        /// renderer took which material, and which token won. <b>Every caller
+        /// ignores it today</b>; it exists because the manifest path binds by
+        /// object name and explicit submesh slot and needs the binder to say
+        /// what it touched. Recording is free: the token that won is already in
+        /// hand when the assignment happens.
         /// </summary>
-        public static void AssignByName(GameObject root, Material fallback,
-                                        params (string token, Material mat)[] map)
+        public static MaterialBindings AssignByName(GameObject root, Material fallback,
+                                                    params (string token, Material mat)[] map)
         {
+            var bindings = new MaterialBindings();
             foreach (var r in root.GetComponentsInChildren<Renderer>(true))
             {
                 string n = r.gameObject.name.ToLowerInvariant();
                 Material chosen = fallback;
+                string won = null;
                 foreach (var (token, mat) in map)
-                    if (n.Contains(token)) { chosen = mat; break; }
+                    if (n.Contains(token)) { chosen = mat; won = token; break; }
                 if (chosen != null) r.sharedMaterial = chosen;
+                // Slot 0, and only slot 0: sharedMaterial IS slot 0, so a
+                // two-material object keeps whatever the import left in its
+                // second slot. Recorded as such rather than glossed over —
+                // that gap is exactly what the manifest path closes.
+                bindings.Add(r, 0, chosen, won,
+                             won != null ? BindSource.Token : BindSource.Fallback);
             }
+            return bindings;
         }
     }
 }

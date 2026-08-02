@@ -289,25 +289,47 @@ namespace AIHWSim.Vehicles
         /// The paint check is StartsWith and the accent check is Contains, and
         /// that asymmetry is deliberate: it is what lets "coupepaint" be an
         /// accent while "paint_3" is the tintable channel.
+        ///
+        /// A null <paramref name="accents"/> means "flatten everything onto
+        /// <paramref name="paintMat"/>" — the literal behaviour the three legacy
+        /// shells need, which is why <c>CarVehicle.BodyAccentTable</c> can
+        /// return null instead of the caller branching.
+        ///
+        /// Returns the <see cref="MaterialBindings"/> the walk produced, with
+        /// the paint channel and an unmatched name recorded as DIFFERENT
+        /// sources even though both land on <paramref name="paintMat"/>. They
+        /// are indistinguishable on screen and mean opposite things: one is an
+        /// authored tintable panel, the other is a renamed export nobody has
+        /// noticed. No caller consumes this yet.
         /// </summary>
-        public static void BindByToken(GameObject inst, (string, Material)[] accents,
+        public static MaterialBindings BindByToken(GameObject inst, (string, Material)[] accents,
             Material paintMat, ICollection<MeshRenderer> paintRenderers = null)
         {
-            if (inst == null) return;
+            var bindings = new MaterialBindings();
+            if (inst == null) return bindings;
             foreach (var r in inst.GetComponentsInChildren<MeshRenderer>(true))
             {
                 string n = r.gameObject.name.ToLowerInvariant();
                 Material hit = null;
-                if (!n.StartsWith("paint") && accents != null)
+                string won = null;
+                bool paintName = n.StartsWith("paint");
+                if (!paintName && accents != null)
                     foreach (var (token, mat) in accents)
-                        if (n.Contains(token)) { hit = mat; break; }
-                if (hit != null) r.sharedMaterial = hit;
+                        if (n.Contains(token)) { hit = mat; won = token; break; }
+                if (hit != null)
+                {
+                    r.sharedMaterial = hit;
+                    bindings.Add(r, 0, hit, won, BindSource.Token);
+                }
                 else
                 {
                     r.sharedMaterial = paintMat;
                     paintRenderers?.Add(r);
+                    bindings.Add(r, 0, paintMat, null,
+                                 paintName ? BindSource.PaintChannel : BindSource.Fallback);
                 }
             }
+            return bindings;
         }
 
         // ---- primitive helper ----
