@@ -7,15 +7,19 @@ namespace AIHWSim.AssetTools
     /// <summary>
     /// Builds preview Materials from a draft's numbers and the export's textures.
     ///
-    /// <b>A stopgap, and named as one.</b> R2 ships <c>AssetManifests</c>, the
-    /// RUNTIME loader that builds these same materials from a committed manifest
-    /// with <c>Resources.Load&lt;Texture2D&gt;</c>. This class exists because the
-    /// draft's textures are not in the project yet — they are PNGs in a Blender
-    /// export folder two directories outside it — and because an authoring tool
-    /// where you edit a smoothness and see nothing change is a form, not an
-    /// editor. When R2 lands, this becomes a call into it plus the texture
-    /// loading, and the property mapping below should move there rather than be
-    /// duplicated.
+    /// <b>The property mapping is not here.</b> It is
+    /// <c>AssetManifests.Configure</c> — the runtime's — and this class supplies
+    /// only the two things the runtime cannot: a draft projected to
+    /// <c>AssetMaterialDef</c>, and a texture loader that reads PNGs off disk.
+    /// The draft's textures are not in the project at all; they are files in a
+    /// Blender export folder outside it, which is why <c>Resources.Load</c> is
+    /// not an option and why <c>Configure</c> takes its loader as an argument.
+    ///
+    /// That injection is the whole design: a preview where you edit a smoothness
+    /// and see nothing change is a form rather than an editor, and a preview that
+    /// computes the answer its OWN way is worse than useless — it agrees with
+    /// itself and disagrees with the game. Same argument as
+    /// <c>PartVisualFactory.BindByToken</c> one level up.
     ///
     /// Everything it creates is <c>HideAndDontSave</c> and destroyed by
     /// <see cref="Dispose"/>. Textures come in through <c>ImageConversion</c>
@@ -49,71 +53,18 @@ namespace AIHWSim.AssetTools
                 hideFlags = HideFlags.HideAndDontSave,
             };
 
-            // A baked material has no flat colour of its own — the texture carries
-            // it — so the tint IS the colour and white means untinted. An unbaked
-            // one multiplies its authored rgb by the same tint.
-            Color albedo = d.baked ? paint : d.rgb * paint;
-            albedo.a = Mathf.Clamp01(d.alpha);
-            m.color = albedo;
-            m.SetFloat("_Metallic", Mathf.Clamp01(d.metallic));
-            m.SetFloat("_Glossiness", Mathf.Clamp01(d.smoothness));
-
-            Texture2D albedoTex = Load(exportDir, d.mapAlbedo);
-            if (albedoTex != null) m.mainTexture = albedoTex;
-
-            Texture2D ms = Load(exportDir, d.mapMetallicSmoothness);
-            if (ms != null)
-            {
-                m.SetTexture("_MetallicGlossMap", ms);
-                m.EnableKeyword("_METALLICGLOSSMAP");
-            }
-
-            Texture2D normal = Load(exportDir, d.mapNormal);
-            if (normal != null)
-            {
-                // Loaded as a plain RGB image, not as a Unity NormalMap import —
-                // there is no importer involved. It reads correctly enough to
-                // judge shape by; the committed asset gets the real
-                // TextureImporterType.NormalMap treatment at R2.
-                m.SetTexture("_BumpMap", normal);
-                m.EnableKeyword("_NORMALMAP");
-            }
-
-            if (d.emissionStrength > 0f || d.mapEmission.Length > 0)
-            {
-                m.EnableKeyword("_EMISSION");
-                m.globalIlluminationFlags = MaterialGlobalIlluminationFlags.RealtimeEmissive;
-                m.SetColor("_EmissionColor", d.emission * Mathf.Max(0f, d.emissionStrength));
-                Texture2D em = Load(exportDir, d.mapEmission);
-                if (em != null) m.SetTexture("_EmissionMap", em);
-            }
-
-            if (d.alpha < 1f) MakeTransparent(m);
+            // The game's own mapping, against the draft's own textures. The normal
+            // map is the one place the preview cannot match the shipped asset: it
+            // arrives here as a plain RGB image because there is no importer
+            // involved, where a committed one gets
+            // TextureImporterType.NormalMap from PartTexturePostprocessor. It
+            // reads well enough to judge shape by, and not well enough to judge
+            // lighting by.
+            AIHWSim.Vehicles.AssetManifests.Configure(
+                m, d.ToDef(), tint, file => Load(exportDir, file));
 
             _mats[key] = m;
             return m;
-        }
-
-        /// <summary>
-        /// Standard's transparent mode, set completely.
-        ///
-        /// All five of these matter and the project has been bitten by setting
-        /// only some: <c>_Mode</c> alone leaves the shader opaque, the keyword
-        /// alone leaves the blend state opaque, and the render queue alone leaves
-        /// it sorting with the opaques. <c>MakeGhostMat</c> elsewhere in the
-        /// project still sets <c>_Mode 3</c> with <c>_ALPHABLEND_ON</c>, which are
-        /// two different modes — noted as a follow-up, not fixed from here.
-        /// </summary>
-        private static void MakeTransparent(Material m)
-        {
-            m.SetFloat("_Mode", 3f);                       // Transparent
-            m.SetInt("_SrcBlend", (int)UnityEngine.Rendering.BlendMode.One);
-            m.SetInt("_DstBlend", (int)UnityEngine.Rendering.BlendMode.OneMinusSrcAlpha);
-            m.SetInt("_ZWrite", 0);
-            m.DisableKeyword("_ALPHATEST_ON");
-            m.DisableKeyword("_ALPHABLEND_ON");
-            m.EnableKeyword("_ALPHAPREMULTIPLY_ON");
-            m.renderQueue = (int)UnityEngine.Rendering.RenderQueue.Transparent;
         }
 
         private Texture2D Load(string exportDir, string file)

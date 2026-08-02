@@ -52,6 +52,38 @@ namespace AIHWSim.AssetTools
                             || !string.IsNullOrEmpty(mapMetallicSmoothness)
                             || !string.IsNullOrEmpty(mapEmission)
                             || !string.IsNullOrEmpty(mapNormal);
+
+        /// <summary>
+        /// This material as the RUNTIME's manifest type — a straight field-for-field
+        /// projection, which is the point: the draft is the authoring shape (a
+        /// <c>Color</c> an IMGUI field can edit, an Undo can record) and
+        /// <see cref="AIHWSim.Vehicles.AssetMaterialDef"/> is the shipped shape
+        /// (<c>float[]</c>, because <c>JsonUtility</c> writes a Color as rgba and a
+        /// hand-edited manifest should read as three numbers).
+        ///
+        /// The map fields cross over unchanged and are therefore still the export's
+        /// bare FILE names here, not Resources paths — the commit pipeline rewrites
+        /// them when it copies the PNGs in. Preview loading resolves them against
+        /// the export folder instead, which is exactly what
+        /// <c>AssetManifests.Configure</c>'s injected loader is for.
+        /// </summary>
+        public AIHWSim.Vehicles.AssetMaterialDef ToDef() =>
+            new AIHWSim.Vehicles.AssetMaterialDef
+            {
+                name = name,
+                baked = baked,
+                paintChannel = paintChannel,
+                rgb = new[] { rgb.r, rgb.g, rgb.b },
+                metallic = metallic,
+                smoothness = smoothness,
+                alpha = alpha,
+                emission = new[] { emission.r, emission.g, emission.b },
+                emissionStrength = emissionStrength,
+                mapAlbedo = mapAlbedo,
+                mapMetallicSmoothness = mapMetallicSmoothness,
+                mapEmission = mapEmission,
+                mapNormal = mapNormal,
+            };
     }
 
     /// <summary>

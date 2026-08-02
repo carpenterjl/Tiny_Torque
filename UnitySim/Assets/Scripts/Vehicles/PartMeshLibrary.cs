@@ -40,6 +40,22 @@ namespace AIHWSim.Vehicles
         /// <summary>True when an asset for <paramref name="key"/> is present.</summary>
         public static bool Has(string key, string root = PartRoot) => Enabled && Load(key, root) != null;
 
+        /// <summary>
+        /// Forget every probed key, hits and misses alike.
+        ///
+        /// <b>The misses are the point.</b> A miss is cached forever, so a key that
+        /// was absent when something first asked for it stays absent for the rest of
+        /// the session — and "the rest of the session" includes the moment right
+        /// after an editor tool has just imported the FBX that key names. Without
+        /// this, committing an asset and then looking at it requires restarting
+        /// Unity, and the asset appears broken until someone does.
+        ///
+        /// <c>TiguanMaterials.ResetCache</c> and
+        /// <c>AssetManifests.ResetCache</c> are the other two halves; Asset Studio's
+        /// commit pipeline calls all three together.
+        /// </summary>
+        public static void ResetCache() => _cache.Clear();
+
         private static GameObject Load(string key, string root)
         {
             string path = root + key;
