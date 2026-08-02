@@ -873,6 +873,10 @@ namespace AIHWSim.Vehicles
                     // every shipped shell — none of them ships a manifest — which
                     // is what leaves the legacy repaint path untouched.
                     _bodyBinding = inst.GetComponent<PartManifestBinding>();
+                    // A livery on a body with no tintable channel went onto a
+                    // material nothing reads. Said out loud here rather than
+                    // discovered as "the police livery does not show up".
+                    if (liveryTex != null) WarnIfNothingToPaint("A livery");
                     return;
                 }
             }
@@ -1041,9 +1045,48 @@ namespace AIHWSim.Vehicles
         public void SetBodyTexture(Texture2D tex)
         {
             if (_bodyMat == null) return;
+            WarnIfNothingToPaint("SetBodyTexture");
             _bodyMat.mainTexture = tex;
             _bodyMat.color = tex != null ? Color.white : bodyColor;
         }
+
+        /// <summary>
+        /// Say so, once, when a paint operation has nowhere to land.
+        ///
+        /// <b>The failure this exists for is a no-op that looks like success.</b>
+        /// <c>_bodyMat</c> always exists, so writing a colour or a texture onto it
+        /// always "works"; whether anything RENDERS from it depends on whether the
+        /// binder registered any paint target, and on a verbatim asset it
+        /// deliberately did not — the FBX's own materials are the whole point of
+        /// that mode. Without this the symptom is a livery that simply does not
+        /// appear, with nothing anywhere saying why.
+        ///
+        /// Once per car, because the garage painter calls
+        /// <see cref="SetBodyTexture"/> on every stroke and a warning per stroke is
+        /// a warning nobody reads. <see cref="HasPaintableBody"/> answers the same
+        /// question BEFORE the call and is what a caller should ask; this is for
+        /// the callers that did not.
+        /// </summary>
+        private void WarnIfNothingToPaint(string what)
+        {
+            if (_noPaintWarned) return;
+            if (_bodyRenderers.Count > 0) return;
+            if (_bodyBinding != null && _bodyBinding.HasPaintSlots) return;
+            _noPaintWarned = true;
+
+            bool verbatim = _bodyBinding != null && _bodyBinding.Manifest != null
+                            && _bodyBinding.Manifest.IsVerbatim;
+            Debug.LogWarning(
+                $"[CarVehicle] {what} on {name} ({bodyShape}) changes nothing: " +
+                (verbatim
+                    ? "this body is in Verbatim material mode, so it keeps the FBX's own " +
+                      "materials and has no tintable channel by design."
+                    : "this shell registered no paint renderer — its finish is baked or " +
+                      "token-bound.") +
+                $" HasPaintableBody({bodyShape}) already answers false.");
+        }
+
+        private bool _noPaintWarned;
 
         private void OnDestroy()
         {
@@ -1141,6 +1184,7 @@ namespace AIHWSim.Vehicles
         public void SetBodyMaterial(Material mat)
         {
             if (mat == null) return;
+            WarnIfNothingToPaint("SetBodyMaterial");
             _bodyMat = mat;
             if (_bodyBinding != null && _bodyBinding.HasPaintSlots)
             {

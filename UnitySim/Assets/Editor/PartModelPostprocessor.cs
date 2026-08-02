@@ -1,4 +1,7 @@
+using System.IO;
+using AIHWSim.Vehicles;
 using UnityEditor;
+using UnityEngine;
 
 namespace AIHWSim.EditorTools
 {
@@ -57,6 +60,14 @@ namespace AIHWSim.EditorTools
             mi.materialImportMode = ModelImporterMaterialImportMode.None; // runtime overrides
             mi.meshCompression = ModelImporterMeshCompression.Off;
 
+            // ...unless the asset ships a manifest that asks for VERBATIM
+            // materials, in which case stripping them is the one thing that must
+            // not happen. Decided here, during import, which is why the manifest
+            // is a sibling FILE rather than something under a Manifests/ folder:
+            // Resources.Load does not exist yet at this point and path arithmetic
+            // does.
+            ApplyMaterialMode(mi, assetPath);
+
             // Use the authored normals rather than recalculating them. The meshes
             // are exported with mesh_smooth_type='EDGE' after Shade Auto Smooth and
             // a Weighted Normal pass, so the split/weighted normals that keep body
@@ -94,6 +105,128 @@ namespace AIHWSim.EditorTools
             // other asset in these folders keeps importing bit-identically.
             if (file.StartsWith("body_tiguan") || file.StartsWith("wheel_tiguan"))
                 mi.indexFormat = ModelImporterIndexFormat.UInt32;
+        }
+
+        /// <summary>Where a verbatim asset's own materials live, relative to the
+        /// project: <c>Resources/PartModels/body_police/Materials/</c>, the same
+        /// per-key folder its textures go in. It mirrors the Blender exporter's own
+        /// layout (<c>FBX + export.json + Materials/ + Textures/</c>), so the commit
+        /// pipeline copies a folder rather than redistributing its contents.</summary>
+        public static string MaterialsDir(string modelAssetPath)
+        {
+            string dir = Path.GetDirectoryName(modelAssetPath)?.Replace('\\', '/') ?? "";
+            return dir + "/" + Path.GetFileNameWithoutExtension(modelAssetPath) + "/Materials";
+        }
+
+        /// <summary>The sibling manifest's path for a model, whether or not it
+        /// exists: <c>body_police.fbx</c> → <c>body_police_asset.json</c>.</summary>
+        public static string ManifestPath(string modelAssetPath)
+        {
+            string dir = Path.GetDirectoryName(modelAssetPath)?.Replace('\\', '/') ?? "";
+            return dir + "/" + Path.GetFileNameWithoutExtension(modelAssetPath) +
+                   AssetManifests.Suffix + ".json";
+        }
+
+        /// <summary>
+        /// Leave the FBX's materials alone when — and only when — a sibling
+        /// manifest says <c>"materialMode": "Verbatim"</c>.
+        ///
+        /// <b>Verbatim is the mode where the exporter's Blender materials ARE the
+        /// answer.</b> Unity is told to import them as Standard, to treat them as
+        /// external assets rather than sub-assets of the model, and then handed an
+        /// explicit remap per material name pointing at the <c>.mat</c> the
+        /// exporter wrote. The remap is what makes it verbatim rather than
+        /// approximately verbatim: without it Unity would build its own Standard
+        /// material from the FBX's diffuse colour and drop every map the author
+        /// wired in Blender.
+        ///
+        /// <b><c>InPrefab</c>, not <c>External</c>, and that was measured.</b> Both
+        /// honour the remap; they differ only in what happens to a material the
+        /// remap does NOT cover. <c>External</c> writes Unity's own replacement out
+        /// as a real <c>.mat</c> file in a <c>Materials</c> folder beside the model
+        /// — which here is <c>Resources/PartModels/Materials/</c>, a folder shared
+        /// by all 207 assets — and it names it after the diffuse TEXTURE, so one
+        /// withheld material produced a stray
+        /// <c>Resources/PartModels/Materials/M_Police_Chrome_BaseColor.mat</c>.
+        /// <c>InPrefab</c> keeps the replacement as a sub-asset of the FBX, where
+        /// it belongs and where it cannot collide with another asset's material of
+        /// the same name. Remapping IS the embedded-materials workflow; External is
+        /// the legacy extract-to-disk one.
+        ///
+        /// <b>Import ORDER is load-bearing and cannot be checked from here.</b>
+        /// <c>LoadAssetAtPath</c> only sees a <c>.mat</c> Unity has already
+        /// imported, so a model imported in the same batch as its materials can
+        /// find none of them. The commit pipeline must import the Materials folder
+        /// first and only then <c>ImportAsset</c> the FBX. A miss is not silent —
+        /// it names the file it wanted — but it is a re-import away from being
+        /// right, and that sentence is the whole reason the warning exists.
+        ///
+        /// <b>No <c>GetVersion()</c> bump.</b> Every existing asset takes the
+        /// unchanged <c>None</c> branch: 207 of 207 ship no manifest, so there is
+        /// nothing to propagate and a bump would reimport 200+ FBX to reach an
+        /// empty set.
+        /// </summary>
+        private static void ApplyMaterialMode(ModelImporter mi, string assetPath)
+        {
+            string manifestPath = ManifestPath(assetPath);
+            if (!File.Exists(manifestPath)) return;   // no manifest: silent, and normal
+
+            AssetManifest man = AssetManifests.FromJson(File.ReadAllText(manifestPath), manifestPath);
+            if (man == null || !man.IsVerbatim) return;
+
+            mi.materialImportMode = ModelImporterMaterialImportMode.ImportStandard;
+            mi.materialLocation = ModelImporterMaterialLocation.InPrefab;
+
+            string dir = MaterialsDir(assetPath);
+            int found = 0, missing = 0, unusable = 0;
+            foreach (AssetMaterialDef d in man.materials)
+            {
+                if (d == null || string.IsNullOrEmpty(d.name)) continue;
+                string matPath = dir + "/" + d.name + ".mat";
+                var mat = AssetDatabase.LoadAssetAtPath<Material>(matPath);
+                if (mat == null)
+                {
+                    missing++;
+                    Debug.LogWarning($"[PartModelPostprocessor] {assetPath} is Verbatim but " +
+                                     $"{matPath} is not imported — \"{d.name}\" will be whatever " +
+                                     "Unity makes of the FBX. Import the Materials folder first, " +
+                                     "then re-import the model.");
+                    continue;
+                }
+                if (!Renderable(mat)) unusable++;
+                mi.AddRemap(new AssetImporter.SourceAssetIdentifier(typeof(Material), d.name), mat);
+                found++;
+            }
+            Debug.Log($"[PartModelPostprocessor] {assetPath}: Verbatim, {found} material(s) " +
+                      $"remapped{(missing > 0 ? $", {missing} missing" : "")}" +
+                      $"{(unusable > 0 ? $", {unusable} on a shader this project does not have" : "")}.");
+        }
+
+        /// <summary>
+        /// False when a material's shader is missing from THIS project — the state
+        /// Unity renders as magenta and reports nowhere.
+        ///
+        /// <b>The case this exists for is real and is the main cost of verbatim
+        /// mode.</b> A Blender export carries whatever materials the exporting
+        /// project's render pipeline uses, and the current exporter runs under URP
+        /// while this game is Built-in RP: its <c>.mat</c> files reference
+        /// Universal Render Pipeline/Lit, which resolves here to
+        /// <c>Hidden/InternalErrorShader</c>. Nothing in this repo can fix that —
+        /// verbatim means verbatim — so the honest thing is to say it by name at
+        /// import, once, with the way out.
+        /// </summary>
+        private static bool Renderable(Material mat)
+        {
+            Shader s = mat.shader;
+            if (s != null && s.name != "Hidden/InternalErrorShader") return true;
+            Debug.LogWarning($"[PartModelPostprocessor] {AssetDatabase.GetAssetPath(mat)}: " +
+                             $"shader \"{(s == null ? "<null>" : s.name)}\" — this material was " +
+                             "authored against a render pipeline this project does not have, and " +
+                             "will render magenta. Verbatim mode cannot fix that by definition. " +
+                             "Re-author it against Built-in RP Standard, or switch the asset to " +
+                             "Manifest mode, which rebuilds materials from the exported numbers " +
+                             "and does not care which pipeline wrote them.");
+            return false;
         }
 
         /// <summary>Bumped so a settings change here reimports every asset in

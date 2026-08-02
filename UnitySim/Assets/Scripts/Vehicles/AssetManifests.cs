@@ -209,9 +209,10 @@ namespace AIHWSim.Vehicles
         public AssetObjectDef[] objects;
         public AssetNotesDef notes;
 
-        /// <summary>Resources path this was loaded from, e.g.
-        /// "PartModels/body_police_asset". Where the file IS, which is not something
-        /// the file can say.</summary>
+        /// <summary>Where this was loaded from — a Resources path
+        /// ("PartModels/body_police_asset") at runtime, an Assets/ path when the
+        /// model postprocessor read it off disk during import. Where the file IS,
+        /// which is not something the file can say.</summary>
         [NonSerialized] public string resourcePath;
 
         // Built lazily, shared by every instance of this asset, and dropped
@@ -343,22 +344,37 @@ namespace AIHWSim.Vehicles
         {
             var ta = Resources.Load<TextAsset>(resourcePath);
             if (ta == null) return null;   // no manifest: silent, and normal
+            return FromJson(ta.text, resourcePath);
+        }
 
+        /// <summary>
+        /// Parse manifest text that has already been fetched, or null (warned) if
+        /// it does not parse. <paramref name="label"/> only names the source in
+        /// that warning.
+        ///
+        /// Separate from <see cref="Load"/> because the model postprocessor has to
+        /// read the sibling manifest DURING import, where <c>Resources.Load</c>
+        /// does not exist yet — it reads the file off disk and hands the text in
+        /// here, so verbatim mode is decided by the same parser the game uses
+        /// rather than by an editor-side re-reading of the same JSON.
+        /// </summary>
+        public static AssetManifest FromJson(string json, string label)
+        {
             AssetManifest m;
-            try { m = JsonUtility.FromJson<AssetManifest>(SanitiseNulls(ta.text)); }
+            try { m = JsonUtility.FromJson<AssetManifest>(SanitiseNulls(json)); }
             catch (Exception e)
             {
-                Debug.LogWarning($"[AssetManifests] Resources/{resourcePath} did not " +
+                Debug.LogWarning($"[AssetManifests] {label} did not " +
                                  $"parse: {e.Message} — the asset will bind through the " +
                                  "legacy token tables instead.");
                 return null;
             }
             if (m == null)
             {
-                Debug.LogWarning($"[AssetManifests] Resources/{resourcePath} is empty.");
+                Debug.LogWarning($"[AssetManifests] {label} is empty.");
                 return null;
             }
-            m.resourcePath = resourcePath;
+            m.resourcePath = label;
             m.materials ??= Array.Empty<AssetMaterialDef>();
             m.objects ??= Array.Empty<AssetObjectDef>();
             // An omitted block deserializes to null, and a hand-written manifest
