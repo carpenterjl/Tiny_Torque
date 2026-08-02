@@ -59,6 +59,7 @@ namespace AIHWSim.EditorTools
             Panels(spec);
             Propulsion(spec);
             Wake(spec);
+            Phugoid(spec);
 
             Debug.Log(_log.ToString().TrimEnd());
 
@@ -443,16 +444,170 @@ namespace AIHWSim.EditorTools
                  + "point the same way and both are declared");
         }
 
-        /// <summary>Spin the shaft to equilibrium at a voltage and an axial inflow.</summary>
-        private static float Equilibrium(AircraftSpec spec, float volts, float vAxial)
+        // ---- the phugoid, and the term the textbook form leaves out -------
+
+        /// <summary>Trim throttle from the [TRIM] probe, as A5 flies it.</summary>
+        private const float TrimThrottle = 0.719f;
+
+        /// <summary>
+        /// <b>Why the phugoid looked over-damped, settled on paper before any
+        /// aeroplane was flown.</b>
+        ///
+        /// A5 measured ζ ≈ 0.16 and compared it against ζ = 1/(√2·L/D) ≈ 0.078,
+        /// concluded the model damped the mode twice as hard as theory allowed, and
+        /// carried that as an open question. The formula is the thing that is
+        /// incomplete: it assumes thrust does not vary with speed, which is true of
+        /// a jet at constant power setting and thoroughly false of a fixed-pitch
+        /// propeller on a fixed voltage.
+        ///
+        /// Everything below is a closed form on the model's own propeller and motor
+        /// constants, so it can be checked on paper — which is what a bench is for,
+        /// and the reason this arrives before the flight test rather than after it.
+        ///
+        /// The single most telling line is the last: the naive formula, fed the
+        /// correct damping, back-solves a lift-to-drag ratio of 4.3. A5's existing
+        /// doc block records the anomaly as "implying a cruise L/D of 4.4". That is
+        /// not a coincidence, it is the same arithmetic run backwards, and it says
+        /// the measurement was right all along.
+        /// </summary>
+        private static void Phugoid(AircraftSpec spec)
         {
-            float omega = 0f;
-            const float dt = 1f / 1000f;
-            for (int i = 0; i < 8000; i++)
-                omega = PropellerModel.StepShaft(spec.propeller, spec.motor, volts,
-                                                 omega, vAxial, dt, out _, out _, out _);
-            return omega;
+            float volts = TrimThrottle * spec.motor.maxVoltage;
+            Check("trim voltage", volts, 7.9809f, 1e-3f, "V",
+                  "71.9 % of an 11.1 V 3S pack — the throttle A5 holds");
+
+            float omega = PropellerModel.EquilibriumOmega(spec.propeller, spec.motor,
+                                                          volts, Cruise);
+            Check("shaft at trim", omega, 725.6f, 8f, "rad/s",
+                  "motor 0.5005 − 6.089e-4·ω against prop 2.506e-7·ω² − 1.010e-4·ω, "
+                  + "Coulomb kt·I0 = 7.64 mN·m included");
+
+            float thrust = PropellerModel.Thrust(spec.propeller, omega, Cruise);
+            Check("thrust at trim", thrust, 2.163f, 0.09f, "N",
+                  "in level flight this IS the drag, so L/D = 19.61/2.16 = 9.07 — "
+                  + "the glide test measures 9.44 and the polar predicts 9.75");
+
+            float j = PropellerModel.AdvanceRatio(spec.propeller, omega, Cruise);
+            Check("advance ratio at trim", j, 0.5001f, 0.006f, "",
+                  "V/(n·D) = 14.66/(115.5 × 0.254); J₀ is 0.68, so the prop is "
+                  + "three quarters of the way to making no thrust at all");
+
+            // The whole point. dT/dV with the shaft free to re-equilibrate.
+            float tv = PropellerModel.ThrustSpeedDerivative(spec.propeller, spec.motor,
+                                                            volts, Cruise);
+            Check("dT/dV at fixed throttle", tv, -0.3275f, 0.012f, "N/(m/s)",
+                  "−(C_T0/J₀)·ρ·D³·n = −0.409, of which the shaft speeding up under "
+                  + "a lighter load returns +0.082");
+
+            // A prop that did NOT respond would be a stiffer damper, not a softer
+            // one. Worth pinning: it is the difference between the derivative being
+            // a property of the propeller and a property of the whole drivetrain.
+            float n = PropellerModel.RevsPerSecond(omega);
+            float frozen = -(spec.propeller.ct0 / spec.propeller.zeroThrustJ)
+                           * AeroDynamics.AirDensity
+                           * spec.propeller.diameterM * spec.propeller.diameterM
+                           * spec.propeller.diameterM * n;
+            Check("dT/dV, shaft held fixed", frozen, -0.4091f, 0.006f, "N/(m/s)",
+                  "the closed form at constant n — the free shaft recovers 20 % of it");
+
+            // ---- the two damping ratios ----
+            float zeta = spec.PhugoidDamping(Cruise, thrust, volts, out float classical);
+
+            Check("zeta, constant thrust (classical)", classical, 0.0780f, 0.003f, "",
+                  "D/(√2·W) = 2.163/(1.4142 × 19.613) — what A5 was comparing against");
+            Check("zeta, with the propeller", zeta, 0.1645f, 0.006f, "",
+                  "(∂D/∂V − ∂T/∂V)/(2·m·ω_n) at ω_n = 0.9460 rad/s");
+
+            float share = zeta > 1e-6f ? (zeta - classical) / zeta : 0f;
+            Check("propeller share of the damping", share * 100f, 52.6f, 2.0f, "%",
+                  "more than half the phugoid damping on this aeroplane is the "
+                  + "propeller, not the airframe");
+
+            float period = AircraftSpec.PhugoidPeriod(Cruise);
+            float damped = period / Mathf.Sqrt(Mathf.Max(1e-6f, 1f - zeta * zeta));
+            Check("phugoid period at trim", period, 6.6417f, 0.01f, "s",
+                  "π√2·V/g at 14.66 m/s — undamped");
+            Check("damped period at trim", damped, 6.7335f, 0.02f, "s",
+                  "T/√(1−ζ²); even at ζ = 0.16 the period only lengthens 1.4 %, so "
+                  + "damping cannot explain a period error of tens of percent");
+
+            // ---- the period, and why the frozen-α form does not describe it ----
+            //
+            // Lanchester's frequency is entirely "how much extra lift does a speed
+            // excursion make", evaluated at CONSTANT α. This aeroplane does not hold
+            // α constant: the flight path swings several degrees over the cycle, the
+            // airframe has to rotate to follow it, and rotating costs a pitching
+            // moment that only an α perturbation can supply. So α moves in antiphase
+            // with speed and cancels part of the extra lift.
+            //
+            // Quasi-static pitch balance, C_mα·Δα + C_mq·(c̄/2V)·q = 0 with q = γ̇,
+            // closes into the path equations and gives a clean factor on ω²:
+            //   k = 1 / [ 1 + (g/V)·(a_w/C_L)·(C_mq/C_mα)·(c̄/2V) ]
+            LiftingSurface wing = spec.surfaces[0];
+            LiftingSurface tail = spec.surfaces[1];
+            float qInfTrim = 0.5f * AeroDynamics.AirDensity * Cruise * Cruise;
+            float clTrim = spec.TotalMass * 9.80665f / (qInfTrim * spec.WingArea);
+            Check("C_L at trim", clTrim, 0.4434f, 0.002f, "",
+                  "W/(q·S) at 14.66 m/s — the lift coefficient the phugoid oscillates about");
+
+            PanelAero aeroTrim = PanelAero.Build(spec.surfaces);
+            SlipstreamState sTrim = Slipstream.Solve(spec.propeller, spec.propPosLocal,
+                                                     thrust, Cruise);
+            float etaTrim = EffectiveQ(aeroTrim, spec, 1, sTrim, Cruise) / qInfTrim;
+            Check("eta_h at TRIM power", etaTrim, 1.1586f, 0.03f, "",
+                  "v_i 1.104, Δv 2.209 over 48.9 % of the tailplane ⇒ 1 + 0.489×0.324. "
+                  + "NOTE the first hand value here was 1.111, computed by reusing the "
+                  + "FULL-POWER immersion of 35.7 %. Less thrust means less contraction, "
+                  + "so the trim tube is WIDER (r∞ 0.1228 m against 0.0898 m) and wets "
+                  + "more of the tail even while pushing it less hard");
+
+            float mac = spec.MeanChord;
+            Vector3 cgT = spec.CentreOfMass;
+            float armH = cgT.z - tail.rootQuarterChord.z;
+            float vH2 = tail.Area * armH / (wing.Area * mac);
+            // ⚠ ESTIMATE. Tail contribution only, the standard textbook form. The
+            // wing's own damping is omitted and is also negative, so this UNDERSTATES
+            // |C_mq| and therefore understates how much the period lengthens.
+            // Published values for this term spread about 30 %.
+            float cmq = -2f * etaTrim * tail.LiftSlope * vH2 * (armH / mac);
+            Check("C_mq (tail only, ⚠ estimate)", cmq, -11.450f, 0.5f, "/rad",
+                  "−2·η_h·a_h·V_H·(l_h/c̄) = −2 × 1.1586 × 3.611 × 0.5492 × 2.4917 — "
+                  + "the pitch damping that forces the alpha perturbation");
+
+            float sm = 0.19762f;   // static margin, as Stability() measures it
+            float cma = -sm * wing.LiftSlope;
+            float pTerm = (cmq / cma) * (mac / (2f * Cruise));
+            float kFactor = 1f / (1f + (9.80665f / Cruise) * (wing.LiftSlope / clTrim) * pTerm);
+            Check("lift-perturbation factor k", kFactor, 0.5829f, 0.03f, "",
+                  "1/(1 + 0.7155) — alpha's response cancels 42 % of the lift a "
+                  + "frozen-alpha phugoid would make");
+
+            float periodCorrected = damped / Mathf.Sqrt(Mathf.Max(1e-4f, kFactor));
+            Check("period with alpha free (⚠)", periodCorrected, 8.819f, 0.30f, "s",
+                  "T/√k. A5 MEASURES 8.15 s, so this closed form lands +8 % — inside "
+                  + "the ±6 % that C_mq's own 30 % spread already implies once the "
+                  + "omitted wing term is allowed for too, and a long way better than "
+                  + "the 6.73 s the frozen-alpha form gives. The period is explicable "
+                  + "from geometry; it is not tight enough to gate");
+
+            // The line that closes the open question.
+            float impliedLd = zeta > 1e-6f ? 0.7071f / zeta : 0f;
+            Check("L/D the naive formula would infer", impliedLd, 4.30f, 0.16f, "",
+                  "0.7071/ζ at the CORRECT ζ. A5's doc block records the anomaly as "
+                  + "'implying a cruise L/D of 4.4' — so the number it called "
+                  + "impossible is the number the corrected theory predicts, and the "
+                  + "measurement was never the thing that was wrong");
+
+            Line("⚠ this treats the shaft as quasi-static: it settles in ~40 ms "
+                 + "against a 6.6 s phugoid, so it sits at its equilibrium throughout "
+                 + "the mode. A5's frozen-thrust stage is the experiment that decides "
+                 + "whether this whole account is right — with ∂T/∂V removed by force, "
+                 + $"the damping must fall to about {classical:0.000}");
         }
+
+        /// <summary>Spin the shaft to equilibrium at a voltage and an axial inflow.</summary>
+        private static float Equilibrium(AircraftSpec spec, float volts, float vAxial) =>
+            PropellerModel.EquilibriumOmega(spec.propeller, spec.motor, volts, vAxial);
 
         /// <summary>Area-weighted mean coverage of one surface by the wake tube.</summary>
         private static float ImmersedFraction(PanelAero aero, AircraftSpec spec,

@@ -453,7 +453,7 @@ watches even on a clean run. Add `-aeroOnly A3,A6` to narrow it while working on
 | A2 level turn | `n = cos γ / cos φ`, trigonometry only | PASS — **2.0007 g** vs exactly 2.000 |
 | A3 stall | root must stall before tip; peak section C_L | PASS — **root at 29 % semi-span**, 8.89 m/s |
 | A4 glide ratio | self-consistent with the model's own C_L/C_D | PASS — 9.441 vs 9.49, **0.5 %** |
-| A5 phugoid | `T = π√2·V/g` | INFO — see below |
+| A5 phugoid | `∂T/∂V` measured by differential damping | PASS — **−0.3148** vs −0.3278 N/(m/s), **4.0 %** |
 | A6 panel count | does the answer depend on the discretisation? | INFO — **0.74 %** across 14/29/58 panels |
 | A7 timestep | P9's twin, 200/400/800 Hz | PASS — **0.25 %** spread, bank 0.00° |
 
@@ -490,19 +490,57 @@ deriving body-frame acceleration the wrong way: differencing body-frame velocity
 the ω×v transport term, which in a 60° turn is the entire 2 g. The car suite learned this
 when its skidpad read 0.36 g against tyres delivering 1 g.
 
-**⚠ Two things this model is knowingly wrong or unproven about**, both recorded rather
-than tuned away:
+**A5 used to be this suite's open question, and the answer was that the textbook formula
+was missing a term.** It measured ζ ≈ 0.16 against the classical ζ = 1/(√2·L/D) ≈ 0.078,
+which implies a cruise L/D of 4.4 where the glide test measures 9.4, and that sat
+unresolved for two milestones.
 
-- **The phugoid damps about twice as hard as classical theory expects.** Measured
-  ζ ≈ 0.16 implies a cruise L/D of 4.4; the glide test measures 9.4. Either the panel
-  model's pitch damping is leaking into the mode, or the 0.7 s short period and 7 s
-  phugoid are too close together on a 2 kg airframe for the standard two-mode split to
-  hold. Unresolved, so A5 reports Info rather than gating.
+The classical result assumes **thrust does not change with speed**. A fixed-pitch
+propeller on a fixed voltage is the opposite: fly faster, the advance ratio rises, C_T
+falls, thrust drops — a force opposing every speed excursion, which is what damping is.
+On this airframe ∂T/∂V = −0.33 N per m/s against a drag term of +0.29, so **the propeller
+supplies more than half the damping**. The giveaway was in the old text: feed the correct
+ζ back through the naive formula and it returns an L/D of 4.3, against the 4.4 that had
+been written down as impossible. The measurement was never the thing that was wrong.
+
+So A5 no longer compares ratios — it **measures ∂T/∂V and gates on it**. The same
+disturbance is flown twice, once with the thrust frozen at its trim value, and since both
+stages share a trim, an airframe and an α response (to 1.2 %), everything cancels but the
+term under test:
+
+```
+∂T/∂V = 2·m·(σ_powered − σ_frozen) = 2 × 2.0 × (−0.12529 + 0.04658) = −0.3148 N/(m/s)
+```
+
+against −0.3278 from C_T0, J₀ and the motor constants alone — **4.0 %**, on a quantity
+measured in flight versus one computed without reference to any flight. Damping *rates*
+rather than *ratios*, because ζ divides by a frequency this aeroplane does not have.
+
+**⚠ Three things this model is knowingly wrong or unproven about**, recorded rather than
+tuned away:
+
+- **The phugoid period is 8.15 s against π√2·V/g = 6.76 s, +21 %.** Not amplitude (a 7.5×
+  sweep moves it 0.1 %), not the timestep (0.02 % at double rate), and reproducible to
+  0 %. Lanchester's frequency assumes α is frozen; this aeroplane measurably does not
+  freeze it — α moves −0.16°/(m/s) *in antiphase* with speed, cancelling part of the extra
+  lift, because following a flight path that swings ±4° needs a rotation and the tail's
+  pitch damping charges an α perturbation for it. `[ABENCH]`'s closed form for that lands
+  at 8.82 s on a ⚠ C_mq estimated to 30 %. The direction and size are explained; nothing
+  here is tight enough to gate, so the period is reported and the gate is on ∂T/∂V.
+- **∂D/∂V comes out 36 % below the constant-α value** (0.186 against 0.290), which is the
+  same α effect seen through drag. Consistent, but not separately confirmed. ⚠ open.
 - **The airframe cannot sustain a 60° level turn under its own power** — it needs about
   4.2 N and the propeller supplies under 3. That is a real performance limit of a 0.57
   thrust-to-weight trainer, not a defect.
 
-**Three defects the new rows found**, all fixed and all previously invisible:
+**Four defects the new rows found**, all fixed and all previously invisible:
+
+- A5's estimator counted rising zero-crossings of airspeed. At ζ = 0.16 the amplitude
+  falls by 0.37 per cycle, so the third crossing is already noise — and the test spent
+  three milestones reporting "the phugoid damps out inside 1 cycle, too fast to time a
+  period", which is **an instrument limit presented as a physical result**. Fitting
+  `c + e^(σt)(a·cos ωt + b·sin ωt)` instead uses every sample rather than three of them
+  and returns 0.2 % residuals off well under two cycles.
 
 - `ResetVehicleTo` moved the Transform without calling `Physics.SyncTransforms()`, so for
   one step `PanelAero` built every strip's moment arm as

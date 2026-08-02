@@ -204,5 +204,56 @@ namespace AIHWSim.Vehicles.Aero
         /// </summary>
         public static float PhugoidPeriod(float trimSpeed) =>
             Mathf.PI * Mathf.Sqrt(2f) * trimSpeed / 9.80665f;
+
+        /// <summary>Undamped phugoid frequency (rad/s): ω_n = √2·g/V.</summary>
+        public static float PhugoidFrequency(float trimSpeed) =>
+            trimSpeed > 1e-3f ? Mathf.Sqrt(2f) * 9.80665f / trimSpeed : 0f;
+
+        /// <summary>
+        /// <b>Phugoid damping ratio — and the term the textbook form omits.</b>
+        ///
+        /// The classical result is ζ = 1/(√2·L/D), which follows from
+        /// ζ = −X_u/(2ω_n) once you assume thrust does not change with speed. Then
+        /// the only speed force left is drag, which at constant angle of attack goes
+        /// as V², so ∂D/∂V = 2D/V and everything cancels down to the lift-to-drag
+        /// ratio.
+        ///
+        /// <b>A fixed-pitch propeller on a fixed voltage breaks that assumption
+        /// badly.</b> Speed up and the advance ratio rises, C_T falls, and thrust
+        /// drops — a restoring force proportional to the speed excursion, which is
+        /// exactly what damping is. On this airframe ∂T/∂V is about −0.33 N per m/s
+        /// against a drag term of +0.30, so the propeller supplies slightly MORE than
+        /// half the total. A model that reproduces this correctly measures roughly
+        /// twice the classical ζ, and reads as over-damped only if it is compared
+        /// against a formula that does not describe it.
+        /// <code>
+        ///   X_u   = (∂T/∂V − ∂D/∂V) / m       ∂D/∂V = 2·D/V at constant α
+        ///   ω_n   = √2·g/V
+        ///   ζ     = −X_u / (2·ω_n)
+        /// </code>
+        ///
+        /// <paramref name="trimDragN"/> is the drag at trim. In level flight that IS
+        /// the thrust, so the flight test hands in its own measured mean thrust
+        /// rather than an estimate off the drag polar — which keeps the prediction
+        /// free of the two ⚠ coefficients (C_D0 and Oswald e) the polar would drag in.
+        /// </summary>
+        /// <param name="classical">The constant-thrust value, ζ = D/(√2·W), for
+        /// comparison. Reporting both is the point: their ratio is how much of this
+        /// aeroplane's phugoid damping is propeller rather than airframe.</param>
+        public float PhugoidDamping(float trimSpeed, float trimDragN, float volts,
+                                    out float classical)
+        {
+            classical = 0f;
+            float wn = PhugoidFrequency(trimSpeed);
+            float m = TotalMass;
+            if (wn <= 1e-6f || m <= 1e-6f) return 0f;
+
+            float dragSlope = 2f * trimDragN / trimSpeed;
+            float thrustSlope = PropellerModel.ThrustSpeedDerivative(propeller, motor,
+                                                                     volts, trimSpeed);
+
+            classical = dragSlope / (2f * m * wn);
+            return (dragSlope - thrustSlope) / (2f * m * wn);
+        }
     }
 }

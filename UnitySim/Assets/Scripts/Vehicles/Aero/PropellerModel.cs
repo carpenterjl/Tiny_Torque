@@ -171,6 +171,64 @@ namespace AIHWSim.Vehicles.Aero
         }
 
         /// <summary>
+        /// The shaft speed (rad/s) a given voltage and axial inflow settle at.
+        ///
+        /// The motor's torque curve falls with speed and the prop's load rises with
+        /// it, so they cross at exactly one place. This integrates to that crossing
+        /// rather than solving the quadratic, which means it is the SAME arithmetic
+        /// the aircraft flies with — a closed form here could agree with the algebra
+        /// and still disagree with <see cref="StepShaft"/>.
+        ///
+        /// 8 000 steps at 1 kHz is 8 s of shaft time against a electrical/inertial
+        /// time constant near 40 ms, so it is converged by two orders of magnitude;
+        /// the bench checks that one more step does not move it.
+        /// </summary>
+        public static float EquilibriumOmega(in PropellerSpec p, in MotorParams m,
+                                             float volts, float vAxial)
+        {
+            float omega = 0f;
+            const float dt = 1f / 1000f;
+            for (int i = 0; i < 8000; i++)
+                omega = StepShaft(p, m, volts, omega, vAxial, dt, out _, out _, out _);
+            return omega;
+        }
+
+        /// <summary>
+        /// <b>∂T/∂V at fixed throttle (N per m/s) — the term the classical phugoid
+        /// damping formula leaves out, and on this airframe the larger half of it.</b>
+        ///
+        /// Lanchester's ζ = 1/(√2·L/D) is derived for CONSTANT thrust. A fixed-pitch
+        /// propeller on a fixed voltage is nothing of the kind: fly faster and the
+        /// advance ratio rises, C_T falls, and thrust drops away. That is a speed
+        /// damper acting directly on the phugoid, and leaving it out of the reference
+        /// makes a correct model look over-damped by a factor of two.
+        ///
+        /// <b>The shaft is re-equilibrated at each speed, not held fixed.</b> A
+        /// slower prop is a lighter load, so the shaft speeds up as the aircraft
+        /// does and claws back part of the loss — here about a fifth of it. Holding
+        /// n constant would overstate the derivative. The quasi-static treatment is
+        /// justified by the timescales: the shaft settles in ~40 ms against a
+        /// ~7 s phugoid, so it is always at its equilibrium as far as the mode is
+        /// concerned.
+        ///
+        /// Central difference, because the C_T(J) curve is linear in J but T is not
+        /// linear in V — a one-sided difference would carry a first-order error where
+        /// this carries none of consequence.
+        /// </summary>
+        public static float ThrustSpeedDerivative(in PropellerSpec p, in MotorParams m,
+                                                  float volts, float vAxial,
+                                                  float delta = 0.25f)
+        {
+            float d = Mathf.Max(1e-3f, delta);
+            float lo = Mathf.Max(0f, vAxial - d);
+            float hi = vAxial + d;
+
+            float tLo = Thrust(p, EquilibriumOmega(p, m, volts, lo), lo);
+            float tHi = Thrust(p, EquilibriumOmega(p, m, volts, hi), hi);
+            return (tHi - tLo) / (hi - lo);
+        }
+
+        /// <summary>
         /// Angular momentum of the spinning prop, body frame (kg·m²/s), along the
         /// thrust axis. The caller turns this into gyroscopic precession with
         /// τ = −ω_body × H — which is why a hard yaw pitches the nose, and why it

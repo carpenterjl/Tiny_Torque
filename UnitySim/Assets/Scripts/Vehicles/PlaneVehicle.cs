@@ -58,6 +58,26 @@ namespace AIHWSim.Vehicles
                  + "aircraft then has NO pitch or yaw authority at zero airspeed — "
                  + "which is what the wake is for, and the fastest way to see it.")]
         public bool slipstreamEnabled = true;
+        /// <summary>
+        /// Freeze the thrust FORCE at this value (N), speed-independent. Negative —
+        /// the default — leaves the propeller alone.
+        ///
+        /// <b>This is a control experiment, not a flight mode.</b> A fixed-pitch
+        /// propeller on a fixed voltage loses thrust as the aircraft accelerates, and
+        /// that lapse is a damper acting on every speed excursion — on this airframe
+        /// it supplies more than half the phugoid damping. Arguing that from the
+        /// coefficients is not the same as showing it, so A5 flies the identical
+        /// disturbance twice and removes the term by force on the second run. If the
+        /// damping does not fall to the classical value, the explanation was wrong.
+        ///
+        /// Only the applied force is frozen. The shaft still integrates, so the
+        /// torque reaction and the gyroscopic term are unchanged and cannot be
+        /// blamed for the difference, and the wake is solved from the same frozen
+        /// thrust so the momentum balance still reads the same from both ends.
+        /// </summary>
+        [Tooltip("Freeze the thrust force at this value (N) regardless of airspeed. "
+                 + "Negative = off. A5's control experiment; not a flight mode.")]
+        public float thrustOverrideN = -1f;
 
         private Rigidbody _body;
         private PanelAero _aero;
@@ -279,6 +299,13 @@ namespace AIHWSim.Vehicles
                                                   out _, out _propLoadTorque,
                                                   out _propCurrent);
             _propThrust = PropellerModel.Thrust(spec.propeller, _propOmega, vAxial);
+
+            // Applied BEFORE the wake is solved and before the force goes on, so a
+            // frozen thrust and its slipstream stay the same momentum balance. The
+            // shaft above is deliberately left running on the real load — the torque
+            // reaction and the gyroscopic term must be identical between the two
+            // stages, or the experiment has changed two things at once.
+            if (thrustOverrideN >= 0f) _propThrust = thrustOverrideN;
 
             // The wake that thrust implies. Solved from THIS step's thrust and the
             // free-stream inflow, so it cannot disagree with the force being
