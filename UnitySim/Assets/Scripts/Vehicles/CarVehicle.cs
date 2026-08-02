@@ -391,6 +391,11 @@ namespace AIHWSim.Vehicles
         private readonly List<(Wheel a, Wheel b)> _antiRollPairs = new List<(Wheel, Wheel)>();
         private readonly List<MeshRenderer> _bodyRenderers = new List<MeshRenderer>();
         private Material _bodyMat;
+
+        /// <summary>The body shell's manifest table when it has one, else null.
+        /// Held for one reason: it is the only thing that knows which SLOT of a
+        /// multi-material object is the paint channel.</summary>
+        private PartManifestBinding _bodyBinding;
         // Tune "Grip (side)" knob. Legacy path: sideways friction stiffness.
         // Brush path: lateral grip scale (× 0.5, so 2.0 = neutral).
         private float _gripStiffness = 2.0f;
@@ -864,6 +869,10 @@ namespace AIHWSim.Vehicles
                         _bodyMat.color = Color.white;
                     }
                     BindBodyMesh(inst, bodyShape, _bodyMat, _bodyRenderers);
+                    // Kept so SetBodyMaterial can repaint the right SLOT. Null for
+                    // every shipped shell — none of them ships a manifest — which
+                    // is what leaves the legacy repaint path untouched.
+                    _bodyBinding = inst.GetComponent<PartManifestBinding>();
                     return;
                 }
             }
@@ -996,7 +1005,26 @@ namespace AIHWSim.Vehicles
             // is that its Blender materials survive untouched.
             if (s == BodyShape.Tiguan) return false;
             string key = BodyMeshKey(s);
-            return key != null && PartMeshLibrary.Has(key);
+            if (key == null) return false;
+
+            // A manifest asset answers this itself instead of being guessed at.
+            // Paint mode works iff some material is declared the paint channel —
+            // which for a baked livery is a deliberate authoring choice (the
+            // design's colour MULTIPLIES the artwork) and not something a name
+            // prefix can be read for. Verbatim mode is a flat no: its whole
+            // premise is that the FBX's own materials are untouched, and a paint
+            // mode that silently did nothing would be worse than none. No shipped
+            // key ships a manifest, so every branch below this line is unreachable
+            // until Asset Studio commits one.
+            AssetManifest m = AssetManifests.Load(key);
+            if (m != null)
+            {
+                if (m.IsVerbatim) return false;
+                foreach (AssetMaterialDef d in m.materials)
+                    if (d != null && d.paintChannel) return true;
+                return false;
+            }
+            return PartMeshLibrary.Has(key);
         }
 
         /// <summary>
@@ -1099,11 +1127,26 @@ namespace AIHWSim.Vehicles
                 new Vector3(s.x * 0.4f, s.y * 0.34f, s.z * 0.28f), Vector3.zero);
         }
 
-        /// <summary>Recolour/replace the body material (used by the scene builder).</summary>
+        /// <summary>
+        /// Recolour/replace the body material (used by the scene builder).
+        ///
+        /// <c>sharedMaterial</c> is slot 0 and nothing else, which is exactly right
+        /// for every shell bound by a token table — that binder can only write slot
+        /// 0 either. On a manifest asset it is wrong in a way that looks like a
+        /// paint bug: <c>Police_Body</c> is dark trim in slot 0 and paint in slot 1,
+        /// so writing slot 0 would erase the trim and leave the paint untouched.
+        /// The manifest table knows which slot is which and is asked when there is
+        /// one.
+        /// </summary>
         public void SetBodyMaterial(Material mat)
         {
             if (mat == null) return;
             _bodyMat = mat;
+            if (_bodyBinding != null && _bodyBinding.HasPaintSlots)
+            {
+                _bodyBinding.ApplyPaint(mat);
+                return;
+            }
             foreach (var r in _bodyRenderers)
                 if (r != null) r.sharedMaterial = mat;
         }

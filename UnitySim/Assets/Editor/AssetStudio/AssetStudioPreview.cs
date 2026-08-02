@@ -284,6 +284,16 @@ namespace AIHWSim.AssetTools
                 _bodyMat = new Material(Shader.Find("Standard")) { hideFlags = HideAndDont };
             _bodyMat.color = o.bodyColor;
 
+            // OWED AT C1, when the first committed manifest asset exists: an
+            // IMPORTED asset that ships a manifest must bind through
+            // AssetManifestBinder here, not through the switch below. The game
+            // routes it that way (PartMeshLibrary.TryInstantiate stamps a
+            // PartManifestBinding and both token binders hand off to it), so a
+            // preview still reading the token table would disagree with Play about
+            // which panel is chrome — the one failure this window exists to catch.
+            // Not wired yet because no asset in the project has a manifest, so
+            // there is nothing it could currently disagree about, and nothing to
+            // test the wiring against until the commit pipeline lands.
             if (byDraft) BindFromDraft(draft, o.bodyColor);
             else switch (table)
             {

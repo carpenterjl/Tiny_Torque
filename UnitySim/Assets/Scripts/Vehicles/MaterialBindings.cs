@@ -23,6 +23,24 @@ namespace AIHWSim.Vehicles
         /// same material: a renamed export lands here, and the two look identical
         /// on screen while meaning completely different things.</summary>
         Fallback,
+
+        /// <summary>The manifest named this material for this object and this
+        /// slot. No token was consulted and none could have been — the whole
+        /// substring hazard class is absent from this path, which is what
+        /// <see cref="AssetManifestBinder"/> exists to be.</summary>
+        Manifest,
+
+        /// <summary>Verbatim mode: the row was RECORDED and the slot was not
+        /// touched, because the FBX's own material is the answer.</summary>
+        Verbatim,
+
+        /// <summary>The manifest had nothing to say about this slot — an
+        /// unlisted object, an empty slot entry, or a slot naming a material the
+        /// manifest does not define. The imported material is still there. This
+        /// is the value that must never be confused with
+        /// <see cref="Fallback"/>: a fallback is a decision, and this is the
+        /// absence of one.</summary>
+        Unbound,
     }
 
     /// <summary>One renderer, one submesh slot, and what the binder put in it.</summary>
@@ -37,10 +55,11 @@ namespace AIHWSim.Vehicles
         /// name that both the token matcher and export.json speak.</summary>
         public readonly string Name;
 
-        /// <summary>Submesh slot. Always 0 today — both binders write
-        /// <c>sharedMaterial</c>, which is slot 0 and nothing else, so a
+        /// <summary>Submesh slot. Always 0 on the TOKEN path — both token binders
+        /// write <c>sharedMaterial</c>, which is slot 0 and nothing else, so a
         /// two-material object like Police_Body has its second slot left
-        /// untouched. The field exists because R3 binds per slot.</summary>
+        /// untouched. <see cref="AssetManifestBinder"/> is the path that closes
+        /// that gap and writes every slot it was given a name for.</summary>
         public readonly int Slot;
 
         /// <summary>What the binder DECIDED, which is not always what the
@@ -66,12 +85,13 @@ namespace AIHWSim.Vehicles
     /// The renderer→material mapping a token binder just computed.
     ///
     /// <b>Nothing consumes this yet, deliberately.</b> It is the per-mesh
-    /// identity seam the manifest path needs: R3 binds by object name and
-    /// explicit submesh slot and hangs damage identity (role, health, group) off
-    /// the same rows, and there is no way to join a manifest's objects to the
-    /// live hierarchy without the binder saying which renderer it touched.
-    /// Landing it inert, with a dump that diffs empty, means the seam is proved
-    /// before anything depends on it.
+    /// identity seam the manifest path needed, and
+    /// <see cref="AssetManifestBinder"/> now returns one so that binding by
+    /// object name and slot is a drop-in for binding by token. The damage
+    /// identity that rides alongside — role, health, group — lives on
+    /// <see cref="PartManifestBinding"/> rather than here, because only the
+    /// manifest path has any, and a Token row with three empty fields would
+    /// look like an answer.
     ///
     /// The mapping is a by-product of a walk the binders already do, so it costs
     /// no extra traversal — only the list. That allocation is unconditional

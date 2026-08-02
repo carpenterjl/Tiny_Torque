@@ -82,6 +82,26 @@ namespace AIHWSim.Vehicles
         /// props so the on-car camera sensor can actually see the scenery). Returns
         /// the instance root, or null when disabled or the asset is missing (caller
         /// should then build primitives).
+        ///
+        /// When the asset ships a manifest, the instance is stamped with a
+        /// <see cref="PartManifestBinding"/> naming the key — <b>this is the whole
+        /// of how the manifest path reaches its call sites</b>. The key is known
+        /// here and nowhere else; the materials are known at the binding call and
+        /// nowhere else. Writing it down where it is known beats threading it
+        /// through the eight call sites that instantiate a mesh and then bind it,
+        /// any one of which could forget and would then silently bind a manifest
+        /// asset by substring. An asset with no manifest is stamped with nothing,
+        /// which is why the 207 shipped ones cannot tell this line is here.
+        ///
+        /// One residual hole, stated rather than papered over: the stamp only
+        /// reaches a binder that is actually CALLED, and the scenery sites
+        /// (<c>TrackCatalog</c>, <c>ArcadeVfx</c>) skip <see cref="AssignByName"/>
+        /// entirely when their token array is empty — a prop shipping a manifest
+        /// would be stamped and never bound. Props are out of Asset Studio's v1
+        /// scope, so no such asset can exist yet; that path has to make the call
+        /// unconditionally before one can. Every VEHICLE site — body, wheel,
+        /// battery, antenna, light cluster, cosmetic — binds unconditionally and
+        /// is covered.
         /// </summary>
         public static GameObject TryInstantiate(string key, Transform parent,
             int layer = PartVisualFactory.VizLayer, string root = PartRoot)
@@ -94,6 +114,7 @@ namespace AIHWSim.Vehicles
             go.transform.localPosition = Vector3.zero;
             go.transform.localRotation = Quaternion.identity;
             Sanitise(go, layer);
+            AssetManifestBinder.TryStamp(go, key, root);
             return go;
         }
 
@@ -120,10 +141,26 @@ namespace AIHWSim.Vehicles
         /// object name and explicit submesh slot and needs the binder to say
         /// what it touched. Recording is free: the token that won is already in
         /// hand when the assignment happens.
+        ///
+        /// <b>A manifest asset never reaches the loop below.</b> If the instance
+        /// carries a <see cref="PartManifestBinding"/> — stamped by
+        /// <see cref="TryInstantiate"/> when the asset ships a manifest — the whole
+        /// call goes to <see cref="AssetManifestBinder"/> instead, which binds by
+        /// object name and slot index and consults no token at all. The two ways of
+        /// deciding a material must not be mixed on one asset: a manifest that has
+        /// covered forty of forty-one objects and a token table that quietly covers
+        /// the forty-first is exactly the "renders almost right" failure the
+        /// manifest exists to end.
         /// </summary>
         public static MaterialBindings AssignByName(GameObject root, Material fallback,
                                                     params (string token, Material mat)[] map)
         {
+            var manifest = root != null ? root.GetComponent<PartManifestBinding>() : null;
+            // No paint material: a wheel, a cosmetic or a prop has no design colour
+            // to tint with, so a paintChannel material there is an ordinary shared
+            // one. Only the body path has a _bodyMat to hand over.
+            if (manifest != null) return AssetManifestBinder.Bind(manifest, null, null);
+
             var bindings = new MaterialBindings();
             foreach (var r in root.GetComponentsInChildren<Renderer>(true))
             {

@@ -395,6 +395,10 @@ namespace AIHWSim.Vehicles
         {
             foreach (AssetManifest m in _cache.Values) m?.ResetMaterials();
             _cache.Clear();
+            // The binder reports a manifest's complaints once per key per session.
+            // A rewritten manifest deserves to be complained about again — or, much
+            // more usefully, to fall silent where it did not before.
+            AssetManifestBinder.ResetDiagnostics();
         }
 
         // ---- materials --------------------------------------------------------

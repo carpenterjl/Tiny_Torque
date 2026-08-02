@@ -301,12 +301,27 @@ namespace AIHWSim.Vehicles
         /// are indistinguishable on screen and mean opposite things: one is an
         /// authored tintable panel, the other is a renamed export nobody has
         /// noticed. No caller consumes this yet.
+        ///
+        /// <b>A manifest asset never reaches the loop below</b>, for the reason
+        /// <see cref="PartMeshLibrary.AssignByName"/> gives at the same seam:
+        /// <paramref name="inst"/> carrying a <see cref="PartManifestBinding"/>
+        /// sends the whole call to <see cref="AssetManifestBinder"/>, which binds
+        /// by object name and slot and consults no token. It is handed the same
+        /// <paramref name="paintMat"/> and the same
+        /// <paramref name="paintRenderers"/>, because the paint channel means the
+        /// same thing on both paths — the difference is only that a manifest says
+        /// WHICH SLOT is paint instead of guessing from a name prefix.
         /// </summary>
         public static MaterialBindings BindByToken(GameObject inst, (string, Material)[] accents,
             Material paintMat, ICollection<MeshRenderer> paintRenderers = null)
         {
             var bindings = new MaterialBindings();
             if (inst == null) return bindings;
+
+            var manifest = inst.GetComponent<PartManifestBinding>();
+            if (manifest != null)
+                return AssetManifestBinder.Bind(manifest, paintMat, paintRenderers);
+
             foreach (var r in inst.GetComponentsInChildren<MeshRenderer>(true))
             {
                 string n = r.gameObject.name.ToLowerInvariant();
