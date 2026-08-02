@@ -403,6 +403,14 @@ you have to fly to reach. Even the skin's alignment to the mesh is *measured*: t
 sphere's UV seam is read off its own vertices at build time (−90.47° as it happens)
 rather than guessed and nudged until it looks right.
 
+The **throttle** wraps the ball as an arc down its left side, idle at the bottom and
+full at the top, so the setting is inside the same glance as the attitude and the fill
+still climbs the way a lever does. It reads the *commanded* setting off the vehicle
+rather than the stick, which is the whole point of a ratchet: the input is a rate, and
+only the gauge says where the lever actually is. There is no panel behind the ball —
+the render texture clears transparent and a bezel follows the limb, so the instrument
+claims no area it does not use.
+
 Because a navball is made almost entirely of sign conventions, they are pinned by a
 bench rather than by eye — `[NAVB]`, 18 checks, all of which run headless in a second.
 It asserts the things that look almost right when they are backwards: that the nose sits

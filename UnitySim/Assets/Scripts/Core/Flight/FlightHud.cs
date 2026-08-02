@@ -51,9 +51,25 @@ namespace AIHWSim.Core.Flight
             "Target", "Wings Lvl", "Alt Hold",
         };
 
-        private static Texture2D _white;
+        private static Texture2D _white, _ring;
         private static GUIStyle _rich;
         private static GUIStyle _bigNum, _smallCap, _marker;
+
+        // Bezel and throttle arc, in UI units of radius from the ball's centre. The
+        // ball is drawn 110 wide and covers NavballRig.BallFill of that, so the
+        // bezel sits on the limb and the arc clears it.
+        private const float BezelRadius = 109f;
+        private const float BezelThickness = 6f;
+        private const float ArcRadius = 124f;
+        private const float ArcThickness = 13f;
+
+        /// <summary>Arc ends, degrees from straight up, clockwise. Idle at the
+        /// bottom-left of the ball and full at the top-left, so the fill still
+        /// climbs like the lever it stands for.</summary>
+        private const float ArcZeroDeg = -145f;
+        private const float ArcFullDeg = -35f;
+        private const int ArcSegments = 44;
+        private const float ArcStepDeg = (ArcFullDeg - ArcZeroDeg) / ArcSegments;
 
         public void Bind(PlaneVehicle p, FlightCameraRig cams,
                          SasController assist = null, Transform tgt = null)
@@ -172,10 +188,17 @@ namespace AIHWSim.Core.Flight
             Rect box = NavballRect();
             Quaternion att = plane.transform.rotation;
 
-            // A dark disc behind it, so the ball reads as an instrument rather than
-            // a sphere floating over the terrain.
-            Fill(box, new Color(0.05f, 0.06f, 0.09f, 0.85f));
+            // Nothing behind it. The render texture clears to transparent and the
+            // ball fills a disc inside it, so the corners are already empty — the
+            // dark square that used to sit here was covering nothing up and read as
+            // a box the instrument lived in rather than as the instrument.
             if (_navball?.Texture != null) GUI.DrawTexture(box, _navball.Texture);
+
+            // A bezel instead, which is the honest shape: it follows the limb, so it
+            // frames the ball without claiming any area the ball does not use.
+            GUI.DrawTexture(RingRect(box, BezelRadius, BezelThickness), Ring(),
+                            ScaleMode.StretchToFill, true, 0f,
+                            new Color(0.10f, 0.11f, 0.14f, 0.85f), 0f, 0f);
 
             float half = box.width * 0.5f;
             var body = plane.GetComponent<Rigidbody>();
@@ -212,25 +235,75 @@ namespace AIHWSim.Core.Flight
         private static Rect NavballRect() =>
             new Rect(UIScale.W * 0.5f - 110f, UIScale.H - 250f, 220f, 220f);
 
-        /// <summary>A bottom-up bar, because a throttle is a lever and reads as a
-        /// height. It shows the COMMANDED setting off the vehicle rather than the
-        /// stick, which is the whole point of a ratchet: the input is a rate and
-        /// only the gauge says where the lever actually is.</summary>
+        /// <summary>
+        /// The throttle, as an arc wrapped round the left of the ball — KSP's
+        /// layout, and it earns the shape twice over. It puts the setting inside the
+        /// same glance as the attitude instead of off at the edge of the screen, and
+        /// a lever still reads as a height: empty is at the bottom of the arc, full
+        /// at the top, so the fill climbs exactly the way the old bar did.
+        ///
+        /// It shows the COMMANDED setting off the vehicle rather than the stick,
+        /// which is the whole point of a ratchet: the input is a rate, and only the
+        /// gauge says where the lever actually is.
+        /// </summary>
         private void ThrottleGauge()
         {
-            var box = new Rect(UIScale.W * 0.5f - 170f, UIScale.H - 240f, 26f, 200f);
+            Rect ball = NavballRect();
             float t = Mathf.Clamp01(plane.ThrottleCommand);
 
-            Fill(box, new Color(0.06f, 0.07f, 0.10f, 0.95f));
-            Fill(new Rect(box.x, box.yMax - box.height * t, box.width, box.height * t),
-                 GarageSkin.Accent);
-            // Quarter marks, so a glance separates 50 % from 60 % without reading.
-            for (int i = 1; i < 4; i++)
-                Fill(new Rect(box.x, box.yMax - box.height * (i * 0.25f) - 1f, box.width, 1f),
-                     new Color(0f, 0f, 0f, 0.45f));
+            // Drawn as short radial segments rather than as one filled shape,
+            // because IMGUI has no radial fill and a per-frame texture would cost
+            // far more than 44 quads. The step is the gauge's resolution — about
+            // 2 %, which is finer than the number below it is read to.
+            for (int i = 0; i < ArcSegments; i++)
+            {
+                float f = (i + 0.5f) / ArcSegments;
+                bool lit = f <= t;
+                ArcSegment(ball.center,
+                           Mathf.Lerp(ArcZeroDeg, ArcFullDeg, f),
+                           ArcRadius, ArcThickness, ArcStepDeg * 1.35f,
+                           lit ? GarageSkin.Accent : new Color(0.06f, 0.07f, 0.10f, 0.85f));
+            }
 
-            GUI.Label(new Rect(box.x - 12f, box.yMax + 2f, box.width + 24f, 18f),
-                      $"{t * 100f:0}%", SmallCap());
+            // Quarter marks, set OUTSIDE the band so the fill never swallows them.
+            for (int i = 0; i <= 4; i++)
+                ArcSegment(ball.center, Mathf.Lerp(ArcZeroDeg, ArcFullDeg, i * 0.25f),
+                           ArcRadius + ArcThickness * 0.5f + 4f, 6f, 1.6f,
+                           new Color(0.72f, 0.70f, 0.66f, 0.9f));
+
+            // The number sits just outside the top of the arc, next to the full
+            // stop — where you look when you are asking whether it is all the way in.
+            GUI.Label(new Rect(ball.center.x - ArcRadius - 76f, ball.center.y - 88f, 70f, 18f),
+                      $"THR {t * 100f:0}%", SmallCap());
+        }
+
+        /// <summary>
+        /// One tile of an arc, centred on <paramref name="angleDeg"/> — measured
+        /// from straight up and counted clockwise, so the left of the ball is the
+        /// negative half. Rotating the GUI about the ball's centre and drawing an
+        /// upright rect keeps every tile tangent to the arc for free.
+        ///
+        /// The matrix is composed by hand rather than with
+        /// <c>GUIUtility.RotateAroundPivot</c>, and that is the whole point of this
+        /// method. That helper multiplies its rotation on the OUTSIDE of the current
+        /// <c>GUI.matrix</c>, so its pivot is in screen pixels — but everything here
+        /// is drawn inside a <see cref="UIScale"/> block and the ball's centre is in
+        /// UI units. Handed to it, the arc turns about a point that is not the ball
+        /// and gets scaled a second time on the way out, which is exactly the arc
+        /// sliding off the bottom of the screen on a radius of its own.
+        /// </summary>
+        private static void ArcSegment(Vector2 centre, float angleDeg, float radius,
+                                       float thickness, float widthDeg, Color c)
+        {
+            float w = 2f * Mathf.PI * radius * (widthDeg / 360f);
+            Matrix4x4 saved = GUI.matrix;
+            // Inside the current transform: translate to the centre, turn, come back.
+            GUI.matrix = saved
+                       * Matrix4x4.TRS(centre, Quaternion.Euler(0f, 0f, angleDeg), Vector3.one)
+                       * Matrix4x4.TRS(-centre, Quaternion.identity, Vector3.one);
+            Fill(new Rect(centre.x - w * 0.5f, centre.y - radius - thickness * 0.5f,
+                          w, thickness), c);
+            GUI.matrix = saved;
         }
 
         /// <summary>Six mode buttons flanking the ball, three a side.
@@ -290,6 +363,48 @@ namespace AIHWSim.Core.Flight
                 _white.Apply();
             }
             return _white;
+        }
+
+        /// <summary>The square a ring of the given radius is drawn into. The ring
+        /// texture's band is fixed as a fraction of its own half-width, so the
+        /// caller only ever chooses where the OUTER edge lands.</summary>
+        private static Rect RingRect(Rect box, float radius, float thickness)
+        {
+            float outer = radius + thickness * 0.5f;
+            return new Rect(box.center.x - outer, box.center.y - outer, outer * 2f, outer * 2f);
+        }
+
+        /// <summary>A white annulus with soft edges, tinted at draw time. One
+        /// texture rather than a ring of quads: a circle is the one shape IMGUI
+        /// draws badly and a texture draws for free.</summary>
+        private static Texture2D Ring()
+        {
+            if (_ring != null) return _ring;
+
+            const int n = 128;
+            float inner = (BezelRadius - BezelThickness * 0.5f)
+                          / (BezelRadius + BezelThickness * 0.5f);
+            float soft = 1.5f / (n * 0.5f);          // about a texel and a half
+            var px = new Color[n * n];
+            for (int y = 0; y < n; y++)
+                for (int x = 0; x < n; x++)
+                {
+                    float dx = (x + 0.5f) / (n * 0.5f) - 1f;
+                    float dy = (y + 0.5f) / (n * 0.5f) - 1f;
+                    float r = Mathf.Sqrt(dx * dx + dy * dy);
+                    float a = Mathf.SmoothStep(0f, 1f, (r - inner) / soft)
+                            * (1f - Mathf.SmoothStep(0f, 1f, (r - (1f - soft)) / soft));
+                    px[y * n + x] = new Color(1f, 1f, 1f, Mathf.Clamp01(a));
+                }
+
+            _ring = new Texture2D(n, n, TextureFormat.ARGB32, mipChain: true)
+            {
+                hideFlags = HideFlags.HideAndDontSave,
+                wrapMode = TextureWrapMode.Clamp,
+            };
+            _ring.SetPixels(px);
+            _ring.Apply();
+            return _ring;
         }
 
         private static GUIStyle Rich() =>
