@@ -11,6 +11,8 @@ namespace AIHWSim.Vehicles.Aero
         public Vector3 normal;        // body-local, the strip's "up"
         public Vector3 spanDir;       // body-local, along the span
         public float area;            // m²
+        public float spanWidth;       // m, the strip's extent along the span
+        public float spanFrac;        // 0 at the root, 1 at the tip
         public float twistRad;        // incidence + washout at this station
         public float controlTau;      // 0 when no hinge here
         public float controlSign;     // maps a pilot axis to a hinge sign
@@ -51,6 +53,14 @@ namespace AIHWSim.Vehicles.Aero
     /// far worse than any real airframe and would be very easy to mistake for the
     /// model simply being draggy.
     ///
+    /// <b>The propeller wake is part of the local flow.</b> A strip inside the
+    /// slipstream is flying in air the propeller has already accelerated, so its
+    /// local velocity carries an extra axial term — see <see cref="Slipstream"/>,
+    /// which supplies it from momentum theory with no free parameters. The two
+    /// things that come out of that are worth knowing: control surfaces work at
+    /// zero airspeed, and the tail's dynamic pressure becomes a function of
+    /// throttle rather than a number somebody authored.
+    ///
     /// Declared omissions, in addition to <see cref="Airfoil"/>'s: the induced
     /// increment is spread by area rather than by local loading (exact only for an
     /// elliptic distribution); there is no downwash from the wing onto the
@@ -84,6 +94,23 @@ namespace AIHWSim.Vehicles.Aero
             /// once anything is stalled; this is the honest stall warning, because
             /// it reports the worst strip rather than an average that hides it.</summary>
             public float stallMargin;
+
+            /// <summary>Which surface holds the worst strip, or −1 if nothing was
+            /// solved this step.</summary>
+            public int worstSurface;
+            /// <summary>Where on that surface's span the worst strip is: 0 at the
+            /// root, 1 at the tip.
+            ///
+            /// <b>This is the field that makes a spanwise model worth having.</b> A
+            /// single-coefficient wing can say "stalled"; only a strip model can say
+            /// WHERE, and root-before-tip is the difference between a wing that
+            /// mushes and one that drops a tip and departs. Test A3 gates on it.</summary>
+            public float worstStation;
+
+            /// <summary>Far-wake velocity increment behind the propeller (m/s), 0
+            /// when there is no accelerated wake. Reported so the HUD and the CSV
+            /// can show what the tail is actually flying in.</summary>
+            public float slipstreamIncrement;
         }
 
         private readonly AeroPanel[] _panels;
@@ -97,9 +124,49 @@ namespace AIHWSim.Vehicles.Aero
         private readonly float[] _profileDragN;
         private readonly float[] _surfaceLift;      // N, per surface, from pass 1
         private readonly float[] _surfaceInduced;   // N, per surface, drag from that lift
+        private readonly float[] _surfaceQSum;      // Σ q_local·area, per surface
+        private readonly float[] _surfaceQArea;     // Σ area that contributed to it
+        private readonly float[] _surfaceQ;         // area-weighted mean local q (Pa)
+        private readonly float[] _surfaceMargin;    // worst stall margin, per surface
+        private readonly float[] _surfaceStation;   // and where along the span it is
 
         public IReadOnlyList<AeroPanel> Panels => _panels;
         public int PanelCount => _panels.Length;
+        public int SurfaceCount => _surfaces.Length;
+
+        /// <summary>Lift produced by one surface in the last solve (N).</summary>
+        public float SurfaceLift(int surfaceIndex) =>
+            surfaceIndex >= 0 && surfaceIndex < _surfaceLift.Length
+                ? _surfaceLift[surfaceIndex] : 0f;
+
+        /// <summary>
+        /// Area-weighted mean LOCAL dynamic pressure over one surface in the last
+        /// solve (Pa). Divided by the free-stream q this is η — the tail's η_h, the
+        /// number a stability calculation authors as 0.9 and this model does not
+        /// have to, because with a slipstream it is a measurement.
+        /// </summary>
+        public float SurfaceDynamicPressure(int surfaceIndex) =>
+            surfaceIndex >= 0 && surfaceIndex < _surfaceQ.Length
+                ? _surfaceQ[surfaceIndex] : 0f;
+
+        /// <summary>
+        /// Worst stall margin on ONE surface, and where along its span that strip
+        /// sits (0 root, 1 tip).
+        ///
+        /// Per-surface rather than only global, because the interesting question is
+        /// about a particular surface. "Which strip is closest to letting go" has a
+        /// different answer for the wing than for the tailplane, and a whole-aircraft
+        /// worst hides the wing's answer completely whenever the elevator is hard
+        /// over — which, in a stall test, is exactly when it matters.
+        /// </summary>
+        public float SurfaceStallMargin(int surfaceIndex) =>
+            surfaceIndex >= 0 && surfaceIndex < _surfaceMargin.Length
+                ? _surfaceMargin[surfaceIndex] : 1f;
+
+        /// <summary>Span station of that surface's worst strip: 0 root, 1 tip.</summary>
+        public float SurfaceWorstStation(int surfaceIndex) =>
+            surfaceIndex >= 0 && surfaceIndex < _surfaceStation.Length
+                ? _surfaceStation[surfaceIndex] : 0f;
 
         private PanelAero(AeroPanel[] panels, SurfaceInfo[] surfaces)
         {
@@ -111,6 +178,11 @@ namespace AIHWSim.Vehicles.Aero
             _profileDragN = new float[panels.Length];
             _surfaceLift = new float[surfaces.Length];
             _surfaceInduced = new float[surfaces.Length];
+            _surfaceQSum = new float[surfaces.Length];
+            _surfaceQArea = new float[surfaces.Length];
+            _surfaceQ = new float[surfaces.Length];
+            _surfaceMargin = new float[surfaces.Length];
+            _surfaceStation = new float[surfaces.Length];
         }
 
         // ---- build -------------------------------------------------------
@@ -188,19 +260,27 @@ namespace AIHWSim.Vehicles.Aero
             {
                 float thetaHi = (i + 1) * (Mathf.PI * 0.5f) / n;
                 float y = surf.semiSpan * Mathf.Sin(thetaHi);
-                float width = y - prevY;
-                float mid = 0.5f * (prevY + y);
+                float loY = prevY;
+                float width = y - loY;
+                float mid = 0.5f * (loY + y);
                 prevY = y;
                 if (width <= 1e-6f) continue;
 
-                float t = surf.semiSpan > 1e-6f ? mid / surf.semiSpan : 0f;
+                float inv = surf.semiSpan > 1e-6f ? 1f / surf.semiSpan : 0f;
+                float t = mid * inv;
                 float chord = surf.ChordAt(t);
 
                 Vector3 pos = surf.rootQuarterChord
                               + spanDir * mid
                               - chordDir * (mid * tanSweep);
 
-                bool hinged = surf.HasControlAt(t);
+                // How much of THIS strip the hinge actually covers, as a fraction.
+                // Taking the overlap rather than testing the midpoint keeps the
+                // total hinged area equal to the authored extent at any panel count
+                // — see LiftingSurface.ControlSpanFraction for what the midpoint
+                // test was doing to the roll rate.
+                float cover = surf.ControlSpanFraction(loY * inv, y * inv);
+                bool hinged = cover > 1e-4f;
                 float sign = 0f;
                 if (hinged)
                 {
@@ -221,8 +301,10 @@ namespace AIHWSim.Vehicles.Aero
                     normal = normal,
                     spanDir = spanDir,
                     area = width * chord,
+                    spanWidth = width,
+                    spanFrac = t,
                     twistRad = (surf.incidenceDeg + surf.washoutDeg * t) * Mathf.Deg2Rad,
-                    controlTau = hinged ? tau : 0f,
+                    controlTau = hinged ? tau * cover : 0f,
                     controlSign = sign,
                     controlMaxRad = controlMaxRad,
                     control = hinged ? surf.control : ControlAxis.None,
@@ -239,9 +321,16 @@ namespace AIHWSim.Vehicles.Aero
         /// (throttle is not an aerodynamic input and is handled elsewhere).
         /// </summary>
         public Result Solve(Rigidbody body, Transform tr, in AirData air,
-                            float aileron, float elevator, float rudder)
+                            float aileron, float elevator, float rudder,
+                            in SlipstreamState slip)
         {
-            var result = new Result { totalPanels = _panels.Length, stallMargin = 1f };
+            var result = new Result
+            {
+                totalPanels = _panels.Length,
+                stallMargin = 1f,
+                worstSurface = -1,
+                slipstreamIncrement = slip.Active ? slip.FarWakeIncrement : 0f,
+            };
             if (_panels.Length == 0) return result;
 
             // Read the body state ONCE. v_i = v_cm + ω × r_i is bit-for-bit what
@@ -256,6 +345,11 @@ namespace AIHWSim.Vehicles.Aero
             {
                 _surfaceLift[i] = 0f;
                 _surfaceInduced[i] = 0f;
+                _surfaceQSum[i] = 0f;
+                _surfaceQArea[i] = 0f;
+                _surfaceQ[i] = 0f;
+                _surfaceMargin[i] = 1f;
+                _surfaceStation[i] = 0f;
             }
 
             // ---- pass 1: local flow, alpha, section coefficients ----
@@ -270,6 +364,28 @@ namespace AIHWSim.Vehicles.Aero
                 Vector3 rWorld = rot * p.posLocal + (tr.position - cm);
                 Vector3 vWorld = vCm + Vector3.Cross(omega, rWorld);
                 Vector3 v = invRot * vWorld;               // body frame
+
+                // The propeller wake, where this strip is inside it. The wake air
+                // moves AFT relative to the airframe, so a strip immersed in it has
+                // a larger forward velocity RELATIVE TO ITS OWN LOCAL AIR — which
+                // is the same statement as "faster air arriving", and it is why the
+                // sign is +z here rather than −z.
+                //
+                // This raises the strip's local dynamic pressure and, because only
+                // the axial component grows, LOWERS its angle of attack. Both are
+                // real, and the second is half of why a tractor aeroplane's trim
+                // changes with throttle.
+                if (slip.Active)
+                {
+                    float aft = slip.DiscLocal.z - p.posLocal.z;
+                    if (aft > 0f)
+                    {
+                        float dv = Slipstream.IncrementAt(slip, aft, out float tube);
+                        float cover = Slipstream.Coverage(slip.DiscLocal, p.posLocal,
+                                                          p.spanDir, p.spanWidth, tube);
+                        if (cover > 0f) v.z += dv * cover;
+                    }
+                }
 
                 // Drop the spanwise component: a strip only responds to the flow
                 // in its own chordwise plane (the independence principle).
@@ -310,29 +426,55 @@ namespace AIHWSim.Vehicles.Aero
                 _liftN[i] = q * cl * p.area;
                 _profileDragN[i] = q * cd * p.area;
                 _surfaceLift[p.surface] += _liftN[i];
+                _surfaceQSum[p.surface] += q * p.area;
+                _surfaceQArea[p.surface] += p.area;
 
                 // Measured from the section's own zero-lift angle — a cambered
                 // section stalls at +11.9° and −18.9°, not symmetrically about zero.
                 float excess = si.airfoil.StallExcess(alphaEff, si.liftSlope);
                 if (excess > 0f) result.stalledPanels++;
                 float margin = -excess;
-                if (margin < result.stallMargin) result.stallMargin = margin;
+                if (margin < result.stallMargin)
+                {
+                    result.stallMargin = margin;
+                    result.worstSurface = p.surface;
+                    result.worstStation = p.spanFrac;
+                }
+                if (margin < _surfaceMargin[p.surface])
+                {
+                    _surfaceMargin[p.surface] = margin;
+                    _surfaceStation[p.surface] = p.spanFrac;
+                }
             }
 
             // ---- induced drag: once per surface, from its total lift ----
-            // Uses the free-stream q as the reference so a surface's C_L means the
-            // same thing the textbook formula assumes.
-            float qRef = air.Q;
+            //
+            // The reference is the surface's OWN area-weighted local q, not the
+            // free stream. Written out, the induced drag force is
+            //     D_i = q·S·C_L²/(π·AR·e) = L² / (q·S·π·AR·e),
+            // so it scales as 1/q — and a tailplane sitting in a 17 m/s slipstream
+            // while the aeroplane flies at 15 is genuinely making its lift more
+            // cheaply than the free stream suggests. Referencing the free stream
+            // there would over-charge it for induced drag by the square of the
+            // velocity ratio, and the error would arrive attached to the throttle,
+            // which is the hardest kind to spot.
+            //
+            // With the wake switched off this reduces to the free-stream form to
+            // within the ω×r terms, which is what it was before.
             for (int s = 0; s < _surfaces.Length; s++)
             {
                 SurfaceInfo si = _surfaces[s];
-                if (qRef < 1e-4f || si.area <= 1e-6f || si.aspectRatio <= 1e-3f) continue;
+                if (_surfaceQArea[s] <= 1e-6f) continue;
 
-                float clSurf = _surfaceLift[s] / (qRef * si.area);
+                _surfaceQ[s] = _surfaceQSum[s] / _surfaceQArea[s];
+                if (_surfaceQ[s] < 1e-4f || si.area <= 1e-6f || si.aspectRatio <= 1e-3f)
+                    continue;
+
+                float clSurf = _surfaceLift[s] / (_surfaceQ[s] * si.area);
                 float cdi = clSurf * clSurf / (Mathf.PI * si.aspectRatio * si.oswald);
                 // The induced drag FORCE for this surface; pass 2 shares it across
                 // the surface's strips by area.
-                _surfaceInduced[s] = qRef * si.area * cdi;
+                _surfaceInduced[s] = _surfaceQ[s] * si.area * cdi;
             }
 
             // ---- pass 2: assemble ----

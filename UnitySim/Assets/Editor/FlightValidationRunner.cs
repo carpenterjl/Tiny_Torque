@@ -45,8 +45,43 @@ namespace AIHWSim.EditorTools
         /// PASS-kind test is called non-deterministic.</summary>
         private const double SpreadTolerance = 0.001;   // 0.1 %
 
-        private static int TotalSteps => FlightTestMenu.All.Length * 2;
-        private static FlightTestMenu.Entry EntryAt(int step) => FlightTestMenu.All[step / 2];
+        /// <summary>
+        /// Which tests this run covers. Normally all of them; <c>-aeroOnly A3,A6</c>
+        /// narrows it while a single row is being worked on, because a full pass is
+        /// twenty minutes and iterating on one test should not cost that.
+        ///
+        /// <b>A narrowed run is not the gate</b>, and the summary line says so
+        /// explicitly rather than leaving a shorter "ALL PASS" to be mistaken for the
+        /// real thing. Nothing may be signed off on a subset.
+        /// </summary>
+        private static FlightTestMenu.Entry[] Selected
+        {
+            get
+            {
+                string filter = Arg("-aeroOnly");
+                if (string.IsNullOrEmpty(filter)) return FlightTestMenu.All;
+
+                var ids = new System.Collections.Generic.HashSet<string>(
+                    filter.Split(','), StringComparer.OrdinalIgnoreCase);
+                var picked = new System.Collections.Generic.List<FlightTestMenu.Entry>();
+                foreach (var e in FlightTestMenu.All)
+                    if (ids.Contains(e.Id)) picked.Add(e);
+                return picked.ToArray();
+            }
+        }
+
+        private static bool IsSubset => Selected.Length != FlightTestMenu.All.Length;
+
+        private static string Arg(string name)
+        {
+            string[] args = Environment.GetCommandLineArgs();
+            for (int i = 0; i < args.Length - 1; i++)
+                if (args[i] == name) return args[i + 1];
+            return null;
+        }
+
+        private static int TotalSteps => Selected.Length * 2;
+        private static FlightTestMenu.Entry EntryAt(int step) => Selected[step / 2];
         private static int PassAt(int step) => (step % 2) + 1;
 
         [MenuItem("Tools/AIHWSim/Flight Tests/Run Full [AERO] Validation", priority = 110)]
@@ -66,13 +101,22 @@ namespace AIHWSim.EditorTools
 
         private static void Begin()
         {
+            var selected = Selected;
+            if (selected.Length == 0)
+            {
+                Debug.LogError("[AERO] -aeroOnly matched no tests");
+                EditorApplication.Exit(3);
+                return;
+            }
+
             SessionState.SetBool(ActiveKey, true);
             SessionState.SetInt(IndexKey, 0);
-            foreach (var e in FlightTestMenu.All)
+            foreach (var e in selected)
                 for (int p = 1; p <= 2; p++)
                     SessionState.EraseString(ResultKey + e.Id + "." + p);
 
-            Debug.Log($"[AERO] validation start — {FlightTestMenu.All.Length} tests × 2 runs");
+            Debug.Log($"[AERO] validation start — {selected.Length} tests × 2 runs"
+                      + (IsSubset ? "  (SUBSET — not the gate)" : ""));
             StepInto(0);
         }
 
@@ -160,7 +204,8 @@ namespace AIHWSim.EditorTools
             var sb = new StringBuilder();
             int failed = 0, missing = 0, unstable = 0;
 
-            foreach (var e in FlightTestMenu.All)
+            var selected = Selected;
+            foreach (var e in selected)
             {
                 Result a = Load(e.Id, 1), b = Load(e.Id, 2);
                 if (a == null || b == null)
@@ -207,10 +252,18 @@ namespace AIHWSim.EditorTools
             }
 
             int bad = failed + missing + unstable;
+            // A subset never prints "ALL PASS". The phrase is what a build gate
+            // greps for, and letting three tests out of eight produce it would be a
+            // green light nobody earned.
+            string scope = IsSubset
+                ? $"SUBSET {selected.Length}/{FlightTestMenu.All.Length} tests × 2 runs "
+                  + "— NOT THE GATE"
+                : $"{selected.Length} tests × 2 runs";
             string summary = bad == 0
-                ? $"[AERO] RESULT ALL PASS ({FlightTestMenu.All.Length} tests × 2 runs)"
+                ? (IsSubset ? $"[AERO] RESULT subset clean ({scope})"
+                            : $"[AERO] RESULT ALL PASS ({scope})")
                 : $"[AERO] RESULT {failed} FAILED/INVALID · {unstable} NON-DETERMINISTIC "
-                  + $"· {missing} MISSING";
+                  + $"· {missing} MISSING ({scope})";
             if (bad == 0) Debug.Log(summary); else Debug.LogError(summary);
 
             Finish(bad == 0 ? 0 : 1);

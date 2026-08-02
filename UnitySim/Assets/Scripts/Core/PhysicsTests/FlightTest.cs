@@ -38,8 +38,14 @@ namespace AIHWSim.Core.PhysicsTests
 
         /// <summary>Airspeed the aircraft is launched at. Roughly its own trim
         /// speed, so the launch does not excite a large phugoid — see
-        /// <see cref="FlightTrimProbe"/> for what that costs a measurement.</summary>
-        protected virtual float LaunchSpeed => 15.0f;
+        /// <see cref="FlightTrimProbe"/> for what that costs a measurement.
+        ///
+        /// 14.66 m/s is what [TRIM] measures WITH the propeller wake modelled; it
+        /// was 15.03 before, and the difference is the slipstream raising the
+        /// tailplane's dynamic pressure and with it the download the tail carries.
+        /// Left stale, this would launch every test half a metre per second off
+        /// trim and start each one with a phugoid nobody asked for.</summary>
+        protected virtual float LaunchSpeed => 14.66f;
 
         /// <summary>What the pilot holds before the run begins.</summary>
         protected virtual void Idle(ScriptedPilot p) => p.Neutral();
@@ -53,6 +59,13 @@ namespace AIHWSim.Core.PhysicsTests
         protected ScriptedPilot Pilot { get; private set; }
         protected AircraftSpec Spec { get; private set; }
         protected AirData Air => Plane.Air;
+
+        /// <summary>Seconds the launch condition must hold CONTINUOUSLY before the run
+        /// begins. Short, because a launch at trim settles fast — it only has to be
+        /// longer than the transient the reposition itself creates.</summary>
+        [Tooltip("Seconds the launch condition must hold continuously before the run "
+                 + "begins. Zero would let the reset itself satisfy the gate.")]
+        public float syncHoldSeconds = 1.5f;
 
         private PlaneInput _input;
         private float _syncTolVs = 0.5f;
@@ -104,14 +117,36 @@ namespace AIHWSim.Core.PhysicsTests
         /// the wings level. The analogue of the car's wheel sync — it is what makes
         /// a glide measurement start from trim rather than from the transient the
         /// launch itself created.
+        ///
+        /// <b>The condition has to HOLD, not merely be true once.</b> The first
+        /// version returned as soon as |vspeed| and bank were small, which is a
+        /// condition <see cref="PlaneVehicle.LaunchAt"/> establishes by construction:
+        /// it puts the aircraft level with a horizontal velocity, so vspeed and bank
+        /// are exactly zero on the very step the reset happens. The gate therefore
+        /// certified the reset rather than a settled aeroplane, and the run began one
+        /// step later with the launch transient still in front of it. Tests that
+        /// settle for twenty seconds inside their own run phase never noticed; the
+        /// stall test, which measures from t = 0, did.
+        ///
+        /// Body rates are checked too. Attitude and vertical speed can both read zero
+        /// at the instant of a reset while the aircraft is rotating hard, and it is
+        /// precisely that state which produces a saturated control input on the first
+        /// step of the run.
         /// </summary>
         protected override bool SyncReady(out string why)
         {
             float vs = Plane.VerticalSpeed;
             float bank = Mathf.Abs(Wrap180(Plane.transform.eulerAngles.z));
+            float rate = Body.angularVelocity.magnitude * Mathf.Rad2Deg;
+
+            bool quiet = Mathf.Abs(vs) < _syncTolVs && bank < 5f && rate < 15f;
+            if (!quiet) _syncSettleFrom = Time.time;
+
+            float held = Time.time - _syncSettleFrom;
             why = $"never settled after launch — vspeed {vs:0.00} m/s, bank {bank:0.0}°, "
-                  + $"tas {Air.Tas:0.00} m/s";
-            return Mathf.Abs(vs) < _syncTolVs && bank < 5f;
+                  + $"rates {rate:0.0}°/s, tas {Air.Tas:0.00} m/s "
+                  + $"(held {held:0.00} s of the {syncHoldSeconds:0.00} s required)";
+            return quiet && held >= syncHoldSeconds;
         }
 
         protected override void ConfigureGraph(GraphOverlay g)
@@ -133,6 +168,9 @@ namespace AIHWSim.Core.PhysicsTests
             GUILayout.Label($"stalled {r.stalledPanels}/{r.totalPanels}   "
                             + $"margin {r.stallMargin * 100f:0}%   "
                             + $"thrust {Plane.Thrust:0.00} N");
+            GUILayout.Label($"wash {r.slipstreamIncrement:0.0} m/s   "
+                            + $"worst {(r.worstSurface >= 0 ? Spec.surfaces[r.worstSurface].name : "—")}"
+                            + $" @ {r.worstStation * 100f:0}% span");
         }
 
         // ---- helpers ----
@@ -162,24 +200,66 @@ namespace AIHWSim.Core.PhysicsTests
         /// model needs a click of aileron trim, and a test that does not hold the
         /// wings level ends up measuring a descending spiral.
         /// </summary>
-        protected void HoldWingsLevel(ScriptedPilot p, float targetBankDeg = 0f)
+        /// <param name="authority">Largest aileron deflection the leveller may use.
+        /// Worth turning down near the stall: the ailerons live outboard, where the
+        /// washout has deliberately left the least margin, so a leveller at full
+        /// deflection is capable of stalling the very tip it is trying to hold up.
+        /// That is the same reason a pilot is taught not to pick up a dropping wing
+        /// with aileron at the stall, and A3 relies on it.</param>
+        protected void HoldWingsLevel(ScriptedPilot p, float targetBankDeg = 0f,
+                                      float authority = 1f)
         {
             float bank = Wrap180(Plane.transform.eulerAngles.z) - targetBankDeg;
             float rollRate = Body.transform.InverseTransformDirection(Body.angularVelocity).z
                              * Mathf.Rad2Deg;
-            p.roll = Mathf.Clamp(bank * 0.030f + rollRate * 0.004f, -1f, 1f);
+            float a = Mathf.Clamp01(authority);
+            p.roll = Mathf.Clamp(bank * 0.030f + rollRate * 0.004f, -a, a);
         }
 
-        /// <summary>Hold a vertical speed with elevator. Used only where the
-        /// QUANTITY being measured does not depend on how the attitude was reached
-        /// — a level turn's load factor is trigonometry, so an autopilot flying the
-        /// turn cannot bias it.</summary>
+        /// <summary>
+        /// Hold a vertical speed with elevator. Used only where the QUANTITY being
+        /// measured does not depend on how the attitude was reached — a level turn's
+        /// load factor is trigonometry, so an autopilot flying the turn cannot bias
+        /// it, and a stall speed is a property of the wing rather than of whatever
+        /// held the height.
+        ///
+        /// <b>A cascade, and the flat version it replaces did not work.</b> The
+        /// original drove the elevator straight from the vertical-speed error, which
+        /// is the textbook pilot-induced-oscillation arrangement: vertical speed
+        /// responds to elevator through pitch attitude, so a proportional loop closed
+        /// around it is closing around two integrations and rings. Nothing exercised
+        /// it until A3 — A2 flies its turn kinematically — and A3's first run saw it
+        /// saturate the elevator within one step and put the aircraft at −3.9 g.
+        ///
+        /// So the outer loop asks for a pitch ATTITUDE, clamped to angles an
+        /// aeroplane actually flies, and an inner loop holds that attitude with rate
+        /// damping. Attitude is one integration from elevator rather than two, and
+        /// the short period damps it, so the inner loop is well behaved by
+        /// construction rather than by tuning.
+        /// </summary>
         protected void HoldVerticalSpeed(ScriptedPilot p, float targetVs)
         {
-            float err = targetVs - Plane.VerticalSpeed;
-            float pitchRate = Body.transform.InverseTransformDirection(Body.angularVelocity).x
-                              * Mathf.Rad2Deg;
-            p.pitch = Mathf.Clamp(err * 0.12f + pitchRate * 0.010f, -1f, 1f);
+            float vsErr = targetVs - Plane.VerticalSpeed;
+
+            // Outer: vertical speed → a pitch attitude to fly, clamped to angles an
+            // aeroplane actually holds so a transient cannot ask for the impossible.
+            //
+            // SIGN: about the body +X axis the nose swings toward −Y, so a POSITIVE
+            // eulerAngles.x is nose DOWN. Sinking (vsErr > 0) therefore wants a
+            // NEGATIVE attitude, hence the minus. The trim probe's own log is the
+            // evidence: it printed pitch +6.3° while descending and −1.4° while
+            // climbing.
+            float wanted = Mathf.Clamp(-vsErr * 1.2f, -14f, 10f);
+
+            // Inner: hold that attitude. Being below the wanted (more nose-down)
+            // number calls for up elevator, which is a positive command — hence
+            // (pitch − wanted) rather than the other way round. The rate term is
+            // damping: +ve body-x rate is nose dropping, and a positive command
+            // opposes it.
+            float pitchDeg = Wrap180(Plane.transform.eulerAngles.x);
+            float rate = Body.transform.InverseTransformDirection(Body.angularVelocity).x
+                         * Mathf.Rad2Deg;
+            p.pitch = Mathf.Clamp((pitchDeg - wanted) * 0.06f + rate * 0.010f, -1f, 1f);
         }
 
         /// <summary>Hold an airspeed with throttle.</summary>

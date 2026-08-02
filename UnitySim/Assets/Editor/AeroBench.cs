@@ -58,6 +58,7 @@ namespace AIHWSim.EditorTools
             Stability(spec);
             Panels(spec);
             Propulsion(spec);
+            Wake(spec);
 
             Debug.Log(_log.ToString().TrimEnd());
 
@@ -230,6 +231,39 @@ namespace AIHWSim.EditorTools
             }
             Check("dihedral: right wing normal x", rightX, -0.0872f, 1e-3f, "", "−sin 5°");
             Check("dihedral: left wing normal x", leftX, 0.0872f, 1e-3f, "", "+sin 5°");
+
+            // The HINGED area must not depend on how finely the wing is chopped up.
+            //
+            // It used to. A midpoint "is this strip hinged?" test quantises the
+            // aileron to panel boundaries, so the model flew a control surface 20 %
+            // too big at four panels a side and 18 % too small at eight — and test
+            // A6, whose whole job is to measure discretisation error, was reading
+            // that as the discretisation error. It reported 226, 166 and 216 °/s at
+            // 4/8/16 panels, non-monotone, and the cause was the aileron changing
+            // size rather than the aerodynamics changing resolution.
+            //
+            // Four panel counts, one authored number, exact agreement demanded.
+            LiftingSurface wing = spec.surfaces[0];
+            float tauRef = wing.ControlEffectiveness;
+            float authoredAileron = (wing.controlSpanEnd - wing.controlSpanStart)
+                                    * wing.semiSpan * wing.rootChord * 2f;
+            foreach (int n in new[] { 4, 8, 16, 32 })
+            {
+                var surfaces = new List<LiftingSurface>(spec.surfaces);
+                LiftingSurface w = surfaces[0];
+                w.panelsPerSide = n;
+                surfaces[0] = w;
+
+                PanelAero built = PanelAero.Build(surfaces);
+                float hingedArea = 0f;
+                foreach (AeroPanel p in built.Panels)
+                    if (p.surface == 0) hingedArea += p.area * (p.controlTau / tauRef);
+
+                Check($"aileron area at {n} panels/side", hingedArea, authoredAileron,
+                      1e-5f, "m²",
+                      "0.45 of a 0.70 m semi-span × 0.24 m chord × 2 — the hinged area "
+                      + "is authored geometry and must not move with the panel count");
+            }
         }
 
         private static void Propulsion(AircraftSpec spec)
@@ -276,6 +310,203 @@ namespace AIHWSim.EditorTools
                                + "the advance ratio is not reaching the coefficients");
             }
             _checks++;
+        }
+
+        // ---- the propeller wake -------------------------------------------
+
+        /// <summary>
+        /// <b>Slipstream, and the two things it buys.</b>
+        ///
+        /// Momentum theory has no free parameters: give it a thrust and it returns
+        /// a velocity field. Everything below is therefore a closed form that can be
+        /// checked on paper, which is exactly the kind of thing a bench is for —
+        /// and the geometry half (which strips are inside the tube) is a
+        /// segment-circle intersection, so it is exact rather than approximately
+        /// right.
+        ///
+        /// The two payoffs are checked directly rather than described:
+        /// <list type="number">
+        /// <item>At <b>zero airspeed</b> the tailplane still has a dynamic pressure
+        ///       to work against — 73.6 Pa at full power, over half its cruise
+        ///       value. Without the wake it would be exactly zero and no model
+        ///       aeroplane could raise its tail on the takeoff roll, which they
+        ///       plainly do.</item>
+        /// <item>η_h stops being an authored constant. It is 1.00 with the motor off
+        ///       and 1.38 at full power, and the neutral point moves 8.7 % of chord
+        ///       between them. That IS the throttle-dependent pitch trim of a
+        ///       tractor-prop aeroplane, and nothing was added to produce it.</item>
+        /// </list>
+        /// </summary>
+        /// <summary>
+        /// The aeroplane's own hands-off trim speed (m/s), as the [TRIM] probe
+        /// measured it with the wake modelled: 14.66 m/s on 71.9 % throttle. It is
+        /// hard-coded here on purpose — a bench compares the model against numbers
+        /// written down beforehand, so reading it back out of the model at run time
+        /// would make every check below compare the code with itself.
+        /// </summary>
+        private const float Cruise = 14.66f;
+
+        private static void Wake(AircraftSpec spec)
+        {
+            PropellerSpec prop = spec.propeller;
+            Vector3 disc = spec.propPosLocal;
+            float r = 0.5f * prop.diameterM;
+
+            Check("disc area", Mathf.PI * r * r, 0.050671f, 1e-5f, "m²", "πD²/4, D = 0.254");
+
+            // ---- static: the aeroplane standing still at full power ----
+            float omegaStatic = Equilibrium(spec, spec.motor.maxVoltage, 0f);
+            float thrustStatic = PropellerModel.Thrust(prop, omegaStatic, 0f);
+            SlipstreamState s0 = Slipstream.Solve(prop, disc, thrustStatic, 0f);
+
+            Check("static v_i", s0.InducedVelocity, 9.50f, 0.03f, "m/s",
+                  "√(T/2ρA) at T = 11.21 N — the hover form, V = 0");
+            Check("static far wake", s0.FarWakeIncrement, 19.00f, 0.06f, "m/s",
+                  "Δv = 2·v_i; this is what the tail flies in at rest");
+            Check("static tube radius", s0.FarWakeRadius, 0.089803f, 3e-4f, "m",
+                  "r∞ = R/√2 exactly when V = 0 — pure continuity");
+
+            // Continuity must hold at EVERY station, not only at the two the theory
+            // names. If the shape function and the contraction ever disagree, the
+            // tube is carrying mass that did not come through the disc.
+            float worstFlow = 0f;
+            float refFlow = Mathf.PI * r * r * (s0.FreeStreamAxial + s0.InducedVelocity);
+            for (float x = 0.05f; x <= 2.0f; x += 0.05f)
+            {
+                float dv = Slipstream.IncrementAt(s0, x * prop.diameterM, out float rad);
+                float flow = Mathf.PI * rad * rad * (s0.FreeStreamAxial + dv);
+                worstFlow = Mathf.Max(worstFlow, Mathf.Abs(flow - refFlow));
+            }
+            Check("wake mass flow conserved", worstFlow, 0f, 1e-6f, "m³/s",
+                  "π·r²·(V+Δv) = π·R²·(V+v_i) at 40 stations — the shape function is "
+                  + "⚠ estimated, the continuity that ties radius to it is not");
+
+            // ---- which strips are inside the tube, at rest ----
+            PanelAero aero = PanelAero.Build(spec.surfaces);
+            Check("wing immersed area", ImmersedFraction(aero, spec, 0, s0), 0.0883f, 0.002f, "",
+                  "tube reaches 0.0618 m of a 0.70 m semi-span, allowing for 5° dihedral "
+                  + "lifting the wing out of it");
+            Check("tailplane immersed area", ImmersedFraction(aero, spec, 1, s0), 0.3570f, 0.002f, "",
+                  "√(r∞² − 0.01²) = 0.0892 m of a 0.25 m semi-span");
+            Check("fin immersed area", ImmersedFraction(aero, spec, 2, s0), 0.3490f, 0.002f, "",
+                  "the fin's root is 0.02 m off the shaft line, so 0.0698 m of 0.20");
+
+            // ---- payoff 1: the tail works with the aeroplane standing still ----
+            float qTailStatic = EffectiveQ(aero, spec, 1, s0, 0f);
+            Check("tail q at zero airspeed", qTailStatic, 73.65f, 1.5f, "Pa",
+                  "full power, aircraft stationary — WITHOUT the wake this is exactly "
+                  + "zero and the elevator does nothing");
+            Line($"tail q at rest is {qTailStatic / 131.64f * 100f:0} % of its {Cruise:0.00} m/s "
+                 + "cruise value (131.6 Pa) — which is why a model can raise its tail "
+                 + "before it has any airspeed at all");
+
+            // ---- payoff 2: eta_h, and a neutral point that moves ----
+            const float cruise = Cruise;
+            float omegaFull = Equilibrium(spec, spec.motor.maxVoltage, cruise);
+            float thrustFull = PropellerModel.Thrust(prop, omegaFull, cruise);
+            Check("thrust at full power, cruise", thrustFull, 5.95f, 0.25f, "N",
+                  "the advance-ratio falloff: 11.21 N static becomes 5.9 N at 14.66 m/s");
+
+            SlipstreamState sCruise = Slipstream.Solve(prop, disc, thrustFull, cruise);
+            float qInf = 0.5f * AeroDynamics.AirDensity * cruise * cruise;
+
+            float etaIdle = EffectiveQ(aero, spec, 1, default, cruise) / qInf;
+            float etaFull = EffectiveQ(aero, spec, 1, sCruise, cruise) / qInf;
+            Check("eta_h, motor off", etaIdle, 1.000f, 1e-3f, "",
+                  "no wake ⇒ the tail sees the free stream, exactly");
+            Check("eta_h, full power", etaFull, 1.410f, 0.03f, "",
+                  "Δv 5.50 m/s over the inboard 47 % of the tailplane");
+
+            // The same textbook neutral point as Stability(), with eta_h now
+            // measured instead of assumed.
+            LiftingSurface w = spec.surfaces[0];
+            LiftingSurface h = spec.surfaces[1];
+            Vector3 cg = spec.CentreOfMass;
+            float mac = spec.MeanChord;
+            float vH = h.Area * (cg.z - h.rootQuarterChord.z) / (w.Area * mac);
+            float coeff = (h.LiftSlope / w.LiftSlope) * vH
+                          * (1f - 2f * w.LiftSlope / (Mathf.PI * w.AspectRatio));
+
+            float npIdle = 0.25f + coeff * etaIdle;
+            float npFull = 0.25f + coeff * etaFull;
+            Check("neutral point, motor off", npIdle, 0.4765f, 0.005f, "c̄",
+                  "0.25 + (a_h/a_w)·V_H·η_h·(1−dε/dα) at η_h = 1.00");
+            Check("neutral point, full power", npFull, 0.5695f, 0.008f, "c̄", "the same, at η_h = 1.41");
+            Check("neutral point shift with throttle", npFull - npIdle, 0.0929f, 0.005f, "c̄",
+                  "9.3 % of chord between idle and full — the throttle-dependent pitch "
+                  + "trim every tractor aeroplane has, and nothing was added to make it");
+
+            Line("⚠ the model's power-off η_h is 1.00 because there is no fuselage "
+                 + "boundary layer or wing wake over the tail; a real trainer's is nearer "
+                 + "0.9. So the model remains slightly MORE stable power-off than the "
+                 + "aeroplane, on top of the missing fuselage aerodynamics — both errors "
+                 + "point the same way and both are declared");
+        }
+
+        /// <summary>Spin the shaft to equilibrium at a voltage and an axial inflow.</summary>
+        private static float Equilibrium(AircraftSpec spec, float volts, float vAxial)
+        {
+            float omega = 0f;
+            const float dt = 1f / 1000f;
+            for (int i = 0; i < 8000; i++)
+                omega = PropellerModel.StepShaft(spec.propeller, spec.motor, volts,
+                                                 omega, vAxial, dt, out _, out _, out _);
+            return omega;
+        }
+
+        /// <summary>Area-weighted mean coverage of one surface by the wake tube.</summary>
+        private static float ImmersedFraction(PanelAero aero, AircraftSpec spec,
+                                              int surface, in SlipstreamState s)
+        {
+            float covered = 0f, total = 0f;
+            foreach (AeroPanel p in aero.Panels)
+            {
+                if (p.surface != surface) continue;
+                total += p.area;
+                if (!s.Active) continue;
+                float aft = s.DiscLocal.z - p.posLocal.z;
+                if (aft <= 0f) continue;
+                Slipstream.IncrementAt(s, aft, out float tube);
+                covered += p.area * Slipstream.Coverage(s.DiscLocal, p.posLocal,
+                                                        p.spanDir, p.spanWidth, tube);
+            }
+            return total > 1e-6f ? covered / total : 0f;
+        }
+
+        /// <summary>
+        /// Area-weighted mean local dynamic pressure over one surface (Pa), computed
+        /// the way <see cref="PanelAero"/> computes it — a partly immersed strip is
+        /// given the matching FRACTION of the increment over its whole width.
+        ///
+        /// That smearing is a discretisation choice rather than a physical claim,
+        /// and it is worth being explicit about which way it errs: q is convex in
+        /// velocity, so a partly immersed strip is under-read. It converges to the
+        /// true integral as the panel count rises, which is one of the things
+        /// test A6 measures.
+        /// </summary>
+        private static float EffectiveQ(PanelAero aero, AircraftSpec spec, int surface,
+                                        in SlipstreamState s, float freeStream)
+        {
+            float sum = 0f, total = 0f;
+            foreach (AeroPanel p in aero.Panels)
+            {
+                if (p.surface != surface) continue;
+                total += p.area;
+
+                float local = freeStream;
+                if (s.Active)
+                {
+                    float aft = s.DiscLocal.z - p.posLocal.z;
+                    if (aft > 0f)
+                    {
+                        float dv = Slipstream.IncrementAt(s, aft, out float tube);
+                        local += dv * Slipstream.Coverage(s.DiscLocal, p.posLocal,
+                                                          p.spanDir, p.spanWidth, tube);
+                    }
+                }
+                sum += p.area * 0.5f * AeroDynamics.AirDensity * local * local;
+            }
+            return total > 1e-6f ? sum / total : 0f;
         }
 
         // ---- plumbing ----------------------------------------------------

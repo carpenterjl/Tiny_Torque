@@ -37,8 +37,8 @@ namespace AIHWSim.Core.PhysicsTests
     /// </summary>
     public sealed class A5PhugoidTest : FlightTest
     {
-        [Tooltip("Trim throttle, from the trim probe.")]
-        public float trimThrottle = 0.734f;
+        [Tooltip("Trim throttle, from the trim probe — 0.719 with the wake modelled.")]
+        public float trimThrottle = 0.719f;
         [Tooltip("Seconds to settle at trim before disturbing it.")]
         public float settleSeconds = 20f;
         /// <summary>
@@ -65,7 +65,6 @@ namespace AIHWSim.Core.PhysicsTests
             "T = π√2·V/g (⚠ Lanchester assumes light damping and wide mode separation)";
 
         protected override float TestAltitude => 1000f;
-        protected override float LaunchSpeed => 15.03f;
 
         private float _t;
         private readonly List<float> _crossTimes = new List<float>();

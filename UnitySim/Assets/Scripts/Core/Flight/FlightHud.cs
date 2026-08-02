@@ -35,7 +35,7 @@ namespace AIHWSim.Core.Flight
         {
             if (plane == null) return;
 
-            const float w = 272f, h = 226f;
+            const float w = 272f, h = 246f;
             GUILayout.BeginArea(new Rect(Screen.width - w - 10f, 10f, w, h), GUI.skin.box);
 
             var air = plane.Air;
@@ -63,6 +63,13 @@ namespace AIHWSim.Core.Flight
                             + $"pitch {Wrap180(plane.transform.eulerAngles.x):+0;-0;0}°");
             GUILayout.Label($"throttle {plane.ThrottleCommand * 100f:0}%   "
                             + $"{plane.PropRevsPerSec * 60f:0} rpm   {plane.Thrust:0.0} N");
+            // What the tail is flying in, which is not what the aeroplane is flying
+            // in. On the ground at full power the airspeed reads zero and this reads
+            // 19 m/s — and that gap IS why the elevator still works there.
+            GUILayout.Label($"wash {r.slipstreamIncrement:0.0} m/s   "
+                            + (air.Q > 1e-3f
+                               ? $"eta_tail {plane.SurfaceDynamicPressure(1) / air.Q:0.00}"
+                               : "eta_tail —"));
             GUILayout.Label($"ail {plane.AileronCommand:+0.00;-0.00; 0.00}   "
                             + $"elev {plane.ElevatorCommand:+0.00;-0.00; 0.00}   "
                             + $"rud {plane.RudderCommand:+0.00;-0.00; 0.00}");

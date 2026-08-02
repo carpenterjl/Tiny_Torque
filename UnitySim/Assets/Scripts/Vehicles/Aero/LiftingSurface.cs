@@ -131,10 +131,35 @@ namespace AIHWSim.Vehicles.Aero
             }
         }
 
-        /// <summary>True when the hinge covers this spanwise fraction.</summary>
-        public bool HasControlAt(float t) =>
-            control != ControlAxis.None &&
-            t >= controlSpanStart && t <= controlSpanEnd;
+        /// <summary>
+        /// What fraction of the span between <paramref name="t0"/> and
+        /// <paramref name="t1"/> the hinge covers. Exact overlap of two intervals.
+        ///
+        /// <b>This replaced a binary "is the midpoint hinged?" test, and the
+        /// difference is not cosmetic.</b> A midpoint test quantises the hinged AREA
+        /// to panel boundaries, so the aeroplane's aileron changes size when the
+        /// discretisation changes: on this wing the model hinged 20 % MORE than
+        /// authored at four panels a side, 18 % LESS at eight, and 8 % more at
+        /// sixteen. Test A6 saw exactly that as a roll rate of 226, 166 and 216 °/s
+        /// — a non-monotone "convergence" that was really the control surface
+        /// growing and shrinking underneath it.
+        ///
+        /// With the overlap taken as a fraction, the total hinged area equals the
+        /// authored extent at every panel count, and what remains is genuine
+        /// discretisation error. Scaling τ by the fraction spreads a partial hinge's
+        /// effect across the whole strip, which is the same smearing approximation
+        /// <see cref="Slipstream"/> makes for partial immersion, and it converges the
+        /// same way.
+        /// </summary>
+        public float ControlSpanFraction(float t0, float t1)
+        {
+            if (control == ControlAxis.None) return 0f;
+            float width = t1 - t0;
+            if (width <= 1e-6f) return 0f;
+            float lo = Mathf.Max(t0, controlSpanStart);
+            float hi = Mathf.Min(t1, controlSpanEnd);
+            return hi > lo ? Mathf.Clamp01((hi - lo) / width) : 0f;
+        }
 
         /// <summary>Tail volume coefficient against a reference wing — the standard
         /// non-dimensional measure of how much authority a tail has. Horizontal

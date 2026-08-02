@@ -52,8 +52,11 @@ namespace AIHWSim.EditorTools
             new Entry("A0", "A0  Ballistic drop (aero off)", typeof(A0BallisticTest)),
             new Entry("A1", "A1  Static thrust",             typeof(A1StaticThrustTest)),
             new Entry("A2", "A2  Level turn load factor",    typeof(A2LevelTurnTest)),
+            new Entry("A3", "A3  Stall speed and progression", typeof(A3StallTest)),
             new Entry("A4", "A4  Glide ratio",               typeof(A4GlideTest)),
             new Entry("A5", "A5  Phugoid period",            typeof(A5PhugoidTest)),
+            new Entry("A6", "A6  Panel-count convergence",   typeof(A6PanelConvergenceTest)),
+            new Entry("A7", "A7  Timestep sensitivity",      typeof(A7TimestepTest)),
         };
 
         public static Entry? Find(string id)
@@ -104,7 +107,10 @@ namespace AIHWSim.EditorTools
         [MenuItem(Root + "A0  Ballistic drop", priority = 200)] private static void O0() => Open("A0");
         [MenuItem(Root + "A1  Static thrust", priority = 201)] private static void O1() => Open("A1");
         [MenuItem(Root + "A2  Level turn", priority = 202)] private static void O2() => Open("A2");
-        [MenuItem(Root + "A4  Glide ratio", priority = 203)] private static void O4() => Open("A4");
-        [MenuItem(Root + "A5  Phugoid", priority = 204)] private static void O5() => Open("A5");
+        [MenuItem(Root + "A3  Stall", priority = 203)] private static void O3() => Open("A3");
+        [MenuItem(Root + "A4  Glide ratio", priority = 204)] private static void O4() => Open("A4");
+        [MenuItem(Root + "A5  Phugoid", priority = 205)] private static void O5() => Open("A5");
+        [MenuItem(Root + "A6  Panel convergence", priority = 206)] private static void O6() => Open("A6");
+        [MenuItem(Root + "A7  Timestep", priority = 207)] private static void O7() => Open("A7");
     }
 }

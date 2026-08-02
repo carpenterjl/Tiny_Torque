@@ -54,6 +54,10 @@ namespace AIHWSim.Vehicles
         public bool aeroEnabled = true;
         [Tooltip("Suppress thrust and shaft torque (dead-stick glide).")]
         public bool propulsionEnabled = true;
+        [Tooltip("Suppress the propeller wake over the tail and inboard wing. The "
+                 + "aircraft then has NO pitch or yaw authority at zero airspeed — "
+                 + "which is what the wake is for, and the fastest way to see it.")]
+        public bool slipstreamEnabled = true;
 
         private Rigidbody _body;
         private PanelAero _aero;
@@ -61,6 +65,7 @@ namespace AIHWSim.Vehicles
         private float _cmdThrottle, _cmdAileron, _cmdElevator, _cmdRudder;
         private float _propOmega;
         private float _propThrust, _propLoadTorque, _propCurrent;
+        private SlipstreamState _slip;
 
         private Vector3 _spawnPos;
         private Quaternion _spawnRot;
@@ -72,6 +77,27 @@ namespace AIHWSim.Vehicles
         public float PropOmega => _propOmega;
         public float PropRevsPerSec => PropellerModel.RevsPerSecond(_propOmega);
         public float Thrust => _propThrust;
+        /// <summary>The propeller wake as momentum theory resolved it this step.</summary>
+        public SlipstreamState Slipstream => _slip;
+
+        /// <summary>Lift from one lifting surface in the last solve (N). Index into
+        /// <c>spec.surfaces</c>; the wing is <c>spec.wingIndex</c>.</summary>
+        public float SurfaceLift(int i) => _aero != null ? _aero.SurfaceLift(i) : 0f;
+
+        /// <summary>Area-weighted mean local dynamic pressure over one surface (Pa).
+        /// Divided by <c>Air.Q</c> this is that surface's η — for the tailplane, the
+        /// η_h a stability calculation would otherwise have to author.</summary>
+        public float SurfaceDynamicPressure(int i) =>
+            _aero != null ? _aero.SurfaceDynamicPressure(i) : 0f;
+
+        /// <summary>Worst stall margin on one surface: positive with flow attached,
+        /// negative once a strip has let go.</summary>
+        public float SurfaceStallMargin(int i) =>
+            _aero != null ? _aero.SurfaceStallMargin(i) : 1f;
+
+        /// <summary>Span station of that surface's worst strip, 0 root to 1 tip.</summary>
+        public float SurfaceWorstStation(int i) =>
+            _aero != null ? _aero.SurfaceWorstStation(i) : 0f;
         /// <summary>Throttle as the pilot set it, [0,1]. The command itself is in
         /// volts (see the actuator layout note), so this divides back out by the
         /// supply rail rather than being a second stored copy that could disagree.</summary>
@@ -155,6 +181,22 @@ namespace AIHWSim.Vehicles
         public void ResetVehicleTo(Vector3 pos, Quaternion rot)
         {
             transform.SetPositionAndRotation(pos, rot);
+
+            // MANDATORY, and it cost a day to find out why.
+            //
+            // Writing Transform.position does not move the physics body until the
+            // next sync, so for one step transform.position is the new place while
+            // Rigidbody.worldCenterOfMass is still the old one. PanelAero forms each
+            // strip's moment arm as `rot·posLocal + (tr.position − cm)`, so that
+            // stale cm turns a 0.7 m lever arm into the WHOLE TELEPORT DISTANCE —
+            // hundreds of metres after a mid-run reposition. One step of that
+            // applies an enormous spurious torque, and the aeroplane departs.
+            //
+            // It showed up as −3.9 g one step after Arm in the stall test, and as a
+            // lateral oscillation that grew to 180° of bank in the timestep test.
+            // Neither looked like a reset bug: both looked like aerodynamics.
+            Physics.SyncTransforms();
+
             _body.linearVelocity = Vector3.zero;
             _body.angularVelocity = Vector3.zero;
             _propOmega = 0f;
@@ -216,6 +258,7 @@ namespace AIHWSim.Vehicles
             {
                 _propOmega = 0f;
                 _propThrust = 0f;
+                _slip = default;
                 return;
             }
 
@@ -236,6 +279,14 @@ namespace AIHWSim.Vehicles
                                                   out _, out _propLoadTorque,
                                                   out _propCurrent);
             _propThrust = PropellerModel.Thrust(spec.propeller, _propOmega, vAxial);
+
+            // The wake that thrust implies. Solved from THIS step's thrust and the
+            // free-stream inflow, so it cannot disagree with the force being
+            // applied a line below — the two are the same momentum balance read
+            // from opposite ends.
+            _slip = slipstreamEnabled
+                ? Aero.Slipstream.Solve(spec.propeller, spec.propPosLocal, _propThrust, vAxial)
+                : default;
 
             Vector3 thrustWorld = transform.forward * _propThrust;
             _body.AddForceAtPosition(thrustWorld, transform.TransformPoint(spec.propPosLocal),
@@ -260,7 +311,7 @@ namespace AIHWSim.Vehicles
             if (!aeroEnabled || _aero == null) { LastAero = default; return; }
 
             PanelAero.Result r = _aero.Solve(_body, transform, Air,
-                                             _cmdAileron, _cmdElevator, _cmdRudder);
+                                             _cmdAileron, _cmdElevator, _cmdRudder, _slip);
             LastAero = r;
             _body.AddForce(r.forceWorld, ForceMode.Force);
             _body.AddTorque(r.torqueWorld, ForceMode.Force);

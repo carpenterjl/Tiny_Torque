@@ -78,9 +78,15 @@ namespace AIHWSim.Telemetry
             hub.RegisterChannel("air/panels_stalled");
             hub.RegisterChannel("air/stall_margin");
 
-            // Propulsion.
+            // Propulsion, and the wake it drags behind it. eta_tail is the tail's
+            // local dynamic pressure over the free stream's — the η_h a stability
+            // calculation normally has to author. Here it is a measurement, and
+            // watching it move with the throttle column is the whole payoff of
+            // modelling the slipstream at all.
             hub.RegisterChannel("air/thrust_n");
             hub.RegisterChannel("air/prop_rps");
+            hub.RegisterChannel("air/slipstream");
+            hub.RegisterChannel("air/eta_tail");
 
             // Commanded controls. "Was the stick actually centred" is the first
             // question of every unexplained roll, and without these the trace
@@ -140,6 +146,13 @@ namespace AIHWSim.Telemetry
 
             hub.SetValue("air/thrust_n", _plane.Thrust);
             hub.SetValue("air/prop_rps", _plane.PropRevsPerSec);
+            hub.SetValue("air/slipstream", r.slipstreamIncrement);
+            // The tailplane is surface 1 by construction in DebugPlanes. Reported
+            // as 0 rather than 1 when there is no free stream to divide by, because
+            // at rest the ratio is genuinely undefined and printing 1 would claim
+            // the tail was seeing still air when it is in a 19 m/s blast.
+            hub.SetValue("air/eta_tail",
+                air.Q > 1e-3f ? _plane.SurfaceDynamicPressure(1) / air.Q : 0f);
 
             hub.SetValue("cmd/throttle", _plane.ThrottleCommand);
             hub.SetValue("cmd/aileron", _plane.AileronCommand);

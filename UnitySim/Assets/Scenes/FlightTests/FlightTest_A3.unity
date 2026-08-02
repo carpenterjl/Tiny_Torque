@@ -130,7 +130,7 @@ GameObject:
   - component: {fileID: 126365764}
   - component: {fileID: 126365763}
   m_Layer: 0
-  m_Name: FlightTest_A1
+  m_Name: FlightTest_A3
   m_TagString: Untagged
   m_Icon: {fileID: 0}
   m_NavMeshLayer: 0
@@ -145,7 +145,7 @@ MonoBehaviour:
   m_GameObject: {fileID: 126365762}
   m_Enabled: 1
   m_EditorHideFlags: 0
-  m_Script: {fileID: 11500000, guid: 9bc11eadc93d6474782d779e69ba0438, type: 3}
+  m_Script: {fileID: 11500000, guid: 68223a9a47eb38b46abf2eecbb73ea01, type: 3}
   m_Name: 
   m_EditorClassIdentifier: 
   physicsRateHz: 400
@@ -155,8 +155,16 @@ MonoBehaviour:
   logCsv: 1
   exitWhenDone: 0
   syncHoldSeconds: 1.5
-  spinUpSeconds: 4
-  toleranceN: 0.3
+  holdSeconds: 6
+  rampSeconds: 35
+  trimThrottle: 0.719
+  entryThrottle: 0.45
+  postStallSeconds: 4
+  rootBand: 0.5
+  clTolerance: 0.12
+  levellerAuthority: 0.1
+  loadedFraction: 0.75
+  minStallAlphaDeg: 2
 --- !u!4 &126365764
 Transform:
   m_ObjectHideFlags: 0

@@ -400,23 +400,84 @@ as a function of shaft speed and airspeed. **RPM is never commanded** — it is 
 equilibrium of those two, which is why thrust sags as the aeroplane accelerates and why
 top speed is a consequence rather than a number anyone chose.
 
+### The propeller wake
+
+Behind the disc there is a tube of air the propeller has already accelerated, and most of
+the tailplane, a third of the fin and the inboard wing are flying inside it.
+`Slipstream.cs` gets that from momentum theory, which has **no free parameters** — feed it
+a thrust and it returns a velocity field:
+
+```
+T = 2·ρ·A·v_i·(V + v_i)   ⇒   v_i = ½(−V + √(V² + 2T/(ρA)))
+Δv_∞ = 2·v_i              r_∞ = R·√((V + v_i)/(V + 2v_i))
+```
+
+Which strips are inside the tube is a segment-circle intersection, so it is exact rather
+than approximately right: the tailplane is **35.7 %** immersed at rest, the fin 34.9 %,
+the wing 8.8 % (the dihedral lifts it out). Two things follow that are the reason this is
+not optional:
+
+- **The tail works with the aeroplane standing still.** At full power and zero airspeed
+  the tailplane sits in 73.6 Pa of dynamic pressure — over half its cruise value. Without
+  the wake it is exactly zero, and no model could raise its tail on the takeoff roll,
+  which they plainly do.
+- **η_h stops being a number somebody authored.** It is 1.00 with the motor off and 1.38
+  at full power, so the neutral point moves **8.6 % of chord** between them. That *is* the
+  throttle-dependent pitch trim every tractor-prop aeroplane has, and nothing was added to
+  produce it.
+
+Momentum theory gives the disc and the far wake exactly and says nothing about the rate of
+development between them, so the shape function there is ⚠ estimated — but constrained
+rather than free: whatever increment it picks, the tube radius follows from continuity, and
+`[ABENCH]` checks mass flow at forty stations. It barely matters on this airframe anyway,
+since the wing sits 2.0 diameters behind the disc and the tail 4.3, both past the
+transition. Swirl, P-factor and the windmilling case are declared out — momentum theory
+disclaims the last of those, so rather than extrapolate into it the wake is switched off
+when thrust goes negative.
+
 ### The `[AERO]` gate
 
 ```bash
 "E:/Unity Hub/Editor/6000.1.15f1/Editor/Unity.exe" -batchmode -projectPath UnitySim -executeMethod AIHWSim.EditorTools.FlightValidationRunner.RunHeadless -logFile aero.log -physSuite
 ```
 
-Five scripted flights, each run twice, greppable as `[AERO]`. Separate from the car's
+Eight scripted flights, each run twice, greppable as `[AERO]`. Separate from the car's
 `[PHYS]` gate on purpose: appending to it would change the summary line a build gate
-watches even on a clean run.
+watches even on a clean run. Add `-aeroOnly A3,A6` to narrow it while working on one row
+— a narrowed run deliberately never prints `ALL PASS`, it says `SUBSET … NOT THE GATE`.
 
 | test | checks | result |
 |---|---|---|
 | A0 ballistic drop | aero off, must fall at exactly `½·g·t·(t+dt)` | PASS — **1.5 mm** error over 3 s |
 | A1 static thrust | motor/prop equilibrium, no aerodynamics at all | PASS — 11.207 N vs 11.21 predicted |
 | A2 level turn | `n = cos γ / cos φ`, trigonometry only | PASS — **2.0007 g** vs exactly 2.000 |
-| A4 glide ratio | self-consistent with the model's own C_L/C_D | PASS — 9.37 vs 9.49, 1.2 % |
+| A3 stall | root must stall before tip; peak section C_L | PASS — **root at 29 % semi-span**, 8.89 m/s |
+| A4 glide ratio | self-consistent with the model's own C_L/C_D | PASS — 9.441 vs 9.49, **0.5 %** |
 | A5 phugoid | `T = π√2·V/g` | INFO — see below |
+| A6 panel count | does the answer depend on the discretisation? | INFO — **0.74 %** across 14/29/58 panels |
+| A7 timestep | P9's twin, 200/400/800 Hz | PASS — **0.25 %** spread, bank 0.00° |
+
+**A3 is the row that justifies the whole model.** Every other test here could be passed by
+a wing represented as one lift coefficient; what a single coefficient cannot have is a
+*place* where it stalls. The wing carries −2° of washout, so the root must let go first —
+and it does, at 29 % of the semi-span. That is what keeps a wing drop from becoming a spin,
+and it is a consequence of the authored twist rather than a modelled behaviour.
+
+It also produced a result nobody asked for. Measured against the free stream the wing
+reached C_L **1.266**, above the section's own 1.20 maximum, which reads as impossible.
+It is not — the propeller wake is blowing the inboard span. Washout raises the power-off
+stall speed from 8.91 to 9.22 m/s; the wake's 1.06× blowing lowers it again to 8.95;
+the measurement is **8.89**. A 0.6 % accounting for a number nothing was tuned to hit, and
+the same effect that puts a lower power-on stall speed than power-off in every pilot's
+handbook.
+
+**A6 says 8 panels a side is enough**, and that decides against building a lifting-line
+solve. Getting there found a real defect first: the hinge test was a binary "is this
+strip's midpoint inside the aileron?", which quantised the control-surface *area* to panel
+boundaries — the model flew an aileron 20 % too big at 4 panels and 18 % too small at 8.
+A6 was reading that as discretisation error and reporting a confident 52.7 %
+non-convergence. With the hinge taken as an exact interval overlap the spread is 0.74 %,
+and `[ABENCH]` now pins the hinged area at 0.1512 m² across 4/8/16/32 panels a side.
 
 A0's expected distance is **not** ½gt². Unity integrates semi-implicitly, which puts the
 answer 36.8 mm further at 400 Hz over 3 s. Predicting that offset rather than widening a
@@ -441,11 +502,27 @@ than tuned away:
   4.2 N and the propeller supplies under 3. That is a real performance limit of a 0.57
   thrust-to-weight trainer, not a defect.
 
+**Three defects the new rows found**, all fixed and all previously invisible:
+
+- `ResetVehicleTo` moved the Transform without calling `Physics.SyncTransforms()`, so for
+  one step `PanelAero` built every strip's moment arm as
+  `transform.position − Rigidbody.worldCenterOfMass` — the *whole teleport distance*. It
+  showed up as −3.9 g one step after a reposition and as a lateral oscillation reaching
+  180° of bank. Both looked like aerodynamics; neither was.
+- The launch gate returned as soon as vertical speed and bank were small, which is a
+  condition the reset establishes *by construction*. It was certifying the reset rather
+  than a settled aeroplane. It now requires the condition to hold, and checks body rates.
+- `HoldVerticalSpeed` drove the elevator straight from vertical-speed error — a
+  proportional loop closed around two integrations, which rings. Nothing had exercised it,
+  because A2 flies its turn kinematically. It is now a cascade through a clamped pitch
+  attitude.
+
 Declared omissions are listed in the class comments: quasi-steady aerodynamics (no
 dynamic stall), no stall hysteresis, no Reynolds dependence, no fuselage aerodynamics
 (so the model is ~5 % of chord more stable than the real aeroplane), no ground effect,
-no propeller slipstream or P-factor, and ground handling well below the standard of the
-car's tyre model — which is why every scripted flight test starts in the air.
+no slipstream swirl or P-factor, no wake at all from a windmilling propeller, and ground
+handling well below the standard of the car's tyre model — which is why every scripted
+flight test starts in the air.
 
 ### It does not touch the controller ABI
 

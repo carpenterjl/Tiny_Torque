@@ -51,7 +51,6 @@ namespace AIHWSim.Core.PhysicsTests
             "self-consistent with the model's own C_L/C_D · real trainer 10–13 (Info)";
 
         protected override float TestAltitude => 1200f;
-        protected override float LaunchSpeed => 15f;
 
         private float _t;
         private float _sumFwd, _sumSink, _sumCl, _sumCd, _sumTas, _sumThrust;
@@ -60,7 +59,7 @@ namespace AIHWSim.Core.PhysicsTests
         protected override void Idle(ScriptedPilot p)
         {
             p.Neutral();
-            p.throttle = 0.73f;      // roughly trim, so the launch is gentle
+            p.throttle = 0.719f;     // roughly trim, so the launch is gentle
             HoldWingsLevel(p);
         }
 
