@@ -109,10 +109,37 @@ namespace AIHWSim.AssetTools
             return list;
         }
 
+        private CommitState _commit;
+        private bool _commitTried;
+
+        /// <summary>
+        /// How this row's committed copy stands against its export.
+        ///
+        /// <b>Lazy and cached, and only for a Managed row.</b> Answering it means
+        /// hashing two FBX files, which is exactly the kind of work
+        /// <see cref="AssetStudioCatalog.Refresh"/> promises not to do — discovery
+        /// reads file names. Computing it here means only the rows the list
+        /// actually draws pay, once per refresh, and only the ones carrying a
+        /// manifest pay at all.
+        /// </summary>
+        public CommitState Commit
+        {
+            get
+            {
+                if (_commitTried) return _commit;
+                _commitTried = true;
+                _commit = status == RowStatus.Managed
+                    ? AssetStudioCommit.StateOf(kind, key, Export)
+                    : CommitState.NotCommitted;
+                return _commit;
+            }
+        }
+
         public void Invalidate()
         {
             _export = null; _exportTried = false;
             _prefab = null; _prefabTried = false;
+            _commit = CommitState.NotCommitted; _commitTried = false;
         }
     }
 

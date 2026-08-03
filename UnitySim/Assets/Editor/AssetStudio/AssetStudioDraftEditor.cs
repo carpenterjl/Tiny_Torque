@@ -28,7 +28,7 @@ namespace AIHWSim.AssetTools
         [SerializeField] private List<string> _openMaterials = new List<string>();
         [SerializeField] private List<string> _openObjects = new List<string>();
         [SerializeField] private bool _showHeader = true, _showMaterials = true,
-                                      _showObjects = true;
+                                      _showObjects = true, _showCommit = true;
 
         private const float Row = 18f;
 
@@ -77,6 +77,7 @@ namespace AIHWSim.AssetTools
             DrawHeader(draft, row);
             DrawMaterials(draft, preview);
             DrawObjects(draft, preview, renderers);
+            DrawCommit(draft, row);
 
             if (_pendingObject != null)
             {
@@ -151,11 +152,89 @@ namespace AIHWSim.AssetTools
                     ? "(not synced)" : draft.sourceAssetName + "   " + draft.sourceExportedAtUtc);
 
                 EditorGUILayout.Space(2f);
+                DrawRegistry(draft);
+                EditorGUILayout.Space(2f);
                 DrawGeometry(draft, row);
                 EditorGUILayout.Space(2f);
                 DrawActions(draft, row);
             }
             EditorGUILayout.Space(4f);
+        }
+
+        /// <summary>
+        /// The handful of facts a catalogue row has that an FBX cannot carry.
+        ///
+        /// Short on purpose. Everything else about a committed row is derived —
+        /// the mesh key IS the key, the paintable flag is whether any material
+        /// claims the paint channel, the label falls back to the key — so what is
+        /// asked for here is only what genuinely cannot be measured or inferred.
+        /// A drag coefficient is the whole of that list for a body, which is why
+        /// the commit refuses without one rather than reaching for a default.
+        /// </summary>
+        private void DrawRegistry(AssetStudioDraft draft)
+        {
+            StringRow(draft, "Label", draft.label, v => draft.label = v);
+
+            AssetKind kind = draft.Kind;
+            if (kind == AssetKind.CarBody)
+            {
+                EditorGUI.BeginChangeCheck();
+                float cd = EditorGUILayout.FloatField("Drag cd", draft.cd);
+                if (EditorGUI.EndChangeCheck()) { Rec(draft, "cd"); draft.cd = cd; Dirty(draft); }
+
+                EditorGUI.BeginChangeCheck();
+                float clA = EditorGUILayout.FloatField("Downforce clA (m2)", draft.clA);
+                if (EditorGUI.EndChangeCheck()) { Rec(draft, "clA"); draft.clA = clA; Dirty(draft); }
+
+                if (draft.cd < 0f)
+                    EditorGUILayout.HelpBox(
+                        "No drag coefficient yet, and the commit will refuse without one. "
+                        + "It cannot be measured off geometry and the game will not run "
+                        + "without it: 0.15 is a teardrop, 0.45-0.6 a saloon, 0.8-0.95 a "
+                        + "bluff off-roader or a slab-sided wrecker, 1.2 a flat plate "
+                        + "broadside. clA is what the SHELL does with no parts on it, so "
+                        + "zero is the honest answer unless a wing is modelled in.",
+                        MessageType.Warning);
+            }
+            else if (kind == AssetKind.Wheel)
+            {
+                EditorGUI.BeginChangeCheck();
+                bool offered = EditorGUILayout.Toggle("Offered in garage", draft.garageOffered);
+                if (EditorGUI.EndChangeCheck())
+                { Rec(draft, "garageOffered"); draft.garageOffered = offered; Dirty(draft); }
+            }
+            else if (kind == AssetKind.Cosmetic)
+            {
+                EnumRow(draft, "Slot", draft.cosmeticSlot,
+                        typeof(Garage.CosmeticSlot), v => draft.cosmeticSlot = v);
+                EnumRow(draft, "Rarity", draft.cosmeticRarity,
+                        typeof(Garage.Rarity), v => draft.cosmeticRarity = v);
+                EnumRow(draft, "Theme", draft.cosmeticTheme,
+                        typeof(Garage.CosmeticTheme), v => draft.cosmeticTheme = v);
+                StringRow(draft, "Blurb", draft.description, v => draft.description = v);
+                EditorGUILayout.HelpBox(
+                    "Scrap value and shop price are NOT authored here — they come from "
+                    + "the rarity, through the same table the 47 shipped cosmetics use. "
+                    + "A new hat must not be able to reprice the economy. There is no "
+                    + "cheat code either, matching every cosmetic already in the pack.",
+                    MessageType.None);
+            }
+        }
+
+        /// <summary>An enum-valued string field: a popup over the names, storing
+        /// the NAME. Strings all the way down, for the reason the manifest gives
+        /// about ordinals reordering silently.</summary>
+        private static void EnumRow(AssetStudioDraft d, string label, string value,
+                                    System.Type type, System.Action<string> set)
+        {
+            string[] names = System.Enum.GetNames(type);
+            int idx = Mathf.Max(0, System.Array.IndexOf(names, value));
+            EditorGUI.BeginChangeCheck();
+            int picked = EditorGUILayout.Popup(label, idx, names);
+            if (!EditorGUI.EndChangeCheck() || picked == idx) return;
+            Rec(d, label);
+            set(names[picked]);
+            Dirty(d);
         }
 
         private void DrawGeometry(AssetStudioDraft draft, AssetRow row)
@@ -190,8 +269,8 @@ namespace AIHWSim.AssetTools
                     if (GUILayout.Button("Propose from export.json", GUILayout.Height(20f)))
                         AssetStudioDrafts.Propose(draft, row);
                 EditorGUILayout.LabelField(
-                    draft.proposedUniformScale > 0f && Mathf.Abs(draft.proposedUniformScale - 1f) > 1e-4f
-                        ? $"uniform x{draft.proposedUniformScale:0.#####}  (1/{1f / draft.proposedUniformScale:0.###})"
+                    draft.authorScale > 0f && Mathf.Abs(draft.authorScale - 1f) > 1e-4f
+                        ? $"uniform x{draft.authorScale:0.#####}  (1/{1f / draft.authorScale:0.###})"
                         : "uniform x1", EditorStyles.miniLabel, GUILayout.Width(190f));
             }
 
@@ -232,6 +311,86 @@ namespace AIHWSim.AssetTools
                     $"{dangling} slot{(dangling == 1 ? " points" : "s point")} at a "
                     + "material this draft does not have — usually a rename in Blender "
                     + "since the last sync.", MessageType.Error);
+        }
+
+        // ==================== commit ====================
+
+        /// <summary>
+        /// The one panel in this window that writes to <c>Resources/</c>.
+        ///
+        /// It leads with the refusals rather than with the button, because the
+        /// interesting state of a draft that is not ready is WHY, and a greyed-out
+        /// button that will not say is the version of this screen nobody can use.
+        /// </summary>
+        private void DrawCommit(AssetStudioDraft draft, AssetRow row)
+        {
+            _showCommit = Foldout(_showCommit, "Commit");
+            if (!_showCommit) return;
+
+            using (new EditorGUI.IndentLevelScope())
+            {
+                TtExport x = row?.Export;
+                CommitState state = AssetStudioCommit.StateOf(draft.Kind, draft.key, x);
+                EditorGUILayout.LabelField("State", AssetStudioCommit.Describe(state));
+                EditorGUILayout.LabelField("Destination",
+                    AssetStudioCommit.FbxPathFor(draft.Kind, draft.key));
+
+                if (state == CommitState.SourceDrifted)
+                    EditorGUILayout.HelpBox(
+                        "The export has changed since this was committed. Sync the draft "
+                        + "first, then commit: sync keeps every damage tag and slot mapping "
+                        + "by OBJECT NAME and reports anything the export no longer has, "
+                        + "rather than dropping forty hand-set tags in silence.",
+                        MessageType.Warning);
+                if (state == CommitState.ProjectEdited)
+                    EditorGUILayout.HelpBox(
+                        "The FBX under Resources/ no longer matches what was committed — "
+                        + "somebody edited the copy. Committing again will overwrite it "
+                        + "with the export's version.", MessageType.Warning);
+
+                // The override, and its reason, sit together because they are one
+                // decision. The reason is mandatory, is written into the manifest,
+                // and is printed by every [AST] run — an override that goes quiet
+                // is just a gate somebody switched off.
+                bool failed = x?.verification != null && !x.verification.passed;
+                if (failed || draft.verificationOverridden)
+                {
+                    EditorGUI.BeginChangeCheck();
+                    bool over = EditorGUILayout.Toggle("Override verification",
+                                                       draft.verificationOverridden);
+                    if (EditorGUI.EndChangeCheck())
+                    {
+                        Rec(draft, "verification override");
+                        draft.verificationOverridden = over;
+                        Dirty(draft);
+                    }
+                    if (draft.verificationOverridden)
+                    {
+                        StringRow(draft, "Reason", draft.overrideReason,
+                                  v => draft.overrideReason = v);
+                        EditorGUILayout.HelpBox(
+                            "This reason is written into the manifest and printed on every "
+                            + "[AST] run for as long as the override lasts.",
+                            MessageType.Warning);
+                    }
+                }
+
+                string refusal = AssetStudioCommit.Refusal(draft, row);
+                if (!string.IsNullOrEmpty(refusal))
+                    EditorGUILayout.HelpBox("Not ready: " + refusal, MessageType.Error);
+
+                using (new EditorGUI.DisabledScope(!string.IsNullOrEmpty(refusal)))
+                    if (GUILayout.Button("Commit to " + AssetStudio.RootName(
+                            AssetStudioCommit.RootFor(draft.Kind)), GUILayout.Height(24f)))
+                    {
+                        AssetStudioDrafts.Save(draft);
+                        AssetStudioCommit.Result res = AssetStudioCommit.Commit(draft, row);
+                        if (res.ok) AssetStudio.Log(AssetStudioCommit.Line(res));
+                        else AssetStudio.Error(draft.key + ": " + res.problem);
+                        AssetStudioCatalog.Refresh();
+                    }
+            }
+            EditorGUILayout.Space(4f);
         }
 
         // ==================== materials ====================

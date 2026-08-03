@@ -199,7 +199,51 @@ namespace AIHWSim.AssetTools
         /// reason the roles are.</summary>
         public string kind = AssetKind.CarBody.ToString();
 
+        /// <summary>Picker text. Free to differ from <see cref="key"/>: renaming
+        /// what a player reads is not a save-format change, which is the point of
+        /// a string key. Empty falls back to the key.</summary>
+        public string label = "";
+
         public string materialMode = DraftMaterialModes.Manifest;
+
+        // ---- what the catalogue row will say --------------------------------
+
+        /// <summary>
+        /// Drag coefficient, for a body. <b>−1 means nobody has decided</b>, and
+        /// the commit refuses rather than defaulting: a car whose top speed was
+        /// chosen by a fallback constant is a car nobody chose.
+        ///
+        /// The band is the one <c>[AKEY]</c> already holds every seed row to —
+        /// 0.15 is a teardrop, 1.2 a flat plate broadside.
+        /// </summary>
+        public float cd = -1f;
+
+        /// <summary>Built-in downforce area (m²) — what the SHELL does without
+        /// parts. Zero is the honest answer for anything that is not carrying an
+        /// authored wing, which is most things.</summary>
+        public float clA;
+
+        /// <summary>Wheels: whether the garage's style cycle offers it. False is
+        /// how a wheel ships as an unlock rather than as a choice.</summary>
+        public bool garageOffered = true;
+
+        // ---- cosmetics ------------------------------------------------------
+
+        /// <summary>Which mount it occupies — a <c>CosmeticSlot</c> name.
+        /// Cosmetics only.</summary>
+        public string cosmeticSlot = "Topper";
+
+        /// <summary>Drop tier — a <c>Rarity</c> name. It also decides the scrap
+        /// value and the shop price, which are NOT authored here: a new hat must
+        /// not be able to reprice the economy.</summary>
+        public string cosmeticRarity = "Common";
+
+        /// <summary>Which of the four worlds a themed crate draws it from — a
+        /// <c>CosmeticTheme</c> name.</summary>
+        public string cosmeticTheme = "Arcade";
+
+        /// <summary>The one-liner the crate reveal and the shop print.</summary>
+        public string description = "";
 
         // ---- where it came from -------------------------------------------
         public string sourceAssetName = "";
@@ -223,9 +267,19 @@ namespace AIHWSim.AssetTools
         /// 90; a bounding box does not survive anything else.</summary>
         public float authorYawDeg;
 
-        /// <summary>The uniform factor the proposal was computed from — kept so a
-        /// later reader can see 1/12.574 rather than having to divide.</summary>
-        public float proposedUniformScale = 1f;
+        /// <summary>
+        /// The single factor that puts this mesh on the game's scale — the
+        /// correction the old exporter baked in and this one does not.
+        ///
+        /// Renamed from <c>proposedUniformScale</c> once it stopped being a
+        /// proposal and started being what the manifest records and the game
+        /// divides by. <see cref="UnityEngine.Serialization.FormerlySerializedAsAttribute"/>
+        /// rather than a plain rename because a draft already on disk carries
+        /// the old name, and a silently defaulted 1.0 is a wrong number that
+        /// looks exactly like a right one.
+        /// </summary>
+        [UnityEngine.Serialization.FormerlySerializedAs("proposedUniformScale")]
+        public float authorScale = 1f;
 
         // ---- the payload ---------------------------------------------------
         public List<DraftMaterial> materials = new List<DraftMaterial>();
@@ -242,6 +296,12 @@ namespace AIHWSim.AssetTools
         public string overrideReason = "";
 
         // ---- lookups -------------------------------------------------------
+
+        /// <summary>The kind as the enum, or <see cref="AssetKind.Unassigned"/>
+        /// when the string names nothing — which the commit gate refuses on
+        /// rather than guessing.</summary>
+        public AssetKind Kind =>
+            System.Enum.TryParse(kind, out AssetKind k) ? k : AssetKind.Unassigned;
 
         public DraftMaterial Material(string materialName)
         {

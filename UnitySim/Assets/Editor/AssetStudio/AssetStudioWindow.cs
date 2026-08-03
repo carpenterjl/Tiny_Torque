@@ -239,7 +239,11 @@ namespace AIHWSim.AssetTools
 
             var label = new Rect(rect.x, rect.y, rect.width - 58f, rect.height);
             var kind = new Rect(rect.xMax - 58f, rect.y, 58f, rect.height);
-            EditorGUI.LabelField(label, r.label);
+            // A managed row says how it stands against its export, because
+            // "committed" and "committed, and Blender has moved on since" are the
+            // one distinction this list exists to make once assets start being
+            // owned here.
+            EditorGUI.LabelField(label, r.label + DriftMark(r));
             EditorGUI.LabelField(kind, KindShort(r.kind), EditorStyles.miniLabel);
 
             if (Event.current.type == EventType.MouseDown && rect.Contains(Event.current.mousePosition))
@@ -265,6 +269,14 @@ namespace AIHWSim.AssetTools
         private bool IsSelected(AssetRow r) =>
             (!string.IsNullOrEmpty(r.key) && r.key == _selectedKey)
             || (!string.IsNullOrEmpty(r.exportDir) && r.exportDir == _selectedExportDir);
+
+        private static string DriftMark(AssetRow r) => r.status != RowStatus.Managed
+            ? "" : r.Commit switch
+            {
+                CommitState.SourceDrifted => "   * drifted",
+                CommitState.ProjectEdited => "   * edited in project",
+                _ => "",
+            };
 
         private static string KindShort(AssetKind k) => k switch
         {

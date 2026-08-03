@@ -261,7 +261,7 @@ namespace AIHWSim.AssetTools
             float yaw = x.LengthRunsAlongX ? -90f : 0f;
 
             Undo.RecordObject(draft, "Asset Studio: propose scale and yaw");
-            draft.proposedUniformScale = scale;
+            draft.authorScale = scale;
             draft.authorYawDeg = yaw;
             draft.authorSize = x.AuthorSizeAfter(scale, yaw);
             EditorUtility.SetDirty(draft);

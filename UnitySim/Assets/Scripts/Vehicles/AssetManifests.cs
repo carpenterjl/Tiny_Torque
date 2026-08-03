@@ -150,6 +150,61 @@ namespace AIHWSim.Vehicles
         public float Axis(int axis) => axis == 0 ? x : axis == 1 ? y : z;
     }
 
+    /// <summary>
+    /// What a committed asset needs to become a <c>BodyCatalog</c> /
+    /// <c>WheelCatalog</c> row — the handful of facts a table has that an FBX
+    /// cannot carry.
+    ///
+    /// <b>Only <see cref="cd"/> and <see cref="clA"/> are genuinely authored</b>;
+    /// everything else about a row is derived (the key is the file name, the
+    /// paintable flag is whether any material claims the paint channel, the mesh
+    /// key IS the key). A drag coefficient is not derivable from geometry and the
+    /// game will not run without one, so it is asked for, with the same band
+    /// <c>[AKEY]</c> already holds the seed rows to: 0.15 is a teardrop, 1.2 a
+    /// flat plate broadside.
+    ///
+    /// Absent on a manifest for a cosmetic or a prop, which have no such row.
+    /// </summary>
+    [Serializable]
+    public sealed class AssetVehicleDef
+    {
+        /// <summary>Drag coefficient. −1 means "not authored", which is a refusal
+        /// to register rather than a silent 0.8: a body with no drag number is a
+        /// car whose top speed nobody decided.</summary>
+        public float cd = -1f;
+
+        /// <summary>Built-in downforce area (m²) — what the SHELL does without
+        /// parts. Wings and splitters add their own on top.</summary>
+        public float clA;
+
+        /// <summary>Whether the garage's wheel cycle offers this. Wheels only;
+        /// false is how a wheel ships as an unlock instead of a choice.</summary>
+        public bool garageOffered = true;
+    }
+
+    /// <summary>
+    /// What a committed cosmetic needs to become a <c>CosmeticItem</c>.
+    ///
+    /// <b>The decision C1 owed, taken:</b> a cosmetic that imports, validates and
+    /// previews but cannot be worn is a pipeline that stops one step short of the
+    /// thing it was built for, so the registry does grow a data-driven source. It
+    /// stays small on purpose — five authored fields and no prices. Scrap value
+    /// and shop cost come from <c>CosmeticCatalog.DupeValueFor</c> /
+    /// <c>DirectCostFor</c>, so a new hat cannot quietly reprice the economy, and
+    /// there is no cheat code, matching the 47 shipped cosmetics which have none.
+    ///
+    /// Strings for slot, rarity and theme rather than the enums they name, for the
+    /// reason <see cref="AssetManifest"/> gives about ordinals. Parsed by name.
+    /// </summary>
+    [Serializable]
+    public sealed class AssetCosmeticDef
+    {
+        public string slot = "";      // CosmeticSlot: Topper/Rim/Ornament/Bobble/Wing
+        public string rarity = "";    // Rarity: Common..Legendary
+        public string theme = "";     // CosmeticTheme: Arcade/Toybox/Enchanted/Haunted
+        public string description = "";
+    }
+
     /// <summary>What the exporter said, carried forward so it stays visible after
     /// the export folder is gone.</summary>
     [Serializable]
@@ -185,6 +240,11 @@ namespace AIHWSim.Vehicles
         public string key = "";
         public string kind = "";
 
+        /// <summary>Picker text. Free to diverge from <see cref="key"/> — that is
+        /// the point of a string key: renaming what a player reads is not a
+        /// save-format change. Empty falls back to the key.</summary>
+        public string label = "";
+
         /// <summary>"Manifest" (materials built from the numbers below) or
         /// "Verbatim" (the FBX keeps its own <c>.mat</c> assets and this loader
         /// builds nothing). R4 ships the second; until then a Verbatim manifest
@@ -193,10 +253,36 @@ namespace AIHWSim.Vehicles
 
         public AssetSourceDef source;
 
-        /// <summary>The asset's real measured extents in the game's axes, AFTER
-        /// <see cref="authorYawDeg"/> — i.e. the divisor a design's bodySize is a
-        /// ratio against, the per-asset answer to
-        /// <c>CarVehicle.BodyMeshAuthorSize</c>'s single nominal one.</summary>
+        /// <summary>
+        /// The single factor that puts this mesh on the game's scale — the
+        /// correction the OLD exporter baked in and the current one does not.
+        ///
+        /// <b>Uniform, and that is the whole point.</b> Every arcade shell was
+        /// built by scaling to length 0.420 with one factor, which is why
+        /// <c>PartModelValidator</c> pins those bodies' length and leaves their
+        /// width free. A per-axis fit would change proportions the original
+        /// pipeline never touched.
+        ///
+        /// Applied at LOAD rather than baked into <c>ModelImporter.globalScale</c>,
+        /// so the imported FBX keeps agreeing byte for byte with the file the
+        /// exporter wrote — which is what makes the drift check a comparison of
+        /// two files rather than of a file against a remembered import setting.
+        /// </summary>
+        public float authorScale = 1f;
+
+        /// <summary>
+        /// The asset's real measured extents in the game's axes, AFTER
+        /// <see cref="authorScale"/> and <see cref="authorYawDeg"/>.
+        ///
+        /// <b>Recorded, not applied.</b> It is what the mesh MEASURES, and the
+        /// validator holds it to within 2 mm of the imported prefab; it is not
+        /// the divisor a design's bodySize is a ratio against. That divisor is
+        /// <c>CarVehicle.BodyMeshAuthorSize</c>, the same nominal box every arcade
+        /// shell uses, and it has to stay nominal: dividing by the real extents
+        /// would stretch a correctly proportioned car to fill a box no shell
+        /// actually fills — 0.20 wide against a real 0.1853 is a 1.08× stretch,
+        /// undoing the uniform scale above for no reason.
+        /// </summary>
         public float[] authorSize;
 
         /// <summary>The quarter turn that puts the long axis on +Z. A multiple of
@@ -208,6 +294,34 @@ namespace AIHWSim.Vehicles
         public AssetMaterialDef[] materials;
         public AssetObjectDef[] objects;
         public AssetNotesDef notes;
+
+        /// <summary>
+        /// The catalogue row this asset registers as, for a body or a wheel.
+        ///
+        /// <b>Always present, and <see cref="kind"/> decides whether it means
+        /// anything.</b> <c>JsonUtility</c> writes a null class field as <c>{}</c>
+        /// and reads <c>{}</c> back as a defaulted object, so "the block is
+        /// absent" is not a distinction this format can carry — the same reason
+        /// <see cref="AssetMaterialDef.baked"/> exists rather than trusting a
+        /// zero. A cosmetic's vehicle block is defaults nobody reads.
+        /// </summary>
+        public AssetVehicleDef vehicle;
+
+        /// <summary>The <c>CosmeticItem</c> this asset registers as. Read only
+        /// when <see cref="kind"/> says Cosmetic; see <see cref="vehicle"/> for
+        /// why it is not simply null otherwise.</summary>
+        public AssetCosmeticDef cosmetic;
+
+        /// <summary>
+        /// MD5 of the FBX as the commit pipeline copied it in.
+        ///
+        /// Distinct from <c>source.fbxMd5</c>, which is what the EXPORT hashed at
+        /// commit time. The two are equal the moment a commit finishes and answer
+        /// different questions afterwards: source drift means Blender moved on,
+        /// and this one moving means somebody edited the copy under
+        /// <c>Resources/</c> — the change a re-commit would silently discard.
+        /// </summary>
+        public string committedHash = "";
 
         /// <summary>Where this was loaded from — a Resources path
         /// ("PartModels/body_police_asset") at runtime, an Assets/ path when the
@@ -222,7 +336,26 @@ namespace AIHWSim.Vehicles
 
         public bool IsVerbatim => materialMode == AssetMaterialModes.Verbatim;
 
+        /// <summary>What a picker prints. The key when nothing better was
+        /// authored, which is always readable and never empty.</summary>
+        public string Label => string.IsNullOrWhiteSpace(label) ? key : label;
+
         public Vector3 AuthorSize => AssetManifests.ToVector(authorSize);
+
+        /// <summary>True when any material claims the paint channel — i.e.
+        /// whether the garage's paint mode has anywhere to land. Derived rather
+        /// than authored twice: a body row's <c>paintable</c> flag and the
+        /// material that would take the tint are the same fact.</summary>
+        public bool HasPaintChannel
+        {
+            get
+            {
+                if (materials == null) return false;
+                foreach (AssetMaterialDef m in materials)
+                    if (m != null && m.paintChannel) return true;
+                return false;
+            }
+        }
 
         public int MaterialCount => materials?.Length ?? 0;
         public int ObjectCount => objects?.Length ?? 0;
@@ -282,6 +415,24 @@ namespace AIHWSim.Vehicles
     {
         public const string Manifest = "Manifest";
         public const string Verbatim = "Verbatim";
+    }
+
+    /// <summary>
+    /// What an asset IS, as the manifest spells it — which decides which
+    /// registry a committed key joins and which geometry contract it is held to.
+    ///
+    /// These are the names Asset Studio's own <c>AssetKind</c> enum produces, and
+    /// they are here rather than there because the runtime has to read a
+    /// manifest's kind and cannot see the editor assembly. One vocabulary, two
+    /// spellings of it, checked against each other by <c>[AST]</c>.
+    /// </summary>
+    public static class AssetKinds
+    {
+        public const string CarBody = "CarBody";
+        public const string Wheel = "Wheel";
+        public const string Cosmetic = "Cosmetic";
+        public const string Prop = "Prop";
+        public const string Fitting = "Fitting";
     }
 
     /// <summary>
@@ -385,6 +536,8 @@ namespace AIHWSim.Vehicles
             m.spec ??= new AssetSpecDef();
             m.source ??= new AssetSourceDef();
             m.notes ??= new AssetNotesDef();
+            m.vehicle ??= new AssetVehicleDef();
+            m.cosmetic ??= new AssetCosmeticDef();
             return m;
         }
 
