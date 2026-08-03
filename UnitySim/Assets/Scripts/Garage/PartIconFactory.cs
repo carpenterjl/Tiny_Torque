@@ -31,8 +31,8 @@ namespace AIHWSim.Garage
         {
             return key switch
             {
-                "wheel"         => p => PartVisualFactory.BuildWheelViz(p, 0.033f, false, -1f),
-                "wheel_powered" => p => PartVisualFactory.BuildWheelViz(p, 0.033f, true, -1f),
+                "wheel"         => p => PartVisualFactory.BuildWheelViz(p, 0.033f, false, -1f, WheelCatalog.Default),
+                "wheel_powered" => p => PartVisualFactory.BuildWheelViz(p, 0.033f, true, -1f, WheelCatalog.Default),
                 "camera"        => p => PartVisualFactory.BuildCameraViz(p),
                 "tof"           => p => PartVisualFactory.BuildTofViz(p),
                 "encoder"       => p => PartVisualFactory.BuildEncoderViz(p),

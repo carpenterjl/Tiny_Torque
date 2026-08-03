@@ -38,8 +38,14 @@ namespace AIHWSim.Vehicles
         public float loadSensitivity;   // grip ∝ (Fz/Fz0)^-s; typical 0.15
         public float balloonPct;        // max radius growth % at high wheel speed
 
-        // Cosmetic wheel/tyre mesh style (0 slick / 1 knobby / 2 rally).
+        // Cosmetic wheel/tyre mesh style (0 slick / 1 knobby / 2 rally), and the
+        // WheelCatalog key that outranks it. Both copied unresolved off the
+        // design; see CarVehicle.bodyKey for why the pair travels together.
         public int wheelStyle;
+        public string wheelKey;
+
+        /// <summary>Mesh, author radius and finish for this corner. Never null.</summary>
+        public WheelDef Wheel => WheelCatalog.Resolve(wheelKey, wheelStyle);
 
         // ---- authored scale-dependent constants (see WheelSpec for the why) ----
         // Runtime mirrors of the design fields. A 0 sentinel means "use the

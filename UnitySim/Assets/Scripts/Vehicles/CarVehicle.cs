@@ -488,7 +488,7 @@ namespace AIHWSim.Vehicles
         /// what the wheel was built with are the same number only as long as
         /// nothing in between drops it.</summary>
         public int WheelStyle(int i) =>
-            (i >= 0 && i < _wheels.Count) ? _wheels[i].cfg.wheelStyle : 0;
+            (i >= 0 && i < _wheels.Count) ? _wheels[i].cfg.Wheel.legacy : 0;
 
         /// <summary>The "BodyMesh" holder — the primitive builders' parent, and
         /// the frame the shell is measured in.</summary>
@@ -1349,7 +1349,7 @@ namespace AIHWSim.Vehicles
             var holder = new GameObject(name + "_Viz").transform;
             holder.SetParent(transform, false);
             float inboardSign = cfg.localPos.x > 0.001f ? -1f : 1f;
-            PartVisualFactory.BuildWheelViz(holder, cfg.radius, cfg.powered, inboardSign, cfg.wheelStyle);
+            PartVisualFactory.BuildWheelViz(holder, cfg.radius, cfg.powered, inboardSign, cfg.Wheel);
 
             // Visible strut spanning body mount → hub (only when a strut length is set).
             Transform strut = null;

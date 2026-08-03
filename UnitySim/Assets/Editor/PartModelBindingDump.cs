@@ -150,8 +150,9 @@ namespace AIHWSim.EditorTools
             for (int style = 0; style < WheelStyles; style++)
             {
                 var holder = Holder(parent, "wheel");
-                PartVisualFactory.BuildWheelViz(holder, PartVisualFactory.AuthorRadiusFor(style),
-                                                powered: true, inboardSign: -1f, style: style);
+                WheelDef wdef = WheelCatalog.ByLegacy(style);
+                PartVisualFactory.BuildWheelViz(holder, wdef.authorRadius,
+                                                powered: true, inboardSign: -1f, def: wdef);
                 rows += Emit(sb, $"wheel:style{style}", holder, null);
                 UnityEngine.Object.DestroyImmediate(holder.gameObject);
             }

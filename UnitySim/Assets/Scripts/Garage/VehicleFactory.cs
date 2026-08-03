@@ -134,6 +134,7 @@ namespace AIHWSim.Garage
                     loadSensitivity = w.loadSensitivity,
                     balloonPct = w.balloonPct,
                     wheelStyle = w.wheelStyle,
+                    wheelKey = w.wheelKey,
                     unsprungMassKg = w.unsprungMassKg,
                     spinInertiaKgM2 = w.spinInertiaKgM2,
                     brushEps = w.brushEps,

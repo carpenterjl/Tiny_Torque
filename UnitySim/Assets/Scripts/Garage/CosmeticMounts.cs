@@ -155,7 +155,7 @@ namespace AIHWSim.Garage
                 // cosRim, so this is a shape that never renders — recorded here
                 // rather than left as an unexplained hazard for whoever tries.
                 go.transform.localScale = Vector3.one
-                    * (radius / PartVisualFactory.AuthorRadiusFor(w?.wheelStyle ?? 0));
+                    * (radius / (w?.Wheel ?? WheelCatalog.Default).authorRadius);
                 // BuildWheelViz's rule, mirrored exactly: on the side where +X
                 // points inboard the wheel is spun half a turn, and the rim has
                 // to come with it or it ends up inside the car.
@@ -202,11 +202,11 @@ namespace AIHWSim.Garage
             "tooth", "gum", "tongue", "maw", "sclera", "pupil", "iris", "em_spec",
         };
 
-        /// <summary>Public so <c>[AKEY]</c> can check <c>BodyCatalog</c>'s
-        /// transcription against the branch that is still the live one.</summary>
-        public static bool HasFoldedAppendages(BodyShape s) =>
-            s == BodyShape.Rattle || s == BodyShape.Redline ||
-            s == BodyShape.Highwing || s == BodyShape.Autopia;
+        // HasFoldedAppendages was a four-name test here until K3d. It is now
+        // BodyDef.foldedAppendages, read below — the last of the six switches
+        // BodyCatalog was transcribed from. The TOKENS above stay code: they
+        // name pieces of geometry, not bodies, and a shell either has a piece
+        // called "tongue" or it does not.
 
         /// <summary>
         /// The body shell's extent in car-local space. Reads the renderers under
@@ -222,7 +222,7 @@ namespace AIHWSim.Garage
             var holder = car.Find("BodyMesh");
             if (holder != null)
             {
-                bool filtered = design != null && HasFoldedAppendages(design.bodyShape);
+                bool filtered = design != null && design.Body.foldedAppendages;
                 var b = filtered ? ShellBounds(car, holder) : LocalBounds(car, holder);
                 if (b.size.sqrMagnitude > 1e-8f) return b;
             }

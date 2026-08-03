@@ -393,35 +393,11 @@ namespace AIHWSim.Vehicles
         /// </summary>
         public static Material TyreMaterial => Tire;
 
-        /// <summary>Map a wheel-style index to its authored FBX key. Styles
-        /// 6-8 are FINISHES, not meshes: the slick re-tinted chrome/gold/neon
-        /// (append-only ints, so old saves never shift).
-        ///
-        /// Public so <c>[AKEY]</c> can check <c>WheelCatalog</c>'s transcription
-        /// against the switch while the switch is still the live path.</summary>
-        public static string WheelStyleKey(int style) => style switch
-        {
-            1 => "knobby",
-            2 => "rally",
-            3 => "coupe",     // TinyTorque gold-rim street tyre
-            4 => "baja",      // TinyTorque orange-rim balloon tyre
-            5 => "patrol",    // TinyTorque chrome steelie
-            6 => "slick",     // chrome finish (unlockable)
-            7 => "slick",     // gold finish (unlockable)
-            8 => "slick",     // neon finish (unlockable)
-            9 => "rattle",    // rusted steelie
-            10 => "redline",  // gold-faced race wheel
-            11 => "highwing", // polished five-spoke
-            12 => "autopia",  // whitewall on a chrome hubcap
-            // The Tiguan's two, front and rear. They differ ONLY in the brake
-            // disc — vented 340x30 front against solid 300x12 rear — which,
-            // once the calipers are dropped, is the only brake hardware still
-            // visible through the spokes. One style for both would put a front
-            // disc on both rear corners.
-            13 => "tiguan",
-            14 => "tiguan_r",
-            _ => "slick",
-        };
+        // WheelStyleKey lived here until K3c: a switch from the persisted int to
+        // an FBX name, with three styles deliberately mapping to the slick
+        // because they are FINISHES over it. WheelCatalog.meshKey says the same
+        // thing next to the finish that explains it, which is the arrangement
+        // that stops a fourth finish being added to one and not the other.
 
         /// <summary>
         /// The radius at which a wheel mesh renders UNSCALED.
@@ -441,35 +417,16 @@ namespace AIHWSim.Vehicles
         /// </summary>
         public const float TiguanWheelAuthorRadius = 0.349f;
 
-        public static float AuthorRadiusFor(int wheelStyle) =>
-            IsFullScale(wheelStyle) ? TiguanWheelAuthorRadius : WheelAuthorRadius;
-
-        /// <summary>
-        /// Whether this style is one of the Tiguan's two full-scale wheels.
-        ///
-        /// One test, three consumers — the author radius above, the token table
-        /// and the finish pass in <see cref="BuildWheelViz"/> — because they are
-        /// one fact: this wheel came from a different pipeline. Writing it out
-        /// three times is how two of them end up agreeing and the third does not.
-        /// </summary>
-        public static bool IsFullScale(int wheelStyle) =>
-            wheelStyle == 13 || wheelStyle == 14;
-
-        /// <summary>
-        /// The rim finish a style applies over the slick, or
-        /// <see cref="WheelFinish.None"/>.
-        ///
-        /// 6-8 are FINISHES; 9-12 are their own authored meshes with their own
-        /// authored materials and must fall through untouched — a bare
-        /// "style &lt; 6" would have painted all four Legendary wheels neon pink.
-        /// </summary>
-        public static WheelFinish FinishFor(int wheelStyle) => wheelStyle switch
-        {
-            6 => WheelFinish.Chrome,
-            7 => WheelFinish.Gold,
-            8 => WheelFinish.Neon,
-            _ => WheelFinish.None,
-        };
+        // AuthorRadiusFor, IsFullScale and FinishFor were the other three
+        // style switches, and K1 had already collapsed "style 13 or 14" out of
+        // three copies into one. K3c finishes the job: they are now
+        // WheelDef.authorRadius, .fullScale and .finish, read straight off the
+        // row. The reasoning each carried lives on those fields.
+        //
+        // FinishFor is the one worth remembering. It replaced a "style < 6"
+        // range test, which would have painted all four Legendary wheels neon
+        // pink the moment they shipped — 9-12 are their own authored meshes
+        // with their own authored materials and must fall through untouched.
 
         // Neon rim: hot-pink emissive, the one wheel that glows in the dark maps.
         private static Material _neonRim;
@@ -591,9 +548,8 @@ namespace AIHWSim.Vehicles
         /// <summary>Swap the rim-family materials for a finish (styles 6-8).
         /// Works on both the authored meshes (token-named pieces) and the
         /// primitive fallback (shared Rim/Hub/Stud materials).</summary>
-        private static void ApplyWheelFinish(GameObject root, int style)
+        private static void ApplyWheelFinish(GameObject root, WheelFinish which)
         {
-            WheelFinish which = FinishFor(style);
             if (which == WheelFinish.None) return;
             Material finish = which == WheelFinish.Chrome ? Chrome
                             : which == WheelFinish.Gold ? Gold : NeonRim;
@@ -617,20 +573,23 @@ namespace AIHWSim.Vehicles
         /// Build a stylized wheel inside <paramref name="holder"/>. The holder's
         /// local X is the axle. <paramref name="inboardSign"/> (±1) selects which
         /// axle side the motor can sits on so it faces the vehicle body.
-        /// <paramref name="style"/> picks an authored tyre mesh (0 slick / 1 knobby /
-        /// 2 rally); when the mesh is absent the primitive tyre is built instead.
+        /// <paramref name="def"/> is the catalogue row: its mesh, its author
+        /// radius, its finish. When the mesh is absent the primitive tyre is
+        /// built instead and the finish still applies to it.
         /// </summary>
-        public static void BuildWheelViz(Transform holder, float radius, bool powered, float inboardSign, int style = 0)
+        public static void BuildWheelViz(Transform holder, float radius, bool powered,
+            float inboardSign, WheelDef def)
         {
             radius = Mathf.Max(0.01f, radius);
 
             // Authored-mesh path: instantiate the tyre+rim FBX, scale to the target
             // radius, and let the shared materials drive its look. Axle stays +X so
             // ballooning (holder Y/Z rescale) and WheelCollider spin remain correct.
-            var mesh = PartMeshLibrary.TryInstantiate("wheel_" + WheelStyleKey(style), holder);
+            def ??= WheelCatalog.Default;
+            var mesh = PartMeshLibrary.TryInstantiate(def.meshKey, holder);
             if (mesh != null)
             {
-                mesh.transform.localScale = Vector3.one * (radius / AuthorRadiusFor(style));
+                mesh.transform.localScale = Vector3.one * (radius / def.authorRadius);
 
                 // The wheel is authored with its rim face toward +X and the brake
                 // disc behind it, so on the axle side where +X points inboard it
@@ -651,10 +610,10 @@ namespace AIHWSim.Vehicles
                 // instead: its pieces carry "tig*" names that match nothing in
                 // WheelTokens, so it would otherwise take the tyre fallback on
                 // every piece and arrive as a solid black wheel.
-                bool tiguan = IsFullScale(style);
+                bool tiguan = def.fullScale;
                 PartMeshLibrary.AssignByName(mesh, tiguan ? null : Tire,
                                              tiguan ? TiguanTokens : WheelTokens);
-                if (!tiguan) ApplyWheelFinish(mesh, style);
+                if (!tiguan) ApplyWheelFinish(mesh, def.finish);
                 if (powered) BuildMotorCan(holder, radius, inboardSign);
                 return;
             }
@@ -691,7 +650,7 @@ namespace AIHWSim.Vehicles
                 Vector3.zero, new Vector3(0f, 0f, 90f),
                 new Vector3(radius * 0.42f, halfWidth + radius * 0.06f, radius * 0.42f));
 
-            ApplyWheelFinish(holder.gameObject, style);
+            ApplyWheelFinish(holder.gameObject, def.finish);
             if (powered) BuildMotorCan(holder, radius, inboardSign);
         }
 

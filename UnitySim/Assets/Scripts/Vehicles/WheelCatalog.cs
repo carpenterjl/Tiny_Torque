@@ -122,6 +122,12 @@ namespace AIHWSim.Vehicles
             return d;
         }
 
+        /// <summary>The slick — what a wheel is when nothing said otherwise.
+        /// Named rather than written as <c>All[0]</c> at each site, because
+        /// "index zero" is not a reason and this is a choice three callers make
+        /// (the part ghost, the palette icon, and any corrupt save).</summary>
+        public static WheelDef Default => All[0];
+
         private static Dictionary<string, WheelDef> _byId;
 
         /// <summary>The entry for a save key, or null.</summary>

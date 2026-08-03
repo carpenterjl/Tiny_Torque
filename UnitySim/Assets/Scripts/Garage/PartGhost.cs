@@ -28,7 +28,7 @@ namespace AIHWSim.Garage
             g.Root.layer = PartVisualFactory.VizLayer;
             var holder = new GameObject("viz").transform;
             holder.SetParent(g.Root.transform, false);
-            PartVisualFactory.BuildWheelViz(holder, radius, powered, -1f);
+            PartVisualFactory.BuildWheelViz(holder, radius, powered, -1f, WheelCatalog.Default);
             g.Finish();
             return g;
         }

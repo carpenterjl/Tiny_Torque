@@ -113,9 +113,11 @@ namespace AIHWSim.EditorTools
                 // that proves nothing; deleting it is the honest move, not
                 // rewriting it into something that still passes.
 
-                bool liveFolded = CosmeticMounts.HasFoldedAppendages(d.legacy);
-                if (d.foldedAppendages != liveFolded)
-                    why += $" foldedAppendages {d.foldedAppendages} != HasFoldedAppendages {liveFolded}";
+                // foldedAppendages lost its second source at K3d. Only the
+                // internal rule is left, and it is a real one: a body with no
+                // mesh has no wings or booms to fold out of the mount box.
+                if (d.foldedAppendages && d.meshKey == null)
+                    why += " foldedAppendages on a primitive body";
 
                 // Nominal size: the constant for every arcade shell, and the
                 // reference car's own published box for the one that bypasses it.
@@ -177,18 +179,25 @@ namespace AIHWSim.EditorTools
                 if (WheelCatalog.ById(d.id) != d) why += " ById does not resolve to this row";
                 if (WheelCatalog.ByLegacy(d.legacy) != d) why += " ByLegacy does not resolve to this row";
 
-                string liveKey = "wheel_" + PartVisualFactory.WheelStyleKey(d.legacy);
-                if (d.meshKey != liveKey) why += $" meshKey '{d.meshKey}' != '{liveKey}'";
+                // K3c retired the four transcription checks here — meshKey,
+                // authorRadius, finish and fullScale were compared against
+                // WheelStyleKey, AuthorRadiusFor, FinishFor and IsFullScale, all
+                // four of which are now this table. What is left is the internal
+                // consistency, which is where the real rules always lived.
 
-                float liveRadius = PartVisualFactory.AuthorRadiusFor(d.legacy);
-                if (!Same(d.authorRadius, liveRadius))
-                    why += $" authorRadius {N(d.authorRadius)} != AuthorRadiusFor {N(liveRadius)}";
+                // Two author radii exist and no third is meaningful: 33 mm is
+                // what the exporter rescales every arcade tyre to, 0.349 is the
+                // Tiguan's loaded centre height. A row inventing a number would
+                // render a wheel at some other size with no other symptom.
+                bool knownRadius = Same(d.authorRadius, PartVisualFactory.WheelAuthorRadius)
+                                || Same(d.authorRadius, PartVisualFactory.TiguanWheelAuthorRadius);
+                if (!knownRadius) why += $" authorRadius {N(d.authorRadius)} is neither author radius";
 
-                WheelFinish liveFinish = PartVisualFactory.FinishFor(d.legacy);
-                if (d.finish != liveFinish) why += $" finish {d.finish} != FinishFor {liveFinish}";
-
-                bool liveFull = PartVisualFactory.IsFullScale(d.legacy);
-                if (d.fullScale != liveFull) why += $" fullScale {d.fullScale} != IsFullScale {liveFull}";
+                // fullScale IS "authored 1:1", so it has to be the one that
+                // takes the full-scale radius. This is the check that used to be
+                // three copies of `style == 13 || style == 14` agreeing.
+                if (d.fullScale != Same(d.authorRadius, PartVisualFactory.TiguanWheelAuthorRadius))
+                    why += $" fullScale {d.fullScale} disagrees with authorRadius {N(d.authorRadius)}";
 
                 // A finish is a re-tint of somebody else's mesh, and the two must
                 // agree about which: a finish whose id claimed a mesh key, or a
@@ -206,21 +215,18 @@ namespace AIHWSim.EditorTools
                 else { Debug.LogError($"{Tag} FAIL wheel:{d.id} -{why}"); fail++; }
             }
 
-            // WheelStyleKey maps anything it does not know to the slick, so it
-            // cannot say where the styles stop. The table can, and this is the
-            // check that catches a fifteenth style added to the switch and
-            // forgotten here: one past the end must still be unknown to the
-            // table AND must resolve to the slick.
+            // One past the end must be unknown to the table and must still
+            // RESOLVE, to the slick. The second half is the live rule now that
+            // WheelStyleKey is gone: a corrupt save renders rather than throwing.
             int past = WheelCatalog.All.Length;
             if (WheelCatalog.ByLegacy(past) != null)
             {
                 Debug.LogError($"{Tag} FAIL wheel:<range> - style {past} has a row past the end");
                 fail++;
             }
-            if (PartVisualFactory.WheelStyleKey(past) != "slick")
+            if (WheelCatalog.Resolve("", past) != WheelCatalog.Default)
             {
-                Debug.LogError($"{Tag} FAIL wheel:<range> - style {past} is a real style in " +
-                               "WheelStyleKey but has no catalogue row");
+                Debug.LogError($"{Tag} FAIL wheel:<range> - style {past} does not resolve to the slick");
                 fail++;
             }
 
