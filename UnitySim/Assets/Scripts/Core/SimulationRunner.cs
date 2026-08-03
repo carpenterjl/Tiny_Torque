@@ -173,6 +173,58 @@ namespace AIHWSim.Core
         }
 
         /// <summary>
+        /// Re-resolve everything <see cref="Start"/> cached, after the car this
+        /// runner drives has been replaced underneath it.
+        ///
+        /// <b>Assigning the fields is not enough, and that is the whole reason
+        /// this exists.</b> Start caches four things that outlive a field write:
+        /// the three interface casts (a runner holding a cast to a destroyed
+        /// component steps a corpse), the <c>VehicleReset</c> subscription (the
+        /// old car's event, which will never fire again), the sensor rig's
+        /// manifest, and the telemetry channels, which close over the OLD
+        /// vehicle and would keep logging its last values forever.
+        ///
+        /// Not called by anything on the normal path — a car is built once and
+        /// lives for the session. <c>CarRebuilder</c> calls it, and only in the
+        /// editor-tuning case where a build-time value changed.
+        ///
+        /// Deliberately does NOT re-run <c>ConfigureRates</c> (the rate did not
+        /// change and re-writing the global step mid-session is exactly what
+        /// PhysicsRateAuthority exists to notice), <c>LoadController</c> (a
+        /// native DLL holds its own state and reloading it under a running
+        /// mission is a different operation with its own button), or
+        /// <c>EnableLogging</c> (a CSV already open should keep its column set;
+        /// CsvLogger.Begin snapshots channels once and a second Begin would
+        /// start a second file mid-run).
+        /// </summary>
+        /// <param name="previous">The vehicle this runner was driving before the
+        /// caller reassigned <see cref="vehicleBehaviour"/>, so its
+        /// <c>VehicleReset</c> subscription can be dropped. Taken as an argument
+        /// rather than read off the field because by the time Rebind is called
+        /// the field already holds the NEW car — unsubscribing from that would
+        /// be a no-op that looks like cleanup.</param>
+        public void Rebind(CarVehicle previous = null)
+        {
+            if (previous != null) previous.VehicleReset -= OnVehicleReset;
+
+            _vehicle = vehicleBehaviour as IControlledVehicle;
+            if (_vehicle == null)
+                Debug.LogError("[SimRunner] Rebind: vehicleBehaviour does not implement "
+                               + "IControlledVehicle.");
+            _manualDriver = inputBehaviour as IManualDriver;
+            _setpointSource = inputBehaviour as ISetpointSource;
+            SyncAssistGate();
+
+            if (sensorRig != null)
+                sensorRig.Initialize(vehicleBehaviour as CarVehicle, vehicleBehaviour.transform);
+            if (vehicleBehaviour is CarVehicle carForReset)
+                carForReset.VehicleReset += OnVehicleReset;
+
+            RegisterChannels();
+            ConfigureGraph();
+        }
+
+        /// <summary>
         /// Begin CSV logging now if it isn't already running. Safe to call after
         /// Start() — the Hub and channels already exist. The pause-menu Settings
         /// toggle calls this so logging can start after the menu closes.

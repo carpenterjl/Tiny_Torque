@@ -1038,6 +1038,18 @@ namespace AIHWSim.Core
                 lapTimer = _lapTimer,
             };
             AttachHandlingFloor(rig);
+#if UNITY_EDITOR
+            // The live-tuning panel, on the solo human's car only. Bots have no
+            // Inspector anyone opens and split-screen has no single "the car";
+            // in a player build this whole block is gone, along with the
+            // component's change detection.
+            if (!botOrSplit)
+            {
+                var tuner = built.car.gameObject.AddComponent<LiveCarTuner>();
+                tuner.design = design;
+                tuner.rig = rig;
+            }
+#endif
             return rig;
         }
 

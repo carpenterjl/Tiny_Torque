@@ -1268,6 +1268,12 @@ namespace AIHWSim.Vehicles
             _spawnCaptured = true;
         }
 
+        /// <summary>The respawn pose this car will return to. Exposed so a car
+        /// that is REPLACED mid-session (the editor tuner's rebuild) can hand
+        /// its successor the same start line rather than the pose it happened to
+        /// be standing in when a slider moved.</summary>
+        public (Vector3 pos, Quaternion rot) Spawn => (_spawnPos, _spawnRot);
+
         /// <summary>Set an explicit respawn pose (the start-line spawn point).</summary>
         public void SetSpawn(Vector3 pos, Quaternion rot)
         {
@@ -2399,12 +2405,70 @@ namespace AIHWSim.Vehicles
             }
         }
 
-        public IReadOnlyList<TunableParam> GetTunables() => new List<TunableParam>
+        /// <summary>
+        /// The channels a slider may move while the car is driving.
+        ///
+        /// Every one of these is read fresh by the physics step, so a change
+        /// lands within one tick and nothing has to be rebuilt. Values consumed
+        /// ONCE when the car was built — suspension rates, mass, wheel geometry,
+        /// motor parameters — are deliberately absent: writing them here would
+        /// move a number that nothing reads again and look like a tuning knob
+        /// that does nothing. Those live on <c>LiveCarTuner</c>, which rebuilds.
+        ///
+        /// <b>The ranges scale with the car, and that is not cosmetic.</b> The
+        /// brake slider used to be a fixed [0.1, 3] N·m, which is a sensible
+        /// window for a 2.5 kg RC car and a catastrophe for the 1500 kg
+        /// reference Tiguan, whose brake is 2400 N·m — one nudge would have
+        /// clamped it to 3 and quietly invalidated every braking measurement
+        /// afterwards. PhysicsDebugBootstrap's answer was to ship no pause menu
+        /// at all, and DebugVehicleSpawner's was a hideTuningSliders flag. A
+        /// range expressed as a multiple of the car's OWN authored value is the
+        /// answer that works for both, and it retires the reason those two
+        /// workarounds exist.
+        /// </summary>
+        public IReadOnlyList<TunableParam> GetTunables()
         {
-            new TunableParam("Steer rate (deg/s)",  60f, 1200f, () => steerRateDegPerSec,  v => steerRateDegPerSec = v),
-            new TunableParam("Brake torque (N·m)", 0.1f,    3f, () => maxBrakeTorque,      v => maxBrakeTorque = v),
-            new TunableParam("Aero mult",            0f,    3f, () => aeroMult,            v => aeroMult = v),
-            new TunableParam("Grip (side)",        0.5f,    3f, () => _gripStiffness,      SetGrip),
-        };
+            // Around the car's own authored value, floored so a design that
+            // authored a zero (a legal "use the legacy expression" sentinel on
+            // several of these) still gets a usable slider rather than [0, 0].
+            float Span(float authored, float floor) => Mathf.Max(floor, authored);
+
+            return new List<TunableParam>
+            {
+                new TunableParam("Steer rate (deg/s)", 60f, 1200f,
+                    () => steerRateDegPerSec, v => steerRateDegPerSec = v),
+                new TunableParam("Brake torque (N·m)",
+                    0.1f * Span(maxBrakeTorque, 0.8f), 4f * Span(maxBrakeTorque, 0.8f),
+                    () => maxBrakeTorque, v => maxBrakeTorque = v),
+                new TunableParam("Handbrake (N·m)",
+                    0.1f * Span(handbrakeTorque, 1.2f), 4f * Span(handbrakeTorque, 1.2f),
+                    () => handbrakeTorque, v => handbrakeTorque = v),
+                new TunableParam("Aero mult", 0f, 3f, () => aeroMult, v => aeroMult = v),
+                new TunableParam("Anti-roll (N·m/m)",
+                    0f, 4f * Span(antiRoll, 8f), () => antiRoll, v => antiRoll = v),
+                new TunableParam("Ackermann %", 0f, 100f,
+                    () => ackermannPct, v => ackermannPct = v),
+                new TunableParam("Grip (side)", 0.5f, 3f, () => _gripStiffness, SetGrip),
+                // The assists, as this car's own 0-to-1 levels. What each one
+                // DOES lives in AssistTuning, which a scene tunes through its
+                // own asset — these say how much of it this driver asked for.
+                //
+                // One caveat that will otherwise look like a bug: with arcade
+                // handling ON, HandlingFloor re-applies a floor every frame with
+                // a MAX per channel, so raising one of these sticks and lowering
+                // it below the floor snaps back. Turn arcade handling off to
+                // tune an assist downwards.
+                new TunableParam("Assist: steer", 0f, 1f,
+                    () => assists.steer, v => assists.steer = v),
+                new TunableParam("Assist: stability", 0f, 1f,
+                    () => assists.stability, v => assists.stability = v),
+                new TunableParam("Assist: traction", 0f, 1f,
+                    () => assists.traction, v => assists.traction = v),
+                new TunableParam("Assist: ABS", 0f, 1f,
+                    () => assists.abs, v => assists.abs = v),
+                new TunableParam("Assist: launch", 0f, 1f,
+                    () => assists.launch, v => assists.launch = v),
+            };
+        }
     }
 }
