@@ -1,0 +1,687 @@
+{
+    "schema": 1,
+    "key": "body_patrol",
+    "kind": "CarBody",
+    "label": "Patrol",
+    "materialMode": "Manifest",
+    "source": {
+        "assetName": "POLICE",
+        "sourceBlend": "E:\\EE Projects\\AI_3D_Modeling\\TinyTorque_RC\\models\\TinyTorque_police.blend",
+        "exportedAtUtc": "2026-08-03T05:50:30.8132598Z",
+        "fbxMd5": "DE-62-EA-C5-1F-E9-EE-87-BB-05-BA-C5-96-FA-37-E3"
+    },
+    "authorScale": 0.07953215390443802,
+    "authorSize": [
+        0.18530991673469544,
+        0.09724424034357071,
+        0.41999998688697817
+    ],
+    "authorYawDeg": 90.0,
+    "authorOffset": [
+        0.0,
+        -0.75,
+        0.0
+    ],
+    "spec": {
+        "x": -1.0,
+        "y": -1.0,
+        "z": 0.41999998688697817,
+        "maxTris": 20500,
+        "specSource": "measured"
+    },
+    "materials": [
+        {
+            "name": "M_Police_Chrome",
+            "baked": false,
+            "paintChannel": false,
+            "rgb": [
+                0.8799999952316284,
+                0.8899999856948853,
+                0.9100000262260437
+            ],
+            "metallic": 1.0,
+            "smoothness": 0.9399999976158142,
+            "alpha": 1.0,
+            "emission": [
+                0.0,
+                0.0,
+                0.0
+            ],
+            "emissionStrength": 0.0,
+            "mapAlbedo": "PartModels/body_patrol/M_Police_Chrome_BaseColor",
+            "mapMetallicSmoothness": "PartModels/body_patrol/M_Police_Chrome_MetallicSmoothness",
+            "mapEmission": "",
+            "mapNormal": ""
+        },
+        {
+            "name": "M_Police_Dark",
+            "baked": false,
+            "paintChannel": false,
+            "rgb": [
+                0.012000000104308129,
+                0.012000000104308129,
+                0.014000000432133675
+            ],
+            "metallic": 0.11999999731779099,
+            "smoothness": 0.42000001668930056,
+            "alpha": 1.0,
+            "emission": [
+                0.0,
+                0.0,
+                0.0
+            ],
+            "emissionStrength": 0.0,
+            "mapAlbedo": "PartModels/body_patrol/M_Police_Dark_BaseColor",
+            "mapMetallicSmoothness": "PartModels/body_patrol/M_Police_Dark_MetallicSmoothness",
+            "mapEmission": "",
+            "mapNormal": ""
+        },
+        {
+            "name": "M_Police_White",
+            "baked": false,
+            "paintChannel": false,
+            "rgb": [
+                0.8600000143051148,
+                0.8999999761581421,
+                1.0
+            ],
+            "metallic": 0.0,
+            "smoothness": 0.9099999666213989,
+            "alpha": 1.0,
+            "emission": [
+                0.8600000143051148,
+                0.8999999761581421,
+                1.0
+            ],
+            "emissionStrength": 11.0,
+            "mapAlbedo": "PartModels/body_patrol/M_Police_White_BaseColor",
+            "mapMetallicSmoothness": "PartModels/body_patrol/M_Police_White_MetallicSmoothness",
+            "mapEmission": "PartModels/body_patrol/M_Police_White_Emission",
+            "mapNormal": ""
+        },
+        {
+            "name": "M_Police_Decal",
+            "baked": false,
+            "paintChannel": false,
+            "rgb": [
+                0.019999999552965165,
+                0.07500000298023224,
+                0.4399999976158142
+            ],
+            "metallic": 0.0,
+            "smoothness": 0.7599999904632568,
+            "alpha": 1.0,
+            "emission": [
+                0.0,
+                0.0,
+                0.0
+            ],
+            "emissionStrength": 0.0,
+            "mapAlbedo": "PartModels/body_patrol/M_Police_Decal_BaseColor",
+            "mapMetallicSmoothness": "PartModels/body_patrol/M_Police_Decal_MetallicSmoothness",
+            "mapEmission": "",
+            "mapNormal": ""
+        },
+        {
+            "name": "M_Police_Paint",
+            "baked": true,
+            "paintChannel": false,
+            "rgb": [
+                1.0,
+                1.0,
+                1.0
+            ],
+            "metallic": 0.0,
+            "smoothness": 0.5,
+            "alpha": 1.0,
+            "emission": [
+                0.0,
+                0.0,
+                0.0
+            ],
+            "emissionStrength": 0.0,
+            "mapAlbedo": "PartModels/body_patrol/M_Police_Paint_BaseColor",
+            "mapMetallicSmoothness": "PartModels/body_patrol/M_Police_Paint_MetallicSmoothness",
+            "mapEmission": "",
+            "mapNormal": "PartModels/body_patrol/M_Police_Paint_Normal"
+        },
+        {
+            "name": "M_Police_Glass",
+            "baked": false,
+            "paintChannel": false,
+            "rgb": [
+                0.014000000432133675,
+                0.016499999910593034,
+                0.023499999195337297
+            ],
+            "metallic": 0.0,
+            "smoothness": 0.9549999833106995,
+            "alpha": 1.0,
+            "emission": [
+                0.0,
+                0.0,
+                0.0
+            ],
+            "emissionStrength": 0.0,
+            "mapAlbedo": "PartModels/body_patrol/M_Police_Glass_BaseColor",
+            "mapMetallicSmoothness": "PartModels/body_patrol/M_Police_Glass_MetallicSmoothness",
+            "mapEmission": "",
+            "mapNormal": ""
+        },
+        {
+            "name": "M_Police_Head",
+            "baked": false,
+            "paintChannel": false,
+            "rgb": [
+                0.8500000238418579,
+                0.9200000166893005,
+                1.0
+            ],
+            "metallic": 0.0,
+            "smoothness": 0.9200000166893005,
+            "alpha": 1.0,
+            "emission": [
+                0.8500000238418579,
+                0.9200000166893005,
+                1.0
+            ],
+            "emissionStrength": 5.0,
+            "mapAlbedo": "PartModels/body_patrol/M_Police_Head_BaseColor",
+            "mapMetallicSmoothness": "PartModels/body_patrol/M_Police_Head_MetallicSmoothness",
+            "mapEmission": "PartModels/body_patrol/M_Police_Head_Emission",
+            "mapNormal": ""
+        },
+        {
+            "name": "M_Police_PlateFace",
+            "baked": false,
+            "paintChannel": false,
+            "rgb": [
+                0.6200000047683716,
+                0.6299999952316284,
+                0.6000000238418579
+            ],
+            "metallic": 0.0,
+            "smoothness": 0.6399999856948853,
+            "alpha": 1.0,
+            "emission": [
+                0.0,
+                0.0,
+                0.0
+            ],
+            "emissionStrength": 0.0,
+            "mapAlbedo": "PartModels/body_patrol/M_Police_PlateFace_BaseColor",
+            "mapMetallicSmoothness": "PartModels/body_patrol/M_Police_PlateFace_MetallicSmoothness",
+            "mapEmission": "",
+            "mapNormal": ""
+        },
+        {
+            "name": "M_Police_Steel",
+            "baked": false,
+            "paintChannel": false,
+            "rgb": [
+                0.1899999976158142,
+                0.19599999487400056,
+                0.20999999344348908
+            ],
+            "metallic": 1.0,
+            "smoothness": 0.7649999856948853,
+            "alpha": 1.0,
+            "emission": [
+                0.0,
+                0.0,
+                0.0
+            ],
+            "emissionStrength": 0.0,
+            "mapAlbedo": "PartModels/body_patrol/M_Police_Steel_BaseColor",
+            "mapMetallicSmoothness": "PartModels/body_patrol/M_Police_Steel_MetallicSmoothness",
+            "mapEmission": "",
+            "mapNormal": ""
+        },
+        {
+            "name": "M_Police_Gold",
+            "baked": false,
+            "paintChannel": false,
+            "rgb": [
+                1.0,
+                0.765999972820282,
+                0.335999995470047
+            ],
+            "metallic": 1.0,
+            "smoothness": 0.8650000095367432,
+            "alpha": 1.0,
+            "emission": [
+                0.0,
+                0.0,
+                0.0
+            ],
+            "emissionStrength": 0.0,
+            "mapAlbedo": "PartModels/body_patrol/M_Police_Gold_BaseColor",
+            "mapMetallicSmoothness": "PartModels/body_patrol/M_Police_Gold_MetallicSmoothness",
+            "mapEmission": "",
+            "mapNormal": ""
+        },
+        {
+            "name": "M_Police_Blue",
+            "baked": false,
+            "paintChannel": false,
+            "rgb": [
+                0.019999999552965165,
+                0.07000000029802323,
+                0.7200000286102295
+            ],
+            "metallic": 0.0,
+            "smoothness": 0.8999999761581421,
+            "alpha": 1.0,
+            "emission": [
+                0.019999999552965165,
+                0.07000000029802323,
+                0.7200000286102295
+            ],
+            "emissionStrength": 26.0,
+            "mapAlbedo": "PartModels/body_patrol/M_Police_Blue_BaseColor",
+            "mapMetallicSmoothness": "PartModels/body_patrol/M_Police_Blue_MetallicSmoothness",
+            "mapEmission": "PartModels/body_patrol/M_Police_Blue_Emission",
+            "mapNormal": ""
+        },
+        {
+            "name": "M_Police_Red",
+            "baked": false,
+            "paintChannel": false,
+            "rgb": [
+                0.6200000047683716,
+                0.019999999552965165,
+                0.014000000432133675
+            ],
+            "metallic": 0.0,
+            "smoothness": 0.8999999761581421,
+            "alpha": 1.0,
+            "emission": [
+                0.6200000047683716,
+                0.019999999552965165,
+                0.014000000432133675
+            ],
+            "emissionStrength": 26.0,
+            "mapAlbedo": "PartModels/body_patrol/M_Police_Red_BaseColor",
+            "mapMetallicSmoothness": "PartModels/body_patrol/M_Police_Red_MetallicSmoothness",
+            "mapEmission": "PartModels/body_patrol/M_Police_Red_Emission",
+            "mapNormal": ""
+        },
+        {
+            "name": "M_Police_Tail",
+            "baked": false,
+            "paintChannel": false,
+            "rgb": [
+                0.5199999809265137,
+                0.019999999552965165,
+                0.019999999552965165
+            ],
+            "metallic": 0.0,
+            "smoothness": 0.8799999952316284,
+            "alpha": 1.0,
+            "emission": [
+                0.5199999809265137,
+                0.019999999552965165,
+                0.019999999552965165
+            ],
+            "emissionStrength": 8.0,
+            "mapAlbedo": "PartModels/body_patrol/M_Police_Tail_BaseColor",
+            "mapMetallicSmoothness": "PartModels/body_patrol/M_Police_Tail_MetallicSmoothness",
+            "mapEmission": "PartModels/body_patrol/M_Police_Tail_Emission",
+            "mapNormal": ""
+        }
+    ],
+    "objects": [
+        {
+            "name": "_spot",
+            "slots": [
+                "M_Police_Chrome"
+            ],
+            "role": "Structural",
+            "healthHp": 0.0,
+            "group": ""
+        },
+        {
+            "name": "_spot.001",
+            "slots": [
+                "M_Police_Chrome"
+            ],
+            "role": "Structural",
+            "healthHp": 0.0,
+            "group": ""
+        },
+        {
+            "name": "_spotarm",
+            "slots": [
+                "M_Police_Dark"
+            ],
+            "role": "Structural",
+            "healthHp": 0.0,
+            "group": ""
+        },
+        {
+            "name": "_spotarm.001",
+            "slots": [
+                "M_Police_Dark"
+            ],
+            "role": "Structural",
+            "healthHp": 0.0,
+            "group": ""
+        },
+        {
+            "name": "_spotlens",
+            "slots": [
+                "M_Police_White"
+            ],
+            "role": "Structural",
+            "healthHp": 0.0,
+            "group": ""
+        },
+        {
+            "name": "_spotlens.001",
+            "slots": [
+                "M_Police_White"
+            ],
+            "role": "Structural",
+            "healthHp": 0.0,
+            "group": ""
+        },
+        {
+            "name": "_starin",
+            "slots": [
+                "M_Police_Decal"
+            ],
+            "role": "Structural",
+            "healthHp": 0.0,
+            "group": ""
+        },
+        {
+            "name": "Police_BeltTrim",
+            "slots": [
+                "M_Police_Chrome"
+            ],
+            "role": "Structural",
+            "healthHp": 0.0,
+            "group": ""
+        },
+        {
+            "name": "Police_Body",
+            "slots": [
+                "M_Police_Paint",
+                "M_Police_Dark"
+            ],
+            "role": "Structural",
+            "healthHp": 0.0,
+            "group": ""
+        },
+        {
+            "name": "Police_Exhaust",
+            "slots": [
+                "M_Police_Chrome"
+            ],
+            "role": "Structural",
+            "healthHp": 0.0,
+            "group": ""
+        },
+        {
+            "name": "Police_FrontBumper",
+            "slots": [
+                "M_Police_Dark"
+            ],
+            "role": "Structural",
+            "healthHp": 0.0,
+            "group": ""
+        },
+        {
+            "name": "Police_Glass",
+            "slots": [
+                "M_Police_Glass"
+            ],
+            "role": "Structural",
+            "healthHp": 0.0,
+            "group": ""
+        },
+        {
+            "name": "Police_Grille",
+            "slots": [
+                "M_Police_Dark"
+            ],
+            "role": "Structural",
+            "healthHp": 0.0,
+            "group": ""
+        },
+        {
+            "name": "Police_GrilleBars",
+            "slots": [
+                "M_Police_Chrome"
+            ],
+            "role": "Structural",
+            "healthHp": 0.0,
+            "group": ""
+        },
+        {
+            "name": "Police_Handles",
+            "slots": [
+                "M_Police_Chrome"
+            ],
+            "role": "Structural",
+            "healthHp": 0.0,
+            "group": ""
+        },
+        {
+            "name": "Police_HeadLights",
+            "slots": [
+                "M_Police_Head"
+            ],
+            "role": "Structural",
+            "healthHp": 0.0,
+            "group": ""
+        },
+        {
+            "name": "Police_HeadSurround",
+            "slots": [
+                "M_Police_Dark"
+            ],
+            "role": "Structural",
+            "healthHp": 0.0,
+            "group": ""
+        },
+        {
+            "name": "Police_HoodBulge",
+            "slots": [
+                "M_Police_Paint"
+            ],
+            "role": "Structural",
+            "healthHp": 0.0,
+            "group": ""
+        },
+        {
+            "name": "Police_HoodVents",
+            "slots": [
+                "M_Police_Dark"
+            ],
+            "role": "Structural",
+            "healthHp": 0.0,
+            "group": ""
+        },
+        {
+            "name": "Police_Mirrors",
+            "slots": [
+                "M_Police_Dark"
+            ],
+            "role": "Structural",
+            "healthHp": 0.0,
+            "group": ""
+        },
+        {
+            "name": "Police_Pillars",
+            "slots": [
+                "M_Police_Paint"
+            ],
+            "role": "Structural",
+            "healthHp": 0.0,
+            "group": ""
+        },
+        {
+            "name": "Police_Plate",
+            "slots": [
+                "M_Police_PlateFace"
+            ],
+            "role": "Structural",
+            "healthHp": 0.0,
+            "group": ""
+        },
+        {
+            "name": "Police_PushBar",
+            "slots": [
+                "M_Police_Steel"
+            ],
+            "role": "Structural",
+            "healthHp": 0.0,
+            "group": ""
+        },
+        {
+            "name": "Police_RearBumper",
+            "slots": [
+                "M_Police_Dark"
+            ],
+            "role": "Structural",
+            "healthHp": 0.0,
+            "group": ""
+        },
+        {
+            "name": "Police_Roof",
+            "slots": [
+                "M_Police_Paint"
+            ],
+            "role": "Structural",
+            "healthHp": 0.0,
+            "group": ""
+        },
+        {
+            "name": "Police_Star",
+            "slots": [
+                "M_Police_Gold"
+            ],
+            "role": "Structural",
+            "healthHp": 0.0,
+            "group": ""
+        },
+        {
+            "name": "Police_Star.001",
+            "slots": [
+                "M_Police_Gold"
+            ],
+            "role": "Structural",
+            "healthHp": 0.0,
+            "group": ""
+        },
+        {
+            "name": "Police_Strobe_blue",
+            "slots": [
+                "M_Police_Blue"
+            ],
+            "role": "Structural",
+            "healthHp": 0.0,
+            "group": ""
+        },
+        {
+            "name": "Police_Strobe_red",
+            "slots": [
+                "M_Police_Red"
+            ],
+            "role": "Structural",
+            "healthHp": 0.0,
+            "group": ""
+        },
+        {
+            "name": "Police_Sub",
+            "slots": [
+                "M_Police_Gold"
+            ],
+            "role": "Structural",
+            "healthHp": 0.0,
+            "group": ""
+        },
+        {
+            "name": "Police_Sub.001",
+            "slots": [
+                "M_Police_Gold"
+            ],
+            "role": "Structural",
+            "healthHp": 0.0,
+            "group": ""
+        },
+        {
+            "name": "Police_TailLights",
+            "slots": [
+                "M_Police_Tail"
+            ],
+            "role": "Structural",
+            "healthHp": 0.0,
+            "group": ""
+        },
+        {
+            "name": "Police_Unit",
+            "slots": [
+                "M_Police_Decal"
+            ],
+            "role": "Structural",
+            "healthHp": 0.0,
+            "group": ""
+        },
+        {
+            "name": "Police_Unit.001",
+            "slots": [
+                "M_Police_Decal"
+            ],
+            "role": "Structural",
+            "healthHp": 0.0,
+            "group": ""
+        },
+        {
+            "name": "Police_Wipers",
+            "slots": [
+                "M_Police_Dark"
+            ],
+            "role": "Structural",
+            "healthHp": 0.0,
+            "group": ""
+        },
+        {
+            "name": "Police_Word",
+            "slots": [
+                "M_Police_Decal"
+            ],
+            "role": "Structural",
+            "healthHp": 0.0,
+            "group": ""
+        },
+        {
+            "name": "Police_Word.001",
+            "slots": [
+                "M_Police_Decal"
+            ],
+            "role": "Structural",
+            "healthHp": 0.0,
+            "group": ""
+        }
+    ],
+    "notes": {
+        "geometryFixes": 9,
+        "textureWarnings": 0,
+        "verificationOverridden": false,
+        "overrideReason": ""
+    },
+    "vehicle": {
+        "cd": 0.550000011920929,
+        "clA": 0.003000000026077032,
+        "garageOffered": true
+    },
+    "cosmetic": {
+        "slot": "",
+        "rarity": "Common",
+        "theme": "Arcade",
+        "description": ""
+    },
+    "committedHash": "DE-62-EA-C5-1F-E9-EE-87-BB-05-BA-C5-96-FA-37-E3"
+}
