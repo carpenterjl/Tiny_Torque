@@ -491,6 +491,61 @@ namespace AIHWSim.Vehicles
             return m;
         }
 
+        // Discovered manifests per root. Null until the first ask; an empty list
+        // is a real answer and means "there are none", which is the shipped case.
+        private static readonly Dictionary<string, List<AssetManifest>> _discovered =
+            new Dictionary<string, List<AssetManifest>>();
+
+        /// <summary>
+        /// Every manifest under a <c>Resources/</c> root — <b>the whole of how a
+        /// committed asset becomes content</b>.
+        ///
+        /// The catalogues seed themselves from this: a key exists because a
+        /// manifest naming it exists, so there is no registry file to keep in step
+        /// with the manifests and no way for the two to disagree. Discovery is by
+        /// <c>Resources.LoadAll&lt;TextAsset&gt;</c>, which is the one enumeration
+        /// <c>Resources</c> offers, filtered to the <c>_asset</c> suffix — the
+        /// project's one hand-written manifest, <c>tiguan_materials.json</c>, is
+        /// not one of these and is correctly ignored.
+        ///
+        /// <b>Cheap because there is nothing to find.</b> All 207 shipped assets
+        /// ship no manifest, so today this loads one TextAsset, keeps none of it,
+        /// and returns empty. It runs once per root per session and is dropped by
+        /// <see cref="ResetCache"/>, which the commit pipeline calls.
+        /// </summary>
+        public static List<AssetManifest> Discover(string root = PartMeshLibrary.PartRoot)
+        {
+            if (_discovered.TryGetValue(root, out List<AssetManifest> cached)) return cached;
+
+            var found = new List<AssetManifest>();
+            string folder = root.TrimEnd('/');
+            foreach (TextAsset ta in Resources.LoadAll<TextAsset>(folder))
+            {
+                if (ta == null || !ta.name.EndsWith(Suffix, StringComparison.Ordinal)) continue;
+                string key = ta.name.Substring(0, ta.name.Length - Suffix.Length);
+                string path = root + ta.name;
+
+                AssetManifest m = _cache.TryGetValue(path, out AssetManifest hit) && hit != null
+                    ? hit : FromJson(ta.text, path);
+                if (m == null) continue;
+
+                // The file name is the authority on the key: it is what
+                // Resources.Load will be handed, and a manifest that names a
+                // different one would register a key nothing can load.
+                if (m.key != key)
+                {
+                    Debug.LogWarning($"[AssetManifests] {path} calls itself '{m.key}' but sits " +
+                                     $"beside {key}.fbx. The file name wins — Resources.Load is " +
+                                     "given the stem, not the manifest's opinion of it.");
+                    m.key = key;
+                }
+                _cache[path] = m;
+                found.Add(m);
+            }
+            _discovered[root] = found;
+            return found;
+        }
+
         private static AssetManifest Parse(string resourcePath)
         {
             var ta = Resources.Load<TextAsset>(resourcePath);
@@ -564,6 +619,7 @@ namespace AIHWSim.Vehicles
         {
             foreach (AssetManifest m in _cache.Values) m?.ResetMaterials();
             _cache.Clear();
+            _discovered.Clear();
             // The binder reports a manifest's complaints once per key per session.
             // A rewritten manifest deserves to be complained about again — or, much
             // more usefully, to fall silent where it did not before.

@@ -597,8 +597,15 @@ namespace AIHWSim.Vehicles
                 // the vertical instead of mirroring with a negative scale: the tyre
                 // and rim are solids of revolution about the axle, so a 180 degree
                 // turn lands the face on -X with normals and winding left intact.
+                //
+                // COMPOSED, not assigned: TryInstantiate may already have applied
+                // a committed asset's authorYawDeg, and overwriting it here would
+                // silently un-rotate exactly the wheels that needed it — on one
+                // side of the car only, which is the hardest version of that bug
+                // to see. Both are rotations about the vertical, so they add.
                 if (inboardSign >= 0f)
-                    mesh.transform.localRotation = Quaternion.Euler(0f, 180f, 0f);
+                    mesh.transform.localRotation =
+                        Quaternion.Euler(0f, 180f, 0f) * mesh.transform.localRotation;
 
                 // TinyTorque tokens ahead of the legacy set; all three wheel
                 // families bind from this one call. "redtrim", "hwtrim" and

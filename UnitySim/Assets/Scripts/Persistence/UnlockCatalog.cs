@@ -175,6 +175,21 @@ namespace AIHWSim.Persistence
             }
         }
 
+        /// <summary>
+        /// Forget the composed pool and both lookups.
+        ///
+        /// Needed since C1b, because the pool is built from
+        /// <c>CosmeticCatalog.All</c> and that table now grows when Asset Studio
+        /// commits a cosmetic. Clearing one and not the other would leave a
+        /// committed hat in the shop and out of the crates, or the reverse.
+        /// </summary>
+        public static void ResetCache()
+        {
+            _all = null;
+            _byId = null;
+            _byCode = null;
+        }
+
         /// <summary>What a duplicate pays and what the shop charges. Cosmetics
         /// carry their own (identical) numbers from the manifest; the legacy
         /// items are priced off the same table so one tier costs one price

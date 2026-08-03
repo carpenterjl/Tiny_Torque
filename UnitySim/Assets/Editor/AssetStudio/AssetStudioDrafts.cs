@@ -253,7 +253,13 @@ namespace AIHWSim.AssetTools
             TtExport x = row?.Export;
             if (draft == null || x == null || x.UnityDims == Vector3.zero) return false;
 
-            float target = row.kind == AssetKind.Wheel
+            // The DRAFT's kind, not the row's. The row's is inferred from a key
+            // and a Resources folder, and an export that has neither is
+            // Unassigned — so reading it here silently scaled every wheel
+            // committed from a fresh export to a body's 0.420 m length instead of
+            // to a 66 mm tyre. The draft is where a human said what this is.
+            AssetKind kind = draft.Kind != AssetKind.Unassigned ? draft.Kind : row.kind;
+            float target = kind == AssetKind.Wheel
                 ? AssetStudioPreview.AuthorRadiusFor(draft.key) * 2f
                 : CarVehicle.BodyMeshAuthorSize.z;
 

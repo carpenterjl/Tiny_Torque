@@ -102,6 +102,15 @@ namespace AIHWSim.Vehicles
         /// unconditionally before one can. Every VEHICLE site — body, wheel,
         /// battery, antenna, light cluster, cosmetic — binds unconditionally and
         /// is covered.
+        ///
+        /// <b>The manifest's yaw is applied here, and here only.</b> It is a
+        /// property of the ASSET — "this mesh was modelled long-axis along X, and
+        /// the game builds every car facing +Z" — not of any one caller, so the
+        /// place that knows the key is the place that owes the quarter turn.
+        /// Every caller that follows sets <c>localScale</c> and none sets
+        /// rotation, except the wheel path's half-turn, which composes with it.
+        /// An asset with no manifest, or one with no yaw, keeps the identity
+        /// rotation this always wrote.
         /// </summary>
         public static GameObject TryInstantiate(string key, Transform parent,
             int layer = PartVisualFactory.VizLayer, string root = PartRoot)
@@ -112,7 +121,12 @@ namespace AIHWSim.Vehicles
 
             var go = Object.Instantiate(src, parent, false);
             go.transform.localPosition = Vector3.zero;
-            go.transform.localRotation = Quaternion.identity;
+
+            AssetManifest man = AssetManifests.Load(key, root);
+            go.transform.localRotation = man != null && Mathf.Abs(man.authorYawDeg) > 0.01f
+                ? Quaternion.Euler(0f, man.authorYawDeg, 0f)
+                : Quaternion.identity;
+
             Sanitise(go, layer);
             AssetManifestBinder.TryStamp(go, key, root);
             return go;

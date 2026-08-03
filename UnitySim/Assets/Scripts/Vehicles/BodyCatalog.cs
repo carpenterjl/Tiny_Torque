@@ -95,6 +95,19 @@ namespace AIHWSim.Vehicles
         /// actually is; for the Tiguan it is the published body box.</summary>
         public Vector3 nominalSize;
 
+        /// <summary>
+        /// The single factor between the mesh as it was exported and the game's
+        /// scale — 1 for every shell the old exporter already corrected, and
+        /// 1/12.573 for something like the police car, which arrives at its
+        /// Blender size because the current exporter applies no correction.
+        ///
+        /// It MULTIPLIES the bodySize divide rather than replacing it, which is
+        /// what keeps the two ideas separate: this one says how big the mesh is,
+        /// the divide says how big the design wants the car. Uniform, because the
+        /// old pipeline was uniform and proportions were never altered.
+        /// </summary>
+        public float authorScale = 1f;
+
         /// <summary>Hidden from every picker. A reference vehicle, not content.
         ///
         /// Authored, but no longer arbitrary: <c>[AKEY]</c> holds it to
@@ -116,13 +129,19 @@ namespace AIHWSim.Vehicles
     /// A row is now the whole answer about a body — what it renders as, what it
     /// drags like, what it is called, and whether it is offered at all.
     ///
-    /// Modelled on <c>CosmeticCatalog</c>: a hard-coded seed array plus a
-    /// dictionary lookup, no scanning. Discovery of committed manifests belongs
-    /// with the commit pipeline that writes them, not here.
-    ///
     /// <b>Order is the picker order</b> and matches <see cref="BodyShape"/>'s
     /// declaration order, which is also the persisted int order. Do not reorder;
     /// append.
+    ///
+    /// <b><see cref="Seed"/> and <see cref="All"/> are different tables, and the
+    /// difference is the point of C1b.</b> Seed is the shipped thirteen and is
+    /// what the structural invariants are about — one row per enum value, in
+    /// enum order. All is Seed plus every body Asset Studio has committed,
+    /// discovered from the manifests themselves so there is no registry file
+    /// that could disagree with what is on disk. Those rows have no enum value
+    /// at all, which is exactly what "a new car without a code change" means, so
+    /// holding them to Seed's invariants would refuse the thing this exists to
+    /// allow. Ask Seed about the enum; ask All about a key.
     /// </summary>
     public static class BodyCatalog
     {
@@ -145,8 +164,11 @@ namespace AIHWSim.Vehicles
         /// checks now is what a table can still be wrong about alone: unique keys
         /// and labels, one row per enum value, plausible aero, and the flags
         /// agreeing with the things they claim to describe.
+        ///
+        /// The shipped thirteen and only those. Committed bodies join
+        /// <see cref="All"/>, not this.
         /// </summary>
-        public static readonly BodyDef[] All =
+        public static readonly BodyDef[] Seed =
         {
             // The two primitive compounds: no asset, no accents, and no sane UVs,
             // which is why paint mode stands down rather than painting a box.
@@ -196,6 +218,86 @@ namespace AIHWSim.Vehicles
         };
 
         private static BodyDef F(BodyDef d) { d.foldedAppendages = true; return d; }
+
+        private static BodyDef[] _all;
+
+        /// <summary>
+        /// The seed table plus every body Asset Studio has committed —
+        /// <b>the point of the whole exercise</b>. A new car is now a folder of
+        /// art and a manifest, not a C# edit.
+        ///
+        /// Seed first and seed wins, so a committed asset can never redefine a
+        /// shipped body out from under every save that names it. Discovery is by
+        /// manifest, so there is no registry file that could disagree with what
+        /// is actually on disk.
+        /// </summary>
+        public static BodyDef[] All => _all ??= Compose();
+
+        private static BodyDef[] Compose()
+        {
+            var list = new List<BodyDef>(Seed);
+            var taken = new HashSet<string>();
+            foreach (BodyDef d in Seed) taken.Add(d.id);
+
+            foreach (AssetManifest m in AssetManifests.Discover())
+            {
+                if (m == null || m.kind != AssetKinds.CarBody) continue;
+                if (!taken.Add(m.key))
+                {
+                    Debug.LogWarning($"[BodyCatalog] '{m.key}' is already a shipped body; the " +
+                                     "committed manifest is ignored. A save that names this key " +
+                                     "has always meant the shipped car and still does.");
+                    continue;
+                }
+                list.Add(FromManifest(m));
+            }
+            return list.ToArray();
+        }
+
+        /// <summary>
+        /// A committed manifest as a row.
+        ///
+        /// Three fields are worth reading twice.
+        /// <see cref="BodyDef.legacy"/> is <c>Box</c> because there IS no enum
+        /// value — this body was added without a code change, which is the whole
+        /// idea, and the cost is that an older build reading the int beside the
+        /// key gets a box. Stated in <see cref="Resolve"/> and unfixable with
+        /// <c>JsonUtility</c>.
+        /// <see cref="BodyDef.tokens"/> is <c>None</c> and is never consulted: a
+        /// manifest asset is bound by <c>AssetManifestBinder</c> per object and
+        /// slot, and <c>BindByToken</c> hands off before it reads a table.
+        /// <see cref="BodyDef.paintable"/> is DERIVED from whether any material
+        /// claims the paint channel — the same fact, asked once rather than
+        /// authored twice — and is false for a Verbatim asset, which has no
+        /// material the game built and therefore nothing to tint.
+        /// </summary>
+        private static BodyDef FromManifest(AssetManifest m) => new BodyDef
+        {
+            id = m.key,
+            label = m.Label,
+            legacy = BodyShape.Box,
+            meshKey = m.key,
+            cd = m.vehicle != null && m.vehicle.cd >= 0f ? m.vehicle.cd : 0.80f,
+            clA = m.vehicle?.clA ?? 0f,
+            paintable = m.HasPaintChannel && !m.IsVerbatim,
+            tokens = BodyTokens.None,
+            unscaled = false,
+            foldedAppendages = false,
+            nominalSize = CarVehicle.BodyMeshAuthorSize,
+            debugOnly = false,
+            authorScale = m.authorScale > 0f ? m.authorScale : 1f,
+        };
+
+        /// <summary>Forget the composed table and every lookup built from it.
+        /// For the commit pipeline, which has just written a manifest naming a
+        /// key this session has already decided does not exist.</summary>
+        public static void ResetCache()
+        {
+            _all = null;
+            _offered = null;
+            _byId = null;
+            _warned = null;
+        }
 
         /// <summary>
         /// The garage's body-size slider range: the smallest and largest car a

@@ -341,6 +341,17 @@ namespace AIHWSim.AssetTools
                           + "is empty, so a prop with a manifest would import and never "
                           + "bind (see PartMeshLibrary.TryInstantiate)");
                     break;
+                case AssetKind.Fitting:
+                    // Bodies, wheels and cosmetics all have a registry a manifest
+                    // can join. A fitting does not: the battery, the antennas and
+                    // the light bars are loaded from keys a switch on an int
+                    // builds, so a committed one would import correctly and be
+                    // asked for by nothing.
+                    why.Add("a fitting (battery, antenna, light bar) has no registry to "
+                          + "join — its key comes from a switch on an int, so a committed "
+                          + "one would import and never be asked for. Replacing one of "
+                          + "those meshes is a file swap, not a commit");
+                    break;
             }
 
             // Overwriting a shipped asset is always a mistake, and a QUIET one:
@@ -710,6 +721,15 @@ namespace AIHWSim.AssetTools
             PartMeshLibrary.ResetCache();
             AssetManifests.ResetCache();
             TiguanMaterials.ResetCache();
+            // The C1b half. Each of these composes a table from the discovered
+            // manifests, so a key committed after the table was built is a key
+            // the session has already decided does not exist — which is what
+            // makes a commit visible without restarting Unity. UnlockCatalog goes
+            // with CosmeticCatalog because its pool is built from that one.
+            BodyCatalog.ResetCache();
+            WheelCatalog.ResetCache();
+            Garage.CosmeticCatalog.ResetItems();
+            Persistence.UnlockCatalog.ResetCache();
         }
 
         // ==================== menu items ====================

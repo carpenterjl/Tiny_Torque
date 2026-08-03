@@ -60,7 +60,7 @@ namespace AIHWSim.EditorTools
             var labels = new HashSet<string>(StringComparer.Ordinal);
             var seen = new HashSet<BodyShape>();
 
-            foreach (BodyDef d in BodyCatalog.All)
+            foreach (BodyDef d in BodyCatalog.Seed)
             {
                 string why = "";
 
@@ -184,11 +184,10 @@ namespace AIHWSim.EditorTools
             var ids = new HashSet<string>(StringComparer.Ordinal);
             var labels = new HashSet<string>(StringComparer.Ordinal);
             var seen = new HashSet<int>();
-            int lastOffered = -1;
 
-            for (int i = 0; i < WheelCatalog.All.Length; i++)
+            for (int i = 0; i < WheelCatalog.Seed.Length; i++)
             {
-                WheelDef d = WheelCatalog.All[i];
+                WheelDef d = WheelCatalog.Seed[i];
                 string why = "";
 
                 if (!ids.Add(d.id)) why += $" duplicate id '{d.id}'";
@@ -253,16 +252,13 @@ namespace AIHWSim.EditorTools
                     why += $" garageOffered {d.garageOffered} disagrees with finish " +
                            $"{d.finish} / debugOnly {d.debugOnly}";
 
-                // ShowroomUI builds its cycle from the non-debugOnly rows and
-                // then indexes it by wheelStyle, so those rows have to be the
-                // FRONT of the table with no gap. legacy == index above makes
-                // that true only if debugOnly never precedes an offered row —
-                // which is this check, and which is what would silently rename
-                // every showroom wheel if a reference wheel were ever inserted
-                // in the middle.
-                if (!d.debugOnly && lastOffered != i - 1)
-                    why += $" offered row at index {i} follows a debugOnly row";
-                if (!d.debugOnly) lastOffered = i;
+                // K4's contiguity check lived here: the non-debugOnly rows had
+                // to be the FRONT of the table with no gap, because ShowroomUI
+                // indexed its cycle by wheelStyle. C1b removed that consumer —
+                // the showroom looks its position up from the row it resolves to,
+                // since a committed wheel has no int for a position to equal — so
+                // per K1's own rule the check went with it. legacy == index above
+                // still says everything it said about the seeds.
 
                 if (why.Length == 0) Debug.Log($"{Tag} PASS wheel:{d.id}");
                 else { Debug.LogError($"{Tag} FAIL wheel:{d.id} -{why}"); fail++; }
@@ -271,7 +267,7 @@ namespace AIHWSim.EditorTools
             // One past the end must be unknown to the table and must still
             // RESOLVE, to the slick. The second half is the live rule now that
             // WheelStyleKey is gone: a corrupt save renders rather than throwing.
-            int past = WheelCatalog.All.Length;
+            int past = WheelCatalog.Seed.Length;
             if (WheelCatalog.ByLegacy(past) != null)
             {
                 Debug.LogError($"{Tag} FAIL wheel:<range> - style {past} has a row past the end");
@@ -308,7 +304,13 @@ namespace AIHWSim.EditorTools
         {
             int fail = 0;
 
-            foreach (BodyDef d in BodyCatalog.All)
+            // Over the SEED table, because this whole section is about the
+            // legacy int and a committed body does not have one — its legacy is
+            // Box, so "a legacy-only design resolves to this row" is false for it
+            // by design, and that IS the downgrade this format cannot fix. What
+            // still holds for a committed row is that the key wins, which is
+            // checked where it can be checked against a real asset: [AST], C2.
+            foreach (BodyDef d in BodyCatalog.Seed)
             {
                 string why = "";
 
@@ -353,7 +355,7 @@ namespace AIHWSim.EditorTools
                 else { Debug.LogError($"{Tag} FAIL migrate:{d.id} -{why}"); fail++; }
             }
 
-            foreach (WheelDef d in WheelCatalog.All)
+            foreach (WheelDef d in WheelCatalog.Seed)
             {
                 string why = "";
 

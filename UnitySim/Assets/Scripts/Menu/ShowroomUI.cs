@@ -40,23 +40,50 @@ namespace AIHWSim.Menu
         /// the garage's list this one KEEPS the three finishes — they are the
         /// unlockables the showroom exists to sell.
         ///
-        /// LockedCycle indexes this array by <c>wheelStyle</c>, which works
-        /// because the two are the same number: <c>[AKEY]</c> pins
-        /// <c>legacy == index</c>, and the rows dropped here are the last two.
-        /// The hand-copied array this replaces was the third copy of these
-        /// names in the codebase.</summary>
-        private static readonly Vehicles.WheelDef[] ShowroomWheels =
+        /// A property rather than a <c>static readonly</c> array, since C1b: the
+        /// table grows when Asset Studio commits a wheel, and a list captured at
+        /// class load would be the list as it was before. <c>WheelCatalog.All</c>
+        /// caches, so asking it per draw costs an array scan and nothing else.</summary>
+        private static Vehicles.WheelDef[] ShowroomWheels =>
             System.Array.FindAll(Vehicles.WheelCatalog.All, d => !d.debugOnly);
-        private static readonly string[] WheelNames =
+        private static string[] WheelNames =>
             System.Array.ConvertAll(ShowroomWheels, d => d.label);
 
-        /// <summary>Write both halves of the wheel choice, or clear both.
-        /// −1 is "as designed" and has no row, so it cannot be resolved — the
-        /// one value where the key must be blanked rather than derived.</summary>
+        /// <summary>
+        /// Where the loadout's current wheel sits in <see cref="ShowroomWheels"/>,
+        /// or −1 for "as designed".
+        ///
+        /// <b>This used to be <c>l.wheelStyle</c> itself</b>, which worked while
+        /// every offered row's index WAS its legacy int. A committed wheel has no
+        /// int — that is what "added without a code change" means — so the
+        /// position is now looked up from the row the loadout resolves to. The
+        /// two agree exactly for all thirteen shipped styles.
+        /// </summary>
+        private static int WheelIndex(Persistence.VehicleLoadout l)
+        {
+            if (l == null || (l.wheelStyle < 0 && string.IsNullOrEmpty(l.wheelKey))) return -1;
+            Vehicles.WheelDef def = Vehicles.WheelCatalog.Resolve(l.wheelKey, l.wheelStyle);
+            return System.Array.IndexOf(ShowroomWheels, def);
+        }
+
+        /// <summary>
+        /// Write both halves of the wheel choice, or clear both. −1 is "as
+        /// designed" and has no row, so it cannot be resolved — the one value
+        /// where the key must be blanked rather than derived.
+        ///
+        /// The int written is the ROW's legacy, not the picker position. They are
+        /// the same number for every shipped style; for a committed wheel the row
+        /// has no int at all and its legacy is 0, so an older build reading the
+        /// int beside the key gets the slick. Writing the position instead would
+        /// hand that build a different wheel entirely — position 13 is the
+        /// Tiguan's front rim.
+        /// </summary>
         private static void SetWheel(Persistence.VehicleLoadout l, int v)
         {
-            l.wheelStyle = v;
-            l.wheelKey = v >= 0 && v < ShowroomWheels.Length ? ShowroomWheels[v].id : "";
+            var rows = ShowroomWheels;
+            if (v < 0 || v >= rows.Length) { l.wheelStyle = -1; l.wheelKey = ""; return; }
+            l.wheelStyle = rows[v].legacy;
+            l.wheelKey = rows[v].id;
         }
         private static readonly string[] TopperNames =
             { "As designed", "Light bar", "Off-road pods", "Flag antenna", "Twin whips", "Whip", "Clean deck" };
@@ -507,7 +534,7 @@ namespace AIHWSim.Menu
             // Asset Studio commits has no int for it to be true or false about.
             changed |= LockedCycle("Wheels", WheelNames,
                 v => v < 0 ? "As designed" : WheelNames[v],
-                l.wheelStyle, v => SetWheel(l, v),
+                WheelIndex(l), v => SetWheel(l, v),
                 v => Persistence.UnlockCatalog.ByWheelKey(ShowroomWheels[v].id)?.id);
 
             // "Roof kit", not "Topper": the cosmetics panel above owns that word

@@ -86,7 +86,7 @@ namespace AIHWSim.Vehicles
         /// and labels, <c>legacy == index</c>, the two author radii, and the two
         /// picker flags against the facts they stand for.
         /// </summary>
-        public static readonly WheelDef[] All =
+        public static readonly WheelDef[] Seed =
         {
             W("wheel_slick",    "Slick",   0, "wheel_slick",    true),
             W("wheel_knobby",   "Knobby",  1, "wheel_knobby",   true),
@@ -126,6 +126,79 @@ namespace AIHWSim.Vehicles
             d.fullScale = true;
             d.debugOnly = true;
             return d;
+        }
+
+        private static WheelDef[] _all;
+
+        /// <summary>
+        /// The seed table plus every wheel Asset Studio has committed. Seed wins
+        /// on a collision; see <see cref="BodyCatalog.All"/> for the argument,
+        /// which is the same one.
+        /// </summary>
+        public static WheelDef[] All => _all ??= Compose();
+
+        private static WheelDef[] Compose()
+        {
+            var list = new List<WheelDef>(Seed);
+            var taken = new HashSet<string>();
+            foreach (WheelDef d in Seed) taken.Add(d.id);
+
+            foreach (AssetManifest m in AssetManifests.Discover())
+            {
+                if (m == null || m.kind != AssetKinds.Wheel) continue;
+                if (!taken.Add(m.key))
+                {
+                    UnityEngine.Debug.LogWarning(
+                        $"[WheelCatalog] '{m.key}' is already a shipped wheel; the committed " +
+                        "manifest is ignored.");
+                    continue;
+                }
+                list.Add(FromManifest(m));
+            }
+            return list.ToArray();
+        }
+
+        /// <summary>
+        /// A committed manifest as a row.
+        ///
+        /// <b><see cref="WheelDef.authorRadius"/> carries the whole scale
+        /// correction, and a wheel therefore needs no <c>authorScale</c> of its
+        /// own</b> — unlike a body, which divides per axis. The wheel path
+        /// already instantiates at <c>radius / authorRadius</c>, so recording the
+        /// mesh's RAW radius (its measured radius divided back out by the uniform
+        /// factor) makes that one divide do both jobs at once.
+        ///
+        /// <see cref="WheelDef.legacy"/> is 0 for the same reason a committed
+        /// body's is Box: there is no int, and 0 is what an older build reading
+        /// the int beside the key will build.
+        /// </summary>
+        private static WheelDef FromManifest(AssetManifest m)
+        {
+            UnityEngine.Vector3 sz = m.AuthorSize;
+            float scale = m.authorScale > 0f ? m.authorScale : 1f;
+            float measured = UnityEngine.Mathf.Max(sz.y, sz.z) * 0.5f;
+            return new WheelDef
+            {
+                id = m.key,
+                label = m.Label,
+                legacy = 0,
+                meshKey = m.key,
+                authorRadius = measured > 1e-5f
+                    ? measured / scale : PartVisualFactory.WheelAuthorRadius,
+                finish = WheelFinish.None,
+                fullScale = false,
+                garageOffered = m.vehicle == null || m.vehicle.garageOffered,
+                debugOnly = false,
+            };
+        }
+
+        /// <summary>Forget the composed table and every lookup built from it.
+        /// The commit pipeline calls this after writing a manifest.</summary>
+        public static void ResetCache()
+        {
+            _all = null;
+            _byId = null;
+            _warned = null;
         }
 
         /// <summary>The slick — what a wheel is when nothing said otherwise.

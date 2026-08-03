@@ -228,7 +228,7 @@ namespace AIHWSim.Garage
 
         // ---- items ----------------------------------------------------------
 
-        public static readonly CosmeticItem[] All =
+        public static readonly CosmeticItem[] Seed =
         {
             // ---- topper ----
             new CosmeticItem { id = "top_lightbar", label = "Light Bar", slot = CosmeticSlot.Topper,
@@ -377,6 +377,72 @@ namespace AIHWSim.Garage
                 rarity = Rarity.Legendary, theme = CosmeticTheme.Enchanted, dupeValue = 200, directCost = 2400,
                 description = "four gossamer blades on a gold spine" },
         };
+
+        private static CosmeticItem[] _all;
+
+        /// <summary>
+        /// The pack's 47 plus every cosmetic Asset Studio has committed.
+        ///
+        /// <b>The decision C1 owed, and this is the whole of it.</b> A cosmetic
+        /// that imports, validates and previews but cannot be worn stops one step
+        /// short of the thing the pipeline was built for, so the registry does
+        /// grow a data-driven source. It stays small: the manifest authors slot,
+        /// rarity, theme, label and blurb, and the two PRICES are derived from the
+        /// rarity through <see cref="DupeValueFor"/> / <see cref="DirectCostFor"/>
+        /// — a new hat must not be able to reprice the economy — with no cheat
+        /// code, matching all 47 already here.
+        ///
+        /// Seed wins on a collision, so a committed asset cannot redefine an item
+        /// a save already names. <c>UnlockCatalog</c> composes its pool from this,
+        /// so a committed cosmetic reaches the crates and the shop with no further
+        /// wiring; its id is its save key, exactly as the pack's are.
+        /// </summary>
+        public static CosmeticItem[] All => _all ??= ComposeItems();
+
+        private static CosmeticItem[] ComposeItems()
+        {
+            var list = new List<CosmeticItem>(Seed);
+            var taken = new HashSet<string>();
+            foreach (CosmeticItem i in Seed) taken.Add(i.id);
+
+            foreach (var m in Vehicles.AssetManifests.Discover(MeshRoot))
+            {
+                if (m == null || m.kind != Vehicles.AssetKinds.Cosmetic) continue;
+                var c = m.cosmetic;
+                if (c == null || string.IsNullOrEmpty(c.slot)) continue;
+                if (!taken.Add(m.key))
+                {
+                    Debug.LogWarning($"[CosmeticCatalog] '{m.key}' is already a pack cosmetic; " +
+                                     "the committed manifest is ignored.");
+                    continue;
+                }
+                if (!System.Enum.TryParse(c.slot, out CosmeticSlot slot)
+                    || !System.Enum.TryParse(c.rarity, out Rarity rarity)
+                    || !System.Enum.TryParse(c.theme, out CosmeticTheme theme))
+                {
+                    Debug.LogWarning($"[CosmeticCatalog] '{m.key}' names slot \"{c.slot}\", rarity " +
+                                     $"\"{c.rarity}\", theme \"{c.theme}\" — one of those is not a " +
+                                     "value this build has. It will not be offered.");
+                    continue;
+                }
+                list.Add(new CosmeticItem
+                {
+                    id = m.key, label = m.Label, slot = slot, rarity = rarity, theme = theme,
+                    description = c.description ?? "",
+                    dupeValue = DupeValueFor(rarity), directCost = DirectCostFor(rarity),
+                });
+            }
+            return list.ToArray();
+        }
+
+        /// <summary>Forget the composed item list and the lookup built from it.
+        /// The commit pipeline calls this; <c>UnlockCatalog.ResetCache</c> has to
+        /// go with it, since its pool is built from this one.</summary>
+        public static void ResetItems()
+        {
+            _all = null;
+            _byId = null;
+        }
 
         // ---- crates ---------------------------------------------------------
 

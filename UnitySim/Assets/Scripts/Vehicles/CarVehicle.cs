@@ -960,13 +960,27 @@ namespace AIHWSim.Vehicles
         /// It was a <c>== BodyShape.Tiguan</c> test until K3a; it now reads
         /// <see cref="BodyDef.unscaled"/>, which is what makes "authored 1:1" a
         /// property an asset can declare rather than a name compiled in here.
+        ///
+        /// <b><see cref="BodyDef.authorScale"/> multiplies the divide, and the two
+        /// are different questions.</b> The divide is how big the DESIGN wants the
+        /// car; the factor is how big the MESH is, which for anything the current
+        /// exporter produced is 12.573x too big because that exporter applies no
+        /// correction. It is 1 for all thirteen shipped rows, so this is
+        /// bit-identical for every car that existed before C1b — and it multiplies
+        /// rather than replacing the divisor because the divisor has to stay
+        /// NOMINAL. Dividing by a committed asset's real extents instead would
+        /// stretch a correctly proportioned car 1.08x wide and squash it 0.83x
+        /// tall to fill a box no shell actually fills, undoing the uniform scale
+        /// for nothing.
         /// </summary>
-        public static Vector3 BodyRenderScale(BodyDef def, Vector3 bodySize) =>
-            def != null && def.unscaled
-                ? Vector3.one
-                : new Vector3(bodySize.x / BodyMeshAuthorSize.x,
-                              bodySize.y / BodyMeshAuthorSize.y,
-                              bodySize.z / BodyMeshAuthorSize.z);
+        public static Vector3 BodyRenderScale(BodyDef def, Vector3 bodySize)
+        {
+            if (def != null && def.unscaled) return Vector3.one;
+            float s = def != null && def.authorScale > 0f ? def.authorScale : 1f;
+            return new Vector3(s * bodySize.x / BodyMeshAuthorSize.x,
+                               s * bodySize.y / BodyMeshAuthorSize.y,
+                               s * bodySize.z / BodyMeshAuthorSize.z);
+        }
 
         /// <summary>
         /// The token→material table a body shell binds against, or <c>null</c>

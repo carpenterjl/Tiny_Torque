@@ -284,17 +284,19 @@ namespace AIHWSim.AssetTools
                 _bodyMat = new Material(Shader.Find("Standard")) { hideFlags = HideAndDont };
             _bodyMat.color = o.bodyColor;
 
-            // OWED AT C1, when the first committed manifest asset exists: an
-            // IMPORTED asset that ships a manifest must bind through
-            // AssetManifestBinder here, not through the switch below. The game
-            // routes it that way (PartMeshLibrary.TryInstantiate stamps a
-            // PartManifestBinding and both token binders hand off to it), so a
-            // preview still reading the token table would disagree with Play about
-            // which panel is chrome — the one failure this window exists to catch.
-            // Not wired yet because no asset in the project has a manifest, so
-            // there is nothing it could currently disagree about, and nothing to
-            // test the wiring against until the commit pipeline lands.
+            // A COMMITTED asset binds the way the game binds it, not the way the
+            // token tables would. The game routes it through AssetManifestBinder
+            // (PartMeshLibrary.TryInstantiate stamps a PartManifestBinding and
+            // both token binders hand off to it), so a preview still reading the
+            // table would disagree with Play about which panel is chrome — the
+            // one failure this window exists to catch. Owed since R3 and payable
+            // now that the commit pipeline can produce such an asset.
+            //
+            // The DRAFT path still wins over it, and deliberately: a draft is the
+            // edit in progress, and the whole point of previewing one is to see a
+            // change before it is committed.
             if (byDraft) BindFromDraft(draft, o.bodyColor);
+            else if (BindThroughManifest(row, o.bodyColor)) { }
             else switch (table)
             {
                 // The shell path, verbatim: "paint*" takes the tintable material,
@@ -335,6 +337,38 @@ namespace AIHWSim.AssetTools
                     if (m == null || m == _unboundMat) { RenderersWithEmptySlots++; break; }
             }
             _overlayKey = "";
+        }
+
+        /// <summary>
+        /// Bind a COMMITTED asset the way the game binds it, or return false and
+        /// leave the token switch to it.
+        ///
+        /// The stamp is the seam at runtime too — <c>TryInstantiate</c> writes a
+        /// <c>PartManifestBinding</c> when and only when the asset ships a
+        /// manifest — so the preview stamps the same component on its own
+        /// instance and calls the same binder. It does not reimplement the
+        /// decision; asking whether the stamp took IS the decision.
+        ///
+        /// The paint material is the rig's <c>_bodyMat</c> for a body and null for
+        /// everything else, which is the split the game makes: only the body path
+        /// has a design colour to hand a paint-channel material.
+        /// </summary>
+        private bool BindThroughManifest(AssetRow row, Color tint)
+        {
+            if (_inst == null || row == null || !row.HasProject
+                || string.IsNullOrEmpty(row.key)) return false;
+
+            string root = row.rootName == "Cosmetics" ? Garage.CosmeticCatalog.MeshRoot
+                        : row.rootName == "TrackProps" ? PartMeshLibrary.PropRoot
+                        : PartMeshLibrary.PartRoot;
+
+            PartManifestBinding stamp = _inst.GetComponent<PartManifestBinding>()
+                                        ?? AssetManifestBinder.TryStamp(_inst, row.key, root);
+            if (stamp == null) return false;
+
+            _bodyMat.color = tint;
+            AssetManifestBinder.Bind(stamp, row.kind == AssetKind.CarBody ? _bodyMat : null, null);
+            return true;
         }
 
         /// <summary>
