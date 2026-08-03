@@ -8,11 +8,952 @@ describe is documented in [README.md](../README.md).
 Active work lives in the session plan file, not here; a plan moves into this archive
 once its milestones are done.
 
-Covering the project bootstrap through the Hydra VTOL jet and combat pass (43 plans).
-Last updated 2026-08-02. (The RC-airplane F0–F9 and slipstream/phugoid G-series plans
+Covering the project bootstrap through the Asset Studio import pipeline (44 plans).
+Last updated 2026-08-03. (The RC-airplane F0–F9 and slipstream/phugoid G-series plans
 completed between Track Studio and the HUD pass but their session files were
 overwritten before archiving; their results live in README's RC-airplane section and
 the [AERO]/[ABENCH] gates.)
+
+---
+
+# Asset Studio — browse, bind and import externally-authored art (2026-08-03)
+
+## Context
+
+The user authors models in Blender and has built an exporter that emits, per asset,
+a folder of `FBX + export.json + Materials/*.mat + Textures/*.png`. Today none of that
+reaches the game intact: the only asset-backed path is `PartMeshLibrary`, which loads by
+`Resources.Load` under a hard-coded string key, throws the FBX's materials away
+(`PartModelPostprocessor.cs:42` forces `materialImportMode = None`) and rebinds every
+renderer by **case-insensitive substring first-match** of the object name against a
+hand-ordered code table. So a freshly exported car arrives correctly shaped in one flat
+colour, with no error anywhere — and adding it as *new* content is impossible without a
+C# edit, because `BodyShape` and `wheelStyle` are persisted as raw ints in every saved
+design.
+
+The goal is a Unity editor tool that browses both already-imported game assets and
+not-yet-imported external exports, previews them as the game will actually build them,
+shows every child mesh with its material binding, lets the author reassign meshes,
+materials and damage tags, and commits the result into the project — plus the runtime
+and registry changes that make a committed asset actually load.
+
+### Decisions taken with the user
+
+| | |
+|---|---|
+| Material handling | **Per-asset choice**: *manifest* (JSON → runtime Materials, textures supported) or *verbatim* (keep the FBX's own `.mat` assets) |
+| Scope | Car bodies, wheels, cosmetics. **Props dropped from v1.** Aircraft out of scope |
+| New content | **Data-driven string keys** — a save-format migration off the persisted enum/int |
+| Destruction | Per-child-mesh **identity plus damage authoring** (role + health + group) recorded now; nothing consumes it yet |
+| Paint on baked liveries | **Tinting offered by default** — a baked material is marked the paint channel, so `bodyColor` multiplies the livery. Applies to NEW manifest assets only; the four shipped baked cars keep standing paint mode down |
+
+### The scale question, settled
+
+The old exporter applied a **uniform** scale to length 0.420 m, which is why
+`PartModelValidator.cs:82-84` pins length and leaves width `null` ("real widths 0.17-0.20
+after uniform scale"). `CarVehicle.BodyMeshAuthorSize (0.20, 0.10, 0.42)` is a nominal
+*divisor*, not a measurement of any shell. Proportions were never altered.
+
+`POLICE` measures `unityDimensions [5.281, 1.521, 2.330]` with
+`verification.rotationDegrees [0,0,0]`, `scale [1,1,1]` — the new exporter applies neither
+correction, and the car is modelled long-axis along Blender X. It therefore needs exactly
+what the old pipeline did: **uniform scale ÷12.573 and a 90° yaw**.
+
+**Decision**: record both in the manifest (`authorSize` = the mesh's real measured extents,
+`authorYawDeg`) and apply them at load, rather than baking `ModelImporter.globalScale`.
+Recording is strictly more general — `globalScale` cannot express the yaw at all — and it
+keeps the FBX agreeing with the `.blend`. The same field set also expresses the
+Tiguan-style full-scale case (`authorSize` = the real size, design bodySize = the real
+size → scale 1), so full-scale reference content stays available without a second mechanism.
+
+### Facts the design rests on (verified this session)
+
+- **`export.json` gives an exact material→object map**, so new assets bind by object name
+  and explicit submesh slot. The entire first-match-substring hazard class — two shipped
+  bugs, `PartVisualFactory.cs:187-204` — does not exist on the new path.
+- **Object names ≠ mesh names.** `POLICE.fbx` mesh datablocks are `Police_Body_baked_baked_…`;
+  the Model names are the clean `Police_Body`, and those are what `materials[].objects[]`
+  lists and what Unity names the GameObject. Bind by GameObject name, never `sharedMesh.name`.
+- **`Police_Body` carries two materials** → multi-submesh. Binding must be per **slot**.
+  Slot order is not in `export.json`; it is read off the imported prefab.
+- **The exporter already writes an `externalObjects:` remap** in `POLICE.fbx.meta` pointing
+  at real Built-in-RP Standard `.mat` GUIDs. Verbatim mode is nearly free because of this.
+- **`baked: true` is the null-discriminator.** `M_Police_Paint` has `values.baseColor/metallic/
+  roughness: null`; `JsonUtility` cannot tell absent from zero. Never trust a zero.
+- No `.asmdef` anywhere — editor code references `AIHWSim.Vehicles` directly.
+  100% IMGUI, zero `.uxml`/`.uss`. **`PreviewRenderUtility` / `AssetPreview` / `OnPreviewGUI`
+  appear zero times** — preview rendering is genuinely new code.
+- `PartMeshLibrary` **caches misses forever** (`:46-56`) and has no `ResetCache`; without one
+  a freshly committed key stays a cached null for the rest of the session.
+  `TiguanMaterials.ResetCache()` (`:186`) exists for exactly this and is currently dead code.
+- `Scripts/Core/VehicleDesignDumpRun.cs` + `Editor/VehicleDesignDump.cs` already build all
+  nine presets + `Default()` + every file in `VehicleLibrary.Dir` and dump a diffable text
+  file. It dumps **physics only** and would not catch a re-skin — extend it, don't invent one.
+- A **third** hand-copied wheel-name array exists at `Menu/ShowroomUI.cs:38-40`, and
+  `VehicleLoadout.wheelStyle` (`ProgressStore.cs:21`) is a second persisted wheel int.
+
+### Standing constraints
+
+- `JsonUtility` only — no dictionaries, no ragged arrays (`CircuitManifest.cs:12-16`).
+- Idempotent asset writes: load-then-update-in-place (`PackMaterialGenerator.cs:116-151`),
+  MD5-guarded copies (`PackImportMenu.cs:78-86`) so `.meta` GUIDs never churn.
+- `try { StartAssetEditing(); } finally { StopAssetEditing(); SaveAssets(); Refresh(); }`.
+- **Never `AssetDatabase.CreateFolder`** — it uniquifies; the "Misc 13" bug, `PackPaths.cs:288-305`.
+- Menu `Tools/Asset Studio/`, priorities in blocks ≥11 apart, every window button also a
+  `[MenuItem]` (`TrackStudioWindow.cs:14-18`). Bracketed tag + `Report()` + one RESULT line.
+  `-quit` is fine (edit-mode only); **never `-nographics`** — `Shader.Find` needs a device.
+- **Do not touch `AccentTokens` / `WheelTokens` contents or order** — their untouched-ness is
+  what guarantees the seven arcade cars cannot regress.
+- **Do not regenerate `PartModelValidator`'s 207 rows.** They are an independent prediction;
+  a measured spec proves only that Unity agrees with itself (`PartModelValidator.cs:104-115`).
+- **Do not bump `PartModelPostprocessor.GetVersion()`** — the new branch is gated on a sibling
+  file no existing asset has, so nothing needs propagating and a bump reimports 200+ FBX.
+- **Leave `TiguanMaterials` alone.** Consolidating it into the new loader is a real
+  simplification and a real regression risk on a car the `[PMV]` gate asserts. Note it as a
+  follow-up; do not bundle it.
+
+---
+
+## Architecture
+
+**Manifest** — `Resources/<root>/<key>_asset.json`, beside the FBX (sibling-path arithmetic
+is what lets `PartModelPostprocessor` find it during import, and it matches where
+`tiguan_materials.json` already lives).
+
+```json
+{ "schema": 1, "key": "body_police", "kind": "CarBody", "materialMode": "Manifest",
+  "source": { "assetName":"POLICE", "sourceBlend":"…", "exportedAtUtc":"…", "fbxMd5":"…" },
+  "authorSize": [0.1853, 0.1210, 0.4200], "authorYawDeg": -90,
+  "spec": { "x": null, "y": null, "z": 0.420, "maxTris": 19000, "specSource": "exporter" },
+  "materials": [ { "name":"M_Police_Paint", "baked": true, "paintChannel": true,
+                   "rgb":[1,1,1], "metallic":0, "smoothness":0.5, "alpha":1,
+                   "emission":[0,0,0], "emissionStrength":0,
+                   "mapAlbedo":"PartModels/body_police/M_Police_Paint_BaseColor",
+                   "mapMetallicSmoothness":"…", "mapEmission":"", "mapNormal":"…" } ],
+  "objects":   [ { "name":"Police_Body", "slots":["M_Police_Dark","M_Police_Paint"],
+                   "role":"Structural", "healthHp":0, "group":"" } ],
+  "notes": { "geometryFixes": 11, "textureWarnings": 0, "verificationOverridden": false } }
+```
+
+`materialMode` and `role` are **strings**, not enums — `JsonUtility` writes enums as ordinals,
+which reorder silently and read as nothing in a diff. `smoothness` is stored, not `roughness`;
+the tool converts once so the runtime has no per-source conversion to get wrong.
+
+**Runtime**: new `Scripts/Vehicles/AssetManifests.cs` parses and caches the manifest, builds
+Materials from values + `Resources.Load<Texture2D>` maps (shape of `TiguanMaterials.Make`,
+`:142-177`, extended with `_MetallicGlossMap` / `_BumpMap` / `_EmissionMap`), and binds
+`sharedMaterials` per renderer per slot. `PartMeshLibrary.AssignByName` starts **returning**
+the `(renderer, token)` mapping it already computes — zero extra traversal — which is the
+per-mesh identity seam. `PartManifestBinding`, one component on the instance root, holds the
+joined table of renderer + id + role + health + group.
+
+**Keys**: `BodyCatalog` / `WheelCatalog`, modelled on `CosmeticCatalog` (hard-coded seed +
+manifest-discovered additions, seed wins on collision). `VehicleDesign` gains `bodyKey` /
+`wheelKey` **alongside** the legacy int, resolved through a lazy **property** so no ingress
+site can be forgotten — there are nine-plus, one of which (`DesignHistory`'s generic `T`) is
+structurally incapable of calling a migration hook.
+
+---
+
+## Milestones
+
+Ordered so the tool — the thing actually asked for — arrives first and carries no runtime
+risk, and the save-format migration is last and isolated.
+
+### Phase 0 — housekeeping
+
+- [x] **P0** Splice the completed Hydra/VTOL plan into `Docs/plan-archive.md` (newest-first,
+      bump the count). Commit the working tree (controls.html + turret fix) so the Asset
+      Studio work starts from a clean diff.
+
+### Phase 1 — the tool, read-only (no writes of any kind)
+
+- [x] **T1 — Browser.** `Editor/AssetStudio/`, namespace `AIHWSim.AssetStudio`:
+      `AssetStudio.cs` (paths, `Menu = "Tools/Asset Studio/"`, `Tag = "[AST]"`, source-root
+      pref — shape of `CircuitPaths.cs:33-84`), `TtExport.cs` (`export.json` mirror,
+      `baked` as the null-discriminator), `AssetStudioCatalog.cs` (imported ∪ external,
+      per-row status), `AssetStudioWindow.cs` (toolbar + 280 px list + read-only detail).
+      **Verify:** point it at `TinyTorqueTests`, see `POLICE` as External with 14 materials /
+      41 objects / 11 geometry fixes beside the 28 imported keys. `[PMV]` unchanged,
+      `git status` clean.
+- [x] **T2 — Preview.** `AssetStudioPreview.cs` on `PreviewRenderUtility` (not
+      `PartIconFactory` — its `Destroy` never runs in edit mode and would leak into the open
+      scene). Orbit, zoom, hover/click highlight **per submesh slot**, isolate, a 0.42 m
+      ruler, an `L|R` wheel toggle applying the game's `Euler(0,180,0)`, an editable
+      `bodySize`. The rig applies the game's own transform rules and calls the game's own
+      binding function — extract `CarVehicle.AssignBodyAccents`' loop into
+      `PartVisualFactory.BindByToken` so the preview cannot disagree with Play.
+      Reuse `PartVisualFactory.LocalRendererBounds` (`:439`) for framing.
+      **Verify:** `body_patrol` renders at 0.42 m against the ruler with chrome/gold/glass
+      distinct; `POLICE` renders 12.6× too big and 90° off until corrected. Domain-reload
+      with the window open → no leaked-PreviewRenderUtility warnings. `[PMV]` unchanged.
+      **Delivered, with one thing the plan had not accounted for:** rendering an export
+      that is *not in the project* is impossible without importing it — the AssetDatabase
+      does not reach outside `Assets/`. So T2 also ships **preview staging**
+      (`AssetStudioStaging`): an explicit, user-pressed, byte-guarded FBX copy into
+      `TinyTorqueAssets/AssetStudio/Staging/`, gitignored, outside `Resources/` so it can
+      never become a key, added to `PartModelPostprocessor`'s scope (no `GetVersion()`
+      bump — the rule for existing assets is unchanged) so the preview shows the game's
+      scale and material stripping rather than FBX defaults. The correction is a
+      **separate rig node** from the design divide, deliberately, so T2 does not
+      pre-decide what R2's manifest `authorSize` means. Also extracted
+      `PartVisualFactory.BindByToken` (from `CarVehicle.AssignBodyAccents`) and exposed
+      `PartVisualFactory.TyreMaterial` so the preview binds through the game's own code
+      and the game's own fallback. Not reproduced, and labelled in-window: wheel finishes
+      (styles 6-8, keyed on an int an FBX key does not carry) and the inline token tables
+      for the battery / antennas / light bars / track props.
+- [x] **T3 — Drafts and editing.** `AssetStudioDraft` as a `ScriptableObject` under
+      `Assets/TinyTorqueAssets/AssetStudio/Drafts/` — **this is what makes Undo work**;
+      `Undo.RecordObject` applies to a `UnityEngine.Object`, not to raw JSON, so edit an
+      object and serialise only on commit. Material edits, per-slot rebinding, damage tags,
+      paint-channel checkbox, `authorSize`/`authorYawDeg` with a "propose from export.json"
+      button (uniform scale to 0.420 + longest-horizontal-axis yaw). Search, group-by-material,
+      virtualised rows. **Verify:** edit, Ctrl+Z each step, restart the editor, draft intact;
+      nothing under `Resources/` changed.
+      **Delivered.** Persistence and re-sync proved headlessly across two editor processes:
+      create → 14 materials / 41 objects / `Police_Body` 2 slots → hand-set role, health,
+      group, verified flag and a smoothness → propose (`x0.07953`, yaw −90,
+      authorSize `0.1853 x 0.1210 x 0.4200`) → save → **fresh Unity process** → every value
+      intact → **re-sync from the export** → still intact. `git status` shows nothing under
+      `Resources/`. Two things the plan did not name: `DraftObject.slotsVerified`, because
+      the import gives the slot COUNT and nothing else (`materialImportMode = None` nulls
+      every slot) and `export.json` lists a material's objects in file order, not slot
+      order — so the initial mapping is a proposal and must not call itself a fact; and
+      `AssetStudioDraftMaterials`, an editor-side material builder so a draft edit is
+      *visible* in the preview, explicitly marked as the stopgap R2's runtime loader
+      replaces. Foldout state changes are deferred to the end of the IMGUI pass so the
+      virtual list cannot change control count mid-event.
+
+### Phase 2 — the runtime manifest path
+
+- [x] **R1 — `MaterialBindings`, provably inert.** `AssignByName` and `AssignBodyAccents`
+      return the mapping; nobody consumes it. **Verify:** `[PMV]`/`[TPV]`/`[COS]`/`[PACK]`
+      green; a new `PartModelValidator.DumpBindings` (per-key, per-renderer, material +
+      `_Color`/`_Metallic`/`_Glossiness`/keywords) diffs **empty** against its own baseline.
+      **Delivered.** `[PMV] ALL PASS (207)`, `[TPV] ALL PASS (12)`, `[PACK] ALL PASS (228)`,
+      `[COS] ALL PASS`, and the dump **diffed empty** — 1538 rows over 220 sections, byte
+      for byte. Four deviations, each with a reason. (1) The dump is its own file and class,
+      `Editor/PartModelBindingDump.cs`, not a method on `PartModelValidator`: the validator's
+      contract is one pass/fail RESULT line, and this thing has no opinion about whether a
+      number is right — only about whether it moved, and its gate is `git diff`. (2) It is
+      keyed by CALLER, not by asset key — every `BodyShape`, all 15 wheel styles, battery,
+      4 antennas, 2 light clusters, 51 cosmetics, every `TrackCatalog.Items` entry — because
+      three wheel styles are FINISHES over the slick mesh and a per-key dump would miss all
+      three while passing on the other twelve. (3) It reads results off the built hierarchy
+      with `sharedMaterials` and never touches the returned `MaterialBindings`; building it
+      out of the mapping would only prove the mapping agrees with itself. (4) Two extractions
+      the dump forced, both proved by the same empty diff: `CarVehicle.BindBodyMesh` (the
+      body-binding branch, lifted out of `BuildBodyVisual` so the dumper calls the car's own
+      code) and `CarVehicle.BodyAccentTable`, which folds `HasAccentTokens` and the
+      Tiguan/AccentTokens choice into one function returning null for the legacy shells —
+      `BindByToken` already reads a null table as flatten-everything, so the hand-written
+      flatten loop was a duplicate of it. **The one thing the diff does NOT cover** is the
+      first extraction step itself: the dump needs a public entry to observe the body path,
+      so the baseline was taken with `BindBodyMesh` already extracted. That move is a
+      verbatim relocation of nine lines, verified by reading.
+- [x] **R2 — Manifest DTOs + loader.** `AssetManifests.cs`, textures, the PBR mapping,
+      `PartMeshLibrary.ResetCache()`, a texture postprocessor (sRGB off for
+      `*_MetallicSmoothness`, `NormalMap` for `*_Normal`). **Verify:** with no manifests
+      present every path is byte-identical; a hand-written manifest for a copied key renders
+      through the new path with its maps.
+      **Delivered.** Binding dump **diffs empty** (1538 rows / 220 sections), `[PMV] ALL PASS
+      (207)`, `[TPV] ALL PASS (12)`, `[PACK] ALL PASS (228)`, `[COS] ALL PASS`. The positive
+      half was proved with a throwaway fixture: POLICE copied into `Resources/PartModels/`
+      under `body_r2probe` with all 34 PNGs and a manifest generated as PLAIN TEXT — never
+      through the runtime DTOs, so the parser was tested against a file a person could have
+      typed rather than against its own writer. **41 renderers, 42 slots bound, 0 uncovered**;
+      every declared map resolved; the two-material `Police_Body` took `M_Police_Dark` in
+      slot 0 and `M_Police_Paint` in slot 1. Fixture and probe deleted; `git status` clean.
+      Five things worth recording. (1) **The tint proof is visible, not argued**: the probe
+      binds with `(1, 0.3, 0.1)`, and exactly one material — the baked, paint-channel one —
+      came out that colour while thirteen kept their own. (2) **`Configure` takes a material
+      rather than returning one**, because the paint channel IS the car's own `_bodyMat`:
+      the manifest supplies the livery maps and the metal/gloss, the car keeps owning its
+      colour, so `bodyColor` / `SetBodyMaterial` / the garage painter go on working against
+      the object they always did. It also takes its texture loader as an argument, which is
+      what let Asset Studio's preview stopgap DELETE its duplicate property mapping and call
+      the runtime's — the T2 argument, one level down. (3) **`_GlossMapScale = 1` is pinned
+      whenever the MS map binds**: with the map bound Standard ignores `_Metallic` and
+      replaces `_Glossiness` with that scale, so folding the authored smoothness in would
+      apply it twice. (4) **A missing manifest is silent** — 207 of 207 shipped assets
+      correctly have none, so `PartMeshLibrary`'s warn-on-miss would be 207 lines of noise;
+      a manifest that exists and does not parse shouts. (5) **The texture postprocessor
+      costs one full reimport of every texture Unity knows about, packages included** — a
+      postprocessor's version enters the import hash before anything asks whether the path
+      is in scope. ~2 min, once, and the same bill arrives on every `GetVersion()` bump.
+      The binder itself is deliberately NOT here: R2 is DTOs and loader, and the ~15 lines
+      of per-slot binding in the probe were the harness, not the product.
+- [x] **R3 — Exact binding + identity.** Bind by object name and slot index;
+      `PartManifestBinding` on the instance root. **Verify:** zero substring matches on the
+      test asset; rename one object in the manifest → named failure; dump diff empty elsewhere.
+      **Delivered.** Binding dump **diffs empty** (1538 rows / 220 sections), `[PMV] ALL PASS
+      (207)`, `[TPV] ALL PASS (12)`, `[PACK] ALL PASS (228)`, `[COS] ALL PASS`. Two new runtime
+      files — `AssetManifestBinder` (the binder) and `PartManifestBinding` (the component and
+      the `PartIdentity` row) — plus 27 semantic lines spread over five existing ones.
+      The fixture was POLICE again, this time as TWO keys over one copy of its textures: a
+      correct manifest, and the same asset with four deliberate defects. Probe: **41 renderers,
+      42 slots, 41 bound, 1 unbound — `Manifest=37 PaintChannel=4 Token=0 Fallback=0`**, every
+      bound slot holding the material it named, and the whole run silent.
+      Seven things worth recording.
+      (1) **The seam is a stamp, not eight call sites.** `TryInstantiate` knows the key and
+      nothing else does; the two token binders know the materials and nothing else does. So
+      `TryInstantiate` stamps a `PartManifestBinding` — **only when the asset ships a
+      manifest** — and `AssignByName` / `BindByToken` each open with a three-line hand-off.
+      The 207 shipped assets carry no component and cannot tell the seam is there, which is
+      also why the dump diff is empty by construction rather than by luck.
+      (2) **"Zero substring matches" was made non-vacuous.** A token table that matched nothing
+      would produce zero Token rows too, so the probe ran the SAME mesh through the token
+      binder: 41 rows, **2 substring hits** (`white`, `glass`). That is the old path's actual
+      score on a modern export — 39 of 41 pieces flat body colour, and the two that did match
+      taking the arcade cars' white trim and glass rather than POLICE's own.
+      (3) **Nothing half-binds.** A manifest asset never falls through to the tokens. An
+      unlisted object keeps its imported material and gets a named warning, and renders visibly
+      wrong; quietly binding it to the body material is precisely the "almost right" failure
+      the manifest exists to end. An EMPTY slot entry is the opposite — a statement, the one
+      way an author says "leave this one as imported" — and it stayed silent.
+      (4) **The manifest path would have introduced a repaint bug, and the probe caught it.**
+      `SetBodyMaterial` writes `renderer.sharedMaterial`, which is slot 0 and nothing else —
+      right for every legacy shell, since the token binder can only write slot 0 either. On
+      `Police_Body` the dark trim is slot 0 and the paint is slot 1, so a repaint would have
+      erased the trim and left the paint alone. `PartManifestBinding.ApplyPaint` writes by
+      slot; the legacy branch is untouched and the probe asserts slot 0 survives.
+      (5) **The design outranks the asset.** The paint channel is CONFIGURED onto the car's own
+      `_bodyMat`, and an albedo texture already sitting there is a decoded livery or a garage
+      stroke — a player painted THIS car — so it is restored after the manifest's baked albedo
+      is applied. The manifest still supplies everything the design has no opinion about.
+      (6) **Diagnostics are per KEY, not per instance.** Every cross-check compares a manifest
+      to a prefab and both are fixed for the session, so the answer cannot differ between the
+      first car on the grid and the eighth; `AssetManifests.ResetCache` clears the record.
+      All four defects produced distinct named lines (renamed object BOTH ways — the manifest
+      names a piece the mesh lacks AND the orphaned mesh object is named; an undefined material;
+      a wrong slot count).
+      (7) **`HasPaintableBody` became manifest-aware including the verbatim arm**, and the
+      binder already records verbatim rows without writing them (42 slots recorded, 0 written,
+      imported materials still in place) — so R4 is now purely the importer change. One residual
+      hole is written into `TryInstantiate`'s doc rather than papered over: the scenery sites
+      (`TrackCatalog`, `ArcadeVfx`) skip `AssignByName` when their token array is empty, so a
+      PROP with a manifest would be stamped and never bound. Props are out of v1 scope; every
+      vehicle site binds unconditionally. **Owed at C1:** Asset Studio's preview still reads
+      the token table for an imported asset — noted in `AssetStudioPreview.Bind` — which will
+      disagree with Play the moment a committed manifest asset exists.
+- [x] **R4 — Verbatim mode.** The `PartModelPostprocessor` branch (`ImportStandard` +
+      `materialLocation = External` + `AddRemap`, gated on the sibling manifest, **no
+      `GetVersion()` bump**), and the honest costs made legible: `HasPaintableBody` returns
+      false, `SetBodyMaterial`/`SetBodyTexture` warn once instead of no-op'ing silently.
+      **Verify:** the exporter's own `.mat` assets survive with maps wired; dump diff empty
+      for every existing asset.
+      **Delivered.** Binding dump **diffs empty** (1538 rows), `[PMV] ALL PASS (207)`,
+      `[TPV] ALL PASS (12)`, `[PACK] ALL PASS (228)`, `[COS] ALL PASS`. The fixture was POLICE
+      again, this time copied WITH its `Materials/*.mat` and their `.meta` (the GUIDs are how
+      a material references its textures) but deliberately WITHOUT the FBX's own `.meta` — its
+      `externalObjects` remap is exactly the thing the postprocessor is supposed to establish,
+      and inheriting it would have proved nothing. Result: **14 of 14 materials remapped, all
+      42 renderer slots holding the exporter's own `.mat` assets**, `M_Police_Paint` arriving
+      with all four map slots wired and resolving (`_BaseMap`, `_MainTex`, `_BumpMap`,
+      `_MetallicGlossMap`, 0 dangling), the runtime binder recording 42 Verbatim rows and
+      changing 0 slots, and `body_patrol`/`body_tiguan`/`wheel_slick` still importing with no
+      materials and no remap.
+      Four things, three of them measurements that changed the design.
+      (1) **`InPrefab`, not the planned `External` — measured, not preferred.** Both honour the
+      remap; they differ only in what happens to a material the remap does not cover. Under
+      `External` the withheld-material fixture wrote a stray
+      `Resources/PartModels/Materials/M_Police_Chrome_BaseColor.mat` — Unity's own replacement,
+      named after the diffuse TEXTURE, into a folder shared by all 207 assets. Under
+      `InPrefab` the replacement stays a sub-asset of the FBX (`M_Police_Chrome @ <embedded>`)
+      and no file appears. Remapping IS the embedded-materials workflow; External is the legacy
+      extract-to-disk one.
+      (2) **The plan's premise that these are "Built-in-RP Standard `.mat`" is WRONG, and this
+      is the real cost of verbatim mode.** The exporting project is URP 17.1.0; Tiny_Torque has
+      no URP package. Every one of those materials references Universal Render Pipeline/Lit
+      (keywords `_METALLICSPECGLOSSMAP`, `_NORMALMAP`) and resolves here to
+      `Hidden/InternalErrorShader` — magenta. **Nothing in this repo can fix that; verbatim
+      means verbatim.** So `PartModelPostprocessor.Renderable` says it by name at import, with
+      the way out: re-author against Built-in RP Standard, or use Manifest mode, which rebuilds
+      materials from the exported numbers and does not care which pipeline wrote them — and
+      which R2/R3 already proved on this exact asset. **Owed upstream:** the Blender exporter
+      should emit Standard materials, or Asset Studio should default new assets to Manifest and
+      say why.
+      (3) **The maps had to be read off the SERIALIZED material.** `GetTexture` asks the
+      shader whether it has the property, and a material whose shader is missing answers no to
+      everything — so "did the author's Blender maps survive" is unanswerable through the
+      Material API here and is answered through `SerializedObject`'s `m_SavedProperties`
+      instead. It did: 4 wired, 0 dangling.
+      (4) **Import ORDER is load-bearing and cannot be checked from inside the postprocessor.**
+      `LoadAssetAtPath` only sees a `.mat` Unity has already imported, so a model imported in
+      the same batch as its materials finds none of them; C1 must import the Materials folder
+      first and only then `ImportAsset` the FBX. A miss is named, not silent, and thirteen
+      present materials still remap — one missing file is not fatal.
+      `SetBodyMaterial`/`SetBodyTexture`/a livery now warn ONCE per car when the call has
+      nowhere to land, distinguishing verbatim from a shell that simply registered no paint
+      renderer. `HasPaintableBody`'s verbatim arm landed in R3. The warning's TEXT was read
+      rather than run — it is guarded by exactly the condition the probe asserts (0 paint
+      renderers, `HasPaintSlots` false), and exercising the string itself needs a play-mode car.
+      One fixture trap worth remembering: the first attempt copied the same `Textures/` and
+      `Materials/` into BOTH fixture keys, duplicating 48 GUIDs; Unity silently reassigns one
+      side of a collision, every texture link came out unresolved, and it looked exactly like
+      an importer bug.
+
+### Phase 3 — data-driven keys (the save-format migration)
+
+Each step must leave the extended design dump **diffing empty**.
+
+- [x] **K0 — Baseline.** Extend `VehicleDesignDumpRun.Dump` with an appearance block —
+      resolved mesh key, author size, **measured** render scale, token table, paint-renderer
+      count, cd/clA, per-wheel key/radius/finish. Measured off the built car, not recomputed
+      from the catalogue. **Nothing after this is verifiable without it.**
+      **Delivered.** 22 designs, 3722 rows — 1522 of them new. The inertness proof is the
+      diff itself: `diff design_pre design_k0` has **0 removed or changed lines and 1622
+      insertions**, and stripping the new prefixes reproduces the pre-K0 file byte for byte
+      (2100 rows, 21 sections). Binding dump **identical to `bind_r4`** (1538 rows), and the
+      **Opus mission is bit-identical** across the change — same `total_err_mm
+      58.238983154296878`, same `drift_mm`, same cruise speeds — which is what the one
+      behavioural edit needed.
+      Five things worth recording.
+      (1) **The block measures; it never re-derives.** The key comes from the instance's own
+      name (`Instantiate` writes `body_patrol(Clone)`, so the resolved key is ON the object),
+      the scale from its transform, the extents from `LocalRendererBounds`, the wheel's tyre
+      width from the game's own `TyreHalfWidth`. A dumper that called `BodyMeshKey` itself
+      would print the right key forever, including after the car stopped asking it — which is
+      the single failure this block exists to catch. Three tiny accessors were added for it
+      (`BodyVisual`, `BodyMeshInstance`, `WheelStyle`) rather than having the dumper
+      `Find("BodyMesh")` by string.
+      (2) **"Author size" is dumped as what was DIVIDED BY, recovered from the result** —
+      `bodySize / renderScale`. `BodyMeshAuthorSize` is a nominal constant that no shell
+      measures, and the Tiguan bypasses it entirely, so reading the constant back would say
+      less than nothing. It lands exactly: LowRacer at bodySize y 0.09 renders at scale 0.9
+      and implies 0.1.
+      (3) **The token table is dumped as its measurable consequence**, not as a name: the
+      distinct materials each part landed on, with a slot count per material. `PartModelBindingDump`
+      already owns what a material IS — 1538 rows of shader, keywords and queue — so this
+      records only enough to tell one shared material from another (colour/metallic/smoothness/
+      emission/texture). TT Patrol comes out 36 renderers over 13 distinct materials with
+      `paintRenderers 0`; Redline 8 and Highwing 7, which is the paint set the garage painter
+      cooks its stroke colliders from.
+      (4) **One behavioural edit, and it was needed to make cd honest**:
+      `CarVehicle.EffectiveAero` lifts the two override branches out of `ApplyAerodynamics`
+      verbatim. Those branches ARE the difference between a design that authors its drag and
+      one that inherits it from its silhouette, and transcribing them into the dumper would
+      have kept it agreeing with itself after the call site stopped agreeing with either. Not
+      hypothetical: the Tiguan is the design that exercises both (`aero.cd 0.31`,
+      `frontalArea 2.47` — published, not the table).
+      (5) **The Tiguan was added to the dump's design list.** It is not in `VehiclePresets.All`
+      and cannot be saved (`VehicleLibrary` hides anything over 50 kg), so the enumeration
+      never built one — yet it is the ONE design that special-cases all three resolution sites
+      at once: scale 1 instead of the bodySize divide, `TiguanTokens` instead of `AccentTokens`,
+      author radius 0.349 instead of 0.033. Phase 3 replaces all three. It now dumps 237
+      renderers over 28 materials at a measured 2.099 x 1.472 x 4.486 — the mirrors-and-rails
+      bounds that are deliberately not its collision box — and wheel styles 13/14 resolving to
+      `wheel_tiguan`/`wheel_tiguan_r`. Appended last, so it diffs as an insertion.
+      **Coverage the block does NOT have**, stated rather than discovered later: no design in
+      the enumeration uses wheel styles **6-8**, the chrome/gold/neon FINISHES over the slick.
+      They are reachable only through progression, so K5's "a `progress.json` with
+      `wheelStyle: 7` still yields gold wheels" stays a separate check — the design dump
+      cannot witness it. `PartModelBindingDump` covers all fifteen styles per style.
+      The baseline is the **K0 commit**, not a file: the dump is deterministic, so a lost
+      scratchpad costs one `git checkout` and one run.
+- [x] **K1 — Catalogues, inert.** `BodyCatalog` / `WheelCatalog` seed tables + `[AKEY]`
+      validator whose central check cross-references every entry against the **still-live**
+      switches (`BodyMeshKey`, `HasPaintableBody`, `AeroDynamics.BodyCd`, `WheelStyleKey`,
+      `AuthorRadiusFor`, `HasFoldedAppendages`). No caller. **Verify:** `[AKEY] ALL PASS`
+      while the original switches are still the live path — the transcription is proved
+      before it is used.
+      **Delivered.** `[AKEY] RESULT ALL PASS (13 bodies, 15 wheels)` — 28 PASS rows, one per
+      entry — with the binding dump and the design dump both **byte-identical** to K0's,
+      `[PMV] ALL PASS (207)`, `[COS] ALL PASS`, zero compile errors.
+      Six things worth recording.
+      (1) **The PASS was proved able to fail.** Nine deliberate breaks, one per check —
+      a wrong cd, a flipped paintable, the wrong token table, a spurious folded-appendage
+      flag, unscaled turned off on the Tiguan, a deleted Box row, a finish moved from Gold
+      to Chrome, a mesh key pointed at the wrong FBX, a dropped author radius — produced
+      **ten named failures** (the radius break hits both Tiguan wheels) and nothing else.
+      Restored byte-for-byte from a pre-break copy and re-run: ALL PASS again. Without this
+      the green line proves only that the loop ran.
+      (2) **Five extractions were needed to make the transcription checkable at all**, and
+      each is verbatim: `CarVehicle.BodyRenderScale` (the Tiguan's scale-1 branch, lifted out
+      of `BuildBodyVisual`), `PartVisualFactory.WheelStyleKey` made public,
+      `PartVisualFactory.FinishFor` returning the new `WheelFinish` enum,
+      `PartVisualFactory.IsFullScale`, and `CosmeticMounts.HasFoldedAppendages` made public.
+      A field nothing can compare against is a field that is wrong for free.
+      (3) **`IsFullScale` collapsed three copies of `style == 13 || style == 14`** — the
+      author radius, the token table and the finish guard. They are one fact (this wheel came
+      from a different pipeline), and written three times is how two agree and the third does
+      not.
+      (4) **`WheelFinish` replaces the 6-8 range test.** That range is the reason a Legendary
+      wheel nearly shipped neon pink, and it is the one thing about a wheel style that an FBX
+      key cannot carry: three styles share the slick's mesh and differ only here. It is also
+      why a wheel's save key is not simply its mesh key — `slick_chrome`/`slick_gold`/
+      `slick_neon` say what they are instead of claiming a file. `[AKEY]` enforces the rule
+      in both directions: a finish must NOT take the mesh key as its id, and a mesh style
+      must.
+      (5) **`HasPaintableBody` answers two questions at once** — "does this shape have a
+      tintable channel" and "did the FBX ship" — so the catalogue records only the first and
+      `[AKEY]` folds the asset check back in before comparing. Worth knowing before K3a moves
+      that consumer.
+      (6) **The validator is designed to become worthless, and says so.** Once
+      `AeroDynamics.BodyCd` reads the catalogue, checking the catalogue against it proves
+      only that it agrees with itself. K3 should delete each cross-check as it moves the
+      consumer that check guards; what survives is the internal consistency — unique keys,
+      one row per legacy value, `legacy == index` for wheels (the int is an array index
+      everywhere it is persisted), one past the end still unknown, and every mesh present.
+      **Not cross-checked, stated rather than implied:** `debugOnly` (GarageUI's exclusion is
+      an inline lambda until K4), `garageOffered` (a local array in `DrawWheelInspector`), and
+      the wheel `label`s (private arrays in two files that K4 deletes). Body labels ARE pinned
+      — the picker prints `shape.ToString()` today, so `[AKEY]` holds them to the enum name
+      until K4 frees them. Slider ranges stay in GarageUI until K4; `nominalSize` is in the
+      table now so K4 can derive the Tiguan exclusion from it.
+- [x] **K2 — Key fields.** `bodyKey`/`wheelKey` + lazy `BodyKey`/`WheelKey` properties +
+      `Migrate()` deriving the legacy int **from** the key, called only from
+      `VehicleLibrary.Save`. Legacy ints keep being written: downgrade legibility, `[AKEY]`'s
+      witness, and hand-readable `UnitySim/Vehicles/*.json`.
+      **Delivered.** `[AKEY] RESULT ALL PASS (13 bodies, 15 wheels)` with **57 PASS rows** —
+      K1's 28 plus 13 body-migration, 15 wheel-migration and one fallbacks row — and the
+      binding dump (1758 rows) and design dump (3722 rows) both **byte-identical** to K1's.
+      The whole milestone is `343 insertions, 0 deletions` across five files.
+      Six things worth recording.
+      (1) **The design dump cannot see this milestone**, and saying so is the point. Nothing
+      reads the new properties until K3, so an empty diff proves only that K2 did not break
+      K1 — it is a regression check, not evidence. The actual claim is a save-format round
+      trip, and it is made in a new `[AKEY]` section that runs everything through
+      `JsonUtility` rather than in memory, because what a field does to a save file is the
+      entire subject. Per catalogue row: a pre-K2 design (int, no key) still resolves to the
+      same row; the key WINS against a deliberately wrong int; `Migrate` fills the key in and
+      leaves the int alone; `Migrate` derives the int back from the key; `Migrate` is
+      idempotent; and the **downgrade** — the key member stripped the way an old build's
+      `JsonUtility` would drop it — still resolves through the int beside it.
+      (2) **These checks do NOT expire at K3.** Every other `[AKEY]` section compares the
+      catalogue to a switch that is about to be deleted; this one compares the catalogue to
+      the save format, which outlives all of it.
+      (3) **Resolution lives in the catalogues, not the design** — `BodyCatalog.Resolve(key,
+      legacy)` / `WheelCatalog.Resolve(key, style)`, never null, never throwing, with the
+      fallbacks matching what the live switches have always BUILT for a value they do not
+      know: `BodyMeshKey`'s `_ => null` is the primitive box, `WheelStyleKey`'s
+      `_ => "slick"` is the slick. So K3 has one function to call per catalogue rather than a
+      fallback rule copied into each consumer.
+      (4) **A property, not a load hook**, and the reason is countable: designs arrive from
+      `VehicleLibrary`, presets, snapshots, LAN payloads, `Clone`, the showroom and
+      `DesignHistory<T>` — which is generic over `T` and structurally cannot call one. Nine
+      ingress sites is nine chances to forget the tenth. The getters are pure: they never
+      write the field back, because a getter with a side effect on a serialized field is
+      exactly how a dump starts moving.
+      (5) **`Migrate` is not a no-op on a corrupt file, and that is deliberate.** A
+      `wheelStyle` of 47 has always RENDERED as the slick; after a save the file says so
+      (`0` / `wheel_slick`). It is a no-op on every design that exists today.
+      (6) **The PASS was proved able to fail — eight breaks over three runs**, because
+      unlike K1's these breaks share functions and would mask each other in one. Run 1
+      (three breaks inside `Migrate` plus two in the fallback arms, mutually orthogonal):
+      **17 named failures**. Run 2 (`Resolve` preferring the int over the key, in
+      `BodyCatalog`; `Resolve` ignoring both, in `WheelCatalog`): **28**. Run 3 (the body
+      `ByLegacy` arm bypassed, to reach the one message the first two could not): **13**.
+      Every distinct check message fired at least once. Restored byte-for-byte from
+      pre-break copies and re-run: ALL PASS, 57 rows.
+      One failure was **not** predicted and is the best argument for the idempotency check
+      being there: writing a wheel's MESH key instead of its save key makes the three
+      finishes fail a second `Migrate` — `wheel_slick` resolves to style 0, so saving twice
+      would silently strip gold rims off a car.
+      **Not run, read instead:** that `VehicleLibrary.Save` calls `Migrate` is a
+      one-statement wiring claim, and exercising it would mean writing into the user's own
+      `UnitySim/Vehicles/`. Loading from that directory IS exercised — the design dump
+      enumerates every file in it and diffed empty. **No `ProtocolVersion` bump here:** LAN
+      carries designs as `JsonUtility` text, an older peer ignores the two new fields, and
+      nothing reads them yet. The bump belongs at K5, where keys start deciding what gets
+      built.
+- [x] **K3 — Consumers, one per commit.** (a) `CarVehicle` body path — what renders.
+      (b) `AeroDynamics.BodyCd`/`BodyClA` — **physics-visible; run `[PHYS]` and the Opus
+      mission here, not at the end**. (c) `PartVisualFactory` wheel path + `ApplyWheelFinish`
+      keyed on `finish != None` rather than an int range; run `[COS]`.
+      (d) `CosmeticMounts` / `CosmeticProbe`.
+      **Delivered in three commits** — `730698d` (a), `60195d7` (b), `bdffc94` (c+d).
+      **All six switches BodyCatalog was transcribed from are gone**, plus the four
+      `WheelCatalog` was: `BodyMeshKey`, `BodyAccentTable`'s shape list, `BodyRenderScale`'s
+      Tiguan test, `HasPaintableBody`'s five names, `AeroDynamics.BodyCd`/`BodyClA`,
+      `CosmeticMounts.HasFoldedAppendages`, `WheelStyleKey`, `AuthorRadiusFor`,
+      `IsFullScale`, `FinishFor`.
+      Six things worth recording.
+      (1) **The verification had to be INVERTED, and this is the milestone's real lesson.**
+      An empty dump diff is what K0-K2 claimed, but at K3 it is equally consistent with
+      having failed to move the consumer at all — a switch left in place produces exactly the
+      same identical dump. So each step proved the opposite direction: break catalogue rows,
+      confirm the dump moves, in the places they name. K3a: three broken body rows moved the
+      design dump 76 lines — `body.key body_baja`→`body_coupe` with renderers 45→15 (meshKey),
+      `paintRenderers 0`→`36` on two Patrol designs (tokens), Tiguan `renderScale 1 1 1`→
+      `9.195 14.43 10.68` (unscaled). K3c: three broken wheel rows moved exactly four
+      sections — style2 (meshKey), style7 (finish), style13/14 from the single `fullScale`
+      break.
+      (2) **K3b is bit-identical where it counts.** Opus mission byte-for-byte equal to the
+      K0 baseline (`total_err_mm 58.238983154296878`, `drift_mm -42.45758056640625`,
+      `cruiseSpeedMean 4.499300479888916`), `[PHYS] ALL PASS (10 tests × 2 runs)`. A float
+      literal moved into a field and read back is the same bits, and this is the run that
+      says so rather than assuming it.
+      (3) **The reasoning moved with the numbers.** `AeroDynamics.BodyCd` was two switches of
+      literals plus the paragraph explaining why a slab-sided wrecker with a boom in the
+      airstream is the draggiest thing in the game. The paragraph is now in `BodyCatalog`
+      beside the numbers: a number whose explanation lives in another file is a number the
+      next person changes.
+      (4) **Deleted checks were replaced only where a real second source survived.** `[AKEY]`
+      lost eight transcriptions. `unscaled` was deleted outright rather than rewritten into a
+      tautology. `paintable` kept a manifest cross-check (a manifest can still contradict the
+      row). `cd`/`clA` became a range — 0.15 is a teardrop, 1.2 a flat plate broadside.
+      `authorRadius`/`fullScale` became the rule that was always the real one: only two
+      author radii exist, and `fullScale` must be exactly the row taking the second — which
+      IS the old `style == 13 || style == 14`, written once instead of three times.
+      (5) **Two switches stayed switches, deliberately.** The five primitive body builders
+      are hand-built geometry, not rows (they now read the RESOLVED legacy value, so a
+      catalogue body whose FBX did not ship falls back to the primitive its own row
+      nominates). And `CosmeticMounts`' `AppendageTokens` name pieces of geometry, not
+      bodies.
+      (6) **`PartModelBindingDump` still enumerates the ENUM, not the catalogue**, and after
+      K3a that is the point: it is what makes "every shape a saved design can carry is
+      covered" true rather than "every row the table happens to have".
+      **Deviations, stated:** (c) and (d) were gated together in one run rather than
+      separately — both are cosmetic-path, both watched by the binding dump, neither can
+      reach physics — and the design dump was not re-run for them. `CosmeticProbe`'s
+      `openTop` test (`Baja || Buggy`) was left alone: "has no roof" is a real body property
+      but adding it would be NEW data, not a move. **The one thing no gate watches** is
+      `HasPaintableBody`, which only `BodyPainter.CanPaint` reads — a garage UI decision no
+      headless run exercises.
+- [x] **K4 — Pickers.** `GarageUI` body + wheel pickers catalogue-driven; slider ranges move
+      into `BodyCatalog` so the Tiguan exclusion becomes *derived* (nominal size outside
+      slider reach) rather than a hard-coded name; delete `ShowroomUI.WheelNames`.
+      **Delivered.** `[AKEY] RESULT ALL PASS (13 bodies, 15 wheels)` with **57 PASS rows**
+      (unchanged — the four new checks fold into the existing per-row lines), the design dump
+      **byte-identical** to K3b's (3722 rows), zero compile errors. Seven files.
+      Five things worth recording.
+      (1) **The equivalence was measured, not asserted.** The deleted arrays are the only
+      second source these lists will ever have, and they exist only in git — so a throwaway
+      `K4Probe` printed the three catalogue-derived lists once and they were diffed against
+      the literals in the diff. Bodies came out `Box, Wedge, Buggy, Shell, LowRacer, Coupe,
+      Baja, Patrol, Rattle, Redline, Highwing, Autopia` (the enum minus Tiguan); the garage's
+      wheel ints came out `0,1,2,3,4,5,9,10,11,12`, exactly the hand-written `offered`; the
+      showroom's thirteen labels came out in the same order as the deleted `WheelNames`. The
+      probe was then deleted — a permanent check against arrays that no longer exist is a
+      transcription that expires the moment it is written.
+      (2) **`debugOnly` is now derived, and the derivation is a real second source.**
+      `BodyCatalog.SizeMin/SizeMax` are the garage's own slider range, moved out of `GarageUI`,
+      and `[AKEY]` holds `debugOnly == !Buildable(d)`. Two independent numbers — what the
+      sliders reach and what the shell is authored for — so the Tiguan is excluded because
+      it is 1.839 x 1.443 x 4.486 m against a 0.35 m ceiling, not because of its name. The
+      probe confirmed the Tiguan is the only row that fails it and every other row passes on
+      all three axes with room to spare.
+      (3) **`label` was freed and immediately re-pinned to something worth pinning.** The old
+      check held it to `legacy.ToString()` because the picker printed the enum name; a body
+      Asset Studio commits has no enum name, so the pin had to go. What replaced it — non-empty
+      and unique — is what a string that gets PRINTED actually has to be, and it caught nothing
+      only because the seeds are still `legacy.ToString()`.
+      (4) **Two stale-key hazards that K4 introduced and had to close in the same commit.**
+      Once the garage writes `wheelKey` beside `wheelStyle`, a key beside a stale int WINS —
+      so `SymmetryUtil.MirrorInto` copying only the int would have left a mirrored wheel
+      quietly keeping the style its partner just changed away from, and
+      `ProgressStore.ApplyLoadout` overriding only the int would have made an unlocked
+      showroom wheel simply not appear on any car the player designed. The mirror copies both;
+      the loadout clears the key, which is what "the int is the answer here" means until K5
+      gives the loadout a key of its own.
+      (5) **Four new `[AKEY]` checks, all proved able to fail.** Eight breaks in one run —
+      an empty label, a duplicate label, a body hiding itself for no reason, the reference car
+      offering itself, a duplicate wheel label, a finish claiming to be a garage choice, a
+      mid-table wheel hiding itself, and a reference wheel stopping being one — produced
+      **9 FAIL rows and 10 named messages** (the Tiguan wheel trips two), every distinct
+      message at least once, 48 PASS + 9 FAIL = 57. Restored byte-for-byte from pre-break
+      copies (MD5 checked) and re-run: ALL PASS, 57.
+      The one genuinely new rule is the **contiguity** check: `ShowroomUI` builds its cycle
+      from the non-`debugOnly` rows and then indexes it by `wheelStyle`, so those rows have to
+      be the front of the table with no gap. Inserting a reference wheel in the middle would
+      silently rename every showroom wheel after it, and nothing else would notice.
+      **Not run, and why:** the binding dump and `[COS]` cannot see this milestone — K4 touches
+      no build path, only which rows a picker offers and what it calls them. **Not covered:**
+      the pickers themselves. Both are IMGUI, drawn only in a live garage or showroom, so the
+      lists and labels are measured (above) but no gate presses the buttons. Also stale-doc
+      cleanup, overdue since K3: both catalogue class docs still said "nothing calls this yet".
+- [x] **K5 — Presets + progression.** Presets author keys; `VehicleLoadout.wheelKey`,
+      `UnlockItem.wheelKey`, `ApplyLoadout`. **Verify:** an existing `progress.json` with
+      `wheelStyle: 7` still yields gold wheels.
+      **Delivered.** `[AKEY] RESULT ALL PASS (13 bodies, 15 wheels)` with **72 PASS rows** —
+      K4's 57 plus 9 presets and 6 loadouts — the design dump **byte-identical** (3722 rows),
+      `[COS] ALL PASS`, zero compile errors. Six files. **`NetSession.ProtocolVersion` 15 → 16.**
+      Six things worth recording.
+      (1) **The gold-wheel check the plan owed is a `[AKEY]` section, built from TEXT.** The
+      design dump structurally cannot witness it — no design in its enumeration uses styles
+      6-8 — so the loadout section parses hand-written `progress.json` fragments and applies
+      them to a real preset. Five rows: a pre-K5 file (`{"wheelStyle":7}`, no key member at
+      all) still yields `slick_gold`; both halves agreeing; the two **disagreeing** and the
+      key winning; **key-only with `wheelStyle` still −1**, which is what an Asset Studio
+      wheel will look like; and untouched, where the Coupe keeps its own wheel. The first two
+      pass even with the resolution broken, which is exactly why the last three exist.
+      (2) **The presets author keys only, and one wrapper makes the pair agree.** `Keyed()`
+      in the `All` table calls `VehicleDesign.Migrate` — the same function `VehicleLibrary.Save`
+      uses, so the same answer. It is there rather than in `Resolve` because four callers reach
+      past `Resolve` into `All[i].build`, and one of them (`CosmeticProbe`) reads `bodyShape`
+      raw: a design handed out with a key and a stale Box beside it is a different car
+      depending on which field the reader trusts. `[AKEY]`'s preset section checks the
+      OUTPUT, so it does not care which route produced it.
+      (3) **A typo'd preset key was silent, and is not any more.** `Migrate` HEALS an unknown
+      key into the box — right for a corrupt save, wrong for code — so the check that would
+      have caught it passes. `Keyed` now says so by name before healing, attributed to the
+      preset. Proved: `[VehiclePresets] 'TT Baja' names body key 'body_bajaa', which is not a
+      BodyCatalog row. It will build as a box.`
+      (4) **`ApplyLoadout` gained an overload taking a loadout rather than a name**, because
+      `LoadoutFor` ADDS an entry for a name it has never seen. Reading the player's progress to
+      test a parser is one thing; growing it is another, and `[AKEY]` must not write to
+      `progress.json`.
+      (5) **The showroom's `v >= 6` range test is gone.** `UnlockItem.wheelKey` names the wheel
+      an unlock sells, and `UnlockCatalog.ByWheelKey` finds it — so a wheel with no unlock row
+      is simply free rather than accidentally locked. That range test was the same shape as
+      the `style < 6` one that nearly painted four Legendary wheels neon pink, and no int test
+      can be true or false about a wheel that has no int. `[AKEY]` checks it both ways: every
+      finish has a row, no free wheel has one, and each row's surviving `payload` still agrees
+      with the style.
+      (6) **The protocol bump belongs here and nowhere earlier.** Until presets and progression
+      started AUTHORING keys, nothing could put a key on the wire that the int beside it did
+      not already say. Now it can, and a v15 peer dropping an unknown `bodyKey` would read the
+      int — which for a genuinely new body says Box, because there was no enum value to write.
+      Same invisible failure as v15's track names, same answer.
+      **Six breaks, one run** — a forgotten `Keyed`, a typo'd body key, the loadout preferring
+      the int, the "chose" guard forced true, an unlock losing its key, and an unlock locking a
+      free wheel — produced **5 FAIL rows with 12 named messages** plus the preset LogError,
+      67 PASS + 5 FAIL = 72. Restored byte-for-byte (MD5 checked) and re-run: ALL PASS, 72.
+      **Not covered:** the wire itself. The bump is a constant, and nothing headless speaks LAN
+      — a v15/v16 mismatch refusing to connect is owed to two machines.
+
+### Phase 4 — commit, validate, document
+
+- [x] **C1 — Commit pipeline.** `AssetStudioCommit.cs`: gate on `verification` (override needs
+      a mandatory reason, written into the manifest and printed by every `[AST]` run) →
+      `EnsureFolder` → MD5-guarded FBX + referenced-textures copy → write manifest →
+      `ImportAsset(ForceUpdate)` → **derive `slots[]` and measure `authorSize` off the
+      imported prefab** → register the key → reset every runtime cache → stamp
+      `committedHash`. Menu items `1. Sync`, `2. Commit all`, `3. Refresh imports`,
+      `4. Reset caches`, `Rebuild everything`. Stale/Drifted detection from `exportedAtUtc`
+      and `fbxMd5`, with a re-import diff that **preserves damage tags and slot bindings by
+      object name** and lists orphans rather than dropping 41 hand-set tags silently.
+      **Verify:** commit POLICE, Play, drive a correctly sized and oriented police car with
+      chrome chrome and lit lenses. Commit twice → `0 copied, N already current`, no `.meta`
+      churn.
+      **Delivered in two commits** — `53933d1` (the pipeline that writes) and `fbb4208`
+      (the registry and the runtime correction) — split for K3's reason: the first touches
+      nothing the game reads, the second changes a render path the design dump watches.
+      `[AKEY] RESULT ALL PASS (13 bodies, 15 wheels)` with **72 PASS rows** (unchanged), the
+      design dump **byte-identical** to K5's (3722 rows), `[COS] ALL PASS`, zero compile
+      errors. Both halves proved by throwaway probes deleted with their fixtures: **47
+      checks ALL PASS** for the pipeline, **46 for the registry**.
+      Nine things worth recording.
+      (1) **`authorSize` is recorded, NOT applied, and the plan's own doc said otherwise.**
+      The divisor a design's `bodySize` is a ratio against has to stay the NOMINAL box:
+      dividing by a committed asset's real extents would stretch a correctly proportioned
+      car 1.079× wide and squash it 0.826× tall to fill a box no shell actually fills —
+      undoing the uniform scale for nothing. So the uniform factor is its own field,
+      `authorScale`, and it MULTIPLIES the divide rather than replacing the divisor. It is
+      1 for all thirteen seed rows, which is why every shipped car still renders at exactly
+      `1:1:1` and the dump diffs empty. `authorSize` is what the mesh MEASURES, for the
+      validator to hold to within 2 mm.
+      (2) **The manifests ARE the registry.** `BodyCatalog`/`WheelCatalog`/`CosmeticCatalog`
+      compose `All` from their seed rows plus every manifest discovered under a Resources
+      root (`Resources.LoadAll<TextAsset>` filtered to the `_asset` suffix — the one
+      enumeration Resources offers, and the project's single hand-written
+      `tiguan_materials.json` is correctly not one of them). No registry file, so nothing
+      can disagree with what is on disk; seed wins on collision, so a committed asset can
+      never redefine a shipped car out from under a save that names it.
+      (3) **`Seed` and `All` are different tables now, and that is the migration story.**
+      A committed row has no enum value at all — that IS "a new car without a code change" —
+      so `[AKEY]`'s enum-coverage and migration sections moved to `Seed`. Holding a
+      discovered row to "a legacy-only design resolves to this row" would refuse the thing
+      the milestone exists to allow. Its legacy is `Box` / style 0, which is exactly what an
+      older build reading the int beside the key will build, and is unfixable with
+      `JsonUtility`.
+      (4) **The idempotence claim was false on the first run, and the counter that measured
+      it was too weak to say so honestly.** The manifest was written twice per commit —
+      once before the import so the postprocessor could read `materialMode`, once after with
+      the measured slots — so a second commit rewrote it. The pre-write now happens only
+      when the file is absent or names a different mode; everything the measured write fills
+      in is a function of the draft and the import, so it reproduces the file byte for byte.
+      The check was rewritten to hash **every file under the key, `.meta` included**, and
+      assert none moved: "a second commit touches nothing" is a statement about bytes, not
+      about a counter that can agree while a file is rewritten with identical content.
+      (5) **A real bug caught in a file the probe was not testing.** `Propose` read the
+      ROW's inferred kind rather than the kind the author picked on the draft; an export with
+      no key and no Resources folder is `Unassigned`, so **every wheel committed from a fresh
+      export was scaled to a body's 0.420 m length**. It measured 0.42 where it should have
+      measured 0.066, and the wheel check was the only thing in the run that could see it.
+      (6) **A wheel needs no `authorScale`, and proving that was the point of committing a
+      police car as a tyre.** The wheel path already instantiates at `radius / authorRadius`,
+      so recording the mesh's RAW radius makes that one divide do both jobs. The probe built
+      it and measured **33.0 mm**. The body cannot do the same, because it divides per axis.
+      (7) **Import ORDER, and why this pipeline does not batch.** `StartAssetEditing` defers
+      every import to the end, which is precisely the ordering R4 measured the postprocessor
+      cannot survive: a Verbatim model imported alongside its materials resolves none of them,
+      since `LoadAssetAtPath` only sees what Unity has already imported. So the copies are
+      plain file writes and the imports are ordered by hand — sidecar first, model second.
+      (8) **The cosmetic registry question, decided.** A cosmetic that imports, validates and
+      previews but cannot be worn stops one step short of the thing the pipeline was built
+      for, so the registry does grow a data-driven source. It stays five authored fields;
+      scrap value and shop price come from the RARITY through the same table the 47 shipped
+      cosmetics use, so a new hat cannot reprice the economy, and there is no cheat code.
+      `UnlockCatalog` composes its pool from `CosmeticCatalog`, so a committed hat reaches
+      the crates and the shop with no further wiring — and its cache had to be reset with
+      that one, or the hat is in the shop and out of the crates.
+      (9) **Two consumers moved with the tables, and one check died with its consumer.**
+      `ShowroomUI` stops indexing its cycle by `wheelStyle` and looks the position up from
+      the row it resolves to, writing the ROW's legacy rather than the picker position —
+      writing the position would hand an older build the Tiguan's front rim. K4's
+      contiguity check guarded exactly that indexing, so it went with it, per K1's own rule.
+      And the preview now binds a committed asset through `AssetManifestBinder`, the debt R3
+      recorded and could not pay until an asset existed that could disagree.
+      **Refusals, all twelve proved able to fire, one break each:** empty or illegal key,
+      wrong prefix, unassigned kind, prop, **fitting** (no registry to join — its key comes
+      from a switch on an int, so a committed one would import and be asked for by nothing),
+      overwriting a shipped asset, override without a reason, dangling slot, unverified slot
+      order, no drag coefficient, non-positive scale, off-quarter yaw, unparseable cosmetic
+      slot. A body with no `cd` is refused rather than defaulted: a car whose top speed was
+      chosen by a fallback constant is a car nobody chose.
+      **Not covered:** the manual half of the verify. Nothing headless enters Play, so
+      "drive a correctly sized police car with chrome chrome and lit lenses" is owed to a
+      human — the size, the yaw, the stamp and the per-slot binding are each measured
+      headlessly off a built instance, but *looking* at it is not. Also **`exportedAtUtc` is
+      recorded and deliberately not part of the drift verdict**: a re-export with identical
+      geometry moves the timestamp and changes nothing, and calling that "drifted" would
+      train an author to ignore the word.
+- [x] **C2 — `[AST]` validator + `[PMV]` union.** Manifest integrity, material/object
+      coverage, texture wiring and import settings, the geometry contract (`authorSize`
+      within 2 mm of measured, `authorYawDeg` a multiple of 90, `body_*` length on +Z after
+      yaw), source freshness (**SKIP, not FAIL, when no source root is configured**), and
+      declared overrides. `PartModelValidator.AllSpecs()` = the 207 literals ∪ manifest specs,
+      duplicate keys a hard fail. **Verify:** break each check on purpose, get one named
+      failure each; grep both RESULT lines from a batch run.
+      **Delivered.** `[PMV] RESULT ALL PASS (207 assets, 0 committed)` with 207 PASS rows and
+      0 FAIL, `[AST] RESULT ALL PASS (0 managed asset(s), 0 source check(s) skipped)`,
+      `[AKEY] RESULT ALL PASS (13 bodies, 15 wheels)` with 72 rows — all unchanged — and zero
+      compile errors. One new editor file plus two edited ones, all under `Assets/Editor/`.
+      Proved by a throwaway probe, deleted with its fixtures: **58 checks ALL PASS**, over four
+      fixtures (POLICE committed as a body, a wheel, a cosmetic and a Verbatim body) and
+      **27 deliberate breaks, one per check, each producing its own named sentence**.
+      Seven things worth recording.
+      (1) **Every check compares two things that can disagree**, which is the only thing worth
+      checking about a file the pipeline wrote itself. The manifest against the imported
+      prefab (objects, slot counts, measured size, triangle count), the map paths against
+      `Resources`, the import settings against the SLOT the map is bound to, `committedHash`
+      against the FBX on disk, and the key against the catalogue that is supposed to have
+      composed a row for it.
+      (2) **The measurement is the pipeline's own, not a transcription of it.**
+      `AssetStudioCommit.MeasuredSize` was extracted and both callers use it, so
+      `authorSize` moves only when the geometry does — a validator carrying its own copy of
+      that arithmetic would be checking a copy against a copy.
+      (3) **`[PMV]`'s rig now applies the correction before it measures**, and that was
+      forced by the union rather than chosen: a committed asset keeps its Blender scale and
+      orientation in the FBX on purpose, so the raw prefab measures 5.28 m where the spec
+      says 0.42. The two lines are inert for all 207 literal rows (scale 1, yaw 0) and are
+      the difference between measuring the FBX and measuring the car for every managed one.
+      (4) **`TokenTrouble` must not run on a managed asset**, and the reason is the same one
+      the Tiguan note already carries one level up: a manifest asset binds by object name and
+      slot and has never heard of the token tables, so the check would either pass by finding
+      nothing or fail an innocent asset for owning a piece called "chrome_1".
+      (5) **A committed row states less than a shipped one and should.** A literal row is an
+      independent prediction; a manifest row carries `specSource: "measured"` and can only say
+      the mesh has not grown since it was committed. So the commit now records a triangle
+      budget (measured +15 %, the same derivation the 47 shipped cosmetic rows use) and the
+      tight size check lives in `[AST]` at 2 mm — stricter than the ±10 % window the shipped
+      cosmetics carry, and possible only because a manifest records what its own asset
+      measured. A budget of 0 reads as "unbudgeted" in `[PMV]` and is a named `[AST]` failure,
+      rather than silently failing every triangle.
+      (6) **Two texture checks could not be broken the way I first tried, and the failed
+      attempt improved them.** Editing the `TextureImporter` does nothing: R2's texture
+      postprocessor re-asserts sRGB-off and NormalMap by FILE NAME on every import, so the
+      setting is corrected before the gate sees it. The failure that survives that
+      postprocessor is a map whose name does not match the rule — so the break became binding
+      an sRGB albedo into the metallic/smoothness slot, which is the real-world shape, and
+      the check reads as intended: the SLOT decides what a texture has to be, not its name.
+      (7) **Two whole-project cross-checks, both promised by existing doc comments and
+      neither previously made.** The runtime's `AssetKinds` strings against the editor's
+      `AssetKind` enum (one vocabulary written twice, because the runtime cannot see the
+      editor assembly), and `AssetStudioCommit`'s idea of where a Verbatim asset's materials
+      go against `PartModelPostprocessor`'s — computed separately from a kind and a key on
+      one side and a model path on the other, and invisible until an author picks Verbatim
+      and gets fourteen missing materials.
+      **Stated rather than discovered later:** a Verbatim asset from the CURRENT exporter
+      cannot pass this gate, and that is the correct answer — its `.mat` files are URP and
+      resolve here to `Hidden/InternalErrorShader`, which is R4's finding promoted from a
+      warning to a failure with the way out named. **Not run:** the design dump and the
+      binding dump, because every changed line is under `Assets/Editor/` and cannot reach a
+      build path. **Not covered:** the source-freshness half needs an export folder, so
+      `DRIFTED` is reported as news rather than as a failure — Blender moving on is not a
+      defect in this repository — and on a machine with no export root configured that half
+      is skipped and counted in the RESULT line.
+- [x] **C3 — Docs.** Rewrite `Docs/asset-authoring.md` §4 (the three hypothetical routes
+      become the two shipped modes), add the manifest schema and the scale/yaw correction,
+      and a memory file for the pipeline.
+      **Delivered.** §4 went from 43 lines of three hypotheticals to seven subsections of
+      shipped pipeline: the two modes as a table, the scale/yaw correction and why it is
+      recorded rather than baked into `globalScale`, the annotated manifest schema with the
+      eight things worth knowing before hand-editing one, committing and its twelve refusals,
+      what a committed asset joins, the two gates, and the one thing this does not buy you
+      (`AccentTokens` is still a code table). Memory: `asset-studio-pipeline.md`, indexed.
+      **Four things elsewhere in the doc were made FALSE by C1/C2 and were corrected**, which
+      was not in the milestone's wording and would have left the document arguing with
+      itself: §1's "the `.meta` GUID being foreign changes nothing" (true of a mesh, false
+      of a `.mat` and its textures — that GUID collision is a named refusal now); §1's list
+      of roots, which omitted `Cosmetics/`; §2's `BodyShape`→key switch table, now
+      `BodyCatalog.Resolve` with `Seed` vs `All` spelled out; and §2's flat "the FBX's own
+      materials are ignored", which is true of the 207 shipped assets and of nothing else.
+      §3 gained the finish-vs-mesh-key distinction and the composed half-turn; §6 gained the
+      sentence saying why props are refused and what adding them would actually cost.
+      Also corrected: §2's Scale now says outright that `BodyMeshAuthorSize` is a nominal
+      divisor and must not be "fixed" to a measured size — the exact mistake C1 caught in
+      this plan's own text.
+
+### Phase 5 — replace the mesh behind a shipped key (added mid-session)
+
+The user asked to swap `body_patrol`'s geometry for a new export while keeping the key, the
+saves and the seed row. Delivered as five steps, all committed:
+
+- [x] **W1 — Slot-order probe**, **W2 — Replace mesh entry point** (`AssetStudioReplace.cs`,
+      `MayReplace` as the permission the commit gate also reads), **W3 — `Compose()`** so a
+      manifest under a seed key supplies the measured fields, **W4 — `[PMV]`** treating a
+      committed manifest as superseding its literal row, **W5 — end-to-end replace**.
+- [x] **Preview fix** (`b191eb2`): `PreviewPath` answered `r.HasProject` first, so the
+      viewport showed the mesh being *replaced* right up to the commit. A row mid-replace has
+      two meshes and "in the project" is the wrong one. `Replacing()` asks
+      `AssetStudioDraft.MayReplace(key)` — the same check the commit gate reads — rather than
+      "has both an export and a project file", because a *drifted* managed asset has both and
+      is not being replaced.
+- [x] **`authorOffset`** (`92ba7bb`): the pivot fix an export cannot propose. In MESH units
+      (a pivot 14 % of the car's height too high stays 14 % too high at every `bodySize` a
+      design asks for), applied after the yaw and inside the scale, as an **inserted node
+      built only when the offset is non-zero** — the root's `localPosition` is in the
+      caller's space and every caller sets `localScale` on it a line later. A translation
+      does not change a bounding box's extents, so `authorSize` and the 2 mm gate are
+      untouched and an author can nudge a car without re-measuring. Commit and `[AST]` both
+      refuse an offset larger than the mesh's own extents, naming the conversion in both
+      directions. Design dump byte-identical with the feature in and stashed out.
+
+---
+
+## Verification (end-to-end)
+
+1. `DumpBindings` before R1 and after every R milestone — **empty diff is the claim**.
+2. The extended design dump before K0 and after every K milestone — same.
+3. `[PHYS]` ten scenes + the Opus mission at **K3b**, where drag moves.
+4. `[COS]` at K3c. `[AKEY]`, `[AST]`, `[PMV]`, `[TPV]`, `[PACK]` at C2.
+5. Manual: commit POLICE both ways (manifest and verbatim), confirm the preview matches Play
+   in each, and that paint mode is offered in manifest mode and refused in verbatim.
+
+## Risks / open items
+
+- **Phase 3 is the risky half.** It touches every saved design, LAN payloads and snapshots.
+  Bump `NetSession.ProtocolVersion` 15 → 16 at K5, not earlier — a LAN race where the cars do
+  not match is worse than one that refuses to start (`NetSession.cs:89-90`).
+- **One unclosable data-loss path**: a new build writes `{bodyKey, bodyShape}`; an *old* build
+  loads and re-saves it; `JsonUtility` drops the unknown field and the design is permanently
+  a Box. Unavoidable with `JsonUtility` + downgrade. Document it in the field's doc comment;
+  do not build machinery against it.
+- **`AccentTokens` stays a code table**, so a new body wanting *new* material tokens still
+  needs code unless it ships a manifest. The claim is "no code change for a manifest asset",
+  not "no code change ever" — say so rather than imply more.
+- **Cosmetics need a `CosmeticItem` row** (id, slot, rarity, theme, price) the same way props
+  needed an `ItemDef`. Smaller than the prop problem, but real: if the registry does not grow
+  a data-driven cosmetic source, the tool's cosmetic path stops at "imported and validated".
+  Decide at C1.
+- **Bounds-level picking only** in the preview — Resources meshes are mostly
+  `isReadable = false`, so triangle picking would need the CPU copy. Say so in the tooltip.
+- **Cross-asset child mesh swap** ("assign new meshes from either parent or child items") is
+  deferred past C3. A mesh swapped in from a foreign FBX arrives with a foreign pivot, scale
+  and slot count; it is a feature designed for a destruction system that does not exist yet.
 
 ---
 
