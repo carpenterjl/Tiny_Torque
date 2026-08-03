@@ -73,20 +73,48 @@ namespace AIHWSim.Core
             // past the bot path, respawn, arena nav and race director — everything
             // that makes a track a track. Going through the real branch below costs
             // nothing and means the scene you test is the scene the game loads.
+            var driving = Boot.DrivingSceneDescriptor.Find();
+
             if (!GameFlow.HasSceneTrack)
             {
                 var here = FindFirstObjectByType<AIHWSim.Track.SceneTrackDescriptor>();
                 if (here != null)
                 {
                     GameFlow.ActiveSceneTrack = here.gameObject.scene.name;
-                    if (GameFlow.ActiveDesign == null)
-                        GameFlow.ActiveDesign = VehiclePresets.Resolve("TT Patrol");
                     // SessionConfig.ResolvePlayers already synthesises a single
                     // merged-input human from ActiveDesign when the roster is empty,
                     // so no PlayerSlot needs building by hand here.
                     if (SessionConfig.Players.Count == 0) SessionConfig.SetSinglePlayer();
+
+                    // THE one place a level's authored rules are applied, and the
+                    // reason is the condition around it: reaching here means
+                    // nothing outside this scene named a track and the scene names
+                    // itself one, which is a state the menu never produces. Order
+                    // matters — SetSinglePlayer above resets the rules to
+                    // free-drive, so the scene's own rules have to land after it.
+                    string wanted = driving != null ? driving.ApplyLevelDefaults() : null;
+
+                    if (GameFlow.ActiveDesign == null)
+                    {
+                        // Resolve returns null for a name it does not know, and a
+                        // null design silently becomes VehicleDesign.Default() eight
+                        // lines further down — a typo in an Inspector field would
+                        // otherwise present as "why is this the wrong car".
+                        var chosen = wanted != null ? VehiclePresets.Resolve(wanted) : null;
+                        if (chosen == null && wanted != null)
+                            Debug.LogWarning($"[TrackBootstrap] LevelSettings names preset "
+                                + $"'{wanted}', which is not a VehiclePresets row. Falling "
+                                + "back to TT Patrol.");
+                        GameFlow.ActiveDesign = chosen ?? VehiclePresets.Resolve("TT Patrol");
+                    }
                 }
             }
+
+            // The scene's step, if it authored one. Read before any rig is built:
+            // every SimulationRunner below is handed these two numbers, and the
+            // first one to Start writes Time.fixedDeltaTime for the whole process.
+            physicsRateHz = driving != null ? driving.PhysicsRate(physicsRateHz) : physicsRateHz;
+            controlRateHz = driving != null ? driving.ControlRate(controlRateHz) : controlRateHz;
 
             // LAN sessions have their own composition paths (host simulates all
             // cars; clients render ghosts). Guard against a stale mode with no
