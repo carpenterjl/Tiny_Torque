@@ -76,7 +76,10 @@ namespace AIHWSim.Core.Config
         [Tooltip("Preset name to drive when this scene is entered directly rather than " +
                  "through the garage or the menu. Empty falls back to whatever the " +
                  "bootstrap's own default is. A design already chosen — by the menu, by " +
-                 "a snapshot, or by DebugVehicleSpawner — always wins over this.")]
+                 "a snapshot, or by DebugVehicleSpawner — always wins over this.\n\n" +
+                 "Read once, when the scene loads. Editing it during Play does not " +
+                 "swap the car you are already driving; to tune THAT car, select it in " +
+                 "the hierarchy and use its Live Car Tuner.")]
         public string defaultDesignName = "TT Patrol";
 
         /// <summary>

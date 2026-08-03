@@ -75,38 +75,52 @@ namespace AIHWSim.Core
             // nothing and means the scene you test is the scene the game loads.
             var driving = Boot.DrivingSceneDescriptor.Find();
 
+            // Nobody outside this scene chose this session: the menu, a
+            // championship round, a LAN join and a resumed snapshot all arrive
+            // through GameFlow.LoadTrack, which is the only LoadScene call in the
+            // project that reaches a track. Pressing Play arrives through nothing.
+            // See GameFlow.LaunchedFromMenu for why this replaced the older proxy
+            // ("the scene names itself a track"), which missed every driving scene
+            // whose geometry comes from a tile map or a terrain.
+            bool directPlay = !GameFlow.LaunchedFromMenu && Net.NetSession.Instance == null;
+
             if (!GameFlow.HasSceneTrack)
             {
                 var here = FindFirstObjectByType<AIHWSim.Track.SceneTrackDescriptor>();
-                if (here != null)
+                // Adopting the scene as the track is about geometry, and is right
+                // whatever chose the session; it stays outside the directPlay gate.
+                if (here != null) GameFlow.ActiveSceneTrack = here.gameObject.scene.name;
+            }
+
+            if (directPlay)
+            {
+                // SessionConfig.ResolvePlayers already synthesises a single
+                // merged-input human from ActiveDesign when the roster is empty,
+                // so no PlayerSlot needs building by hand here.
+                if (SessionConfig.Players.Count == 0) SessionConfig.SetSinglePlayer();
+
+                // THE one place a level's authored rules are applied. Order
+                // matters — SetSinglePlayer above resets the rules to free-drive,
+                // so the scene's own rules have to land after it.
+                string wanted = driving != null ? driving.ApplyLevelDefaults() : null;
+
+                if (GameFlow.ActiveDesign == null)
                 {
-                    GameFlow.ActiveSceneTrack = here.gameObject.scene.name;
-                    // SessionConfig.ResolvePlayers already synthesises a single
-                    // merged-input human from ActiveDesign when the roster is empty,
-                    // so no PlayerSlot needs building by hand here.
-                    if (SessionConfig.Players.Count == 0) SessionConfig.SetSinglePlayer();
-
-                    // THE one place a level's authored rules are applied, and the
-                    // reason is the condition around it: reaching here means
-                    // nothing outside this scene named a track and the scene names
-                    // itself one, which is a state the menu never produces. Order
-                    // matters — SetSinglePlayer above resets the rules to
-                    // free-drive, so the scene's own rules have to land after it.
-                    string wanted = driving != null ? driving.ApplyLevelDefaults() : null;
-
-                    if (GameFlow.ActiveDesign == null)
-                    {
-                        // Resolve returns null for a name it does not know, and a
-                        // null design silently becomes VehicleDesign.Default() eight
-                        // lines further down — a typo in an Inspector field would
-                        // otherwise present as "why is this the wrong car".
-                        var chosen = wanted != null ? VehiclePresets.Resolve(wanted) : null;
-                        if (chosen == null && wanted != null)
-                            Debug.LogWarning($"[TrackBootstrap] LevelSettings names preset "
-                                + $"'{wanted}', which is not a VehiclePresets row. Falling "
-                                + "back to TT Patrol.");
+                    // Resolve returns null for a name it does not know, and a null
+                    // design silently becomes VehicleDesign.Default() — a typo in an
+                    // Inspector field would otherwise present as "why am I driving
+                    // the Stock RC".
+                    var chosen = wanted != null ? VehiclePresets.Resolve(wanted) : null;
+                    if (chosen == null && wanted != null)
+                        Debug.LogWarning($"[TrackBootstrap] LevelSettings names preset "
+                            + $"'{wanted}', which is not a VehiclePresets row. Falling "
+                            + "back to TT Patrol.");
+                    // A hand-authored scene has always defaulted to TT Patrol on a
+                    // direct Play, and still does. TrackScene never has: a plain
+                    // Play there with no LevelSettings keeps landing on
+                    // VehicleDesign.Default(), as it always has.
+                    if (wanted != null || GameFlow.HasSceneTrack)
                         GameFlow.ActiveDesign = chosen ?? VehiclePresets.Resolve("TT Patrol");
-                    }
                 }
             }
 

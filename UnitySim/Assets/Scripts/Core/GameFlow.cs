@@ -1,5 +1,6 @@
 using AIHWSim.Garage;
 using AIHWSim.TrackEd;
+using UnityEngine;
 using UnityEngine.SceneManagement;
 
 namespace AIHWSim.Core
@@ -60,6 +61,37 @@ namespace AIHWSim.Core
         public static Persistence.SessionSnapshot PendingSnapshot;
 
         /// <summary>
+        /// True once something outside a scene has chosen this session — the menu,
+        /// a championship round, a LAN join, a resumed snapshot. All of them reach
+        /// a track through <see cref="LoadTrack"/>, and <see cref="LoadTrack"/> is
+        /// the only <c>LoadScene</c> call in the project that reaches one. Pressing
+        /// Play in a scene reaches it through nothing.
+        ///
+        /// That is exactly the distinction a scene's authored defaults need: they
+        /// are defaults for the case where nobody else decided. The condition this
+        /// replaces — "the scene names itself a track" — was a proxy for it, and
+        /// too narrow: a driving scene that gets its geometry from a tile map or a
+        /// terrain has no <c>SceneTrackDescriptor</c>, so its
+        /// <c>DrivingSceneDescriptor</c> was read for solver and assists and
+        /// silently ignored for rules and car.
+        ///
+        /// <b>Never cleared during a session.</b> Once the menu has chosen a car
+        /// and a rule set it stays in charge for the whole process; a restart or a
+        /// trip through the garage must not hand the scene's defaults back the
+        /// wheel.
+        /// </summary>
+        public static bool LaunchedFromMenu { get; private set; }
+
+        /// <summary>
+        /// Statics survive a scene load, which is the point of this class — but
+        /// they also survive entering Play mode when domain reload is disabled,
+        /// which would make the second Play of a session look menu-driven. Same
+        /// guard, and the same reason, as <c>PhysicsRateAuthority.Reset</c>.
+        /// </summary>
+        [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.SubsystemRegistration)]
+        private static void ResetLaunchState() => LaunchedFromMenu = false;
+
+        /// <summary>
         /// Load whatever track is selected. A tile map or the oval loads
         /// <c>TrackScene</c>; a scene track loads ITSELF single (so its render
         /// settings, skybox and baked lighting become the active scene's) and pulls
@@ -69,6 +101,10 @@ namespace AIHWSim.Core
         /// </summary>
         public static void LoadTrack()
         {
+            // Whoever called this made the choices a scene would otherwise make
+            // for itself. Set before the load, because the bootstrap that reads it
+            // runs inside it.
+            LaunchedFromMenu = true;
             if (HasSceneTrack)
             {
                 SceneManager.LoadScene(_activeSceneTrack, LoadSceneMode.Single);

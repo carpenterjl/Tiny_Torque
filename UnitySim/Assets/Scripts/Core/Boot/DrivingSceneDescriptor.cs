@@ -27,25 +27,26 @@ namespace AIHWSim.Core.Boot
     /// <item><b>Rules are defaults, never overrides.</b> Laps, countdown, mode
     /// and the arcade layer are the player's choice, and the menu has already
     /// made it by the time a scene loads. <see cref="ApplyLevelDefaults"/> is
-    /// therefore called by <c>TrackBootstrap</c> from ONE place — the branch
-    /// that already exists for "someone pressed Play directly in an authored
-    /// scene, so there was no menu to have chosen anything".</item>
+    /// therefore called by <c>TrackBootstrap</c> from ONE place, gated on
+    /// <c>GameFlow.LaunchedFromMenu</c> being false.</item>
     /// </list>
     ///
-    /// <b>Why not a condition of its own.</b> Deciding "was this session
-    /// menu-driven?" from the outside is harder than it looks: a single-player
-    /// race leaves <c>SessionConfig.Players</c> empty exactly as a direct Play
-    /// does, and a menu-chosen procedural oval leaves both track carriers null
-    /// exactly as a direct Play into TrackScene does. The bootstrap's existing
-    /// branch is not a heuristic — it is reached only when nothing outside this
-    /// scene named a track AND the scene names itself one, which the menu never
-    /// produces. Borrowing it is strictly safer than inventing a second rule
-    /// that has to agree with it forever.
+    /// <b>What "nobody else chose this" means, exactly.</b> Not a heuristic over
+    /// session state — that was tried and it was wrong. A single-player race
+    /// leaves <c>SessionConfig.Players</c> empty exactly as a direct Play does,
+    /// and a menu-chosen oval leaves both track carriers null exactly as a
+    /// direct Play into TrackScene does. The honest signal is the entry point:
+    /// <c>GameFlow.LoadTrack</c> is the only <c>LoadScene</c> call in the
+    /// project that reaches a track, so every externally chosen session passes
+    /// through it and a Play button passes through nothing.
     ///
-    /// The consequence, stated rather than discovered: <b>in TrackScene itself
-    /// — the procedural oval and the tile maps — the level rules are not
-    /// applied</b>, because that branch does not fire there. The solver and
-    /// assist assets still are.
+    /// The first version of this borrowed a narrower condition — "the scene
+    /// names itself a track" — and it under-covered by exactly the scenes that
+    /// most want authoring: a driving scene whose geometry comes from a tile map
+    /// or a terrain has no <c>SceneTrackDescriptor</c>, so its rules and its
+    /// <c>defaultDesignName</c> were read and silently dropped while the solver
+    /// and assist assets applied. Half-working is the worst outcome available,
+    /// because the half that works is the half nobody looks at.
     /// </summary>
     [DefaultExecutionOrder(-4000)]
     public sealed class DrivingSceneDescriptor : MonoBehaviour
