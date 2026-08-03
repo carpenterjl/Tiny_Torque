@@ -252,13 +252,7 @@ namespace AIHWSim.Core
 
         private Camera TakeCamera()
         {
-            Camera cam = Camera.main;
-            if (cam == null)
-            {
-                var go = new GameObject("Main Camera") { tag = "MainCamera" };
-                cam = go.AddComponent<Camera>();
-                go.AddComponent<AudioListener>();
-            }
+            Camera cam = Boot.SceneRig.CameraOrCreate();
             // 3 km: the circuits are long, and the chase distance below is sized
             // for a 4.5 m car rather than a 0.42 m one.
             cam.farClipPlane = Mathf.Max(cam.farClipPlane, 1500f);

@@ -76,15 +76,14 @@ namespace AIHWSim.Core
         {
             var runnerGo = new GameObject("SimulationRunner");
             var runner = runnerGo.AddComponent<SimulationRunner>();
-            runner.physicsRateHz = physicsRateHz;
-            runner.controlRateHz = controlRateHz;
-            runner.logCsv = logCsv;
-            runner.vehicleBehaviour = rig.car;
-            runner.inputBehaviour = rig.input;
-            runner.sensorRig = rig.sensors;
-            runner.graph = graph;
-            runner.startInManual = true;
-            runner.loadControllerDll = false;
+            // Nine fields, and deliberately only nine: allowModeToggle,
+            // showModeBox and graphProfile stay at SimulationRunner's own
+            // defaults (on, on, DiffDrive) here, which is the measured
+            // behaviour of every physics-test car and not something to tidy up
+            // in passing.
+            Boot.CarRunnerRig.ConfigureCarRunner(runner, rig.car, rig.input, rig.sensors, graph,
+                physicsRateHz, controlRateHz,
+                startInManual: true, loadControllerDll: false, logCsv: logCsv);
 
             var tele = runnerGo.AddComponent<PhysicsDebugTelemetry>();
             tele.Bind(runner, rig.car);

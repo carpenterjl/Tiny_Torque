@@ -541,28 +541,19 @@ namespace AIHWSim.Core
 
         private Camera BuildLanCamera(Transform target)
         {
-            Camera cam = Camera.main;
-            if (cam == null)
-            {
-                var go = new GameObject("Main Camera") { tag = "MainCamera" };
-                cam = go.AddComponent<Camera>();
-                go.AddComponent<AudioListener>();
-            }
+            // Shared with the local paths: a LAN camera renders the same way a
+            // single-player one does. What a LAN session does differently is
+            // decide which car this machine SIMULATES, and that lives in
+            // BuildLanRig, which is deliberately still hand-written until a
+            // two-machine test can watch it change.
+            Camera cam = Boot.SceneRig.CameraOrCreate();
             cam.farClipPlane = 800f;
             // Background, far plane and (on a themed map) the sky dome's own
             // horizon colour come from the map's ambience.
             TrackEd.MapAmbience.ApplyCamera(cam, AmbienceKey(), SkyBlue, SceneOwnsSky());
             cam.rect = new Rect(0f, 0f, 1f, 1f);
             AIHWSim.Rendering.CameraBloom.Attach(cam);
-            var follow = cam.gameObject.GetComponent<ChaseCamera>() ?? cam.gameObject.AddComponent<ChaseCamera>();
-            follow.target = target;
-            follow.offset = new Vector3(0f, 1.1f, -2.2f);
-            follow.followLerp = 5f;
-            // Look-back key. Bound here rather than at every call site because
-            // the camera already knows which car it is following, and in
-            // split-screen that pairing is the only thing that gets it right.
-            var lookBackOwner = target != null ? target.GetComponent<CarInput>() : null;
-            if (lookBackOwner != null) lookBackOwner.chase = follow;
+            Boot.SceneRig.AttachChase(cam, target);
             return cam;
         }
 
@@ -949,17 +940,30 @@ namespace AIHWSim.Core
                 else cam = BuildPlayerCamera(index, built.car.transform);
             }
 
+            // The two discriminators the runner's whole configuration turns on,
+            // hoisted so the shared block below can be handed its final values
+            // rather than three placeholders a branch then overwrites.
+            // "firmware" is asked only of the solo human, exactly as before: a
+            // bot or a split-screen player never loads a DLL whatever its slot
+            // says, and C-firmware autonomy is the one case that starts
+            // closed-loop instead of in Manual.
+            bool botOrSplit = slot.isBot || splitScreen;
+            bool firmware = !botOrSplit && slot.control == DriveControl.Firmware;
+            // Telemetry logging is opt-in (Options / pause Settings → "Log
+            // sensor/telemetry data"). Default OFF; can also start after the
+            // menu closes via SimulationRunner.EnableLogging. Never for bots.
+            bool runnerLogCsv = !botOrSplit
+                && logCsv && Persistence.SettingsStore.Current.logTelemetry;
+
             string runnerName = slot.isBot ? $"SimulationRunner_Bot{index}"
                 : splitScreen ? $"SimulationRunner_P{index + 1}" : "SimulationRunner";
             var runner = new GameObject(runnerName).AddComponent<SimulationRunner>();
-            runner.physicsRateHz = physicsRateHz;
-            runner.controlRateHz = controlRateHz;
+            Boot.CarRunnerRig.ConfigureCarRunner(runner, built.car, carInput, built.rig, graph,
+                physicsRateHz, controlRateHz,
+                startInManual: !firmware, loadControllerDll: firmware, logCsv: runnerLogCsv);
+
             runner.autoReloadOnChange = autoReloadControllerOnChange;
             runner.dllRelativePath = "Plugins/x86_64/" + SafeDllName(design.controllerDll);
-            runner.vehicleBehaviour = built.car;
-            runner.inputBehaviour = carInput;
-            runner.graph = graph;
-            runner.sensorRig = built.rig;
             // A car that names its own firmware is running a purpose-built mission,
             // so graph distance/heading rather than the generic ToF/camera panes.
             runner.graphProfile = string.IsNullOrWhiteSpace(design.controllerDll)
@@ -967,33 +971,20 @@ namespace AIHWSim.Core
                 : SimulationRunner.GraphProfile.Mission;
             runner.actuationDelayTicks = Persistence.SettingsStore.Current.actuationDelayTicks;
             // Only the solo human may log (mid-session pause-Settings toggle honors this).
-            runner.loggable = !slot.isBot && !splitScreen;
+            runner.loggable = !botOrSplit;
+            // Only meaningful with a controller, so both are the solo human's
+            // firmware flag and both are off for everyone else.
+            runner.allowModeToggle = firmware;
+            runner.showModeBox = firmware;
 
-            if (slot.isBot || splitScreen)
+            if (botOrSplit)
             {
                 // Opponents & split-screen humans: no DLL, no mode toggle, no CSV,
                 // no full-screen mode box. Bots/humans drive via CarInput.
-                runner.loadControllerDll = false;
-                runner.allowModeToggle = false;
-                runner.showModeBox = false;
-                runner.logCsv = false;
-                runner.startInManual = true;
                 runner.logLabel = slot.isBot ? $"bot{index}" : $"p{index + 1}";
             }
             else
             {
-                // The solo human. Manual and bot-AI autonomy drive via CarInput
-                // (Manual mode); C-firmware autonomy runs the DLL (start closed-loop).
-                bool firmware = slot.control == DriveControl.Firmware;
-                runner.loadControllerDll = firmware;
-                runner.allowModeToggle = firmware;  // only meaningful with a controller
-                runner.showModeBox = firmware;
-                runner.startInManual = !firmware;
-                // Telemetry logging is opt-in (Options / pause Settings → "Log
-                // sensor/telemetry data"). Default OFF; can also start after the
-                // menu closes via SimulationRunner.EnableLogging.
-                runner.logCsv = logCsv && Persistence.SettingsStore.Current.logTelemetry;
-
                 var hud = new GameObject("SensorHud").AddComponent<SensorHud>();
                 hud.rig = built.rig;
                 // Step-response metrics readout (J) — controller validation aid.
@@ -1110,13 +1101,7 @@ namespace AIHWSim.Core
             Camera cam;
             if (index == 0)
             {
-                cam = Camera.main;
-                if (cam == null)
-                {
-                    var go = new GameObject("Main Camera") { tag = "MainCamera" };
-                    cam = go.AddComponent<Camera>();
-                    go.AddComponent<AudioListener>();
-                }
+                cam = Boot.SceneRig.CameraOrCreate();
             }
             else
             {
@@ -1131,15 +1116,7 @@ namespace AIHWSim.Core
             // viewport-sized RT, so splits cannot bleed into each other.
             AIHWSim.Rendering.CameraBloom.Attach(cam);
 
-            var follow = cam.gameObject.GetComponent<ChaseCamera>() ?? cam.gameObject.AddComponent<ChaseCamera>();
-            follow.target = target;
-            follow.offset = new Vector3(0f, 1.1f, -2.2f);
-            follow.followLerp = 5f;
-            // Look-back key. Bound here rather than at every call site because
-            // the camera already knows which car it is following, and in
-            // split-screen that pairing is the only thing that gets it right.
-            var lookBackOwner = target != null ? target.GetComponent<CarInput>() : null;
-            if (lookBackOwner != null) lookBackOwner.chase = follow;
+            Boot.SceneRig.AttachChase(cam, target);
             return cam;
         }
 
@@ -1310,16 +1287,11 @@ namespace AIHWSim.Core
         private void BuildLighting()
         {
             // A hand-authored scene brings its own sun (and often baked lighting to
-            // match it), so the guard below already does the right thing there —
-            // the scene-name special case this used to carry has moved onto
+            // match it), so SceneRig's any-light guard already does the right thing
+            // there — the scene-name special case this used to carry has moved onto
             // SceneTrackDescriptor.skyboxOverride, where it is authored rather than
             // hardcoded.
-            if (FindFirstObjectByType<Light>() != null) return;
-            var lightGo = new GameObject("Directional Light");
-            var light = lightGo.AddComponent<Light>();
-            light.type = LightType.Directional;
-            light.intensity = 1.1f;
-            light.transform.rotation = Quaternion.Euler(50f, -30f, 0f);
+            Boot.SceneRig.BuildLighting(1.1f, new Vector3(50f, -30f, 0f));
         }
 
         private void BuildGround()
@@ -1454,26 +1426,12 @@ namespace AIHWSim.Core
 
         private (Camera, GraphOverlay) BuildCameraAndGraph(Transform target)
         {
-            Camera cam = Camera.main;
-            if (cam == null)
-            {
-                var go = new GameObject("Main Camera") { tag = "MainCamera" };
-                cam = go.AddComponent<Camera>();
-                go.AddComponent<AudioListener>();
-            }
+            Camera cam = Boot.SceneRig.CameraOrCreate();
             cam.farClipPlane = 800f;
             TrackEd.MapAmbience.ApplyCamera(cam, AmbienceKey(), SkyBlue, SceneOwnsSky());
             AIHWSim.Rendering.CameraBloom.Attach(cam);
 
-            var follow = cam.gameObject.GetComponent<ChaseCamera>() ?? cam.gameObject.AddComponent<ChaseCamera>();
-            follow.target = target;
-            follow.offset = new Vector3(0f, 1.1f, -2.2f);
-            follow.followLerp = 5f;
-            // Look-back key. Bound here rather than at every call site because
-            // the camera already knows which car it is following, and in
-            // split-screen that pairing is the only thing that gets it right.
-            var lookBackOwner = target != null ? target.GetComponent<CarInput>() : null;
-            if (lookBackOwner != null) lookBackOwner.chase = follow;
+            Boot.SceneRig.AttachChase(cam, target);
 
             var graph = cam.gameObject.GetComponent<GraphOverlay>() ?? cam.gameObject.AddComponent<GraphOverlay>();
             return (cam, graph);

@@ -70,12 +70,7 @@ namespace AIHWSim.Core
 
         private static void BuildLighting()
         {
-            if (FindFirstObjectByType<Light>() != null) return;
-            var lightGo = new GameObject("Directional Light");
-            var light = lightGo.AddComponent<Light>();
-            light.type = LightType.Directional;
-            light.intensity = 1.1f;
-            lightGo.transform.rotation = Quaternion.Euler(50f, -30f, 0f);
+            Boot.SceneRig.BuildLighting(1.1f, new Vector3(50f, -30f, 0f));
         }
 
         private static void BuildGround(PhysicsMaterial mat)
@@ -141,13 +136,7 @@ namespace AIHWSim.Core
 
         private static (Camera, GraphOverlay) BuildCameraAndGraph()
         {
-            Camera cam = Camera.main;
-            if (cam == null)
-            {
-                var go = new GameObject("Main Camera") { tag = "MainCamera" };
-                cam = go.AddComponent<Camera>();
-                go.AddComponent<AudioListener>();
-            }
+            Camera cam = Boot.SceneRig.CameraOrCreate();
             cam.transform.position = new Vector3(0f, 3f, -4f);
             cam.transform.rotation = Quaternion.Euler(35f, 0f, 0f);
             cam.backgroundColor = new Color(0.08f, 0.09f, 0.11f);

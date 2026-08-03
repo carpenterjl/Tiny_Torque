@@ -49,25 +49,12 @@ namespace AIHWSim.TrackEd
         private void BuildLighting()
         {
             RenderSettings.ambientLight = new Color(0.50f, 0.52f, 0.55f);
-            if (FindFirstObjectByType<Light>() == null)
-            {
-                var lightGo = new GameObject("Directional Light");
-                var light = lightGo.AddComponent<Light>();
-                light.type = LightType.Directional;
-                light.intensity = 1.1f;
-                light.transform.rotation = Quaternion.Euler(50f, -30f, 0f);
-            }
+            Core.Boot.SceneRig.BuildLighting(1.1f, new Vector3(50f, -30f, 0f));
         }
 
         private void BuildCamera()
         {
-            Cam = Camera.main;
-            if (Cam == null)
-            {
-                var go = new GameObject("Main Camera") { tag = "MainCamera" };
-                Cam = go.AddComponent<Camera>();
-                go.AddComponent<AudioListener>();
-            }
+            Cam = Core.Boot.SceneRig.CameraOrCreate();
             Cam.farClipPlane = 800f;
             ApplyCameraAmbience();
             Orbit = Cam.gameObject.GetComponent<OrbitCamera>() ?? Cam.gameObject.AddComponent<OrbitCamera>();

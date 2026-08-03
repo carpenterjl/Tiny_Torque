@@ -60,14 +60,7 @@ namespace AIHWSim.Garage
         private void BuildLighting()
         {
             RenderSettings.ambientLight = new Color(0.45f, 0.46f, 0.5f);
-            if (FindFirstObjectByType<Light>() == null)
-            {
-                var lightGo = new GameObject("Directional Light");
-                var light = lightGo.AddComponent<Light>();
-                light.type = LightType.Directional;
-                light.intensity = 1.05f;
-                light.transform.rotation = Quaternion.Euler(45f, 35f, 0f);
-            }
+            Core.Boot.SceneRig.BuildLighting(1.05f, new Vector3(45f, 35f, 0f));
         }
 
         private void BuildFloor()
@@ -82,13 +75,7 @@ namespace AIHWSim.Garage
 
         private void BuildCamera()
         {
-            Cam = Camera.main;
-            if (Cam == null)
-            {
-                var go = new GameObject("Main Camera") { tag = "MainCamera" };
-                Cam = go.AddComponent<Camera>();
-                go.AddComponent<AudioListener>();
-            }
+            Cam = Core.Boot.SceneRig.CameraOrCreate();
             Cam.clearFlags = CameraClearFlags.SolidColor;
             Cam.backgroundColor = new Color(0.12f, 0.13f, 0.16f);
             Cam.farClipPlane = 200f;

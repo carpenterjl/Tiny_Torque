@@ -47,14 +47,7 @@ namespace AIHWSim.Menu
         private void BuildLighting()
         {
             RenderSettings.ambientLight = new Color(0.35f, 0.36f, 0.40f);
-            if (FindFirstObjectByType<Light>() == null)
-            {
-                var lightGo = new GameObject("Directional Light");
-                var light = lightGo.AddComponent<Light>();
-                light.type = LightType.Directional;
-                light.intensity = 1.0f;
-                light.transform.rotation = Quaternion.Euler(45f, 35f, 0f);
-            }
+            Core.Boot.SceneRig.BuildLighting(1.0f, new Vector3(45f, 35f, 0f));
         }
 
         private void BuildBackdrop()
@@ -91,13 +84,7 @@ namespace AIHWSim.Menu
 
         private void BuildCamera()
         {
-            var cam = Camera.main;
-            if (cam == null)
-            {
-                var go = new GameObject("Main Camera") { tag = "MainCamera" };
-                cam = go.AddComponent<Camera>();
-                go.AddComponent<AudioListener>();
-            }
+            var cam = Core.Boot.SceneRig.CameraOrCreate();
             cam.clearFlags = CameraClearFlags.SolidColor;
             cam.backgroundColor = new Color(0.09f, 0.10f, 0.12f);
             cam.farClipPlane = 100f;

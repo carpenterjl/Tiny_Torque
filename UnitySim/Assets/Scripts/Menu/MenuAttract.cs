@@ -104,18 +104,15 @@ namespace AIHWSim.Menu
                 // Step the car exactly like a race bot: Manual drive via CarInput,
                 // no controller DLL, no telemetry, no mode box.
                 var runner = new GameObject($"MenuBotRunner{k}").AddComponent<SimulationRunner>();
-                runner.physicsRateHz = PhysicsRateHz;
-                runner.controlRateHz = ControlRateHz;
-                runner.vehicleBehaviour = built.car;
-                runner.inputBehaviour = carInput;
-                runner.sensorRig = built.rig;
+                // No graph overlay: an attract car is scenery, and the null is
+                // the same null the field already had.
+                Core.Boot.CarRunnerRig.ConfigureCarRunner(runner, built.car, carInput, built.rig,
+                    graph: null, physicsRateHz: PhysicsRateHz, controlRateHz: ControlRateHz,
+                    startInManual: true, loadControllerDll: false, logCsv: false);
                 runner.graphProfile = SimulationRunner.GraphProfile.Car;
-                runner.loadControllerDll = false;
                 runner.allowModeToggle = false;
                 runner.showModeBox = false;
-                runner.logCsv = false;
                 runner.loggable = false;
-                runner.startInManual = true;
             }
         }
 
@@ -135,13 +132,7 @@ namespace AIHWSim.Menu
             _orbitRadius = maxR * 1.5f + 2f;
             _orbitHeight = maxR * 0.8f + 2f;
 
-            _cam = Camera.main;
-            if (_cam == null)
-            {
-                var go = new GameObject("Main Camera") { tag = "MainCamera" };
-                _cam = go.AddComponent<Camera>();
-                go.AddComponent<AudioListener>();
-            }
+            _cam = Core.Boot.SceneRig.CameraOrCreate();
             _cam.farClipPlane = Mathf.Max(500f, _orbitRadius * 4f);
             MapAmbience.ApplyCamera(_cam, _ambience, MenuBackdrop);
             Rendering.CameraBloom.Attach(_cam);

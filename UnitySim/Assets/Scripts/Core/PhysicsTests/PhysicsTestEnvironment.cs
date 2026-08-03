@@ -100,12 +100,7 @@ namespace AIHWSim.Core.PhysicsTests
 
         private static void BuildLighting()
         {
-            if (Object.FindFirstObjectByType<Light>() != null) return;
-            var lightGo = new GameObject("Directional Light");
-            var light = lightGo.AddComponent<Light>();
-            light.type = LightType.Directional;
-            light.intensity = 1.1f;
-            lightGo.transform.rotation = Quaternion.Euler(50f, -30f, 0f);
+            Boot.SceneRig.BuildLighting(1.1f, new Vector3(50f, -30f, 0f));
         }
 
         /// <summary>
@@ -156,13 +151,7 @@ namespace AIHWSim.Core.PhysicsTests
 
         private static (Camera, GraphOverlay) BuildCameraAndGraph(EnvSpec spec)
         {
-            Camera cam = Camera.main;
-            if (cam == null)
-            {
-                var go = new GameObject("Main Camera") { tag = "MainCamera" };
-                cam = go.AddComponent<Camera>();
-                go.AddComponent<AudioListener>();
-            }
+            Camera cam = Boot.SceneRig.CameraOrCreate();
             cam.transform.position = new Vector3(0f, 4f, -10f);
             cam.transform.rotation = Quaternion.Euler(12f, 0f, 0f);
             // Far enough to see the end of whichever surface was built.
