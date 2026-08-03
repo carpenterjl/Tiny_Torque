@@ -16,8 +16,27 @@ namespace AIHWSim.Core
     public static class PhysicsTuning
     {
         [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.BeforeSceneLoad)]
-        private static void Apply()
+        private static void ApplyAtBoot() => Apply(null);
+
+        /// <summary>
+        /// Apply the global PhysX tuning: the shipped numbers, or a scene's own
+        /// <see cref="Config.PhysicsSettings"/> asset when it has one.
+        ///
+        /// <b>null is the whole contract.</b> The boot path passes null and gets
+        /// the five literals below, which is why a project with no settings
+        /// asset anywhere behaves bit-identically to one that never had this
+        /// parameter. A scene descriptor calls it again, later, with its own
+        /// asset; running twice is harmless because both calls are plain
+        /// assignments to the same five globals.
+        ///
+        /// The asset's own field initialisers are these same five numbers, so a
+        /// freshly created asset is also a no-op — assigning one has to be a
+        /// deliberate edit before it means anything.
+        /// </summary>
+        public static void Apply(Config.PhysicsSettings settings)
         {
+            if (settings != null) { settings.ApplySolver(); return; }
+
             Physics.defaultContactOffset = 0.002f;
             Physics.defaultSolverIterations = 10;
             Physics.defaultSolverVelocityIterations = 2;

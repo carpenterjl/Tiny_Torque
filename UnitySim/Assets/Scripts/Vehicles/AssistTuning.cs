@@ -18,67 +18,127 @@ namespace AIHWSim.Vehicles
     /// </summary>
     public static class AssistTuning
     {
+        /// <summary>
+        /// The asset a scene has chosen to tune these numbers with, or null —
+        /// and null is what every value below falls back to its shipped literal
+        /// for. Installed by <c>DrivingSceneDescriptor</c>; cleared by setting
+        /// it back to null, which restores the defaults in one assignment
+        /// because nothing here caches or copies them.
+        ///
+        /// Static, and so it outlives a scene load within a session: whoever
+        /// installs one owns clearing it. That is the same contract
+        /// <see cref="Core.SessionConfig"/> already has, for the same reason —
+        /// there is exactly one physics world and these are its assists.
+        /// </summary>
+        public static AssistTuningOverride Override;
+
+        // Each accessor below is "the asset's field, or the literal that
+        // shipped". The literal lives in a private const beside its accessor
+        // rather than in the asset alone, so that a project with no asset
+        // anywhere is not merely equivalent to the old code — it runs the same
+        // numbers from the same file. The asset's own field initialisers are
+        // these same values, so a freshly created asset is also a no-op.
+
         // ---- steering assist ----
+        private const float SteerLimitRefSpeedDefault = 4f;
+        private const float SteerLimitMinSpeedDefault = 0.5f;
+        private const float CounterSteerMinLongSpeedDefault = 1f;
+        private const float CounterSteerGainDefault = 0.5f;
+        private const float CounterSteerClampDefault = 0.35f;
+
         /// <summary>Reference speed for the lock limiter (m/s): available lock is
         /// scaled by ref/speed above it, so a lower number means a tighter limit
         /// at any given speed.</summary>
-        public const float SteerLimitRefSpeed = 4f;
+        public static float SteerLimitRefSpeed =>
+            Override != null ? Override.steerLimitRefSpeed : SteerLimitRefSpeedDefault;
         /// <summary>Floor on the speed used by the limiter, so it cannot divide
         /// by ~0 and hand back infinite lock at a standstill.</summary>
-        public const float SteerLimitMinSpeed = 0.5f;
+        public static float SteerLimitMinSpeed =>
+            Override != null ? Override.steerLimitMinSpeed : SteerLimitMinSpeedDefault;
         /// <summary>Longitudinal speed below which countersteer stays out of it —
         /// slip angle is meaningless when the car is barely moving.</summary>
-        public const float CounterSteerMinLongSpeed = 1f;
+        public static float CounterSteerMinLongSpeed =>
+            Override != null ? Override.counterSteerMinLongSpeed : CounterSteerMinLongSpeedDefault;
         /// <summary>Slip angle (rad) → steering correction.</summary>
-        public const float CounterSteerGain = 0.5f;
+        public static float CounterSteerGain =>
+            Override != null ? Override.counterSteerGain : CounterSteerGainDefault;
         /// <summary>Cap on that correction, so the assist nudges rather than
         /// takes the wheel off you.</summary>
-        public const float CounterSteerClamp = 0.35f;
+        public static float CounterSteerClamp =>
+            Override != null ? Override.counterSteerClamp : CounterSteerClampDefault;
 
         // ---- stability (ESC) ----
+        private const float StabilityGainDefault = 0.08f;
+        private const float StabilityTorqueClampDefault = 0.3f;
+
         /// <summary>Yaw-rate error → corrective torque.</summary>
-        public const float StabilityGain = 0.08f;
+        public static float StabilityGain =>
+            Override != null ? Override.stabilityGain : StabilityGainDefault;
         /// <summary>Hard cap on that torque (N·m). This is the real ceiling on
         /// the whole assist: against roughly 2 N·m of tyre resisting moment,
         /// 0.30 is barely a nudge.</summary>
-        public const float StabilityTorqueClamp = 0.3f;
+        public static float StabilityTorqueClamp =>
+            Override != null ? Override.stabilityTorqueClamp : StabilityTorqueClampDefault;
 
         // ---- traction control ----
+        private const float TractionOnsetDefault = 0.25f;
+        private const float TractionBandDefault = 0.35f;
+
         /// <summary>Slip ratio at which drive starts being cut.</summary>
-        public const float TractionOnset = 0.25f;
+        public static float TractionOnset =>
+            Override != null ? Override.tractionOnset : TractionOnsetDefault;
         /// <summary>Slip range over which the cut reaches full authority.</summary>
-        public const float TractionBand = 0.35f;
+        public static float TractionBand =>
+            Override != null ? Override.tractionBand : TractionBandDefault;
 
         // ---- ABS ----
+        private const float AbsOnsetDefault = 0.3f;
+        private const float AbsBandDefault = 0.4f;
+
         /// <summary>Negative slip ratio at which the brake starts being released.</summary>
-        public const float AbsOnset = 0.3f;
+        public static float AbsOnset =>
+            Override != null ? Override.absOnset : AbsOnsetDefault;
         /// <summary>Slip range over which the release reaches full authority.</summary>
-        public const float AbsBand = 0.4f;
+        public static float AbsBand =>
+            Override != null ? Override.absBand : AbsBandDefault;
 
         // ---- launch control ----
         // A voltage-side governor for standing starts (see
         // CarVehicle.UpdateLaunchControl). TC composes with it: TC is per-wheel
         // and stateless, this is global and integrating.
 
+        private const float LaunchSlipTargetDefault = 0.12f;
+        private const float LaunchGainDefault = 4f;
+        private const float LaunchFloorDefault = 0.30f;
+        private const float LaunchEngageSpeedDefault = 3.0f;
+        private const float LaunchReleaseSpeedDefault = 4.0f;
+        private const float LaunchReleaseRateDefault = 2f;
+
         /// <summary>Slip ratio the governor holds the worst powered wheel at:
         /// 1.2 × TyreModel.KappaPeak (0.10), i.e. just PAST the force peak — a
         /// governed launch leaves at maximum force, and converging from the
         /// spin side keeps the integrator from hunting across the peak.</summary>
-        public const float LaunchSlipTarget = 0.12f;
+        public static float LaunchSlipTarget =>
+            Override != null ? Override.launchSlipTarget : LaunchSlipTargetDefault;
         /// <summary>Integrator gain: voltage-scale units per second per unit of
         /// excess slip. At a floored-launch excess of ~0.5 this cuts ~2/s, so
         /// the governor bites in a couple of tenths.</summary>
-        public const float LaunchGain = 4f;
+        public static float LaunchGain =>
+            Override != null ? Override.launchGain : LaunchGainDefault;
         /// <summary>The governor never cuts below this — a launch should feel
         /// managed, not confiscated.</summary>
-        public const float LaunchFloor = 0.30f;
+        public static float LaunchFloor =>
+            Override != null ? Override.launchFloor : LaunchFloorDefault;
         /// <summary>Below this speed (m/s) the governor is armed.</summary>
-        public const float LaunchEngageSpeed = 3.0f;
+        public static float LaunchEngageSpeed =>
+            Override != null ? Override.launchEngageSpeed : LaunchEngageSpeedDefault;
         /// <summary>Above this speed the scale is handed back at 4× the release
         /// rate — the launch is over, the motor belongs to the driver.</summary>
-        public const float LaunchReleaseSpeed = 4.0f;
+        public static float LaunchReleaseSpeed =>
+            Override != null ? Override.launchReleaseSpeed : LaunchReleaseSpeedDefault;
         /// <summary>Recovery rate (scale units per second) while not cutting.</summary>
-        public const float LaunchReleaseRate = 2f;
+        public static float LaunchReleaseRate =>
+            Override != null ? Override.launchReleaseRate : LaunchReleaseRateDefault;
 
         // ================= the top end =================
         //
