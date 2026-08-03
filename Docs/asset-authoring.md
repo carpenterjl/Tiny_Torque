@@ -5,7 +5,9 @@ geometry for the things that have no mesh yet (the aircraft).
 
 Written against the code as of 2026-08-02. The authoritative files are
 `Vehicles/PartMeshLibrary.cs`, `Vehicles/PartVisualFactory.cs`,
-`Vehicles/CarVehicle.cs` (`BuildBodyVisual`) and
+`Vehicles/CarVehicle.cs` (`BuildBodyVisual`), `Vehicles/BodyCatalog.cs` and
+`Vehicles/WheelCatalog.cs` (which rows exist), `Vehicles/AssetManifests.cs`
+(§4's runtime half), `Editor/AssetStudio/` (§4's tool) and
 `Core/Flight/DebugPlaneRig.cs`.
 
 ---
@@ -18,7 +20,14 @@ else in the project is built from Unity primitives at runtime.
 ```
 UnitySim/Assets/Resources/PartModels/<key>.fbx     vehicle parts
 UnitySim/Assets/Resources/TrackProps/<key>.fbx     track scenery
+UnitySim/Assets/Resources/Cosmetics/<key>.fbx      unlockable cosmetics + crates
 ```
+
+An asset may also ship a **manifest** beside its FBX —
+`<key>_asset.json`, same folder — which is what §4 is about. 207 of the 207
+assets in the project today ship none, and that is the normal case: a manifest
+is how art that arrives from *outside* the repository brings its own materials,
+its own scale correction and its own catalogue row with it.
 
 Loading is `Resources.Load<GameObject>("PartModels/" + key)` — **by path, not by
 GUID**. Consequences:
@@ -26,10 +35,15 @@ GUID**. Consequences:
 - The file must sit under a folder literally called `Resources`, and its
   **filename is the key**. `body_patrol.fbx` is found because something asks for
   `body_patrol`.
-- The `.meta` file matters only for *import settings* (scale factor, normals,
-  material import mode). Copying it across from another project is fine and
-  usually what you want; its GUID being foreign changes nothing, because nothing
-  references these by GUID.
+- For an FBX the `.meta` matters only for *import settings* (scale factor,
+  normals, material import mode). Copying it across from another project is fine
+  and usually what you want; its GUID being foreign changes nothing, because
+  nothing references a mesh by GUID. **The exception is a `.mat` and its
+  textures** — a material references its maps by GUID, so those `.meta` files
+  have to travel with them, and two copies of one export under different keys
+  duplicate the GUIDs. Unity silently reassigns one side and every texture link
+  on the loser comes out unresolved, which looks exactly like an importer bug.
+  §4's commit pipeline refuses that by name rather than letting it happen.
 - A missing key is not an error. `PartMeshLibrary.Load` logs one warning and
   caches the miss, then the caller silently builds primitives instead. If your
   new car looks like a grey box, check the Console first.
@@ -50,9 +64,17 @@ the police car's front ToF is at `z = +0.22` and its light bar at `z = −0.02`.
 
 ## 2. The car body contract
 
-`CarVehicle.BuildBodyVisual` → `BodyMeshKey(bodyShape)` → `TryInstantiate`.
+`CarVehicle.BuildBodyVisual` → `BodyCatalog.Resolve(bodyKey, bodyShape)` →
+`TryInstantiate`.
 
-| BodyShape | key |
+**The key is a string and the table is data.** A design carries `bodyKey`
+("body_patrol") alongside the legacy `bodyShape` int, and every consumer —
+the mesh, the drag coefficient, the token table, the scale rule, the garage
+picker — reads a `BodyCatalog` row rather than a `switch`. The int is still
+written to every save for downgrade legibility; the key wins when the two
+disagree.
+
+| row | key |
 |---|---|
 | Shell / LowRacer / Buggy | `body_shell`, `body_lowracer`, `body_buggy` |
 | Coupe / Baja / Patrol | `body_coupe`, `body_baja`, `body_patrol` |
@@ -60,22 +82,37 @@ the police car's front ToF is at `z = +0.22` and its light bar at `z = −0.02`.
 | Tiguan | `body_tiguan` |
 | Box / Wedge | *(none — always primitives)* |
 
+That is `BodyCatalog.Seed`, the shipped table. `BodyCatalog.All` is the seed
+plus one row per discovered manifest (§4), and a seed row always wins a name
+collision — a committed asset can never redefine a shipped car out from under
+a save that names it.
+
 ### Scale
 
 Every arcade shell is authored to **0.20 × 0.10 × 0.42 m** (`BodyMeshAuthorSize`)
 and is rescaled at spawn by `bodySize / BodyMeshAuthorSize`, per axis. Author to a
 different size and the car is stretched by the ratio.
 
-The Tiguan is the one exception: authored 1:1 and given `Vector3.one`, because its
-renderer bounds (2.099 × 1.472, carrying mirrors and roof rails) are deliberately
-*not* its collision box (1.839 × 1.443).
+**That constant is a nominal divisor, not a measurement of any shell.** The real
+shells land between 0.17 and 0.20 wide, because the old exporter scaled them to
+length 0.420 with a single *uniform* factor and left width and height as
+consequences — which is exactly why `PartModelValidator` pins those bodies'
+length and leaves their width free. Do not "correct" the divisor to a measured
+size: dividing by real extents stretches a correctly proportioned car to fill a
+box no shell actually fills.
+
+The Tiguan is the one exception: authored 1:1 and given `Vector3.one` (its row
+sets `unscaled`), because its renderer bounds (2.099 × 1.472, carrying mirrors
+and roof rails) are deliberately *not* its collision box (1.839 × 1.443).
 
 ### Materials — the part that trips people up
 
-**The FBX's own materials are ignored.** `AssignByName` walks every renderer and
-rebinds `sharedMaterial` from a code-side table, matched by **case-insensitive
-substring of the GameObject's name**. This is deliberate: one lighting/theme/
-recolour system, and the garage painter needs to know which renderers are paint.
+**For an asset with no manifest, the FBX's own materials are ignored.**
+`AssignByName` walks every renderer and rebinds `sharedMaterial` from a code-side
+table, matched by **case-insensitive substring of the GameObject's name**. This is
+deliberate: one lighting/theme/recolour system, and the garage painter needs to
+know which renderers are paint. It is also the path all 207 shipped assets take —
+§4 is the other one, and an asset never takes both.
 
 So the shipped shells are exported **split by material, one object per material,
 renamed to a token**:
@@ -109,12 +146,19 @@ Wheels are **separate FBXs, one per style**, instantiated per corner into a hold
 the suspension drives. They must not be part of the body mesh.
 
 - Key: `wheel_<style>` — `slick knobby rally coupe baja patrol rattle redline
-  highwing autopia tiguan tiguan_r`.
+  highwing autopia tiguan tiguan_r` — resolved through `WheelCatalog`, the same
+  seed-plus-manifests shape as `BodyCatalog`. A wheel's save key is **not** always
+  its mesh key: `slick_chrome`, `slick_gold` and `slick_neon` are *finishes* over
+  the slick's mesh, and a `WheelFinish` on the row is the one thing about a wheel
+  that no FBX key can carry.
 - **Axle along local +X.** Rim face toward **+X**, brake disc behind it; the
-  builder spins the mesh 180° about Y on the side where +X points inboard.
-- Authored radius **0.033 m** (66 mm RC tyre); scaled by `radius / 0.033`. The
-  Tiguan's two are the exception at **0.349 m** — its *loaded* centre height, not
-  its free radius, because 0.349 is also the number the WheelCollider gets.
+  builder spins the mesh 180° about Y on the side where +X points inboard —
+  *composed* with any manifest yaw, never assigned over it.
+- Authored radius **0.033 m** (66 mm RC tyre); scaled by `radius / authorRadius`.
+  The Tiguan's two are the exception at **0.349 m** — its *loaded* centre height,
+  not its free radius, because 0.349 is also the number the WheelCollider gets.
+  A committed wheel needs no separate scale correction: recording the mesh's raw
+  radius makes that one divide do both jobs.
 - Tokens (`PartVisualFactory.WheelTokens`): `tire`/`tyre`, `rim`, `hub`, `stud`,
   `brake`, plus finish tokens. Same ordering hazard: `redtrim` and `hwtrim` both
   contain `rim`, and `hubcap` contains `hub`.
@@ -123,48 +167,252 @@ the suspension drives. They must not be part of the body mesh.
 
 ---
 
-## 4. Bringing in a textured export (the `TinyTorqueTests/POLICE` case)
+## 4. Bringing in a textured export — Asset Studio
 
-That export is geometry + real `.mat` assets + BaseColor/MetallicSmoothness/
-Emission/Normal PNGs + an `export.json` manifest, with objects under their Blender
+Blender exports arrive as a folder: `<NAME>.fbx`, an `export.json`, a
+`Materials/` of real `.mat` assets and a `Textures/` of BaseColor /
+MetallicSmoothness / Emission / Normal PNGs, with objects under their Blender
 names (`Police_Body`, `Police_Roof`, `_spotlens.001`, …).
 
-Dropped into `Resources/PartModels/` as-is it would load, but:
+Dropped into `Resources/PartModels/` as-is such an export loads, and is wrong in
+two ways that never produce an error: **none of those names contain a token**, so
+every renderer misses, falls through to the body material, and the car arrives
+correctly shaped in one flat colour; and the `.mat` assets and textures are never
+read, because the importer strips them and `AssignByName` overwrites
+`sharedMaterial` on every renderer anyway.
 
-- **None of those names contain a token.** Every renderer would miss, fall through
-  to the body material, and the car would arrive correctly shaped in one flat
-  colour.
-- The `.mat` assets and textures would never be read, because `AssignByName`
-  overwrites `sharedMaterial` on every renderer.
+**Asset Studio** (`Tools > Asset Studio`) is the answer to that. It browses both
+the imported assets and the not-yet-imported exports, previews an export as the
+game will actually build it, lets you bind materials per object and per submesh
+slot, and commits the result into `Resources/` with a manifest beside it. A
+committed asset becomes a car, a wheel or a cosmetic **with no C# edit**.
 
-Three ways forward, in increasing order of work:
+### 4.1 The two material modes
 
-**A. Speak the existing language.** Split by material and rename the objects to
-tokens (`patrolpaint_1`, `chrome_1`, …), exactly as the current exporter does.
-Zero code change; drop the FBX in and it works. You lose the textures — the look
-comes from the constants in `PartVisualFactory`.
+Per asset, chosen on the draft. There is no third route and no halfway: an asset
+with a manifest never falls back to the token tables.
 
-**B. Manifest-driven materials (the Tiguan precedent).** `TiguanMaterials` builds
-its token table at runtime from `Resources/PartModels/tiguan_materials.json`,
-which is the same shape as your `export.json` but flat-valued. Give the objects a
-unique name prefix, add a `BodyShape` entry, and build the table from the manifest
-— including `mainTexture` from the PNGs, which the Tiguan path doesn't do yet.
-Materials still come from data rather than from the FBX, so the project's rule
-holds. This is the honest fit for a textured export.
+| | **Manifest** | **Verbatim** |
+|---|---|---|
+| Materials | rebuilt at runtime from the numbers in the manifest | the FBX keeps the exporter's own `.mat` assets |
+| Textures | yes — albedo, metallic/smoothness, emission, normal | yes, whatever the `.mat` references |
+| Paint mode | **offered** — a baked material can be the paint channel, so `bodyColor` multiplies the livery | refused; `HasPaintableBody` answers no and `SetBodyMaterial` warns once |
+| Render pipeline | doesn't care which one wrote the export | the `.mat` must be **Built-in RP Standard** |
+| Import setting | `materialImportMode = None` (the default) | `ImportStandard` + `materialLocation = InPrefab` + an explicit remap per material |
 
-**C. Keep the FBX's own materials.** A third branch in `BuildBodyVisual` that
-returns before `AssignByName`. Smallest diff, but it opts that car out of
-bodyColor, livery and garage paint mode, and puts its look outside the one system
-the project keeps it in. Fine for a one-off; a bad default.
+**Manifest is the default and should stay it.** The current Blender exporter runs
+under URP; this game is Built-in RP and has no URP package, so every `.mat` it
+writes references `Universal Render Pipeline/Lit`, resolves here to
+`Hidden/InternalErrorShader`, and renders **magenta**. Nothing in this repository
+can fix that — verbatim means verbatim — so `[AST]` fails such an asset by name,
+with the way out in the message. Manifest mode rebuilds materials from the
+exported *numbers* and does not care which pipeline wrote them.
 
-Whichever route: the police body is **already in the game** as `BodyShape.Patrol`,
-from the same `TinyTorque_police.blend`. Overwriting `body_patrol.fbx` replaces it
-everywhere (including the Patrol preset and any saved design that selected it);
-adding a new `BodyShape` member leaves the old one alone. Enum members are
-append-only — saved designs store the int.
+### 4.2 The scale and yaw correction
 
-And the wheels: your export has none. `wheel_patrol` still ships separately and
-still needs its own FBX under the §3 contract.
+The old exporter baked its correction into the FBX. The current one does not:
+`POLICE` measures `[5.281, 1.521, 2.330]` with `rotation [0,0,0]`, `scale
+[1,1,1]`, modelled long-axis along Blender X. It needs exactly what the old
+pipeline applied — a **uniform** scale to length 0.420 and a **90° yaw**.
+
+Both are *recorded in the manifest and applied at load*, rather than baked into
+`ModelImporter.globalScale`. Recording is strictly more general (`globalScale`
+cannot express the yaw at all) and it keeps the imported FBX agreeing byte for
+byte with the file the exporter wrote — which is what makes the drift check a
+comparison of two files rather than of a file against a remembered import
+setting.
+
+- **`authorScale`** — one uniform factor. It **multiplies** the nominal divide of
+  §2; it does not replace the divisor. It is `1` for every seed row, which is why
+  every shipped car still renders at exactly `1:1:1`.
+- **`authorYawDeg`** — the quarter turn that puts the long axis on `+Z`. A
+  multiple of 90, and refused otherwise: a bounding box does not survive anything
+  else, and the game builds every car facing `+Z` (sensors, lights and gear are
+  all placed that way). It is *composed* with the wheel builder's own half-turn,
+  never assigned over it.
+- **`authorSize`** — what the mesh MEASURES after both, **recorded and not
+  applied**. The validator holds it to within 2 mm of the imported prefab. It is
+  not the divisor a design's `bodySize` is a ratio against; see §2 for why that
+  has to stay nominal.
+
+A wheel needs no `authorScale`. The wheel path already instantiates at
+`radius / authorRadius`, so recording the mesh's raw radius makes that one divide
+do both jobs.
+
+### 4.3 The manifest
+
+`Resources/<root>/<key>_asset.json`, a **sibling** of the FBX rather than
+something under a `Manifests/` folder — the model postprocessor has to find it by
+path arithmetic *during* import, where `Resources.Load` does not exist yet.
+
+```jsonc
+{
+  "schema": 1,
+  "key": "body_police",          // the FILE NAME wins if these disagree
+  "kind": "CarBody",             // CarBody | Wheel | Cosmetic | Prop | Fitting
+  "label": "Police Cruiser",     // what a picker prints; free to change
+  "materialMode": "Manifest",    // or "Verbatim"
+
+  "source":  { "assetName": "POLICE", "sourceBlend": "…",
+               "exportedAtUtc": "…", "fbxMd5": "…" },
+
+  "authorScale": 0.07953,        // uniform, multiplies the nominal divide
+  "authorYawDeg": -90,           // a multiple of 90
+  "authorSize": [0.1853, 0.1210, 0.4200],   // measured, after both
+
+  "spec": { "x": -1, "y": -1, "z": 0.420,   // -1 = unpinned (a hand-written
+            "maxTris": 18850,               //   null is accepted and read as -1)
+            "specSource": "measured" },
+
+  "materials": [
+    { "name": "M_Police_Paint",  // the JOIN KEY — object slots hold these names
+      "baked": true,             // the null-discriminator; see below
+      "paintChannel": true,      // the design's colour MULTIPLIES this material
+      "rgb": [1,1,1], "metallic": 0, "smoothness": 0.5, "alpha": 1,
+      "emission": [0,0,0], "emissionStrength": 0,
+      "mapAlbedo": "PartModels/body_police/M_Police_Paint_BaseColor",
+      "mapMetallicSmoothness": "…", "mapEmission": "", "mapNormal": "…" }
+  ],
+
+  "objects": [
+    { "name": "Police_Body",     // the Blender OBJECT name, never the mesh name
+      "slots": ["M_Police_Dark", "M_Police_Paint"],   // INDEX is the submesh slot
+      "role": "Structural", "healthHp": 0, "group": "" }
+  ],
+
+  "vehicle":  { "cd": 0.34, "clA": 0.0, "garageOffered": true },
+  "cosmetic": { "slot": "", "rarity": "", "theme": "", "description": "" },
+  "notes":    { "geometryFixes": 11, "textureWarnings": 0,
+                "verificationOverridden": false, "overrideReason": "" },
+  "committedHash": "…"
+}
+```
+
+Things about that file worth knowing before you hand-edit one:
+
+- **Every string that could have been an enum is a string.** `JsonUtility` writes
+  an enum as its *ordinal*, so inserting a value in the middle would silently
+  reinterpret every asset already authored, and the diff would show a number
+  nobody can read.
+- **`baked` is the null-discriminator.** A baked material has no flat colour — the
+  texture carries it — and `JsonUtility` cannot tell an absent float from a zero
+  one. Never read `rgb`, `metallic` or `smoothness` as meaningful without checking
+  it first.
+- **Object names, never mesh names.** Unity names an imported GameObject after the
+  Blender *object*; the mesh datablock inside it is called something else entirely
+  (`Police_Body` vs `Police_Body_baked_baked_baked`).
+- **An empty slot entry is a statement**, not a gap: "leave this slot as
+  imported". A slot naming a material the manifest does not have is a dangling
+  reference and `[AST]` fails it.
+- **`smoothness`, not roughness.** Blender exports roughness; the conversion
+  happens once, in the tool, so nothing at runtime has a convention left to get
+  wrong.
+- **`vehicle` and `cosmetic` are always present** and `kind` decides which one
+  means anything. `JsonUtility` writes a null class field as `{}` and reads `{}`
+  back as a defaulted object, so "the block is absent" is not a distinction this
+  format can carry.
+- **Two hashes, two questions.** `source.fbxMd5` is what the *export* hashed at
+  commit time, so a mismatch means Blender moved on; `committedHash` is what the
+  *copy* hashed, so a mismatch means somebody edited the file under `Resources/`
+  and a re-commit would throw that edit away.
+- **Textures live in the asset's own folder**, `Resources/<root>/<key>/`, never a
+  shared one. A material Unity replaces gets named after its diffuse *texture*, so
+  two assets whose exporter both wrote a `BaseColor` map would collide in a shared
+  folder and one would silently win.
+
+### 4.4 Committing
+
+`Tools > Asset Studio >` `1. Sync drafts from exports` → `2. Commit all drafts`,
+or the per-asset button in the window. A draft is a `ScriptableObject` under
+`TinyTorqueAssets/AssetStudio/Drafts/` — which is what makes Undo work — and it
+is **not** what the game reads. Committing is what writes the manifest.
+
+The pipeline copies the FBX and the referenced textures MD5-guarded, writes the
+manifest, imports **sidecars first and the model second** (a Verbatim model
+imported alongside its materials resolves none of them), then reads the truth back
+off the import: the real submesh slot counts, the measured `authorSize`, the
+triangle budget. Committing twice moves nothing — not one byte, `.meta` included.
+
+**It refuses rather than guesses**, and gives all the reasons at once so fixing
+three problems takes one round trip: an illegal key, the wrong `body_`/`wheel_`
+prefix, an unassigned kind, a prop or a fitting (neither has a registry a manifest
+can join), overwriting a shipped asset, a failed exporter verification without an
+override, an override without a written reason, a dangling slot, an unverified
+multi-slot object, a non-positive scale, an off-quarter yaw, an unparseable
+cosmetic slot/rarity/theme — and, for a body, **no drag coefficient**. A car whose
+top speed was chosen by a fallback constant is a car nobody chose.
+
+A re-sync keeps every authored decision that still has something to attach to:
+damage role, health, group, slot mapping and the verified flag by OBJECT NAME,
+and hand-edited material values by MATERIAL NAME. Anything the new export no
+longer mentions is *reported*, not deleted in silence — "the door is gone" and
+"the door was renamed" look identical from here and only you can tell them apart.
+
+### 4.5 What a committed asset joins
+
+The manifests **are** the registry. `BodyCatalog`, `WheelCatalog` and
+`CosmeticCatalog` each compose their table from their seed rows plus every
+manifest discovered under a `Resources` root, so there is no registry file that
+could disagree with what is on disk.
+
+- **A body** becomes a `BodyDef`: `cd`/`clA` authored, `paintable` derived from
+  whether any material claims the paint channel, and the mesh key *is* the key.
+- **A wheel** becomes a `WheelDef` whose `authorRadius` is measured off the mesh.
+- **A cosmetic** becomes a `CosmeticItem` from five authored fields; scrap value
+  and shop price come from the *rarity* through the same table the 47 shipped
+  cosmetics use, so a new hat cannot reprice the economy. `UnlockCatalog` composes
+  its pool from `CosmeticCatalog`, so it reaches the crates and the shop with no
+  further wiring.
+- **Props and fittings do not register.** Props are out of v1 scope — the scenery
+  call sites skip material binding entirely when their token array is empty — and
+  a fitting's key (the battery, the antennas, the light bars) comes from a
+  `switch` on an int, so a committed one would import correctly and be asked for
+  by nothing. Replacing one of those meshes is a file swap, not a commit.
+
+A committed row has **no enum value at all**, and that is what "a new car without
+a code change" means. Its legacy int is `Box` / style 0, which is what an older
+build reading the int beside the key will build — unfixable with `JsonUtility`,
+and the reason `NetSession.ProtocolVersion` went to 16.
+
+### 4.6 The gates
+
+```
+-executeMethod AIHWSim.AssetTools.AssetStudioValidator.Report      -> [AST] RESULT
+-executeMethod AIHWSim.EditorTools.PartModelValidator.Report       -> [PMV] RESULT
+-executeMethod AIHWSim.EditorTools.AssetKeyValidator.Report        -> [AKEY] RESULT
+```
+
+`[AST]` checks every committed manifest against things that can disagree with it:
+the prefab Unity imported (objects, submesh slot counts, measured size within
+2 mm, triangle count), the map paths against `Resources`, the import settings
+against the **slot** a map is bound to, `committedHash` against the FBX on disk,
+and the key against the catalogue that should have composed a row for it. Zero
+managed assets is a pass and says so — that is the shipped state. Source drift is
+reported as *news*, not as a failure: Blender moving on is not a defect in this
+repository, and on a machine with no export folder configured that half is skipped
+and counted.
+
+`[PMV]`'s table is the 207 literal rows **∪** one row per manifest, and a
+duplicate key is a hard failure rather than a merge. The two halves are not the
+same kind of claim and the manifest says which is which: a literal row is an
+independent prediction about what an FBX round trip should preserve, while a
+manifest row carries `specSource: "measured"` and can only say the mesh has not
+grown since it was committed.
+
+Neither validator runs the token-table check on a managed asset — it binds by
+object name and slot and has never heard of those tables, so the check would
+either pass by finding nothing or fail an innocent asset for owning a piece
+called `chrome_1`.
+
+### 4.7 The one thing this does not buy you
+
+`PartVisualFactory.AccentTokens` is still a code table. A body wanting *new*
+material tokens still needs a code change **unless it ships a manifest**. The
+claim is "no code change for a manifest asset", not "no code change ever".
+
+And the police body is **already in the game** as `body_patrol`, from the same
+`TinyTorque_police.blend`. Committing over a shipped key is refused; commit under
+a new one, which is the whole point of string keys.
 
 ---
 
@@ -249,3 +497,10 @@ props have **no runtime scale contract** — they are placed at their authored s
 and validated on extent and triangle budget. They are instantiated onto the
 parent's layer rather than the viz layer, so the on-car camera sensor can see
 scenery.
+
+Props are **out of Asset Studio's scope** (§4) and the commit pipeline refuses
+them by name. The reason is not that they are hard: `TrackCatalog` and `ArcadeVfx`
+skip material binding entirely when their token array is empty, so a prop with a
+manifest would import correctly and never bind. Adding props means giving the
+scenery call sites the hand-off the vehicle ones already have, plus an `ItemDef`
+row for placement — a real piece of work, not a flag.
