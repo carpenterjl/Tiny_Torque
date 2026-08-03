@@ -34,9 +34,11 @@ namespace AIHWSim.Vehicles
         /// never existed.</summary>
         public string id;
 
-        /// <summary>Picker text. Free to diverge from <see cref="id"/> — the
-        /// point of a string key is that renaming what a player reads is not a
-        /// save-format change.</summary>
+        /// <summary>Picker text, and since K4 the ONLY source of it. Free to
+        /// diverge from <see cref="id"/> — the point of a string key is that
+        /// renaming what a player reads is not a save-format change — and free
+        /// to diverge from <see cref="legacy"/>'s name too, which it could not
+        /// be while the picker printed <c>shape.ToString()</c>.</summary>
         public string label;
 
         /// <summary>The <see cref="BodyShape"/> this key migrates from, and the
@@ -93,18 +95,26 @@ namespace AIHWSim.Vehicles
         /// actually is; for the Tiguan it is the published body box.</summary>
         public Vector3 nominalSize;
 
-        /// <summary>Hidden from every picker. A reference vehicle, not content.</summary>
+        /// <summary>Hidden from every picker. A reference vehicle, not content.
+        ///
+        /// Authored, but no longer arbitrary: <c>[AKEY]</c> holds it to
+        /// <see cref="BodyCatalog.Buildable"/>, so the flag has to agree with
+        /// whether the garage's own size sliders can reach this shell at all.
+        /// That is what K4 replaced the hard-coded <c>s != BodyShape.Tiguan</c>
+        /// with — an offered body the player cannot size is a body you can pick
+        /// and cannot use.</summary>
         public bool debugOnly;
     }
 
     /// <summary>
     /// The bodies the game can build, as a table instead of six switches.
     ///
-    /// <b>Nothing calls this yet.</b> It is transcribed from the live switches
-    /// and checked against them by <c>[AKEY]</c> while they are still the live
-    /// path — so the transcription is proved before anything depends on it, and
-    /// a wrong number here cannot reach a car. K3 moves the consumers over one
-    /// at a time; until then this file is a claim under test.
+    /// <b>This is the live path.</b> It was transcribed from those switches and
+    /// checked against them by <c>[AKEY]</c> while they still ran, so the
+    /// transcription was proved before anything depended on it; K3 then moved
+    /// every consumer here and deleted them, and K4 moved the garage's picker.
+    /// A row is now the whole answer about a body — what it renders as, what it
+    /// drags like, what it is called, and whether it is offered at all.
     ///
     /// Modelled on <c>CosmeticCatalog</c>: a hard-coded seed array plus a
     /// dictionary lookup, no scanning. Discovery of committed manifests belongs
@@ -126,12 +136,15 @@ namespace AIHWSim.Vehicles
         };
 
         /// <summary>
-        /// The seed table. Every number is transcribed from the switch that
-        /// still owns it — <c>BodyMeshKey</c>, <c>HasPaintableBody</c>,
+        /// The seed table. Every number in it was transcribed from a switch that
+        /// owned it — <c>BodyMeshKey</c>, <c>HasPaintableBody</c>,
         /// <c>BodyAccentTable</c>, <c>BodyRenderScale</c>,
         /// <c>AeroDynamics.BodyCd</c>/<c>BodyClA</c>,
-        /// <c>CosmeticMounts.HasFoldedAppendages</c> — and every one of those is
-        /// re-read and compared by <c>[AKEY]</c>.
+        /// <c>CosmeticMounts.HasFoldedAppendages</c> — and compared against it by
+        /// <c>[AKEY]</c> before K3 deleted the six of them. What <c>[AKEY]</c>
+        /// checks now is what a table can still be wrong about alone: unique keys
+        /// and labels, one row per enum value, plausible aero, and the flags
+        /// agreeing with the things they claim to describe.
         /// </summary>
         public static readonly BodyDef[] All =
         {
@@ -183,6 +196,43 @@ namespace AIHWSim.Vehicles
         };
 
         private static BodyDef F(BodyDef d) { d.foldedAppendages = true; return d; }
+
+        /// <summary>
+        /// The garage's body-size slider range: the smallest and largest car a
+        /// player can build. Width, height, length, in metres.
+        ///
+        /// It lives here rather than in <c>GarageUI</c> because it is what makes
+        /// <see cref="BodyDef.debugOnly"/> a DERIVED fact rather than a name.
+        /// The UI still owns how the sliders look; it no longer owns what they
+        /// reach, because that is a statement about which bodies are content.
+        /// </summary>
+        public static readonly Vector3 SizeMin = new Vector3(0.12f, 0.04f, 0.25f);
+
+        /// <summary>The other end of <see cref="SizeMin"/>.</summary>
+        public static readonly Vector3 SizeMax = new Vector3(0.35f, 0.18f, 0.60f);
+
+        /// <summary>
+        /// Whether the garage's sliders can reach this shell's nominal size —
+        /// i.e. whether a player could build the car this shell is authored for.
+        ///
+        /// The Tiguan is 1.839 x 1.443 x 4.486 m against a 0.35 m ceiling, so it
+        /// fails on every axis; every arcade shell is authored at
+        /// <see cref="CarVehicle.BodyMeshAuthorSize"/>, which is mid-range on all
+        /// three. Nothing is close to the boundary, which is the point: this is a
+        /// test for "a different pipeline entirely", not a fussy tolerance.
+        /// </summary>
+        public static bool Buildable(BodyDef d) =>
+            d != null
+            && d.nominalSize.x >= SizeMin.x && d.nominalSize.x <= SizeMax.x
+            && d.nominalSize.y >= SizeMin.y && d.nominalSize.y <= SizeMax.y
+            && d.nominalSize.z >= SizeMin.z && d.nominalSize.z <= SizeMax.z;
+
+        /// <summary>The rows a picker offers, in table order. Everything that is
+        /// not a reference vehicle.</summary>
+        public static BodyDef[] Offered =>
+            _offered ??= System.Array.FindAll(All, d => !d.debugOnly);
+
+        private static BodyDef[] _offered;
 
         private static Dictionary<string, BodyDef> _byId;
 

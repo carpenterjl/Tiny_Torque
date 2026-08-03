@@ -35,9 +35,19 @@ namespace AIHWSim.Menu
 
         private static readonly string[] HornNames =
             { "Standard", "Police siren", "Air horn", "Musical", "Clown" };
-        private static readonly string[] WheelNames =
-            { "Slick", "Knobby", "Rally", "Coupe", "Baja", "Steelie", "Chrome", "Gold", "Neon",
-              "Rusted", "Race gold", "Five-spoke", "Whitewall" };
+        /// <summary>The wheel styles the showroom offers, from WheelCatalog:
+        /// every row that is not a reference vehicle's, in table order. Unlike
+        /// the garage's list this one KEEPS the three finishes — they are the
+        /// unlockables the showroom exists to sell.
+        ///
+        /// LockedCycle indexes this array by <c>wheelStyle</c>, which works
+        /// because the two are the same number: <c>[AKEY]</c> pins
+        /// <c>legacy == index</c>, and the rows dropped here are the last two.
+        /// The hand-copied array this replaces was the third copy of these
+        /// names in the codebase.</summary>
+        private static readonly string[] WheelNames = System.Array.ConvertAll(
+            System.Array.FindAll(Vehicles.WheelCatalog.All, d => !d.debugOnly),
+            d => d.label);
         private static readonly string[] TopperNames =
             { "As designed", "Light bar", "Off-road pods", "Flag antenna", "Twin whips", "Whip", "Clean deck" };
         private static readonly string[] AeroNames =

@@ -404,7 +404,17 @@ namespace AIHWSim.Persistence
 
             if (l.hornStyle >= 0) d.hornStyle = l.hornStyle;
             if (l.wheelStyle >= 0 && d.wheels != null)
-                foreach (var w in d.wheels) w.wheelStyle = l.wheelStyle;
+                foreach (var w in d.wheels)
+                {
+                    // The loadout still speaks in ints — K5 gives it a key — and
+                    // a key beside an int WINS. Since K4 the garage writes both,
+                    // so overriding the int alone would be overridden right back:
+                    // an unlocked wheel would simply not appear on any car the
+                    // player designed. Clearing the key says "the int is the
+                    // answer here", which is what a loadout override means.
+                    w.wheelStyle = l.wheelStyle;
+                    w.wheelKey = "";
+                }
             if (l.paintIdx >= 0 && l.paintIdx < PaintPalette.Length)
             {
                 d.bodyColor = PaintPalette[l.paintIdx].color;

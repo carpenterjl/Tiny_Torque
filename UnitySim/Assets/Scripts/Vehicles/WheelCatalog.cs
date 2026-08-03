@@ -17,9 +17,11 @@ namespace AIHWSim.Vehicles
         /// wheel needs a key of its own instead of just an FBX name.</summary>
         public string id;
 
-        /// <summary>Picker text. Currently duplicated by hand in
-        /// <c>GarageUI.DrawWheelInspector</c> and <c>ShowroomUI.WheelNames</c>;
-        /// K4 deletes both and reads this.</summary>
+        /// <summary>Picker text, and since K4 the only copy of it. It was
+        /// written out by hand in three places — here,
+        /// <c>GarageUI.DrawWheelInspector</c> and <c>ShowroomUI.WheelNames</c> —
+        /// which is how the garage and the showroom could have disagreed about
+        /// what style 10 is called.</summary>
         public string label;
 
         /// <summary>The <c>wheelStyle</c> int this key migrates from, still
@@ -55,11 +57,12 @@ namespace AIHWSim.Vehicles
     }
 
     /// <summary>
-    /// The wheel styles the game can build, as a table instead of three switches
+    /// The wheel styles the game can build, as a table instead of four switches
     /// and two hand-copied name arrays.
     ///
-    /// <b>Nothing calls this yet</b> — see <see cref="BodyCatalog"/> for why, and
-    /// for the seed-plus-lookup shape it copies.
+    /// <b>This is the live path</b> — see <see cref="BodyCatalog"/> for the order
+    /// it was proved in, and for the seed-plus-lookup shape it copies. K3c took
+    /// the four switches, K4 the two name arrays and the garage's offered list.
     ///
     /// <b>Order is the persisted int order.</b> Do not reorder; append.
     /// </summary>
@@ -77,8 +80,11 @@ namespace AIHWSim.Vehicles
         /// <summary>
         /// The seed table, transcribed from <c>PartVisualFactory</c>'s
         /// <c>WheelStyleKey</c>, <c>AuthorRadiusFor</c>, <c>FinishFor</c> and
-        /// <c>IsFullScale</c>, and from the garage's <c>offered</c> list. Every
-        /// one of those is re-read and compared by <c>[AKEY]</c>.
+        /// <c>IsFullScale</c>, and from the garage's <c>offered</c> list — all
+        /// five compared against it by <c>[AKEY]</c> before K3c and K4 deleted
+        /// them. What is checked now is the table's own consistency: unique keys
+        /// and labels, <c>legacy == index</c>, the two author radii, and the two
+        /// picker flags against the facts they stand for.
         /// </summary>
         public static readonly WheelDef[] All =
         {

@@ -1274,34 +1274,43 @@ namespace AIHWSim.Garage
         private void DrawBodyTab()
         {
             Header("BODY");
-            // Rows of four — eight shapes no longer fit one line.
-            // BodyShape.Tiguan is a full-scale physics reference vehicle, not
-            // game content: its design is 1500 kg on 0.349 m wheels, which every
-            // slider below clamps away, and VehicleLibrary would hide the save.
-            // Offering it here would be a shape you can pick and cannot use.
-            var shapes = System.Array.FindAll(
-                (BodyShape[])System.Enum.GetValues(typeof(BodyShape)),
-                s => s != BodyShape.Tiguan);
-            for (int row = 0; row < shapes.Length; row += 4)
+            // Rows of four — eight shapes no longer fit one line. The rows come
+            // from BodyCatalog, so a body committed by Asset Studio appears here
+            // without a C# edit, and the label is the row's own rather than an
+            // enum name a new body would not have.
+            //
+            // What is NOT offered used to be the literal `s != BodyShape.Tiguan`.
+            // It is now BodyDef.debugOnly, which [AKEY] holds to the size sliders
+            // below: a shell the sliders cannot reach is one you could pick and
+            // never size. The Tiguan is still the only row that fails it — the
+            // difference is that the rule now says why.
+            var bodies = BodyCatalog.Offered;
+            for (int row = 0; row < bodies.Length; row += 4)
             {
                 GUILayout.BeginHorizontal();
-                for (int i = row; i < Mathf.Min(row + 4, shapes.Length); i++)
+                for (int i = row; i < Mathf.Min(row + 4, bodies.Length); i++)
                 {
-                    BodyShape shape = shapes[i];
-                    bool on = D.bodyShape == shape;
-                    if (GUILayout.Toggle(on, shape.ToString(), GUI.skin.button) && !on)
+                    BodyDef def = bodies[i];
+                    bool on = D.Body == def;
+                    if (GUILayout.Toggle(on, def.label, GUI.skin.button) && !on)
                     {
                         bootstrap.PushUndo("shape");
-                        D.bodyShape = shape;
+                        // Both halves, the way Migrate leaves them: the key is
+                        // what decides, and the int is what an older build reads.
+                        D.bodyKey = def.id;
+                        D.bodyShape = def.legacy;
                         bootstrap.RebuildPreview();
                     }
                 }
                 GUILayout.EndHorizontal();
             }
 
-            D.bodySize.x = Slider("Width", D.bodySize.x, 0.12f, 0.35f);
-            D.bodySize.y = Slider("Height", D.bodySize.y, 0.04f, 0.18f);
-            D.bodySize.z = Slider("Length", D.bodySize.z, 0.25f, 0.60f);
+            // The ranges live in BodyCatalog now — see BodyCatalog.SizeMin. They
+            // are not only a UI clamp: they are the definition of a buildable
+            // car, and the picker above is filtered by them.
+            D.bodySize.x = Slider("Width", D.bodySize.x, BodyCatalog.SizeMin.x, BodyCatalog.SizeMax.x);
+            D.bodySize.y = Slider("Height", D.bodySize.y, BodyCatalog.SizeMin.y, BodyCatalog.SizeMax.y);
+            D.bodySize.z = Slider("Length", D.bodySize.z, BodyCatalog.SizeMin.z, BodyCatalog.SizeMax.z);
             bool comp = GUILayout.Toggle(D.useCompositeMass, " Composite mass & CoM");
             if (comp != D.useCompositeMass)
             {
@@ -1522,24 +1531,22 @@ namespace AIHWSim.Garage
             w.yaw = Slider("Heading°", w.yaw, -180f, 180f);
             w.radius = Slider("Radius", w.radius, 0.02f, 0.07f);
 
-            // The button cycles a LIST of styles, not a range: 6-8 are showroom
-            // FINISHES over the slick rather than meshes, so the garage skips
-            // them, while 9-12 (the Legendary cars' own wheels) belong here.
-            // A style the list does not carry — a design saved with a finish —
-            // still displays, and the first press moves it into the list.
-            int[] offered = { 0, 1, 2, 3, 4, 5, 9, 10, 11, 12 };
-            string[] styleNames =
-            {
-                "Slick", "Knobby", "Rally", "Coupe", "Baja", "Steelie",
-                "Chrome", "Gold", "Neon",
-                "Rusted", "Race gold", "Five-spoke", "Whitewall",
-            };
-            int st = Mathf.Clamp(w.wheelStyle, 0, styleNames.Length - 1);
-            if (GUILayout.Button("Tyre style: " + styleNames[st]))
+            // The button cycles a LIST of styles, not a range — the catalogue's
+            // garageOffered rows. The three showroom FINISHES over the slick are
+            // unlocked rather than designed, and the reference car's two are not
+            // content, so neither is in the list. A wheel already carrying one
+            // still shows its own name, and the first press moves it into the
+            // list (IndexOf returns -1, so the cycle lands on the slick — the
+            // behaviour the old hand-written array had for exactly the same
+            // reason).
+            WheelDef cur = w.Wheel;
+            if (GUILayout.Button("Tyre style: " + cur.label))
             {
                 bootstrap.PushUndo("tyre");
-                int at = System.Array.IndexOf(offered, st);
-                w.wheelStyle = offered[(at + 1) % offered.Length];
+                var offered = System.Array.FindAll(WheelCatalog.All, d => d.garageOffered);
+                WheelDef next = offered[(System.Array.IndexOf(offered, cur) + 1) % offered.Length];
+                w.wheelKey = next.id;
+                w.wheelStyle = next.legacy;
                 bootstrap.RequestRebuild();
             }
 

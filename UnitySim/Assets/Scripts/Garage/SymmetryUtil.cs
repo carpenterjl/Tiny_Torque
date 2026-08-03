@@ -91,7 +91,11 @@ namespace AIHWSim.Garage
             dst.gripMult = src.gripMult;
             dst.loadSensitivity = src.loadSensitivity;
             dst.balloonPct = src.balloonPct;
+            // Both halves of the style pair. Copying only the int would leave the
+            // mirror's own key in place, and the key wins — so the left wheel
+            // would quietly keep the style the right one just changed away from.
             dst.wheelStyle = src.wheelStyle;
+            dst.wheelKey = src.wheelKey;
             dst.massKg = src.massKg;
         }
 

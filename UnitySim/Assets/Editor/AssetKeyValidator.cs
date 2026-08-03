@@ -54,6 +54,7 @@ namespace AIHWSim.EditorTools
         {
             int fail = 0;
             var ids = new HashSet<string>(StringComparer.Ordinal);
+            var labels = new HashSet<string>(StringComparer.Ordinal);
             var seen = new HashSet<BodyShape>();
 
             foreach (BodyDef d in BodyCatalog.All)
@@ -127,10 +128,24 @@ namespace AIHWSim.EditorTools
                 if ((d.nominalSize - wantSize).sqrMagnitude > 1e-8f)
                     why += $" nominalSize {V(d.nominalSize)} != {V(wantSize)}";
 
-                // The picker prints shape.ToString() today, so the label is
-                // pinned to the enum name until K4 makes it free to diverge.
-                if (d.label != d.legacy.ToString() && d.legacy != BodyShape.Tiguan)
-                    why += $" label '{d.label}' != enum name '{d.legacy}'";
+                // The label was pinned to the enum name until K4, because the
+                // picker printed shape.ToString() and the two had to agree.
+                // The picker prints THIS now, so the pin is gone — a body Asset
+                // Studio commits has no enum name to be held to. What replaces
+                // it is what a printed string has to be: there, and its own.
+                if (string.IsNullOrWhiteSpace(d.label)) why += " no label";
+                else if (!labels.Add(d.label)) why += $" duplicate label '{d.label}'";
+
+                // debugOnly is what the garage picker filters on, and this is
+                // what K4 replaced `s != BodyShape.Tiguan` with: a body is
+                // content exactly when the garage's own size sliders can reach
+                // the size it is authored for. Two independent numbers — the
+                // slider range and the shell's nominal size — so a row that
+                // hid itself for no reason, or offered a shell nobody can size,
+                // is a named failure rather than a puzzling picker.
+                if (d.debugOnly == BodyCatalog.Buildable(d))
+                    why += $" debugOnly {d.debugOnly} disagrees with nominalSize " +
+                           $"{V(d.nominalSize)} against the size sliders";
 
                 if (d.meshKey != null && !PartMeshLibrary.Has(d.meshKey))
                     why += $" no mesh at Resources/PartModels/{d.meshKey}";
@@ -164,7 +179,9 @@ namespace AIHWSim.EditorTools
         {
             int fail = 0;
             var ids = new HashSet<string>(StringComparer.Ordinal);
+            var labels = new HashSet<string>(StringComparer.Ordinal);
             var seen = new HashSet<int>();
+            int lastOffered = -1;
 
             for (int i = 0; i < WheelCatalog.All.Length; i++)
             {
@@ -210,6 +227,39 @@ namespace AIHWSim.EditorTools
 
                 if (!PartMeshLibrary.Has(d.meshKey))
                     why += $" no mesh at Resources/PartModels/{d.meshKey}";
+
+                // K4 made the three label arrays one. A label is now printed
+                // rather than compared, so what it has to be is there and its
+                // own — the garage and the showroom can no longer disagree about
+                // what style 10 is called, but they can both print "".
+                if (string.IsNullOrWhiteSpace(d.label)) why += " no label";
+                else if (!labels.Add(d.label)) why += $" duplicate label '{d.label}'";
+
+                // Two picker filters, checkable for the first time now that the
+                // pickers read them.
+                //
+                // debugOnly IS "authored 1:1": the reference car's wheels are
+                // the ones that came from the other pipeline, and nothing else
+                // should be hiding from both pickers.
+                if (d.debugOnly != d.fullScale)
+                    why += $" debugOnly {d.debugOnly} disagrees with fullScale {d.fullScale}";
+
+                // The garage offers meshes. A finish is unlocked in the showroom,
+                // not designed in the garage; a reference wheel is not content.
+                if (d.garageOffered != (d.finish == WheelFinish.None && !d.debugOnly))
+                    why += $" garageOffered {d.garageOffered} disagrees with finish " +
+                           $"{d.finish} / debugOnly {d.debugOnly}";
+
+                // ShowroomUI builds its cycle from the non-debugOnly rows and
+                // then indexes it by wheelStyle, so those rows have to be the
+                // FRONT of the table with no gap. legacy == index above makes
+                // that true only if debugOnly never precedes an offered row —
+                // which is this check, and which is what would silently rename
+                // every showroom wheel if a reference wheel were ever inserted
+                // in the middle.
+                if (!d.debugOnly && lastOffered != i - 1)
+                    why += $" offered row at index {i} follows a debugOnly row";
+                if (!d.debugOnly) lastOffered = i;
 
                 if (why.Length == 0) Debug.Log($"{Tag} PASS wheel:{d.id}");
                 else { Debug.LogError($"{Tag} FAIL wheel:{d.id} -{why}"); fail++; }
