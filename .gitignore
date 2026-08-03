@@ -71,6 +71,13 @@ UnitySim/Assets/Plugins/x86_64/*.pdb
 UnitySim/Assets/TinyTorqueAssets/AssetStudio/Staging/
 UnitySim/Assets/TinyTorqueAssets/AssetStudio/Staging.meta
 
+# Asset Studio slot-order scratch — an export imported WITH its materials for
+# exactly as long as it takes to read which one sits in which submesh slot, then
+# deleted in a finally. It should never survive a call, let alone reach a commit;
+# this is here for the run that dies between the copy and the delete.
+UnitySim/Assets/TinyTorqueAssets/AssetStudio/SlotProbe/
+UnitySim/Assets/TinyTorqueAssets/AssetStudio/SlotProbe.meta
+
 # Runtime output / personal data (settings, profiles, session snapshots)
 UnitySim/TelemetryLogs/
 UnitySim/Saves/

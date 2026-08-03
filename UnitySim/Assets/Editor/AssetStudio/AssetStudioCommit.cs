@@ -354,16 +354,23 @@ namespace AIHWSim.AssetTools
                     break;
             }
 
-            // Overwriting a shipped asset is always a mistake, and a QUIET one:
+            // Overwriting a shipped asset by ACCIDENT is a quiet disaster:
             // BodyCatalog's seed rows win over any later addition of the same
-            // key, so a committed body_patrol would replace the car's mesh while
-            // the row describing it stayed the old one.
+            // key, so a stray body_patrol would swap the car's mesh while the row
+            // describing it stayed the old one. Doing it ON PURPOSE is the whole
+            // Replace workflow, and the difference between the two is
+            // AssetStudioDraft.replacesKey — the author's signature, recorded
+            // against this exact key.
             if (!string.IsNullOrWhiteSpace(key))
             {
                 string dst = FbxPathFor(kind, key);
-                if (File.Exists(PackPaths.ToAbsolute(dst)) && CommittedManifest(kind, key) == null)
+                if (File.Exists(PackPaths.ToAbsolute(dst))
+                    && CommittedManifest(kind, key) == null
+                    && !draft.MayReplace(key))
                     why.Add($"{dst} already exists and was not committed by Asset Studio — "
-                          + "it is one of the assets the project ships. Choose another key");
+                          + "it is one of the assets the project ships. Choose another key, or "
+                          + "start this from \"Replace mesh...\" on that asset's row if you mean "
+                          + "to replace it");
             }
 
             if (x.verification != null && !x.verification.passed && !draft.verificationOverridden)

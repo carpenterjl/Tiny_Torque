@@ -63,6 +63,12 @@ namespace AIHWSim.AssetTools
 
         private int _hoverRenderer = -1, _hoverSlot = -1;
 
+        /// <summary>The row whose "Replace mesh..." button was pressed this pass,
+        /// run once the layout is finished with. Deliberately NOT serialized: a
+        /// domain reload mid-flow should drop the request, not reopen a folder
+        /// picker the author has no memory of asking for.</summary>
+        private AssetRow _pendingReplace;
+
         private const float ListWidth = 280f;
         private const float RowHeight = 18f;
 
@@ -154,6 +160,25 @@ namespace AIHWSim.AssetTools
                 DrawList();
                 DrawDetail();
             }
+
+            // Deferred to the end of the pass, for T3's reason one level up: the
+            // replace flow opens a modal folder panel and a dialog, and doing
+            // that from inside the layout leaves every control after it drawing
+            // against a layout captured before the user spent a minute in a file
+            // browser. Running it here means the next OnGUI sees the new draft
+            // from the top.
+            if (_pendingReplace != null)
+            {
+                AssetRow target = _pendingReplace;
+                _pendingReplace = null;
+                if (AssetStudioReplace.Begin(target) != null)
+                {
+                    AssetStudioCatalog.Refresh();
+                    _rig?.InvalidateBinding();
+                }
+                Repaint();
+            }
+
             if (Event.current.type == EventType.MouseMove) Repaint();
         }
 
@@ -666,8 +691,10 @@ namespace AIHWSim.AssetTools
                 EditorGUILayout.HelpBox(
                     "Bound by the legacy substring token tables — its object names are "
                     + "matched case-insensitively, first match wins, against "
-                    + "PartVisualFactory's hand-ordered tables. Asset Studio does not "
-                    + "own this asset and will not change it.", MessageType.None);
+                    + "PartVisualFactory's hand-ordered tables. Asset Studio does not own "
+                    + "this asset yet. \"Replace mesh...\" points it at a Blender export and "
+                    + "takes it over: same key, same saved designs, exact per-slot binding.",
+                    MessageType.None);
 
             using (new EditorGUILayout.HorizontalScope())
             {
@@ -678,6 +705,18 @@ namespace AIHWSim.AssetTools
                 using (new EditorGUI.DisabledScope(!r.HasExport))
                     if (GUILayout.Button("Show export folder", GUILayout.Height(22f)))
                         EditorUtility.RevealInFinder(r.exportDir);
+
+                // The whole replace workflow behind one button, on the row of the
+                // thing being replaced — which is where an author looks for it,
+                // rather than in a commit flow that would have to ask them to
+                // retype a key the row is already displaying.
+                if (AssetStudioReplace.CanReplace(r)
+                    && GUILayout.Button(new GUIContent("Replace mesh...",
+                            $"Point \"{r.key}\" at a Blender export. The row keeps its "
+                            + "identity and aero; the export supplies the geometry, the "
+                            + "materials and the slot bindings."),
+                        GUILayout.Height(22f)))
+                    _pendingReplace = r;
 
                 // A draft is only meaningful with an export behind it — it is the
                 // authored form of what export.json says, and there is nothing to

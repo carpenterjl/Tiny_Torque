@@ -448,13 +448,20 @@ namespace AIHWSim.EditorTools
         /// The 207 literal rows above <b>∪</b> one row per committed manifest —
         /// the whole of what "a new car without a code change" costs this gate.
         ///
-        /// <b>A duplicate key is a hard failure and not a merge.</b> Two rows for
-        /// one asset means two contracts, and whichever the loop reached second
-        /// would be the one that decided — so a committed <c>body_patrol</c>
-        /// would quietly relax the shipped car's budget, or tighten it, with no
-        /// line anywhere saying which table won. The seed/committed collision is
-        /// refused at commit time as well (<c>AssetStudioCommit.Refusal</c>); this
-        /// is the half that still holds when a manifest arrives some other way.
+        /// <b>A duplicate key SUPERSEDES rather than merging or failing.</b> Two
+        /// rows for one asset would be two contracts, and whichever the loop
+        /// reached second would be the one that decided, with no line anywhere
+        /// saying which table won — so the manifest takes the slot outright and
+        /// the supersede is logged by name.
+        ///
+        /// It was a hard failure until the replace workflow arrived, on the
+        /// reasoning that a committed <c>body_patrol</c> could only be a mistake.
+        /// Replacing a shipped mesh in place is now a supported thing to do, and
+        /// after it the literal row describes a file that is no longer on disk:
+        /// failing on it would mean every replacement demanded a hand edit to
+        /// this table, which is precisely the C# edit that workflow exists to
+        /// remove. What is lost is real and is not glossed — see the next
+        /// paragraph for exactly what the replacement row can no longer claim.
         ///
         /// <b>The two halves are not the same KIND of claim, and the manifest
         /// says which is which.</b> A literal row is an independent prediction
@@ -472,9 +479,10 @@ namespace AIHWSim.EditorTools
         /// carry, and possible only because a manifest records what its own asset
         /// measured.
         /// </summary>
-        private static List<Spec> AllSpecs(out int fail)
+        private static List<Spec> AllSpecs(out int fail, out int superseded)
         {
             fail = 0;
+            superseded = 0;
             var all = new List<Spec>(Specs);
             var seen = new HashSet<string>(System.StringComparer.Ordinal);
             foreach (Spec s in all) seen.Add(s.Key);
@@ -489,12 +497,28 @@ namespace AIHWSim.EditorTools
                     if (man == null || string.IsNullOrEmpty(man.key)) continue;
                     if (!seen.Add(man.key))
                     {
-                        Debug.LogError($"[PMV] FAIL {man.key}: a committed manifest names a key " +
-                                       "this validator already has a literal row for. Two rows " +
-                                       "is two contracts and the second one silently wins — " +
-                                       "commit it under another key, or delete the literal row " +
-                                       "if the asset really has been replaced.");
-                        fail++;
+                        // Asset Studio has REPLACED a shipped mesh under its own
+                        // key, and the literal row is now a prediction about a
+                        // file that no longer exists — 0.420 m of a car somebody
+                        // deleted. Two rows would be two contracts with no line
+                        // anywhere saying which won, so the manifest takes the
+                        // slot outright.
+                        //
+                        // This is a real LOSS and is said out loud rather than
+                        // absorbed: the literal row was an independent prediction
+                        // and the row replacing it can only say the mesh has not
+                        // moved since it was committed. It is the honest outcome
+                        // all the same — the alternative is a gate that fails
+                        // until somebody hand-edits a table, which is exactly the
+                        // C# edit the replace workflow exists to remove.
+                        int at = all.FindIndex(s => s.Key == man.key);
+                        if (at >= 0) all[at] = new Spec(man, root);
+                        superseded++;
+                        Debug.Log($"[PMV] SUPERSEDED {man.key}: this validator's literal row " +
+                                  "described the shipped mesh, which Asset Studio has replaced. " +
+                                  "The manifest's measured spec takes its place — an independent " +
+                                  "prediction traded for a drift check, which is what replacing " +
+                                  "a shipped asset costs.");
                         continue;
                     }
                     all.Add(new Spec(man, root));
@@ -505,7 +529,7 @@ namespace AIHWSim.EditorTools
 
         public static void Report()
         {
-            List<Spec> specs = AllSpecs(out int fail);
+            List<Spec> specs = AllSpecs(out int fail, out int superseded);
             foreach (var s in specs)
             {
                 var src = Resources.Load<GameObject>(s.Root + s.Key);
@@ -570,7 +594,8 @@ namespace AIHWSim.EditorTools
             fail += TiguanChecks.Run();
 
             Debug.Log($"[PMV] RESULT {(fail == 0 ? "ALL PASS" : fail + " FAILED")} " +
-                      $"({specs.Count} assets, {specs.Count - Specs.Length} committed)");
+                      $"({specs.Count} assets, {specs.Count - Specs.Length} committed" +
+                      $"{(superseded > 0 ? $", {superseded} superseded" : "")})");
         }
 
         /// <summary>

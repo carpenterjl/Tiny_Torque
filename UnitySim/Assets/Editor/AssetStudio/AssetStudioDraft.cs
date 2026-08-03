@@ -206,6 +206,30 @@ namespace AIHWSim.AssetTools
 
         public string materialMode = DraftMaterialModes.Manifest;
 
+        /// <summary>
+        /// The shipped key this draft was explicitly authorised to REPLACE, or "".
+        ///
+        /// Overwriting an asset the project ships is refused by default and has to
+        /// be, because <c>BodyCatalog</c>'s seed row wins over any manifest of the
+        /// same name: a body_patrol that arrived by accident would swap the car's
+        /// mesh while the row describing it stayed the old one. The Replace
+        /// workflow is that refusal's one exception, and this field is the
+        /// author's signature on it.
+        ///
+        /// <b>It records the KEY, not a bool, and that is the whole design.</b>
+        /// The authorisation is checked with a string comparison against the key
+        /// actually being committed, so editing the key afterwards revokes it
+        /// rather than carrying a licence to overwrite <c>body_patrol</c> across
+        /// to <c>body_coupe</c>.
+        /// </summary>
+        public string replacesKey = "";
+
+        /// <summary>Whether this draft may overwrite <paramref name="k"/> — an
+        /// asset the project ships. See <see cref="replacesKey"/>.</summary>
+        public bool MayReplace(string k) =>
+            !string.IsNullOrEmpty(k)
+            && string.Equals(replacesKey, k, System.StringComparison.Ordinal);
+
         // ---- what the catalogue row will say --------------------------------
 
         /// <summary>

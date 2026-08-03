@@ -589,7 +589,8 @@ namespace AIHWSim.Vehicles
             var mesh = PartMeshLibrary.TryInstantiate(def.meshKey, holder);
             if (mesh != null)
             {
-                mesh.transform.localScale = Vector3.one * (radius / def.authorRadius);
+                mesh.transform.localScale =
+                    Vector3.one * (radius / WheelCatalog.AuthorRadiusOf(def));
 
                 // The wheel is authored with its rim face toward +X and the brake
                 // disc behind it, so on the axle side where +X points inboard it

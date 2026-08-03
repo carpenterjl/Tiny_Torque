@@ -202,8 +202,29 @@ namespace AIHWSim.AssetTools
                 }
             }
 
+            // A draft that names a source folder IS a declared link between an
+            // imported asset and an export — the same link a manifest records
+            // after a commit, asserted before there is a manifest to record it.
+            // It is what the Replace workflow leaves behind, and without it the
+            // pairing would evaporate on the next Refresh and leave a draft
+            // pointing at a row that no longer knew where its geometry came from.
+            var claimed = new HashSet<string>(System.StringComparer.OrdinalIgnoreCase);
+            foreach (AssetRow row in _rows)
+            {
+                if (row.HasExport || string.IsNullOrEmpty(row.key)) continue;
+                AssetStudioDraft d = AssetStudioDrafts.Find(row);
+                if (d == null || string.IsNullOrEmpty(d.sourceDir)
+                    || !Directory.Exists(d.sourceDir)) continue;
+                row.exportDir = d.sourceDir;
+                claimed.Add(Path.GetFullPath(d.sourceDir));
+            }
+
             foreach (string dir in ExportFolders())
             {
+                // Not a second row for a folder some asset has already claimed:
+                // one export becoming two rows is the merge failing loudly a
+                // week later, when one of them is committed and the other is not.
+                if (claimed.Contains(Path.GetFullPath(dir))) continue;
                 _rows.Add(new AssetRow
                 {
                     label = Path.GetFileName(dir),

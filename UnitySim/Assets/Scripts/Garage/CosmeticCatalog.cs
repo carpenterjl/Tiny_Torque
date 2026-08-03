@@ -412,8 +412,15 @@ namespace AIHWSim.Garage
                 if (c == null || string.IsNullOrEmpty(c.slot)) continue;
                 if (!taken.Add(m.key))
                 {
-                    Debug.LogWarning($"[CosmeticCatalog] '{m.key}' is already a pack cosmetic; " +
-                                     "the committed manifest is ignored.");
+                    // A pack cosmetic whose mesh Asset Studio has replaced. Only
+                    // this ROW is ignored — the manifest still binds the mesh's
+                    // materials at instantiate time. Unlike a body or a wheel
+                    // there is no measured field to hand back, because a
+                    // CosmeticItem carries none: slot, rarity and theme are
+                    // registry facts a replacement mesh has no say in.
+                    Debug.Log($"[CosmeticCatalog] '{m.key}' is a pack cosmetic whose mesh has " +
+                              "been replaced by Asset Studio. It keeps its slot, rarity and " +
+                              "theme; the manifest still binds its materials.");
                     continue;
                 }
                 if (!System.Enum.TryParse(c.slot, out CosmeticSlot slot)

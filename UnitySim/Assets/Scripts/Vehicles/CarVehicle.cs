@@ -976,7 +976,7 @@ namespace AIHWSim.Vehicles
         public static Vector3 BodyRenderScale(BodyDef def, Vector3 bodySize)
         {
             if (def != null && def.unscaled) return Vector3.one;
-            float s = def != null && def.authorScale > 0f ? def.authorScale : 1f;
+            float s = BodyCatalog.AuthorScaleOf(def);
             return new Vector3(s * bodySize.x / BodyMeshAuthorSize.x,
                                s * bodySize.y / BodyMeshAuthorSize.y,
                                s * bodySize.z / BodyMeshAuthorSize.z);
@@ -1059,7 +1059,7 @@ namespace AIHWSim.Vehicles
         /// </summary>
         public static bool HasPaintableBody(BodyDef def)
         {
-            if (def == null || !def.paintable) return false;
+            if (def == null) return false;
             string key = def.meshKey;
             if (key == null) return false;
 
@@ -1069,9 +1069,15 @@ namespace AIHWSim.Vehicles
             // design's colour MULTIPLIES the artwork) and not something a name
             // prefix can be read for. Verbatim mode is a flat no: its whole
             // premise is that the FBX's own materials are untouched, and a paint
-            // mode that silently did nothing would be worse than none. No shipped
-            // key ships a manifest, so every branch below this line is unreachable
-            // until Asset Studio commits one.
+            // mode that silently did nothing would be worse than none.
+            //
+            // Asked BEFORE the row's own flag, which is the one ordering that
+            // survives a mesh being replaced. body_patrol's row says false
+            // because the police livery is baked artwork; replace that mesh with
+            // a shell that declares a paint channel and the row is describing a
+            // car that is no longer there. The manifest is about the mesh, the
+            // flag is about the mesh, and when they disagree the one that came
+            // with the mesh wins.
             AssetManifest m = AssetManifests.Load(key);
             if (m != null)
             {
@@ -1080,6 +1086,8 @@ namespace AIHWSim.Vehicles
                     if (d != null && d.paintChannel) return true;
                 return false;
             }
+
+            if (!def.paintable) return false;
             return PartMeshLibrary.Has(key);
         }
 

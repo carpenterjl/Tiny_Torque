@@ -20,6 +20,19 @@ namespace AIHWSim.EditorTools
     /// </summary>
     public sealed class PartModelPostprocessor : AssetPostprocessor
     {
+        /// <summary>
+        /// Whether this path gets the settings below — public because Asset
+        /// Studio's slot-order reader depends on being OUTSIDE this scope and
+        /// should assert that rather than assume it.
+        ///
+        /// The reader imports a scratch copy of an export with its materials left
+        /// on, purely to read which material sits in which submesh slot; a copy
+        /// that landed in scope would be stripped by <c>materialImportMode
+        /// = None</c> below and read back as 42 slots of Unity's
+        /// <c>Default-Material</c>, which is not a failure that looks like one.
+        /// </summary>
+        public static bool InScope(string path) => IsPartModel(path);
+
         private static bool IsPartModel(string path)
         {
             string p = path.Replace('\\', '/');

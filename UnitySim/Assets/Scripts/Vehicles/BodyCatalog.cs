@@ -244,9 +244,22 @@ namespace AIHWSim.Vehicles
                 if (m == null || m.kind != AssetKinds.CarBody) continue;
                 if (!taken.Add(m.key))
                 {
-                    Debug.LogWarning($"[BodyCatalog] '{m.key}' is already a shipped body; the " +
-                                     "committed manifest is ignored. A save that names this key " +
-                                     "has always meant the shipped car and still does.");
+                    // A shipped key with a committed manifest beside it: Asset
+                    // Studio has REPLACED this body's mesh. The seed row stays,
+                    // and stays authoritative about identity and design — the
+                    // key, the enum it migrates from, its label, what it drags
+                    // like. A replacement mesh has no standing to change those,
+                    // and a save naming this key has always meant this car.
+                    //
+                    // What the manifest DOES own is what the new mesh measures,
+                    // and that is read from it where it is used (AuthorScaleOf,
+                    // CarVehicle.HasPaintableBody) rather than copied in here.
+                    // Copying would mean mutating a static readonly table, which
+                    // then keeps the replaced mesh's numbers for the rest of the
+                    // session after the manifest is deleted again.
+                    Debug.Log($"[BodyCatalog] '{m.key}' is a shipped body whose mesh has been " +
+                              "replaced by Asset Studio. The row keeps its identity and aero; " +
+                              "the manifest supplies what the new mesh measures.");
                     continue;
                 }
                 list.Add(FromManifest(m));
@@ -287,6 +300,34 @@ namespace AIHWSim.Vehicles
             debugOnly = false,
             authorScale = m.authorScale > 0f ? m.authorScale : 1f,
         };
+
+        /// <summary>
+        /// How much bigger the MESH is than the game wants it — asked of the
+        /// manifest first, and of the row only when there is no manifest to ask.
+        ///
+        /// <b>Those two can disagree, and only since a shipped mesh became
+        /// replaceable.</b> <see cref="Compose"/> keeps the SEED row when a
+        /// committed manifest names a shipped key, which is right for identity
+        /// and design and was never meant to cover geometry. A row still
+        /// insisting on <c>authorScale</c> 1 after the mesh under it was replaced
+        /// by one 12.573x larger renders a police car the size of a house — and
+        /// nothing would say so, because every gate checks the manifest against
+        /// the MESH and none checks it against the row.
+        ///
+        /// Inert for all thirteen seed rows, which have no manifest and an
+        /// <c>authorScale</c> of 1, and inert for every committed row, whose
+        /// field <see cref="FromManifest"/> copied out of this same manifest.
+        /// </summary>
+        public static float AuthorScaleOf(BodyDef def)
+        {
+            if (def == null) return 1f;
+            if (!string.IsNullOrEmpty(def.meshKey))
+            {
+                AssetManifest m = AssetManifests.Load(def.meshKey);
+                if (m != null && m.authorScale > 0f) return m.authorScale;
+            }
+            return def.authorScale > 0f ? def.authorScale : 1f;
+        }
 
         /// <summary>Forget the composed table and every lookup built from it.
         /// For the commit pipeline, which has just written a manifest naming a

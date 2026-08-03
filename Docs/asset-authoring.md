@@ -336,11 +336,24 @@ triangle budget. Committing twice moves nothing — not one byte, `.meta` includ
 **It refuses rather than guesses**, and gives all the reasons at once so fixing
 three problems takes one round trip: an illegal key, the wrong `body_`/`wheel_`
 prefix, an unassigned kind, a prop or a fitting (neither has a registry a manifest
-can join), overwriting a shipped asset, a failed exporter verification without an
-override, an override without a written reason, a dangling slot, an unverified
-multi-slot object, a non-positive scale, an off-quarter yaw, an unparseable
-cosmetic slot/rarity/theme — and, for a body, **no drag coefficient**. A car whose
-top speed was chosen by a fallback constant is a car nobody chose.
+can join), overwriting a shipped asset *without having chosen Replace* (§4.5), a
+failed exporter verification without an override, an override without a written
+reason, a dangling slot, an unverified multi-slot object, a non-positive scale, an
+off-quarter yaw, an unparseable cosmetic slot/rarity/theme — and, for a body,
+**no drag coefficient**. A car whose top speed was chosen by a fallback constant
+is a car nobody chose.
+
+**Slot order is measured, not asked.** `export.json` lists a material's objects in
+Blender's material-list order, which has no reason to match an object's submesh
+slot order — on the police car it is exactly backwards. The importer the game uses
+destroys the real order (`materialImportMode = None`, correctly — the game binds
+its own materials), so Asset Studio imports a scratch copy *outside* every
+postprocessor scope with materials left on, reads `sharedMaterials` per renderer,
+and throws the copy away. The "unverified multi-slot object" refusal above is
+therefore the fallback path now: it fires only when that read fails, and then the
+draft says so and the ordering goes back to being your problem. Getting this pair
+the wrong way round is not cosmetic — a repaint writes **by slot**, so a reversed
+`Police_Body` recolours the trim and leaves the livery alone.
 
 A re-sync keeps every authored decision that still has something to attach to:
 damage role, health, group, slot mapping and the verified flag by OBJECT NAME,
@@ -348,7 +361,54 @@ and hand-edited material values by MATERIAL NAME. Anything the new export no
 longer mentions is *reported*, not deleted in silence — "the door is gone" and
 "the door was renamed" look identical from here and only you can tell them apart.
 
-### 4.5 What a committed asset joins
+### 4.5 Replacing a mesh that already ships
+
+Re-modelled the Patrol car and want the existing `body_patrol` to *be* the new
+mesh? That is a **replacement**, not a new asset, and it has its own path:
+
+> Select the asset in Asset Studio → **Replace mesh...** → pick the export folder
+> → confirm → look at the preview → **Commit**.
+
+**It asks nothing a new asset has to be asked.** The key, the kind, the label, the
+drag coefficient, which slot a hat occupies and how rare it is are all inherited
+from the row being replaced — a new mesh has no standing to change them, and a
+saved design naming that key must keep meaning the car it has always meant. What
+the export supplies is what a mesh actually decides: the geometry, the scale and
+yaw correction, the materials, the per-slot bindings.
+
+**The FBX is overwritten in place.** Same path, same `.meta`, same GUID, so every
+scene and prefab referencing it keeps resolving. Do *not* delete or rename the old
+file first — that breaks those references, makes `[PMV]` and `[AKEY]` fail on a
+missing asset, and makes the car fall back to the primitive box its row nominates.
+It is a tracked file, so the replacement is one `git checkout` from undone.
+
+**Seed row and manifest split ownership**, which is what makes this need no code
+change. `Compose()` keeps the *seed* row when a manifest names a shipped key — the
+key, its `BodyShape`, its label, its aero — but the row was never the authority on
+geometry, so `authorScale` (bodies) and `authorRadius` (wheels) are read from the
+manifest at the point of use, by `BodyCatalog.AuthorScaleOf` and
+`WheelCatalog.AuthorRadiusOf`. `HasPaintableBody` asks the manifest *before* the
+row's own flag for the same reason: replace a baked livery with a shell that
+declares a paint channel and the row is describing a car that is no longer there.
+Nothing mutates the static seed table, so deleting the manifest restores the
+original answers immediately.
+
+**One thing is genuinely lost, and `[PMV]` says so out loud.** That validator's
+literal row for a shipped key was an *independent prediction* about what an FBX
+round trip should preserve. After a replacement it describes a file that is not on
+disk, so the manifest's measured spec supersedes it and the run logs
+`[PMV] SUPERSEDED <key>`. The replacement row carries `specSource: "measured"` and
+can only say the mesh has not moved since it was committed. That is what replacing
+a shipped asset costs; it is not hidden, and it is cheaper than a gate that fails
+until somebody hand-edits a table.
+
+Authorisation is recorded on the draft as `replacesKey` — the key, not a flag — so
+editing the draft's key afterwards revokes it rather than carrying a licence to
+overwrite `body_patrol` across to `body_coupe`. Props and fittings are refused
+here for the same reasons §4.6 gives below — and the refusal arrives before the
+folder picker rather than after it.
+
+### 4.6 What a committed asset joins
 
 The manifests **are** the registry. `BodyCatalog`, `WheelCatalog` and
 `CosmeticCatalog` each compose their table from their seed rows plus every
@@ -374,7 +434,7 @@ a code change" means. Its legacy int is `Box` / style 0, which is what an older
 build reading the int beside the key will build — unfixable with `JsonUtility`,
 and the reason `NetSession.ProtocolVersion` went to 16.
 
-### 4.6 The gates
+### 4.7 The gates
 
 ```
 -executeMethod AIHWSim.AssetTools.AssetStudioValidator.Report      -> [AST] RESULT
@@ -404,7 +464,7 @@ object name and slot and has never heard of those tables, so the check would
 either pass by finding nothing or fail an innocent asset for owning a piece
 called `chrome_1`.
 
-### 4.7 The one thing this does not buy you
+### 4.8 The one thing this does not buy you
 
 `PartVisualFactory.AccentTokens` is still a code table. A body wanting *new*
 material tokens still needs a code change **unless it ships a manifest**. The

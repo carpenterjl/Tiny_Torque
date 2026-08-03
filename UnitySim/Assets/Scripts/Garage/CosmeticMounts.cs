@@ -155,7 +155,7 @@ namespace AIHWSim.Garage
                 // cosRim, so this is a shape that never renders — recorded here
                 // rather than left as an unexplained hazard for whoever tries.
                 go.transform.localScale = Vector3.one
-                    * (radius / (w?.Wheel ?? WheelCatalog.Default).authorRadius);
+                    * (radius / WheelCatalog.AuthorRadiusOf(w?.Wheel ?? WheelCatalog.Default));
                 // BuildWheelViz's rule, mirrored exactly: on the side where +X
                 // points inboard the wheel is spun half a turn, and the rim has
                 // to come with it or it ends up inside the car.

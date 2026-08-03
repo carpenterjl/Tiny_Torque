@@ -148,9 +148,15 @@ namespace AIHWSim.Vehicles
                 if (m == null || m.kind != AssetKinds.Wheel) continue;
                 if (!taken.Add(m.key))
                 {
-                    UnityEngine.Debug.LogWarning(
-                        $"[WheelCatalog] '{m.key}' is already a shipped wheel; the committed " +
-                        "manifest is ignored.");
+                    // A shipped wheel whose mesh Asset Studio has replaced. The
+                    // seed row stays authoritative about identity, its persisted
+                    // int and its finish; the manifest owns what the new mesh
+                    // measures, read where it is used. See BodyCatalog.Compose
+                    // for the full argument — it is the same one.
+                    UnityEngine.Debug.Log(
+                        $"[WheelCatalog] '{m.key}' is a shipped wheel whose mesh has been " +
+                        "replaced by Asset Studio. The row keeps its identity; the manifest " +
+                        "supplies the radius the new mesh renders unscaled at.");
                     continue;
                 }
                 list.Add(FromManifest(m));
@@ -174,22 +180,57 @@ namespace AIHWSim.Vehicles
         /// </summary>
         private static WheelDef FromManifest(AssetManifest m)
         {
-            UnityEngine.Vector3 sz = m.AuthorSize;
-            float scale = m.authorScale > 0f ? m.authorScale : 1f;
-            float measured = UnityEngine.Mathf.Max(sz.y, sz.z) * 0.5f;
+            float raw = RawRadiusOf(m);
             return new WheelDef
             {
                 id = m.key,
                 label = m.Label,
                 legacy = 0,
                 meshKey = m.key,
-                authorRadius = measured > 1e-5f
-                    ? measured / scale : PartVisualFactory.WheelAuthorRadius,
+                authorRadius = raw > 0f ? raw : PartVisualFactory.WheelAuthorRadius,
                 finish = WheelFinish.None,
                 fullScale = false,
                 garageOffered = m.vehicle == null || m.vehicle.garageOffered,
                 debugOnly = false,
             };
+        }
+
+        /// <summary>The radius a manifest's mesh renders unscaled at: its
+        /// measured half-extent divided back out by the uniform factor, or 0 when
+        /// the manifest cannot say. Shared with <see cref="AuthorRadiusOf"/> so a
+        /// committed row and a replaced shipped one cannot derive the same number
+        /// two different ways.</summary>
+        private static float RawRadiusOf(AssetManifest m)
+        {
+            if (m == null) return 0f;
+            UnityEngine.Vector3 sz = m.AuthorSize;
+            float scale = m.authorScale > 0f ? m.authorScale : 1f;
+            float measured = UnityEngine.Mathf.Max(sz.y, sz.z) * 0.5f;
+            return measured > 1e-5f ? measured / scale : 0f;
+        }
+
+        /// <summary>
+        /// The radius this row's MESH renders unscaled at — asked of the manifest
+        /// first and of the row only when there is no manifest to ask.
+        ///
+        /// The same split as <see cref="BodyCatalog.AuthorScaleOf"/> and for the
+        /// same reason: replacing a shipped wheel's mesh leaves the seed row's
+        /// 33 mm behind, and a row still claiming 33 mm for a mesh that measures
+        /// 415 would render the tyre at a twelfth of its size. Inert for the
+        /// fifteen seed rows, which have no manifest, and for every committed
+        /// row, whose field <see cref="FromManifest"/> derived from this same
+        /// manifest through this same helper.
+        /// </summary>
+        public static float AuthorRadiusOf(WheelDef def)
+        {
+            if (def == null) return PartVisualFactory.WheelAuthorRadius;
+            if (!string.IsNullOrEmpty(def.meshKey))
+            {
+                float raw = RawRadiusOf(AssetManifests.Load(def.meshKey));
+                if (raw > 0f) return raw;
+            }
+            return def.authorRadius > 0f ? def.authorRadius
+                                         : PartVisualFactory.WheelAuthorRadius;
         }
 
         /// <summary>Forget the composed table and every lookup built from it.

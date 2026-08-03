@@ -166,31 +166,70 @@ namespace AIHWSim.AssetTools
             foreach (DraftObject o in draft.objects)
                 if (o != null && !string.IsNullOrEmpty(o.name)) keptObjs[o.name] = o;
 
+            // The slot order READ off the FBX, which is the authority. Falls back
+            // to export.json's material order — a proposal, and a measurably bad
+            // one — only when the read fails; see AssetStudioSlotOrder.
+            Dictionary<string, string[]> fbxOrder = AssetStudioSlotOrder.Read(x, out string slotProblem);
+            if (fbxOrder.Count == 0 && !string.IsNullOrEmpty(slotProblem))
+                AssetStudio.Warn($"{draft.key}: could not read the FBX's slot order "
+                    + $"({slotProblem}). Falling back to export.json's material order, which "
+                    + "is a PROPOSAL — every multi-slot object has to be checked against the "
+                    + "preview by hand before this can be committed.");
+
             Dictionary<string, int> slotCounts = SlotCounts(row);
             var objs = new List<DraftObject>();
+            int measured = 0, disagreed = 0;
             foreach (string name in x.AllObjects())
             {
                 keptObjs.TryGetValue(name, out DraftObject d);
                 bool isNew = d == null;
                 d ??= new DraftObject { name = name };
 
+                fbxOrder.TryGetValue(name, out string[] fromFbx);
                 List<TtMaterial> on = x.MaterialsOn(name);
-                int count = slotCounts.TryGetValue(name, out int c) ? c
-                          : Mathf.Max(1, on.Count);
+                int count = fromFbx?.Length
+                          ?? (slotCounts.TryGetValue(name, out int c) ? c
+                              : Mathf.Max(1, on.Count));
 
                 if (isNew || d.slots.Count != count)
                 {
-                    // Proposal, not measurement — see DraftObject.slotsVerified.
                     var slots = new List<string>(count);
                     for (int i = 0; i < count; i++)
-                        slots.Add(i < on.Count ? on[i].name : "");
+                        slots.Add(fromFbx != null ? fromFbx[i]
+                                : i < on.Count ? on[i].name : "");
                     d.slots = slots;
-                    d.slotsVerified = false;
+                    d.slotsVerified = fromFbx != null;
+                    if (fromFbx != null) measured++;
+                }
+                else if (fromFbx != null && !d.slotsVerified)
+                {
+                    // Measured now, only proposed before. Taking it is the whole
+                    // point: the measurement cannot be less true than the guess
+                    // it replaces.
+                    for (int i = 0; i < count; i++) d.slots[i] = fromFbx[i];
+                    d.slotsVerified = true;
+                    measured++;
+                }
+                else if (fromFbx != null && Differs(d.slots, fromFbx))
+                {
+                    // Already verified, and the FBX disagrees. Reported, never
+                    // silently overwritten: a deliberate rebinding and a mesh
+                    // whose slots moved in a re-export look identical from here,
+                    // and only the author can say which this is.
+                    disagreed++;
+                    AssetStudio.Warn($"{draft.key}: \"{name}\" is bound as "
+                        + $"[{string.Join(", ", d.slots)}] but the FBX now says "
+                        + $"[{string.Join(", ", fromFbx)}]. If you did not rebind those "
+                        + "deliberately, the mesh's slot order moved and this binding is stale.");
                 }
                 objs.Add(d);
                 keptObjs.Remove(name);
             }
             draft.objects = objs;
+
+            if (measured > 0)
+                AssetStudio.Log($"{draft.key}: slot order read from the FBX for {measured} "
+                    + $"object(s){(disagreed > 0 ? $"; {disagreed} existing binding(s) disagree" : "")}.");
 
             EditorUtility.SetDirty(draft);
 
@@ -205,13 +244,15 @@ namespace AIHWSim.AssetTools
         }
 
         /// <summary>
-        /// Submesh slot count per object, read off the imported FBX — the only
-        /// place it exists. The staged copy counts too: it is the same file under
-        /// the same import settings.
+        /// Submesh slot count per object, read off the imported FBX. The staged
+        /// copy counts too: it is the same file under the same import settings.
         ///
-        /// Only the COUNT is readable. <c>PartModelPostprocessor</c> forces
-        /// <c>materialImportMode = None</c>, so every slot arrives null and which
-        /// material belongs in which is not a question the import can answer.
+        /// <b>A fallback since <see cref="AssetStudioSlotOrder"/> arrived</b>, for
+        /// the case where a scratch copy cannot be imported at all. What it reads
+        /// has been through <c>PartModelPostprocessor</c>, which forces
+        /// <c>materialImportMode = None</c> — so every slot holds Unity's
+        /// <c>Default-Material</c> stand-in and the LENGTH is the only thing in
+        /// here that means anything.
         /// </summary>
         private static Dictionary<string, int> SlotCounts(AssetRow row)
         {
@@ -226,6 +267,18 @@ namespace AIHWSim.AssetTools
             foreach (Renderer r in src.GetComponentsInChildren<Renderer>(true))
                 counts[r.gameObject.name] = Mathf.Max(1, r.sharedMaterials?.Length ?? 1);
             return counts;
+        }
+
+        /// <summary>Whether a draft's bindings say something other than the FBX
+        /// does. Length is compared too — a slot count change is the loudest
+        /// possible disagreement.</summary>
+        private static bool Differs(List<string> slots, string[] fromFbx)
+        {
+            if (slots == null || fromFbx == null) return false;
+            if (slots.Count != fromFbx.Length) return true;
+            for (int i = 0; i < fromFbx.Length; i++)
+                if (slots[i] != fromFbx[i]) return true;
+            return false;
         }
 
         private static Color ColorOf(float[] rgb) =>
