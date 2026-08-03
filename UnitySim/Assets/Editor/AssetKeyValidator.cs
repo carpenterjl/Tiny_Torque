@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Globalization;
 using AIHWSim.Garage;
+using AIHWSim.Persistence;
 using AIHWSim.Vehicles;
 using UnityEditor;
 using UnityEngine;
@@ -44,6 +45,8 @@ namespace AIHWSim.EditorTools
             fail += Bodies();
             fail += Wheels();
             fail += Migration();
+            fail += Presets();
+            fail += Loadouts();
             Debug.Log($"{Tag} RESULT {(fail == 0 ? "ALL PASS" : fail + " FAILED")} " +
                       $"({BodyCatalog.All.Length} bodies, {WheelCatalog.All.Length} wheels)");
         }
@@ -429,6 +432,156 @@ namespace AIHWSim.EditorTools
             if (why.Length == 0) Debug.Log($"{Tag} PASS migrate:<fallbacks>");
             else { Debug.LogError($"{Tag} FAIL migrate:<fallbacks> -{why}"); fail++; }
             return fail;
+        }
+
+        // ---- presets ---------------------------------------------------------
+
+        /// <summary>
+        /// Every built-in design, as the pickers hand it out. K5 moved the
+        /// presets onto keys — <c>bodyKey = "body_coupe"</c> rather than
+        /// <c>bodyShape = BodyShape.Coupe</c> — and the pair is made to agree by
+        /// a wrapper in the <c>All</c> table, which is one place to forget.
+        /// So the check is on the OUTPUT: whatever route a preset took, the key
+        /// it carries and the int beside it must name the same row.
+        ///
+        /// This is not the transcription check the deleted switches had. It is
+        /// the thing that actually goes wrong: a design handed to
+        /// <c>CosmeticProbe</c> or the attract loop, both of which read
+        /// <c>bodyShape</c> raw, while the renderer reads the key.
+        /// </summary>
+        private static int Presets()
+        {
+            int fail = 0;
+            foreach (var p in VehiclePresets.All)
+            {
+                string why = "";
+                VehicleDesign d = p.build();
+
+                if (string.IsNullOrEmpty(d.bodyKey)) why += " no bodyKey";
+                else if (BodyCatalog.ById(d.bodyKey) == null)
+                    why += $" bodyKey '{d.bodyKey}' is not a catalogue row";
+                else if (d.Body.legacy != d.bodyShape)
+                    why += $" bodyKey '{d.bodyKey}' and bodyShape {d.bodyShape} disagree";
+
+                for (int i = 0; d.wheels != null && i < d.wheels.Count; i++)
+                {
+                    WheelSpec w = d.wheels[i];
+                    if (string.IsNullOrEmpty(w.wheelKey)) { why += $" wheel {i} has no wheelKey"; continue; }
+                    if (WheelCatalog.ById(w.wheelKey) == null)
+                    { why += $" wheel {i} key '{w.wheelKey}' is not a catalogue row"; continue; }
+                    if (w.Wheel.legacy != w.wheelStyle)
+                        why += $" wheel {i} key '{w.wheelKey}' and style {w.wheelStyle} disagree";
+                }
+
+                // A preset must survive the round trip its own Save would do.
+                // Migrate is idempotent by K2's check; this is the other half —
+                // that the preset was already in the state Save would leave it.
+                VehicleDesign again = Round(d);
+                again.Migrate();
+                if (again.bodyKey != d.bodyKey || again.bodyShape != d.bodyShape)
+                    why += " a save would change the body pair";
+
+                if (why.Length == 0) Debug.Log($"{Tag} PASS preset:{p.name}");
+                else { Debug.LogError($"{Tag} FAIL preset:{p.name} -{why}"); fail++; }
+            }
+            return fail;
+        }
+
+        // ---- loadouts --------------------------------------------------------
+
+        /// <summary>
+        /// What a <c>progress.json</c> means. This is the section the plan owes
+        /// K5: <b>an existing progress.json with <c>wheelStyle: 7</c> still
+        /// yields gold wheels</b> — which the design dump structurally cannot
+        /// witness, because no design in its enumeration uses styles 6-8.
+        ///
+        /// Built as TEXT and parsed, not constructed in memory, for the same
+        /// reason K2's migration section is: what a field does to a save file is
+        /// the whole subject, and a pre-K5 file has no <c>wheelKey</c> member at
+        /// all rather than an empty one.
+        /// </summary>
+        private static int Loadouts()
+        {
+            int fail = 0;
+
+            // 1. The pre-K5 file, verbatim: an int and nothing else.
+            Check(ref fail, "old-int",
+                "{\"vehicleName\":\"TT Coupe\",\"wheelStyle\":7}", "slick_gold", 7);
+
+            // 2. What this build writes: both halves, agreeing.
+            Check(ref fail, "both",
+                "{\"vehicleName\":\"TT Coupe\",\"wheelStyle\":7,\"wheelKey\":\"slick_gold\"}",
+                "slick_gold", 7);
+
+            // 3. Disagreeing, the downgrade-then-upgrade case: an old build read
+            //    the file, wrote the int it understood, and a newer build reads
+            //    both. The KEY wins, exactly as it does on a design.
+            Check(ref fail, "key-wins",
+                "{\"vehicleName\":\"TT Coupe\",\"wheelStyle\":3,\"wheelKey\":\"slick_gold\"}",
+                "slick_gold", 7);
+
+            // 4. Key only, no int — a wheel with no legacy value, which is what
+            //    Asset Studio will commit. The int sentinel is still -1 here, so
+            //    an override keyed on `wheelStyle >= 0` alone would do nothing.
+            Check(ref fail, "key-only",
+                "{\"vehicleName\":\"TT Coupe\",\"wheelKey\":\"slick_gold\"}", "slick_gold", 7);
+
+            // 5. Untouched: neither half set, and the design keeps what it
+            //    authored. The Coupe's own wheel, not the slick.
+            {
+                string why = "";
+                var l = JsonUtility.FromJson<VehicleLoadout>("{\"vehicleName\":\"TT Coupe\"}");
+                var d = VehiclePresets.Resolve("TT Coupe");
+                string before = d.wheels[0].wheelKey;
+                Progression.ApplyLoadout(d, l);
+                if (l.wheelStyle != -1 || l.wheelKey != "") why += " sentinels are not -1/\"\"";
+                if (d.wheels[0].wheelKey != before)
+                    why += $" an untouched loadout changed the wheel to '{d.wheels[0].wheelKey}'";
+                if (why.Length == 0) Debug.Log($"{Tag} PASS loadout:untouched");
+                else { Debug.LogError($"{Tag} FAIL loadout:untouched -{why}"); fail++; }
+            }
+
+            // 6. The three showroom finishes each have an unlock that names them
+            //    by KEY. This replaced `v >= 6`, so what has to be true is that
+            //    every locked wheel is found and no free one is.
+            {
+                string why = "";
+                foreach (WheelDef d in WheelCatalog.All)
+                {
+                    var item = UnlockCatalog.ByWheelKey(d.id);
+                    bool shouldLock = d.finish != WheelFinish.None;
+                    if (shouldLock && item == null) why += $" {d.id} has no unlock row";
+                    if (!shouldLock && item != null) why += $" {d.id} is locked by '{item.id}'";
+                    if (item != null && item.payload != d.legacy)
+                        why += $" {item.id} payload {item.payload} != style {d.legacy}";
+                }
+                if (why.Length == 0) Debug.Log($"{Tag} PASS loadout:unlocks");
+                else { Debug.LogError($"{Tag} FAIL loadout:unlocks -{why}"); fail++; }
+            }
+
+            return fail;
+        }
+
+        /// <summary>Parse a loadout as written, apply it to a real preset, and
+        /// assert every wheel came out as the named row.</summary>
+        private static void Check(ref int fail, string label, string json,
+            string wantKey, int wantStyle)
+        {
+            string why = "";
+            var l = JsonUtility.FromJson<VehicleLoadout>(json);
+            var d = VehiclePresets.Resolve("TT Coupe");
+            Progression.ApplyLoadout(d, l);
+            foreach (var w in d.wheels)
+            {
+                if (w.wheelKey != wantKey)
+                    { why += $" wheelKey '{w.wheelKey}' != '{wantKey}'"; break; }
+                if (w.wheelStyle != wantStyle)
+                    { why += $" wheelStyle {w.wheelStyle} != {wantStyle}"; break; }
+                if (w.Wheel.finish != WheelCatalog.ById(wantKey).finish)
+                    { why += " resolved to a different finish"; break; }
+            }
+            if (why.Length == 0) Debug.Log($"{Tag} PASS loadout:{label}");
+            else { Debug.LogError($"{Tag} FAIL loadout:{label} -{why}"); fail++; }
         }
 
         private static VehicleDesign Round(VehicleDesign d) =>

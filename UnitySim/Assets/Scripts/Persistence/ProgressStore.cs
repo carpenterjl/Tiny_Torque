@@ -19,6 +19,20 @@ namespace AIHWSim.Persistence
         public string vehicleName = "";
         public int hornStyle = -1;     // -1 = as designed
         public int wheelStyle = -1;    // -1 = as designed (applies to all wheels)
+
+        /// <summary>The wheel the showroom actually chose, as a
+        /// <see cref="Vehicles.WheelCatalog"/> key; "" = as designed. Outranks
+        /// <see cref="wheelStyle"/> for the same reason a design's key does:
+        /// a wheel added by Asset Studio has no int to be named by.
+        ///
+        /// <b>Both are written.</b> A progress.json from before K5 carries only
+        /// the int, and resolves through it — that is the case the [AKEY]
+        /// loadout section exercises with a hand-built `wheelStyle: 7`, because
+        /// the design dump cannot: no design in its enumeration uses styles 6-8.
+        /// A file written by this build and read by an older one loses the key
+        /// and keeps the int, which is the same unclosable downgrade path
+        /// VehicleDesign.bodyKey documents.</summary>
+        public string wheelKey = "";
         public int paintIdx = -1;      // -1 = as designed; else Progression.PaintPalette
         public int topper = 0;         // 0 = as designed; see Progression.ApplyRoofKit
         public int aeroKit = 0;        // 0 = as designed; 1 street / 2 track
@@ -400,21 +414,41 @@ namespace AIHWSim.Persistence
         public static void ApplyLoadout(VehicleDesign d, string vehicleName)
         {
             if (d == null) return;
-            var l = LoadoutFor(vehicleName);
+            ApplyLoadout(d, LoadoutFor(vehicleName));
+        }
+
+        /// <summary>
+        /// The same overlay against a loadout already in hand. Split out at K5
+        /// so <c>[AKEY]</c> can apply a hand-written progress.json fragment
+        /// without going through <see cref="LoadoutFor"/>, which ADDS an entry
+        /// for a name it has never seen — reading the player's progress to test
+        /// a parser is one thing, growing it is another.
+        /// </summary>
+        public static void ApplyLoadout(VehicleDesign d, VehicleLoadout l)
+        {
+            if (d == null || l == null) return;
 
             if (l.hornStyle >= 0) d.hornStyle = l.hornStyle;
-            if (l.wheelStyle >= 0 && d.wheels != null)
+            // The loadout carries both halves since K5 — resolved through the
+            // same rules a design uses, so an old progress.json with only
+            // `wheelStyle: 7` still means gold. K4 had to CLEAR the design's key
+            // here, because writing a stale int under a live key would have been
+            // silently ignored; now the override writes a key of its own and the
+            // pair simply agrees.
+            // Either half being set means "the player chose a wheel". Testing
+            // only the int would make a key-only loadout — which is what a wheel
+            // committed by Asset Studio will produce, having no int — read as
+            // "as designed" and do nothing at all.
+            bool chose = l.wheelStyle >= 0 || !string.IsNullOrEmpty(l.wheelKey);
+            if (chose && d.wheels != null)
+            {
+                var def = Vehicles.WheelCatalog.Resolve(l.wheelKey, l.wheelStyle);
                 foreach (var w in d.wheels)
                 {
-                    // The loadout still speaks in ints — K5 gives it a key — and
-                    // a key beside an int WINS. Since K4 the garage writes both,
-                    // so overriding the int alone would be overridden right back:
-                    // an unlocked wheel would simply not appear on any car the
-                    // player designed. Clearing the key says "the int is the
-                    // answer here", which is what a loadout override means.
-                    w.wheelStyle = l.wheelStyle;
-                    w.wheelKey = "";
+                    w.wheelKey = def.id;
+                    w.wheelStyle = def.legacy;
                 }
+            }
             if (l.paintIdx >= 0 && l.paintIdx < PaintPalette.Length)
             {
                 d.bodyColor = PaintPalette[l.paintIdx].color;

@@ -104,7 +104,19 @@ namespace AIHWSim.Net
         // conclude "classic oval" and drive a different track from everyone else
         // while every position message still looked perfectly valid. That failure
         // is invisible, which is exactly why the version had to move.
-        public const int ProtocolVersion = 15;
+        // v16 is the string body/wheel KEYS. The wire format is again untouched —
+        // bodyKey and wheelKey ride the design JSON beside the ints they migrate
+        // from — and this is the first version where a peer can send a name the
+        // other end has never compiled. A v15 build drops the unknown fields and
+        // reads the ints beside them, which is right for every shipped car and
+        // wrong for the first one Asset Studio commits: there is no enum value to
+        // write for it, so the int says Box and a v15 peer would race a box while
+        // every packet stayed valid. Same invisible failure as v15, same answer.
+        //
+        // Bumped HERE and not at K2, where the fields were added: until presets
+        // and progression started AUTHORING keys, nothing could put a key on the
+        // wire that the int beside it did not already say.
+        public const int ProtocolVersion = 16;
 
         /// <summary>Raised from 4 for 3v3 soccer. The slot goes on the wire as a
         /// byte and every MaxPlayers-sized array simply grows, so the only cost

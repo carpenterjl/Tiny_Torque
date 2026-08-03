@@ -215,7 +215,11 @@ namespace AIHWSim.Menu
                 : VehiclePresets.Resolve(name) ?? VehicleLibrary.Load(name);
 
             var l = Persistence.Progression.LoadoutFor(name ?? "");
-            bool touched = l.hornStyle >= 0 || l.wheelStyle >= 0 || l.paintIdx >= 0
+            // wheelKey counts on its own: a wheel with no legacy int — anything
+            // Asset Studio commits — leaves wheelStyle at −1 and would otherwise
+            // read as an untouched loadout.
+            bool touched = l.hornStyle >= 0 || l.wheelStyle >= 0
+                || !string.IsNullOrEmpty(l.wheelKey) || l.paintIdx >= 0
                 || l.topper != 0 || l.aeroKit != 0
                 // A loadout that ONLY carries cosmetics is still a loadout: leave
                 // these out and a car wearing nothing but a crown races bare.

@@ -45,9 +45,19 @@ namespace AIHWSim.Menu
         /// <c>legacy == index</c>, and the rows dropped here are the last two.
         /// The hand-copied array this replaces was the third copy of these
         /// names in the codebase.</summary>
-        private static readonly string[] WheelNames = System.Array.ConvertAll(
-            System.Array.FindAll(Vehicles.WheelCatalog.All, d => !d.debugOnly),
-            d => d.label);
+        private static readonly Vehicles.WheelDef[] ShowroomWheels =
+            System.Array.FindAll(Vehicles.WheelCatalog.All, d => !d.debugOnly);
+        private static readonly string[] WheelNames =
+            System.Array.ConvertAll(ShowroomWheels, d => d.label);
+
+        /// <summary>Write both halves of the wheel choice, or clear both.
+        /// −1 is "as designed" and has no row, so it cannot be resolved — the
+        /// one value where the key must be blanked rather than derived.</summary>
+        private static void SetWheel(Persistence.VehicleLoadout l, int v)
+        {
+            l.wheelStyle = v;
+            l.wheelKey = v >= 0 && v < ShowroomWheels.Length ? ShowroomWheels[v].id : "";
+        }
         private static readonly string[] TopperNames =
             { "As designed", "Light bar", "Off-road pods", "Flag antenna", "Twin whips", "Whip", "Clean deck" };
         private static readonly string[] AeroNames =
@@ -491,10 +501,14 @@ namespace AIHWSim.Menu
                 l.hornStyle, v => l.hornStyle = v,
                 v => v switch { 1 => "horn_siren", 2 => "horn_truck", 3 => "horn_musical", 4 => "horn_clown", _ => null });
 
+            // The lock id is asked of UnlockCatalog by KEY, not built out of the
+            // int with `v >= 6`. That range test was the same shape as the one
+            // that nearly shipped four neon-pink Legendary wheels, and a wheel
+            // Asset Studio commits has no int for it to be true or false about.
             changed |= LockedCycle("Wheels", WheelNames,
                 v => v < 0 ? "As designed" : WheelNames[v],
-                l.wheelStyle, v => l.wheelStyle = v,
-                v => v >= 6 ? $"wheel_style_{v}" : null);
+                l.wheelStyle, v => SetWheel(l, v),
+                v => Persistence.UnlockCatalog.ByWheelKey(ShowroomWheels[v].id)?.id);
 
             // "Roof kit", not "Topper": the cosmetics panel above owns that word
             // now, and this row swaps the light bar and antennas rather than

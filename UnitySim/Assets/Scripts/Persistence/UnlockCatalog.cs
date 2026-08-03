@@ -7,7 +7,7 @@ namespace AIHWSim.Persistence
     {
         Car,        // payload unused; the item id maps to a preset display name
         Horn,       // payload = VehicleDesign.hornStyle
-        WheelStyle, // payload = WheelSpec.wheelStyle
+        WheelStyle, // payload = WheelSpec.wheelStyle; see UnlockItem.wheelKey
         Topper,     // payload = VehicleLoadout roof-kit slot index
         AeroKit,    // payload = VehicleLoadout aero kit index
         Paint,      // payload = index into the premium paint palette
@@ -21,6 +21,15 @@ namespace AIHWSim.Persistence
         public UnlockKind kind;
         public int payload;
         public string code;      // the cheat that unlocks it (lowercase, no spaces)
+
+        /// <summary>For <see cref="UnlockKind.WheelStyle"/> only: the
+        /// WheelCatalog key this item sells. The showroom used to find the lock
+        /// for a style by building "wheel_style_{v}" out of the int and testing
+        /// v >= 6 — the same range test that nearly painted four Legendary
+        /// wheels neon pink, and one an Asset Studio wheel could not satisfy at
+        /// all, having no int. The item names the wheel now, and the showroom
+        /// looks it up. <see cref="id"/> stays what it was: it is a save key.</summary>
+        public string wheelKey;
         public string blurb;     // one-liner for the reveal / cheat flourish
         public Rarity rarity;    // which crate tier can pay it out
     }
@@ -95,13 +104,13 @@ namespace AIHWSim.Persistence
                 code = "clowncar", blurb = "It's a clown car now. No refunds." },
 
             // ---- wheel finishes (styles 6-8, appended tint variants) ----
-            new UnlockItem { id = "wheel_style_6", display = "Chrome wheels", kind = UnlockKind.WheelStyle, payload = 6,
+            new UnlockItem { id = "wheel_style_6", display = "Chrome wheels", kind = UnlockKind.WheelStyle, payload = 6, wheelKey = "slick_chrome",
                 rarity = Rarity.Rare,
                 code = "hubcapital", blurb = "The hub capital of the world." },
-            new UnlockItem { id = "wheel_style_7", display = "Gold wheels", kind = UnlockKind.WheelStyle, payload = 7,
+            new UnlockItem { id = "wheel_style_7", display = "Gold wheels", kind = UnlockKind.WheelStyle, payload = 7, wheelKey = "slick_gold",
                 rarity = Rarity.Epic,
                 code = "rollmodel", blurb = "Be a roll model." },
-            new UnlockItem { id = "wheel_style_8", display = "Neon wheels", kind = UnlockKind.WheelStyle, payload = 8,
+            new UnlockItem { id = "wheel_style_8", display = "Neon wheels", kind = UnlockKind.WheelStyle, payload = 8, wheelKey = "slick_neon",
                 rarity = Rarity.Epic,
                 code = "glowgetter", blurb = "A real glow-getter." },
 
@@ -187,6 +196,18 @@ namespace AIHWSim.Persistence
         {
             _byId ??= Build(i => i.id);
             return id != null && _byId.TryGetValue(id, out var item) ? item : null;
+        }
+
+        /// <summary>The unlock that sells a wheel, or null when the wheel is
+        /// free. Asked by the showroom instead of building an id out of an int,
+        /// so a wheel with no unlock row is simply free rather than accidentally
+        /// locked or accidentally not.</summary>
+        public static UnlockItem ByWheelKey(string wheelKey)
+        {
+            if (string.IsNullOrEmpty(wheelKey)) return null;
+            foreach (var i in All)
+                if (i.kind == UnlockKind.WheelStyle && i.wheelKey == wheelKey) return i;
+            return null;
         }
 
         public static UnlockItem ByCode(string code)

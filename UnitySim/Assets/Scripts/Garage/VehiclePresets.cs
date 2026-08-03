@@ -20,16 +20,56 @@ namespace AIHWSim.Garage
 
         public static readonly (string name, Func<VehicleDesign> build)[] All =
         {
-            ("Real Twin 1/10", RealTwin),
-            ("TT Coupe",    TTCoupe),
-            ("TT Baja",     TTBaja),
-            ("TT Patrol",   TTPatrol),
-            ("TT Rattletrap", TTRattletrap),
-            ("TT Redline",  TTRedline),
-            ("TT Highwing", TTHighwing),
-            ("TT Autopia",  TTAutopia),
-            ("Opus Vector", OpusVector),
+            ("Real Twin 1/10", Keyed(RealTwin)),
+            ("TT Coupe",    Keyed(TTCoupe)),
+            ("TT Baja",     Keyed(TTBaja)),
+            ("TT Patrol",   Keyed(TTPatrol)),
+            ("TT Rattletrap", Keyed(TTRattletrap)),
+            ("TT Redline",  Keyed(TTRedline)),
+            ("TT Highwing", Keyed(TTHighwing)),
+            ("TT Autopia",  Keyed(TTAutopia)),
+            ("Opus Vector", Keyed(OpusVector)),
         };
+
+        /// <summary>
+        /// Wraps a builder so the design it returns has both halves of every
+        /// key/int pair agreeing. Since K5 the builders below author only the
+        /// KEY — <c>bodyKey = "body_coupe"</c>, <c>wheelKey = "wheel_coupe"</c> —
+        /// and <see cref="VehicleDesign.Migrate"/> derives the ints back from it,
+        /// which is the same function <c>VehicleLibrary.Save</c> uses and
+        /// therefore the same answer.
+        ///
+        /// It is applied HERE rather than in <c>Resolve</c> because four callers
+        /// reach past Resolve into <c>All[i].build</c> (the attract loop, the
+        /// menu's car carousel, the design dump and the cosmetic probe) and at
+        /// least one of them — <c>CosmeticProbe</c> — reads <c>bodyShape</c> raw.
+        /// A preset handed out with a key and a stale Box beside it would be a
+        /// different car depending on which field the reader trusted. A new row
+        /// that forgets the wrapper is visible in the list above, which is the
+        /// point of putting it there.
+        /// </summary>
+        private static Func<VehicleDesign> Keyed(Func<VehicleDesign> build) =>
+            () =>
+            {
+                var d = build();
+                // A preset naming a key the catalogue does not have is a typo in
+                // this file, not a save-file downgrade — and Migrate is about to
+                // HEAL it into the box, silently, because that is the right
+                // answer for a corrupt save and the wrong one for code. Said out
+                // loud before it is healed, and attributed to the preset.
+                if (!string.IsNullOrEmpty(d.bodyKey) && BodyCatalog.ById(d.bodyKey) == null)
+                    Debug.LogError($"[VehiclePresets] '{d.name}' names body key '{d.bodyKey}', " +
+                                   "which is not a BodyCatalog row. It will build as a box.");
+                for (int i = 0; d.wheels != null && i < d.wheels.Count; i++)
+                {
+                    string k = d.wheels[i].wheelKey;
+                    if (!string.IsNullOrEmpty(k) && WheelCatalog.ById(k) == null)
+                        Debug.LogError($"[VehiclePresets] '{d.name}' wheel {i} names key '{k}', " +
+                                       "which is not a WheelCatalog row. It will build as a slick.");
+                }
+                d.Migrate();
+                return d;
+            };
 
         /// <summary>Prefixed display names for the pickers.</summary>
         public static List<string> DisplayNames()
@@ -148,7 +188,7 @@ namespace AIHWSim.Garage
             var d = new VehicleDesign
             {
                 name = "TT Coupe",
-                bodyShape = BodyShape.Coupe,
+                bodyKey = "body_coupe",
                 bodySize = new Vector3(0.20f, 0.10f, 0.42f),
                 bodyColor = new Color(0.80f, 0.80f, 0.80f),
                 mass = 1.7f,
@@ -162,7 +202,7 @@ namespace AIHWSim.Garage
                 var w = Wheel(front ? (i == 0 ? "wheel_fl" : "wheel_fr") : (i == 2 ? "wheel_rl" : "wheel_rr"),
                               x, z, front, !front);
                 w.radius = 0.0438f;
-                w.wheelStyle = 3;   // coupe gold-rim street tyre
+                w.wheelKey = "wheel_coupe";   // gold-rim street tyre
                 w.suspStiffness = 400f;
                 w.suspDampingRatio = 0.7f;
                 w.suspTravel = 0.025f;
@@ -182,7 +222,7 @@ namespace AIHWSim.Garage
             var d = new VehicleDesign
             {
                 name = "TT Baja",
-                bodyShape = BodyShape.Baja,
+                bodyKey = "body_baja",
                 bodySize = new Vector3(0.20f, 0.10f, 0.42f),
                 bodyColor = new Color(0.80f, 0.80f, 0.80f),
                 hornStyle = 2,     // air horn — it's the truck of the family
@@ -197,7 +237,7 @@ namespace AIHWSim.Garage
                 var w = Wheel(front ? (i == 0 ? "wheel_fl" : "wheel_fr") : (i == 2 ? "wheel_rl" : "wheel_rr"),
                               x, z, front, true);   // 4WD
                 w.radius = 0.0522f;
-                w.wheelStyle = 4;   // baja balloon tyre, orange rim
+                w.wheelKey = "wheel_baja";    // balloon tyre, orange rim
                 w.gripMult = 1.15f;
                 // Soft and long — but suspLength stays 0: the shocks and arms are
                 // authored INTO the body mesh, a procedural strut would double them.
@@ -222,7 +262,7 @@ namespace AIHWSim.Garage
             var d = new VehicleDesign
             {
                 name = "TT Patrol",
-                bodyShape = BodyShape.Patrol,
+                bodyKey = "body_patrol",
                 bodySize = new Vector3(0.20f, 0.10f, 0.42f),
                 bodyColor = new Color(0.80f, 0.80f, 0.80f),
                 hornStyle = 1,     // police siren, obviously
@@ -237,7 +277,7 @@ namespace AIHWSim.Garage
                 var w = Wheel(front ? (i == 0 ? "wheel_fl" : "wheel_fr") : (i == 2 ? "wheel_rl" : "wheel_rr"),
                               x, z, front, !front);
                 w.radius = 0.0388f;
-                w.wheelStyle = 5;   // chrome steelie
+                w.wheelKey = "wheel_patrol";  // chrome steelie
                 w.suspStiffness = 350f;
                 w.suspDampingRatio = 0.65f;
                 w.suspTravel = 0.03f;
@@ -265,15 +305,15 @@ namespace AIHWSim.Garage
         /// the standard sensor rig, and encoders. Only the numbers that give a
         /// car its character are left to the caller.
         /// </summary>
-        private static VehicleDesign Legendary(string name, BodyShape shape, Color paint,
-            float halfTrack, float halfBase, float radius, int wheelStyle,
+        private static VehicleDesign Legendary(string name, string bodyKey, Color paint,
+            float halfTrack, float halfBase, float radius, string wheelKey,
             float mass, float steerRate, bool fourWheelDrive,
             float stiffness, float damping, float travel)
         {
             var d = new VehicleDesign
             {
                 name = name,
-                bodyShape = shape,
+                bodyKey = bodyKey,
                 bodySize = new Vector3(0.20f, 0.10f, 0.42f),
                 bodyColor = paint,
                 mass = mass,
@@ -288,7 +328,7 @@ namespace AIHWSim.Garage
                                     : (i == 2 ? "wheel_rl" : "wheel_rr"),
                               x, z, front, fourWheelDrive || !front);
                 w.radius = radius;
-                w.wheelStyle = wheelStyle;
+                w.wheelKey = wheelKey;
                 w.suspStiffness = stiffness;
                 w.suspDampingRatio = damping;
                 w.suspTravel = travel;
@@ -308,9 +348,9 @@ namespace AIHWSim.Garage
             // bodyColor cannot repaint this car (PartVisualFactory.RustPaint owns
             // the panels), but it is still what the tyre smoke and the HUD tint
             // read, so it carries the authored faded teal.
-            var d = Legendary("TT Rattletrap", BodyShape.Rattle,
+            var d = Legendary("TT Rattletrap", "body_rattle",
                 new Color(0.055f, 0.245f, 0.255f),
-                0.0787f, 0.1099f, 0.041583f, 9,
+                0.0787f, 0.1099f, 0.041583f, "wheel_rattle",
                 mass: 2.15f, steerRate: 420f, fourWheelDrive: false,
                 stiffness: 240f, damping: 0.5f, travel: 0.045f);
             d.hornStyle = 2;    // air horn — it is the tow truck of the family
@@ -322,9 +362,9 @@ namespace AIHWSim.Garage
         /// Light, stiff and quick to turn in.</summary>
         private static VehicleDesign TTRedline()
         {
-            var d = Legendary("TT Redline", BodyShape.Redline,
+            var d = Legendary("TT Redline", "body_redline",
                 new Color(0.520f, 0.036f, 0.040f),
-                0.0903f, 0.1230f, 0.040864f, 10,
+                0.0903f, 0.1230f, 0.040864f, "wheel_redline",
                 mass: 1.62f, steerRate: 610f, fourWheelDrive: false,
                 stiffness: 460f, damping: 0.72f, travel: 0.022f);
             foreach (var w in d.wheels) w.gripMult = 1.10f;
@@ -336,9 +376,9 @@ namespace AIHWSim.Garage
         /// worth more downforce for being where it is.</summary>
         private static VehicleDesign TTHighwing()
         {
-            var d = Legendary("TT Highwing", BodyShape.Highwing,
+            var d = Legendary("TT Highwing", "body_highwing",
                 new Color(0.030f, 0.068f, 0.230f),
-                0.0872f, 0.1184f, 0.040000f, 11,
+                0.0872f, 0.1184f, 0.040000f, "wheel_highwing",
                 mass: 1.74f, steerRate: 575f, fourWheelDrive: false,
                 stiffness: 420f, damping: 0.70f, travel: 0.025f);
             foreach (var w in d.wheels) w.gripMult = 1.06f;
@@ -350,9 +390,9 @@ namespace AIHWSim.Garage
         /// unbothered, which is the point of it.</summary>
         private static VehicleDesign TTAutopia()
         {
-            var d = Legendary("TT Autopia", BodyShape.Autopia,
+            var d = Legendary("TT Autopia", "body_autopia",
                 new Color(0.840f, 0.560f, 0.045f),
-                0.0881f, 0.1197f, 0.036981f, 12,
+                0.0881f, 0.1197f, 0.036981f, "wheel_autopia",
                 mass: 1.88f, steerRate: 470f, fourWheelDrive: false,
                 stiffness: 300f, damping: 0.58f, travel: 0.035f);
             d.hornStyle = 3;    // musical — it is a theme-park ride
@@ -380,7 +420,7 @@ namespace AIHWSim.Garage
             var d = new VehicleDesign
             {
                 name = "Opus Vector",
-                bodyShape = BodyShape.LowRacer,          // flat-deck F1TENTH silhouette
+                bodyKey = "body_lowracer",               // flat-deck F1TENTH silhouette
                 bodySize = new Vector3(0.200f, 0.090f, 0.420f),
                 bodyColor = new Color(0.85f, 0.45f, 0.10f),
                 // Chassis only — rolling chassis, motor, ESC, servo, Pi, shell,
@@ -432,7 +472,7 @@ namespace AIHWSim.Garage
                                     : (i == 2 ? "wheel_rl" : "wheel_rr"),
                               x, z, front, !front);          // RWD, steered fronts
                 w.radius = 0.033f;                           // 66 mm touring tyre
-                w.wheelStyle = 0;                            // slick
+                w.wheelKey = "wheel_slick";                  // slick
                 w.massKg = 0.060f;                           // wheel + tyre + hub only:
                 // the motor is central, not in the wheel, so the simulator's 190 g
                 // powered-wheel default would misplace both mass and yaw inertia.
