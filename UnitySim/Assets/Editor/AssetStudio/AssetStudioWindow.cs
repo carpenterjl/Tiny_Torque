@@ -175,6 +175,17 @@ namespace AIHWSim.AssetTools
                 {
                     AssetStudioCatalog.Refresh();
                     _rig?.InvalidateBinding();
+
+                    // The viewport is about to show a DIFFERENT mesh, so the two
+                    // pieces of state that are about the old one have to go: a
+                    // pinned "renderer 17" means nothing now, and the correction
+                    // toggle comes on because an uncorrected export renders twelve
+                    // times too big and lying on its side. That default is the
+                    // right one for browsing — seeing it wrong is the point — and
+                    // the wrong one here, where the question is whether the new
+                    // geometry will pass for the car it is replacing.
+                    Select(target);
+                    _preview.applyCorrection = true;
                 }
                 Repaint();
             }
@@ -355,7 +366,7 @@ namespace AIHWSim.AssetTools
                     // the read-only export lists beside it would be two answers to
                     // the same question, and the one you cannot edit is the one
                     // that looks authoritative.
-                    _draftEditor.Draw(draft, r, _preview, LiveRenderers(r));
+                    _draftEditor.Draw(draft, r, _preview, LiveRenderers(r, draft));
                     if (Event.current.type == EventType.Repaint
                         && _draftEditor.HoverRenderer >= 0)
                     {
@@ -388,7 +399,7 @@ namespace AIHWSim.AssetTools
 
         private void DrawPreview(AssetRow r, TtExport x, AssetStudioDraft draft)
         {
-            string path = PreviewPath(r, x, out string why);
+            string path = PreviewPath(r, x, draft, out string why);
 
             if (string.IsNullOrEmpty(path))
             {
@@ -421,15 +432,27 @@ namespace AIHWSim.AssetTools
         }
 
         /// <summary>
-        /// Where the mesh Unity can actually render lives. Three answers, and the
-        /// third is the interesting one: an export that is not in the project has
-        /// no mesh object at all, and no amount of preview code changes that —
-        /// the AssetDatabase does not reach outside <c>Assets/</c>.
+        /// Where the mesh Unity can actually render lives. Four answers, and two
+        /// of them are the interesting ones.
+        ///
+        /// <b>A row mid-replace shows the INCOMING mesh.</b> It has an imported FBX
+        /// — that is what is about to be overwritten — so answering "in the
+        /// project" first would show the old body right up until the commit
+        /// replaced it, which is exactly the moment it stops being useful. The
+        /// whole point of the replace flow is to look at the new geometry before
+        /// anything is written, so an authorised draft redirects the preview to
+        /// the staged copy of its export.
+        ///
+        /// <b>An export that is not in the project has no mesh object at all</b>,
+        /// and no amount of preview code changes that — the AssetDatabase does not
+        /// reach outside <c>Assets/</c>. Both cases fall through to the same
+        /// staging offer below.
         /// </summary>
-        private static string PreviewPath(AssetRow r, TtExport x, out string why)
+        private static string PreviewPath(AssetRow r, TtExport x, AssetStudioDraft draft,
+                                          out string why)
         {
             why = "";
-            if (r.HasProject) return r.fbxAssetPath;
+            if (r.HasProject && !Replacing(r, draft)) return r.fbxAssetPath;
             if (x == null)
             {
                 why = "Nothing to preview: this row has no imported model and no "
@@ -438,14 +461,34 @@ namespace AIHWSim.AssetTools
             }
             if (AssetStudioStaging.IsStaged(x)) return AssetStudioStaging.PathFor(x);
 
-            why = "This export is not in the project, and Unity can only render a mesh "
-                + "it has imported.\n\n\"Stage for preview\" copies just the FBX into "
+            why = (r.HasProject
+                    ? "The replacement export is not in the project yet, and Unity can "
+                      + "only render a mesh it has imported. Until it is staged there is "
+                      + "nothing to show but the mesh you are replacing."
+                    : "This export is not in the project, and Unity can only render a mesh "
+                      + "it has imported.")
+                + "\n\n\"Stage for preview\" copies just the FBX into "
                 + AssetStudio.StagingDir + " — outside Resources/, so it cannot become "
                 + "a key the game finds, and Tools > Asset Studio > Clear preview "
                 + "staging removes it again. Committing the asset later copies from "
                 + "the export, never from staging.";
             return "";
         }
+
+        /// <summary>
+        /// True while this row's draft is authorised to overwrite it — the state
+        /// the replace flow puts a row in, and the one the preview has to treat
+        /// differently from every other imported asset.
+        ///
+        /// It asks <see cref="AssetStudioDraft.MayReplace"/>, the same permission
+        /// the commit gate reads, rather than "does this row have both an export
+        /// and a project file". A managed asset whose source has drifted has both
+        /// of those and is NOT being replaced; showing it the export would quietly
+        /// answer "what did Blender do next" when the question was "what does the
+        /// game load".
+        /// </summary>
+        private static bool Replacing(AssetRow r, AssetStudioDraft draft) =>
+            r != null && draft != null && r.HasExport && draft.MayReplace(r.key);
 
         private void HandleViewport(Rect view)
         {
@@ -574,7 +617,10 @@ namespace AIHWSim.AssetTools
 
                 GUILayout.FlexibleSpace();
 
-                if (x != null && !r.HasProject
+                // Re-stage is offered wherever the viewport is showing a STAGED
+                // copy — which now includes a row mid-replace, where re-exporting
+                // from Blender and pressing this is the edit loop.
+                if (x != null && (!r.HasProject || Replacing(r, draft))
                     && GUILayout.Button("Re-stage", EditorStyles.toolbarButton,
                                         GUILayout.Width(70f)))
                 {
@@ -621,6 +667,17 @@ namespace AIHWSim.AssetTools
         private void DrawPreviewNotes(AssetRow r, TtExport x, AssetStudioDraft draft)
         {
             bool byDraft = draft != null && _preview.useDraft;
+
+            // Said first and unconditionally, because the viewport is showing a
+            // mesh that is NOT the one this key currently loads, and a preview
+            // that does not say so is a preview you can misread in one direction
+            // only — the expensive one.
+            if (Replacing(r, draft))
+                EditorGUILayout.HelpBox(
+                    "Showing the REPLACEMENT — the staged copy of " + r.exportDir
+                    + ", not " + r.fbxAssetPath + ", which is what the game loads "
+                    + "until you commit. Nothing under Resources/ has changed yet.",
+                    MessageType.Info);
 
             if (byDraft)
             {
@@ -936,7 +993,9 @@ namespace AIHWSim.AssetTools
         /// </summary>
         private void DrawObjects(AssetRow r, TtExport x)
         {
-            IReadOnlyList<Renderer> rends = LiveRenderers(r);
+            // Reached only when no draft exists (see DrawDetail), so there is no
+            // replacement in flight and the imported prefab is the right fallback.
+            IReadOnlyList<Renderer> rends = LiveRenderers(r, null);
             List<string> declared = x?.AllObjects() ?? new List<string>();
             if (rends.Count == 0 && declared.Count == 0) return;
 
@@ -979,9 +1038,18 @@ namespace AIHWSim.AssetTools
         /// otherwise. Both walk the same hierarchy with the same call, so index i
         /// means the same mesh either way — which is what lets a row select into
         /// the viewport.
+        ///
+        /// <b>Except mid-replace, where the fallback has no honest answer.</b> The
+        /// imported prefab is the mesh being replaced, so its renderers would list
+        /// the old car's pieces against the new car's draft — index i meaning two
+        /// different objects on the two halves of the screen. An empty list is the
+        /// truthful answer with the preview collapsed, and the caller already
+        /// handles it by showing what the export declares.
         /// </summary>
-        private IReadOnlyList<Renderer> LiveRenderers(AssetRow r) =>
-            _previewLive ? _rig.Renderers : r.Renderers();
+        private IReadOnlyList<Renderer> LiveRenderers(AssetRow r, AssetStudioDraft draft) =>
+            _previewLive ? _rig.Renderers
+            : Replacing(r, draft) ? System.Array.Empty<Renderer>()
+            : r.Renderers();
 
         private void DrawMeshRow(int i, Renderer rd)
         {
