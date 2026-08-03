@@ -1,3 +1,4 @@
+using System.Collections.Generic;
 using UnityEditor;
 using UnityEngine;
 
@@ -10,6 +11,13 @@ namespace AIHWSim.EditorTools
     /// two failure modes this pipeline actually hits — the FBX exporter's
     /// metre→centimetre bake importing everything 100x oversized, and an asset
     /// drifting off its authored dimensions during a re-model.
+    ///
+    /// <b>The table is no longer the whole list.</b> Since C2 the rows checked are
+    /// the 207 literals ∪ one row per committed manifest (<see cref="AllSpecs"/>),
+    /// so an asset Asset Studio imported is held to a contract here like every
+    /// shipped one — which is what stops "no code change" from also meaning "no
+    /// gate". The two kinds of row are not the same kind of claim; see that
+    /// method.
     ///
     /// Run with (editor must be closed):
     ///   Unity.exe -batchmode -quit -projectPath &lt;UnitySim&gt;
@@ -33,11 +41,37 @@ namespace AIHWSim.EditorTools
             public readonly float? X, Y, Z, MinExtent, MaxExtent;
             public readonly int MaxTris;
 
+            /// <summary>
+            /// This row came from a manifest rather than from the table below.
+            ///
+            /// The one thing it changes is <see cref="TokenTrouble"/>, which must
+            /// not run: a managed asset binds by object name and slot index and
+            /// has never heard of the token tables, so testing its Blender names
+            /// against them would either pass by finding nothing — the exact
+            /// vacuous shape the Tiguan note above warns about — or FAIL an
+            /// innocent asset for owning a piece called "chrome_1".
+            /// </summary>
+            public readonly bool Managed;
+
+            /// <summary>
+            /// The correction the game applies at load — a committed asset keeps
+            /// its Blender scale and orientation in the FBX on purpose, so the
+            /// imported prefab is 12.6× too big and 90° off until these are
+            /// applied.
+            ///
+            /// Which means the rig below has to apply them before it measures.
+            /// Every literal row measures an asset whose correction the OLD
+            /// exporter baked in, so both halves of this table answer the same
+            /// question: how big is the thing the game actually builds.
+            /// </summary>
+            public readonly float Scale, Yaw;
+
             /// <summary>Vehicle part: exact authored axes (null = free).</summary>
             public Spec(string key, float? x, float? y, float? z, int maxTris)
             {
                 Key = key; Root = "PartModels/";
                 X = x; Y = y; Z = z; MinExtent = null; MaxExtent = null; MaxTris = maxTris;
+                Managed = false; Scale = 1f; Yaw = 0f;
             }
 
             /// <summary>Track prop: bound the extent and the triangle budget.</summary>
@@ -46,6 +80,27 @@ namespace AIHWSim.EditorTools
                 Key = key; Root = "TrackProps/";
                 X = null; Y = null; Z = null;
                 MinExtent = null; MaxExtent = maxExtent; MaxTris = maxTris;
+                Managed = false; Scale = 1f; Yaw = 0f;
+            }
+
+            /// <summary>
+            /// A committed asset, stated by its own manifest.
+            ///
+            /// The axes arrive already in this row's vocabulary — <c>−1</c> for
+            /// unpinned is the same statement as a <c>null</c> here, and for the
+            /// same reason: a body is uniformly scaled to length, so its length
+            /// is a promise and its width is a consequence.
+            /// </summary>
+            public Spec(AIHWSim.Vehicles.AssetManifest man, string root)
+            {
+                Key = man.key; Root = root;
+                X = man.spec.x >= 0f ? man.spec.x : (float?)null;
+                Y = man.spec.y >= 0f ? man.spec.y : (float?)null;
+                Z = man.spec.z >= 0f ? man.spec.z : (float?)null;
+                MinExtent = null; MaxExtent = null; MaxTris = man.spec.maxTris;
+                Managed = true;
+                Scale = man.authorScale > 0f ? man.authorScale : 1f;
+                Yaw = man.authorYawDeg;
             }
 
             /// <summary>
@@ -59,6 +114,7 @@ namespace AIHWSim.EditorTools
                 Key = key; Root = "Cosmetics/";
                 X = null; Y = null; Z = null;
                 MinExtent = minExtent; MaxExtent = maxExtent; MaxTris = maxTris;
+                Managed = false; Scale = 1f; Yaw = 0f;
             }
         }
 
@@ -388,10 +444,69 @@ namespace AIHWSim.EditorTools
             return why;
         }
 
+        /// <summary>
+        /// The 207 literal rows above <b>∪</b> one row per committed manifest —
+        /// the whole of what "a new car without a code change" costs this gate.
+        ///
+        /// <b>A duplicate key is a hard failure and not a merge.</b> Two rows for
+        /// one asset means two contracts, and whichever the loop reached second
+        /// would be the one that decided — so a committed <c>body_patrol</c>
+        /// would quietly relax the shipped car's budget, or tighten it, with no
+        /// line anywhere saying which table won. The seed/committed collision is
+        /// refused at commit time as well (<c>AssetStudioCommit.Refusal</c>); this
+        /// is the half that still holds when a manifest arrives some other way.
+        ///
+        /// <b>The two halves are not the same KIND of claim, and the manifest
+        /// says which is which.</b> A literal row is an independent prediction
+        /// about what an FBX round trip should preserve; a manifest row carries
+        /// <c>specSource: "measured"</c> and can only say that the mesh has not
+        /// moved since it was committed. Both are worth having and only one of
+        /// them would survive being regenerated.
+        ///
+        /// <b>A committed row states less than a shipped one, and does not need
+        /// to.</b> It pins the axes the pipeline promised — a body's length, a
+        /// wheel's diameter — plus a triangle budget, and a committed cosmetic
+        /// gets no extent window at all. The tight check on the rest is
+        /// <c>[AST]</c>'s, which holds every axis to within 2 mm of the mesh
+        /// Unity imported: stricter than the ±10 % window the shipped cosmetics
+        /// carry, and possible only because a manifest records what its own asset
+        /// measured.
+        /// </summary>
+        private static List<Spec> AllSpecs(out int fail)
+        {
+            fail = 0;
+            var all = new List<Spec>(Specs);
+            var seen = new HashSet<string>(System.StringComparer.Ordinal);
+            foreach (Spec s in all) seen.Add(s.Key);
+
+            foreach (string root in new[]
+                     { AIHWSim.Vehicles.PartMeshLibrary.PartRoot,
+                       AIHWSim.Vehicles.PartMeshLibrary.PropRoot,
+                       AIHWSim.Garage.CosmeticCatalog.MeshRoot })
+            {
+                foreach (var man in AIHWSim.Vehicles.AssetManifests.Discover(root))
+                {
+                    if (man == null || string.IsNullOrEmpty(man.key)) continue;
+                    if (!seen.Add(man.key))
+                    {
+                        Debug.LogError($"[PMV] FAIL {man.key}: a committed manifest names a key " +
+                                       "this validator already has a literal row for. Two rows " +
+                                       "is two contracts and the second one silently wins — " +
+                                       "commit it under another key, or delete the literal row " +
+                                       "if the asset really has been replaced.");
+                        fail++;
+                        continue;
+                    }
+                    all.Add(new Spec(man, root));
+                }
+            }
+            return all;
+        }
+
         public static void Report()
         {
-            int fail = 0;
-            foreach (var s in Specs)
+            List<Spec> specs = AllSpecs(out int fail);
+            foreach (var s in specs)
             {
                 var src = Resources.Load<GameObject>(s.Root + s.Key);
                 if (src == null)
@@ -401,6 +516,11 @@ namespace AIHWSim.EditorTools
                 }
 
                 var inst = Object.Instantiate(src);
+                // Inert for all 207 literal rows (scale 1, yaw 0); for a managed
+                // one this is the difference between measuring the FBX and
+                // measuring the car.
+                inst.transform.localRotation = Quaternion.Euler(0f, s.Yaw, 0f);
+                inst.transform.localScale = Vector3.one * s.Scale;
                 var rs = inst.GetComponentsInChildren<Renderer>(true);
                 if (rs.Length == 0)
                 {
@@ -428,8 +548,12 @@ namespace AIHWSim.EditorTools
                     if (ext > s.MaxExtent.Value) why += $" extent={ext:0.0000}>{s.MaxExtent.Value:0.0000}";
                     if (ext < floor) why += $" extent={ext:0.0000}<{floor:0.0000}";
                 }
-                if (tris > s.MaxTris) why += $" tris={tris}>{s.MaxTris}";
-                why += TokenTrouble(s.Key, rs);
+                // A budget of 0 is "unbudgeted", which only a manifest can say —
+                // every literal row above carries one, so this guard is inert for
+                // all 207. A manifest that arrives without one is named by [AST]
+                // rather than silently failing every triangle here.
+                if (s.MaxTris > 0 && tris > s.MaxTris) why += $" tris={tris}>{s.MaxTris}";
+                if (!s.Managed) why += TokenTrouble(s.Key, rs);
 
                 string line = $"{s.Key}: parts={rs.Length} tris={tris} " +
                               $"size=({b.size.x:0.000},{b.size.y:0.000},{b.size.z:0.000}) " +
@@ -446,7 +570,7 @@ namespace AIHWSim.EditorTools
             fail += TiguanChecks.Run();
 
             Debug.Log($"[PMV] RESULT {(fail == 0 ? "ALL PASS" : fail + " FAILED")} " +
-                      $"({Specs.Length} assets)");
+                      $"({specs.Count} assets, {specs.Count - Specs.Length} committed)");
         }
 
         /// <summary>

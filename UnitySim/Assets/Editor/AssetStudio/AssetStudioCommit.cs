@@ -162,7 +162,7 @@ namespace AIHWSim.AssetTools
             public bool ok;
             public string problem = "";
             public int filesCopied, filesCurrent;
-            public int objects, slots, unmapped, orphans;
+            public int objects, slots, unmapped, orphans, triangles;
             public Vector3 measured;
             public bool overridden;
             public string overrideReason = "";
@@ -505,6 +505,57 @@ namespace AIHWSim.AssetTools
         }
 
         /// <summary>
+        /// The triangle budget this asset joins <c>[PMV]</c>'s table with,
+        /// measured off the import with 15 % of headroom and rounded up to a
+        /// readable number.
+        ///
+        /// <b>A drift check, not a prediction, and the manifest says so</b> —
+        /// <c>spec.specSource</c> reads "measured". The 207 literal rows are an
+        /// independent claim about what an FBX round trip should preserve; this
+        /// one can only ever say "the mesh has not grown since it was committed",
+        /// which is the question worth asking about art that arrives from outside
+        /// the repository. It is the same way the 47 shipped cosmetic rows were
+        /// derived, and the same 15 %.
+        ///
+        /// Deterministic in the measurement, so a re-commit of an unchanged asset
+        /// reproduces the number and the manifest stays byte-identical.
+        /// </summary>
+        public static int BudgetFor(int triangles) =>
+            Mathf.CeilToInt(triangles * 1.15f / 50f) * 50;
+
+        /// <summary>
+        /// What this mesh MEASURES once the game has corrected it — the scale and
+        /// the quarter turn applied to the imported prefab's own renderer bounds.
+        ///
+        /// Public because <c>[AST]</c> re-measures every committed asset against
+        /// the <c>authorSize</c> recorded here, and a validator carrying its own
+        /// transcription of this arithmetic would be checking a copy against a
+        /// copy. Sharing it is what makes the check about the MESH: the recorded
+        /// number moves only when the geometry does.
+        /// </summary>
+        public static Vector3 MeasuredSize(GameObject prefab, float authorScale, float authorYawDeg)
+        {
+            if (prefab == null) return Vector3.zero;
+            Bounds b = PartVisualFactory.LocalRendererBounds(prefab.transform, prefab.transform);
+            Vector3 size = b.size * authorScale;
+            // A bounding box survives a quarter turn by swapping two axes and
+            // nothing else, which is why authorYawDeg is refused unless it is one.
+            int quarter = Mathf.RoundToInt(Mathf.Repeat(authorYawDeg, 360f) / 90f) & 3;
+            return quarter == 1 || quarter == 3 ? new Vector3(size.z, size.y, size.x) : size;
+        }
+
+        /// <summary>Triangles in an imported prefab, counted the way
+        /// <c>PartModelValidator</c> counts them.</summary>
+        public static int TriangleCount(GameObject prefab)
+        {
+            int tris = 0;
+            if (prefab == null) return 0;
+            foreach (MeshFilter mf in prefab.GetComponentsInChildren<MeshFilter>(true))
+                if (mf.sharedMesh != null) tris += mf.sharedMesh.triangles.Length / 3;
+            return tris;
+        }
+
+        /// <summary>
         /// Replace the draft's proposed slot lists with the imported prefab's
         /// real ones, and the proposed size with the measured one.
         ///
@@ -555,15 +606,17 @@ namespace AIHWSim.AssetTools
             // Measured off the prefab and corrected the way the game will load
             // it, which is the independent check: export.json's own
             // unityDimensions never enter this number.
-            Bounds b = PartVisualFactory.LocalRendererBounds(prefab.transform, prefab.transform);
-            Vector3 size = b.size * draft.authorScale;
-            int quarter = Mathf.RoundToInt(Mathf.Repeat(draft.authorYawDeg, 360f) / 90f) & 3;
-            if (quarter == 1 || quarter == 3) size = new Vector3(size.z, size.y, size.x);
+            Vector3 size = MeasuredSize(prefab, draft.authorScale, draft.authorYawDeg);
             man.authorSize = new[] { size.x, size.y, size.z };
             res.measured = size;
 
             if (draft.Kind == AssetKind.CarBody) man.spec.z = size.z;
             else if (draft.Kind == AssetKind.Wheel) { man.spec.y = size.y; man.spec.z = size.z; }
+
+            // The triangle budget joins [PMV]'s table with the rest of the spec,
+            // so a committed asset is held to a ceiling like every shipped one.
+            res.triangles = TriangleCount(prefab);
+            man.spec.maxTris = BudgetFor(res.triangles);
         }
 
         /// <summary>
@@ -779,7 +832,7 @@ namespace AIHWSim.AssetTools
         /// makes it a decision rather than a way past the gate.</summary>
         public static string Line(Result r) =>
             $"COMMIT {r.key}: {r.filesCopied} copied, {r.filesCurrent} already current, "
-            + $"{r.objects} object(s), {r.slots} slot(s), measured "
+            + $"{r.objects} object(s), {r.slots} slot(s), {r.triangles} tris, measured "
             + $"{r.measured.x:0.####} x {r.measured.y:0.####} x {r.measured.z:0.####} m"
             + (r.unmapped > 0 ? $", {r.unmapped} object(s) the draft never mapped" : "")
             + (r.orphans > 0 ? $", {r.orphans} draft entry(s) the mesh no longer has" : "")
