@@ -123,7 +123,11 @@ namespace AIHWSim.Core
             // Snap control rate to the exact achievable value after decimation.
             controlRateHz = Mathf.RoundToInt((float)physicsRateHz / _decimation);
 
-            Time.fixedDeltaTime = 1f / physicsRateHz;
+            // Reports through PhysicsRateAuthority, which applies exactly this
+            // write and additionally notices when a second runner in the same
+            // session asks for a different rate — the global-fixedDeltaTime
+            // hazard DebugVehicleSpawner documents and hand-works-around.
+            Boot.PhysicsRateAuthority.Apply(physicsRateHz, this);
         }
 
         private void Awake()

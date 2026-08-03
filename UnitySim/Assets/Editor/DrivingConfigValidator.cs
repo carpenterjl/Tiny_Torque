@@ -1,5 +1,6 @@
 using System.Collections.Generic;
 using AIHWSim.Core;
+using AIHWSim.Core.Boot;
 using AIHWSim.Core.Config;
 using AIHWSim.Vehicles;
 using UnityEditor;
@@ -51,6 +52,7 @@ namespace AIHWSim.EditorTools
             CheckLevelClamps();
             CheckPhysicsDefaults();
             CheckAssistDefaults();
+            CheckRateAuthority();
 
             foreach (string f in Fails) Debug.LogError($"{Tag} FAIL {f}");
             string line = Fails.Count == 0
@@ -247,6 +249,70 @@ namespace AIHWSim.EditorTools
             AssistTuning.StabilityClamp(0.85f), AssistTuning.SteerLimitRef(0.90f),
             AssistTuning.TractionOnsetFor(0.95f), AssistTuning.AbsOnsetFor(0.95f),
         };
+
+        /// <summary>
+        /// The two-rates warning must fire for two objects and stay silent for
+        /// one changing its mind.
+        ///
+        /// Both halves are needed and the second is the one that matters: a
+        /// runner reconfigures itself at two different rates on EVERY rig in the
+        /// project (Awake on the component defaults, Start on the builder's), so
+        /// a check that only looked at the rate fired twenty times in a clean
+        /// [PHYS] run. A diagnostic that cries wolf on every correct scene is
+        /// worse than none, and this is what stops it regressing to that.
+        ///
+        /// Also the only place the warning is exercised at all: a genuine
+        /// two-runner conflict needs a scene built to have one, and the
+        /// production paths all take care not to.
+        /// </summary>
+        private static void CheckRateAuthority()
+        {
+            float dt = Time.fixedDeltaTime;
+            var a = ScriptableObject.CreateInstance<LevelSettings>();   // stand-in requesters:
+            var b = ScriptableObject.CreateInstance<LevelSettings>();   // any two distinct Objects
+            a.name = "RunnerA";
+            b.name = "RunnerB";
+
+            int warnings = 0;
+            void OnLog(string msg, string _, LogType t)
+            {
+                if (t == LogType.Warning && msg.StartsWith("[RATE]")) warnings++;
+            }
+
+            Application.logMessageReceived += OnLog;
+            try
+            {
+                PhysicsRateAuthority.Reset();
+                PhysicsRateAuthority.Apply(500, a);
+                PhysicsRateAuthority.Apply(400, a);
+                Eq("[RATE] silent when one object changes its own rate", 0, warnings);
+
+                PhysicsRateAuthority.Reset();
+                warnings = 0;
+                PhysicsRateAuthority.Apply(400, a);
+                PhysicsRateAuthority.Apply(500, b);
+                Eq("[RATE] warns when two objects disagree", 1, warnings);
+
+                // Once, not once per step: this runs inside FixedUpdate's caller
+                // on some paths and a per-frame warning would bury the log.
+                PhysicsRateAuthority.Apply(400, a);
+                PhysicsRateAuthority.Apply(500, b);
+                Eq("[RATE] warns only once per session", 1, warnings);
+
+                _checks++;
+                if (Time.fixedDeltaTime != 1f / 500)
+                    Fails.Add($"[RATE] did not apply the requested step: fixedDeltaTime is "
+                              + $"{Time.fixedDeltaTime}, expected {1f / 500}");
+            }
+            finally
+            {
+                Application.logMessageReceived -= OnLog;
+                PhysicsRateAuthority.Reset();
+                Time.fixedDeltaTime = dt;
+                Object.DestroyImmediate(a);
+                Object.DestroyImmediate(b);
+            }
+        }
 
         // ---- SessionConfig snapshot/restore ---------------------------------
         // The validator writes to a static the whole editor session shares, so

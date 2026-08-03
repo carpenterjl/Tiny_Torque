@@ -64,6 +64,16 @@ namespace AIHWSim.Core
             // measurement scenes cannot drift apart on the surface they measure
             // against. Assists-off and the telemetry ordering live in
             // DebugVehicleRig for the same reason.
+            // A descriptor in this scene owns the solver and the step; without
+            // one the fields above stand, which is what every existing copy of
+            // this scene has.
+            var driving = Boot.DrivingSceneDescriptor.Find();
+            if (driving != null)
+            {
+                physicsRateHz = driving.PhysicsRate(physicsRateHz);
+                controlRateHz = driving.ControlRate(controlRateHz);
+            }
+
             var env = PhysicsTestEnvironment.EnvSpec.Default();
             env.straightLength = straightLength;
             env.straightWidth = straightWidth;
