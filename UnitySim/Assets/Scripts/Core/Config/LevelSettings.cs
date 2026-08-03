@@ -73,6 +73,7 @@ namespace AIHWSim.Core.Config
         public bool arcadeHandling = true;
 
         [Header("The car, when nothing else chose one")]
+        [Garage.VehiclePreset(true, "(none — the bootstrap's own default)")]
         [Tooltip("Preset name to drive when this scene is entered directly rather than " +
                  "through the garage or the menu. Empty falls back to whatever the " +
                  "bootstrap's own default is. A design already chosen — by the menu, by " +
