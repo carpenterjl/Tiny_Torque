@@ -27,6 +27,13 @@ namespace AIHWSim.Core
         public bool autoReloadControllerOnChange = false;
 
         [Header("Track geometry (m)")]
+        [Tooltip("Build the classic procedural oval when nothing else supplies a track. " +
+                 "Off means this scene's OWN geometry is the map: no ground plane, no " +
+                 "loop, no finish line — and therefore no lap counting, so a race mode " +
+                 "will say so and fall back to a free drive. Ignored when a scene track " +
+                 "or a tile map is selected; those already supply a track.")]
+        public bool buildDefaultOval = true;
+
         public float ovalRadiusX = 12f;
         public float ovalRadiusZ = 7.5f;
         public float roadWidth = 2.5f;
@@ -40,7 +47,10 @@ namespace AIHWSim.Core
         private Material _dirt, _road, _bermA, _bermB, _cone, _block, _barrier, _post, _checker;
 
         private Vector3 _spawnPos;
-        private Quaternion _spawnRot;
+        /// <summary>Identity rather than <c>default</c>: every track source assigns
+        /// this, but the no-track path below may not, and a zero Quaternion is not a
+        /// rotation — it is a car pointing nowhere.</summary>
+        private Quaternion _spawnRot = Quaternion.identity;
         private LapTimer _lapTimer;
         private TrackEd.BuiltTrack _built;   // custom maps only; null on the classic oval
         private Arcade.ArcadeDirector _arcade;
@@ -219,6 +229,30 @@ namespace AIHWSim.Core
             }
         }
 
+        /// <summary>How long the on-screen composition warning stays up. Long enough
+        /// to read at a standing start, gone before it can cover anything that
+        /// matters; the Console copy is permanent.</summary>
+        private const float ComposeWarningSeconds = 14f;
+
+        private string _composeWarning;
+        private float _composeWarningUntil;
+
+        /// <summary>
+        /// Say that a mode could not be composed — to the Console AND to the screen.
+        ///
+        /// Both, because the two audiences are different and neither is served by the
+        /// other's channel. The Console reaches whoever is authoring the scene; the
+        /// banner reaches whoever pressed Play, who would otherwise experience the
+        /// refusal as "I chose a race and got a free drive" with no way to tell that
+        /// from never having chosen one.
+        /// </summary>
+        private void WarnCompose(string message)
+        {
+            Debug.LogWarning($"[TrackBootstrap] {message}");
+            _composeWarning = message;
+            _composeWarningUntil = Time.unscaledTime + ComposeWarningSeconds;
+        }
+
         /// <summary>
         /// Compose the rules object for <see cref="SessionConfig.Match"/>, or
         /// null for a free drive. One method per mode, called from every scene
@@ -255,8 +289,8 @@ namespace AIHWSim.Core
         {
             if (!Modes.ArenaNav.Available)
             {
-                Debug.LogWarning($"[TrackBootstrap] {SessionConfig.Match} needs a map with " +
-                                 "spawn points; falling back to free drive.");
+                WarnCompose($"{SessionConfig.Match} needs a map with spawn points, and this "
+                            + "one has none. Falling back to a free drive.");
                 return null;
             }
 
@@ -275,8 +309,30 @@ namespace AIHWSim.Core
 
         private Track.MatchDirector BuildRaceDirector()
         {
-            // Race mode (first to N laps) when configured and the map can time laps.
-            if (SessionConfig.TargetLaps <= 0 || _lapTimer == null) return null;
+            // 0 laps is a free drive on purpose — every legacy entry path produced
+            // one, and it is what LevelSettings ships as. Not a misconfiguration,
+            // so not a warning.
+            if (SessionConfig.TargetLaps <= 0) return null;
+
+            // Asking for a race on a map that cannot time a lap used to return null
+            // here and say nothing, which presents as "I chose Race and got a free
+            // drive" — the composition refusing, indistinguishable from it never
+            // having been asked. The refusal is right; the silence was not.
+            if (_lapTimer == null)
+            {
+                bool noTrackAtAll = !buildDefaultOval && !GameFlow.HasSceneTrack
+                                    && GameFlow.ActiveTrack == null;
+                WarnCompose(
+                    $"Race mode wants {SessionConfig.TargetLaps} lap(s), but this map has "
+                    + "no finish line, so nothing can time a lap. Falling back to a free "
+                    + "drive. "
+                    + (noTrackAtAll
+                        ? "Build Default Oval is off, so this scene's own geometry has to "
+                          + "supply the gates: add a Finish Marker (and Checkpoint Markers) "
+                          + "plus a Scene Track Descriptor, or turn the oval back on."
+                        : "Add a Finish Marker to the track, or set the mode to Free Roam."));
+                return null;
+            }
 
             var race = new GameObject("RaceDirector").AddComponent<RaceDirector>();
             race.targetLaps = SessionConfig.TargetLaps;
@@ -370,12 +426,18 @@ namespace AIHWSim.Core
         /// user-built tile map, or the classic procedural oval. This is the whole
         /// dispatch — every composition path funnels through here so a source added
         /// once is a source every mode understands.
+        ///
+        /// <see cref="buildDefaultOval"/> is consulted only on the last of them. A
+        /// scene track and a tile map ARE tracks; the checkbox exists for the case
+        /// where the scene's own geometry is the map and the oval would be laid
+        /// through the middle of it.
         /// </summary>
         private void BuildEnvironment()
         {
             if (GameFlow.HasSceneTrack) { BuildSceneEnvironment(); return; }
-            if (GameFlow.ActiveTrack != null) BuildCustomEnvironment();
-            else BuildOvalEnvironment();
+            if (GameFlow.ActiveTrack != null) { BuildCustomEnvironment(); return; }
+            if (buildDefaultOval) { BuildOvalEnvironment(); return; }
+            BuildBareEnvironment();
         }
 
         /// <summary>
@@ -1225,6 +1287,47 @@ namespace AIHWSim.Core
             BuildFinishLine(track, pts);
         }
 
+        /// <summary>
+        /// No track at all: the scene's own geometry is the map.
+        ///
+        /// Lighting still runs, because <c>SceneRig.BuildLighting</c> only creates a
+        /// sun when the scene has none — a lit scene keeps its own, an unlit one
+        /// still renders. Nothing else is built. There is no ground plane, no loop
+        /// and no finish line, which means no <see cref="LapTimer"/> and so no lap
+        /// counting: that is the trade the checkbox offers, and
+        /// <see cref="BuildRaceDirector"/> says it out loud rather than composing a
+        /// race that can never be won.
+        ///
+        /// The spawn pose comes from a <see cref="AIHWSim.Track.TrackSpawnMarker"/>
+        /// if the scene has one — the same component a scene track uses, honoured
+        /// here without a descriptor because a car has to start somewhere and the
+        /// author has already said where. Its authored height is used verbatim: with
+        /// no descriptor there is no statement about what counts as ground, so
+        /// dropping the car onto the nearest collider could just as easily settle it
+        /// on a roof. Failing that, this bootstrap's own transform, which is at least
+        /// a thing you can see and drag in the scene view.
+        /// </summary>
+        private void BuildBareEnvironment()
+        {
+            BuildLighting();
+
+            var marks = FindObjectsByType<AIHWSim.Track.TrackSpawnMarker>(FindObjectsSortMode.None);
+            AIHWSim.Track.TrackSpawnMarker first = null;
+            foreach (var m in marks)
+                if (first == null || m.gridOrder < first.gridOrder) first = m;
+
+            if (first != null)
+            {
+                _spawnPos = first.transform.position;
+                _spawnRot = Quaternion.Euler(0f, first.transform.eulerAngles.y, 0f);
+            }
+            else
+            {
+                _spawnPos = transform.position;
+                _spawnRot = Quaternion.Euler(0f, transform.eulerAngles.y, 0f);
+            }
+        }
+
         /// <summary>A user-built tile map via the shared TrackFactory.</summary>
         private void BuildCustomEnvironment()
         {
@@ -1491,8 +1594,30 @@ namespace AIHWSim.Core
             return (cam, graph);
         }
 
+        /// <summary>
+        /// The banner for a mode that refused to compose. Drawn before the
+        /// split-screen early-out below: the DLL box is a solo-only debug affordance,
+        /// but "your race is not running" is news in every session.
+        /// </summary>
+        private void DrawComposeWarning()
+        {
+            if (_composeWarning == null || Time.unscaledTime > _composeWarningUntil) return;
+
+            UI.UIScale.Begin();
+            const float w = 620f, h = 72f;
+            var area = new Rect((UI.UIScale.W - w) * 0.5f, 8f, w, h);
+            var prev = GUI.color;
+            GUI.color = new Color(1f, 0.82f, 0.30f);
+            GUILayout.BeginArea(area, GUI.skin.box);
+            GUILayout.Label(_composeWarning);
+            GUILayout.EndArea();
+            GUI.color = prev;
+            UI.UIScale.End();
+        }
+
         private void OnGUI()
         {
+            DrawComposeWarning();
             if (_splitScreen) return; // split-screen: humans only, no DLL box
             UI.UIScale.Begin();
             const float w = 230f, h = 74f;
