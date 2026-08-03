@@ -230,10 +230,22 @@ setting.
   else, and the game builds every car facing `+Z` (sensors, lights and gear are
   all placed that way). It is *composed* with the wheel builder's own half-turn,
   never assigned over it.
-- **`authorSize`** — what the mesh MEASURES after both, **recorded and not
-  applied**. The validator holds it to within 2 mm of the imported prefab. It is
-  not the divisor a design's `bodySize` is a ratio against; see §2 for why that
-  has to stay nominal.
+- **`authorOffset`** — a pivot fix, in **mesh units**, applied after the yaw and
+  *inside* the scale. Mesh units rather than metres because a pivot that sits 14 %
+  of the car's height too high is 14 % too high at every `bodySize` a design asks
+  for, and the garage lets a player move that slider; after the yaw because the
+  axes worth thinking in are the car's (`Y` up, `+Z` the way it faces), not the
+  ones Blender happened to model along. **Nothing proposes it** — an export can
+  measure how big a mesh is and which way its long axis runs, but "the wheels
+  should touch the ground" is a judgement about a car. Zero for every asset that
+  does not set one, and `TryInstantiate` builds no node at all in that case, so
+  all 207 shipped assets cannot tell the field exists.
+- **`authorSize`** — what the mesh MEASURES after the scale and the yaw,
+  **recorded and not applied**. The validator holds it to within 2 mm of the
+  imported prefab. It is not the divisor a design's `bodySize` is a ratio against;
+  see §2 for why that has to stay nominal. `authorOffset` deliberately does not
+  enter it: a translation does not change a bounding box's extents, which is the
+  property that lets an author nudge a car without re-measuring anything.
 
 A wheel needs no `authorScale`. The wheel path already instantiates at
 `radius / authorRadius`, so recording the mesh's raw radius makes that one divide
@@ -258,7 +270,9 @@ path arithmetic *during* import, where `Resources.Load` does not exist yet.
 
   "authorScale": 0.07953,        // uniform, multiplies the nominal divide
   "authorYawDeg": -90,           // a multiple of 90
-  "authorSize": [0.1853, 0.1210, 0.4200],   // measured, after both
+  "authorOffset": [0, -0.75, 0], // pivot fix, MESH units, after the yaw,
+                                 //   inside the scale. Absent reads as zero.
+  "authorSize": [0.1853, 0.1210, 0.4200],   // measured, after scale + yaw
 
   "spec": { "x": -1, "y": -1, "z": 0.420,   // -1 = unpinned (a hand-written
             "maxTris": 18850,               //   null is accepted and read as -1)

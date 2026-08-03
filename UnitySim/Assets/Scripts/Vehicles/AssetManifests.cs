@@ -290,6 +290,28 @@ namespace AIHWSim.Vehicles
         /// every car facing +Z — sensors, lights and gear are all placed that way.</summary>
         public float authorYawDeg;
 
+        /// <summary>
+        /// A pivot correction, in MESH UNITS, applied after
+        /// <see cref="authorYawDeg"/> and inside <see cref="authorScale"/>.
+        ///
+        /// <b>Why mesh units rather than metres.</b> A pivot that sits 14 % of the
+        /// car's height too high is 14 % too high at every size a design asks for,
+        /// so the correction has to ride the same scale the mesh does. Recorded in
+        /// metres it would be right for one <c>bodySize</c> and wrong for the rest,
+        /// and the garage lets a player change that slider.
+        ///
+        /// <b>Why after the yaw.</b> The axes an author is thinking in are the
+        /// CAR's — down, forward, right — not the ones Blender happened to model
+        /// along. Y is unaffected by a yaw either way, so this only decides what X
+        /// and Z mean, and "along the car" is the answer worth having.
+        ///
+        /// Zero for every asset that does not set it, which is all 207 shipped
+        /// ones: <see cref="PartMeshLibrary.TryInstantiate"/> builds nothing at all
+        /// unless this is non-zero, so an asset without it cannot tell the field
+        /// exists.
+        /// </summary>
+        public float[] authorOffset;
+
         public AssetSpecDef spec;
         public AssetMaterialDef[] materials;
         public AssetObjectDef[] objects;
@@ -341,6 +363,11 @@ namespace AIHWSim.Vehicles
         public string Label => string.IsNullOrWhiteSpace(label) ? key : label;
 
         public Vector3 AuthorSize => AssetManifests.ToVector(authorSize);
+
+        /// <summary>The pivot correction as a vector, zero when unset. A manifest
+        /// written before this field existed has a null array and reads as zero,
+        /// which is the same answer as "authored, and left alone".</summary>
+        public Vector3 AuthorOffset => AssetManifests.ToVector(authorOffset);
 
         /// <summary>True when any material claims the paint channel — i.e.
         /// whether the garage's paint mode has anywhere to land. Derived rather

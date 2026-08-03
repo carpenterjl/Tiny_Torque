@@ -482,7 +482,8 @@ namespace AIHWSim.AssetTools
         /// settle the manifest wording for. Composing them into one number here
         /// would quietly pick that answer.
         /// </summary>
-        private void Transform(AssetRow row, PreviewOptions o, TtExport x, float target)
+        private void Transform(AssetRow row, PreviewOptions o, TtExport x, float target,
+                               AssetStudioDraft draft)
         {
             float scale = 1f;
             float yawFix = 0f;
@@ -493,6 +494,14 @@ namespace AIHWSim.AssetTools
             }
             _correction.transform.localScale = Vector3.one * scale;
             _correction.transform.localRotation = Quaternion.Euler(0f, yawFix, 0f);
+
+            // The draft's pivot fix, in the same place the game puts it: inside
+            // the correction node's scale and after its rotation, which is what
+            // makes localPosition here mean the mesh units the field is written
+            // in. Shown whenever a draft has one, not gated on "Apply correction"
+            // — that toggle is about the export's proposal, and this is an
+            // authored decision that has to be visible while it is being made.
+            _inst.transform.localPosition = draft != null ? draft.authorOffset : Vector3.zero;
 
             if (row != null && row.kind == AssetKind.Wheel)
             {
@@ -625,7 +634,7 @@ namespace AIHWSim.AssetTools
             Bind(row, o, draft);
             Overlay(o);
             float target = RulerLength(row);
-            Transform(row, o, export, target);
+            Transform(row, o, export, target, draft);
             Ruler(target, o.showRuler);
 
             Bounds b = WorldBounds;

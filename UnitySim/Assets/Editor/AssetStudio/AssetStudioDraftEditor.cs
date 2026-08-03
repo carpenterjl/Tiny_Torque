@@ -263,6 +263,26 @@ namespace AIHWSim.AssetTools
                     + "survive an arbitrary rotation, so authorSize would stop meaning "
                     + "anything the moment this is 37 degrees.", MessageType.Error);
 
+            EditorGUI.BeginChangeCheck();
+            Vector3 off = EditorGUILayout.Vector3Field("authorOffset", draft.authorOffset);
+            if (EditorGUI.EndChangeCheck())
+            {
+                Rec(draft, "authorOffset");
+                draft.authorOffset = off;
+                Dirty(draft);
+            }
+
+            // The number is in mesh units and the eye judges in centimetres, so
+            // say what it comes to on the car. Not a second field: two editable
+            // spellings of one fact is how they end up disagreeing.
+            if (draft.authorOffset.sqrMagnitude > 1e-12f && draft.authorScale > 0f)
+            {
+                Vector3 m = draft.authorOffset * draft.authorScale;
+                EditorGUILayout.LabelField(" ",
+                    $"= {m.x * 100f:0.##}, {m.y * 100f:0.##}, {m.z * 100f:0.##} cm "
+                    + "at nominal size", EditorStyles.miniLabel);
+            }
+
             using (new EditorGUILayout.HorizontalScope())
             {
                 using (new EditorGUI.DisabledScope(row?.Export == null))
@@ -273,6 +293,16 @@ namespace AIHWSim.AssetTools
                         ? $"uniform x{draft.authorScale:0.#####}  (1/{1f / draft.authorScale:0.###})"
                         : "uniform x1", EditorStyles.miniLabel, GUILayout.Width(190f));
             }
+
+            EditorGUILayout.HelpBox(
+                "authorOffset is a PIVOT fix, in mesh units, applied after the yaw and "
+                + "inside the scale — so it stays the same fraction of the car at every "
+                + "bodySize a design asks for, and its axes are the car's (Y up, +Z the "
+                + "way it faces). It moves nothing else: authorSize is a bounding-box "
+                + "SIZE and translation does not change one, so the gate's 2 mm check "
+                + "neither notices nor needs re-measuring. Nothing proposes it — where "
+                + "the wheels should meet the ground is a judgement about a car.",
+                MessageType.None);
 
             EditorGUILayout.HelpBox(
                 "One uniform factor, never a per-axis fit. The old exporter scaled "

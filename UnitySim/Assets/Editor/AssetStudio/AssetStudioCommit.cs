@@ -398,6 +398,26 @@ namespace AIHWSim.AssetTools
                 why.Add($"authorYawDeg {draft.authorYawDeg} is not a multiple of 90 — a "
                       + "bounding box does not survive anything else");
 
+            // A pivot fix that exceeds the mesh's own extents has moved the car
+            // clear of where it used to be, which is not a pivot fix. The one way
+            // to write that by accident is to take a number off a node INSIDE the
+            // design scale and type it into a field that is outside one, or the
+            // reverse — so the refusal names the converted number rather than
+            // just saying no.
+            Vector3 offM = draft.authorOffset * Mathf.Max(1e-6f, draft.authorScale);
+            Vector3 ext = draft.authorSize;
+            if (!Finite(draft.authorOffset))
+                why.Add("authorOffset is not a finite number");
+            else if (ext.sqrMagnitude > 1e-9f
+                     && (Mathf.Abs(offM.x) > ext.x || Mathf.Abs(offM.y) > ext.y
+                         || Mathf.Abs(offM.z) > ext.z))
+                why.Add($"authorOffset {draft.authorOffset} is {offM.x:0.###}, {offM.y:0.###}, "
+                      + $"{offM.z:0.###} m on a {ext.x:0.###} x {ext.y:0.###} x {ext.z:0.###} m "
+                      + "asset — further than the mesh is big, so this is a pivot fix in name "
+                      + "only. It is measured in MESH units (multiplied by authorScale "
+                      + $"{draft.authorScale:0.#####}), not metres; if the number came off a "
+                      + "node outside the design scale, divide it by authorScale first");
+
             if (kind == AssetKind.Cosmetic)
             {
                 if (!System.Enum.TryParse(draft.cosmeticSlot, out Garage.CosmeticSlot _))
@@ -410,6 +430,13 @@ namespace AIHWSim.AssetTools
 
             return why.Count == 0 ? "" : string.Join("; ", why) + ".";
         }
+
+        /// <summary>All three components are real numbers. A NaN survives
+        /// JsonUtility both ways and turns every transform it touches into NaN,
+        /// silently, one frame later and somewhere else.</summary>
+        private static bool Finite(Vector3 v) =>
+            !float.IsNaN(v.x) && !float.IsNaN(v.y) && !float.IsNaN(v.z)
+            && !float.IsInfinity(v.x) && !float.IsInfinity(v.y) && !float.IsInfinity(v.z);
 
         // ==================== the pieces ====================
 
@@ -469,6 +496,8 @@ namespace AIHWSim.AssetTools
                 },
                 authorScale = draft.authorScale,
                 authorYawDeg = draft.authorYawDeg,
+                authorOffset = new[] { draft.authorOffset.x, draft.authorOffset.y,
+                                       draft.authorOffset.z },
                 authorSize = new[] { draft.authorSize.x, draft.authorSize.y, draft.authorSize.z },
                 spec = SpecFor(draft, kind),
                 materials = mats.ToArray(),

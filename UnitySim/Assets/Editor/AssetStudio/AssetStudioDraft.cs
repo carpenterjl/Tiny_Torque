@@ -292,6 +292,17 @@ namespace AIHWSim.AssetTools
         public float authorYawDeg;
 
         /// <summary>
+        /// A pivot correction in MESH UNITS, applied after the yaw and inside the
+        /// scale — see <see cref="AIHWSim.Vehicles.AssetManifest.authorOffset"/>
+        /// for why those are the right two answers.
+        ///
+        /// Never proposed. The export can measure how big a mesh is and which way
+        /// its long axis runs, but "the wheels should touch the ground" is a
+        /// judgement about a car that only a person looking at one can make.
+        /// </summary>
+        public Vector3 authorOffset;
+
+        /// <summary>
         /// The single factor that puts this mesh on the game's scale — the
         /// correction the old exporter baked in and this one does not.
         ///

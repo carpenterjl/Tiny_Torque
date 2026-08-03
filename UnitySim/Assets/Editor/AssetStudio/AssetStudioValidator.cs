@@ -338,10 +338,26 @@ namespace AIHWSim.AssetTools
                 why.Add($"authorYawDeg {man.authorYawDeg} is not a multiple of 90 — a bounding "
                       + "box does not survive anything else");
 
+            // The pivot fix, checked for the two ways it can be nonsense. It is
+            // deliberately NOT checked against the measured size below: a
+            // translation does not change a bounding box's extents, so authorSize
+            // stays true whatever this is — which is the property that lets an
+            // author nudge a car without re-measuring anything.
+            Vector3 off = man.AuthorOffset;
+            Vector3 offM = off * Mathf.Max(1e-6f, man.authorScale);
+            if (float.IsNaN(off.sqrMagnitude) || float.IsInfinity(off.sqrMagnitude))
+                why.Add("authorOffset is not a finite number");
+
             if (m.Prefab == null) return;
 
             Vector3 measured = AssetStudioCommit.MeasuredSize(m.Prefab, man.authorScale, man.authorYawDeg);
             Vector3 recorded = man.AuthorSize;
+
+            if (Mathf.Abs(offM.x) > measured.x || Mathf.Abs(offM.y) > measured.y
+                || Mathf.Abs(offM.z) > measured.z)
+                why.Add($"authorOffset {F(off)} comes to {F(offM)} m on a {F(measured)} m asset "
+                      + "— further than the mesh is big, so it is not a pivot fix. It is in "
+                      + $"MESH units (times authorScale {man.authorScale:0.#####}), not metres");
             if (Off(measured.x, recorded.x) || Off(measured.y, recorded.y) || Off(measured.z, recorded.z))
                 why.Add($"authorSize records {F(recorded)} and the mesh measures {F(measured)} — "
                       + "the geometry has changed since it was committed; re-commit");

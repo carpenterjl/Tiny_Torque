@@ -126,10 +126,51 @@ namespace AIHWSim.Vehicles
             go.transform.localRotation = man != null && Mathf.Abs(man.authorYawDeg) > 0.01f
                 ? Quaternion.Euler(0f, man.authorYawDeg, 0f)
                 : Quaternion.identity;
+            ApplyAuthorOffset(go, man);
 
             Sanitise(go, layer);
             AssetManifestBinder.TryStamp(go, key, root);
             return go;
+        }
+
+        /// <summary>
+        /// Slide the mesh inside its own root by <see cref="AssetManifest.authorOffset"/>.
+        ///
+        /// <b>An inserted node, not a move of the root.</b> The root's
+        /// <c>localPosition</c> is in the CALLER's space, and every caller sets
+        /// <c>localScale</c> on the root a line or two later — so a metre written
+        /// there would be a metre at any car size, and the correction has to be a
+        /// fraction of the car instead. Reparenting the root's children under one
+        /// node puts the offset inside that scale, where a mesh unit is a mesh
+        /// unit, and leaves the root exactly as the caller expects to find it.
+        ///
+        /// <b>Nothing is built when the offset is zero</b>, which is every asset
+        /// that has not set one. That is what makes this inert rather than
+        /// nearly-inert: with no node inserted, the hierarchy a binder walks and
+        /// the order <c>GetComponentsInChildren</c> returns are the ones that were
+        /// there before this function existed.
+        ///
+        /// The name is deliberately not a token any material table matches — the
+        /// node carries no renderer, but a binder that logged unmatched objects
+        /// should have nothing to say about it.
+        /// </summary>
+        private static void ApplyAuthorOffset(GameObject go, AssetManifest man)
+        {
+            if (man == null) return;
+            Vector3 off = man.AuthorOffset;
+            if (off.sqrMagnitude < 1e-12f) return;
+
+            var pivot = new GameObject("_AuthorOffset").transform;
+            pivot.SetParent(go.transform, false);
+
+            // Snapshot before reparenting: moving a child mutates the collection
+            // this is walking, and the first move would end the loop early.
+            var kids = new List<Transform>();
+            foreach (Transform t in go.transform)
+                if (t != pivot) kids.Add(t);
+            foreach (Transform t in kids) t.SetParent(pivot, false);
+
+            pivot.localPosition = off;
         }
 
         /// <summary>Strip colliders + rigidbodies and force the given layer, recursively.</summary>
