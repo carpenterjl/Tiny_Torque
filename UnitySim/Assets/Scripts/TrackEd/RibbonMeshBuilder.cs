@@ -13,8 +13,9 @@ namespace AIHWSim.TrackEd
     /// <summary>
     /// Turns a <see cref="SplineSpec"/> into ribbon geometry: one Mesh (+
     /// MeshCollider + <see cref="SurfaceTag"/>) per contiguous surface run,
-    /// optional red/white kerb stripes as a second submesh, and an optional
-    /// extruded edge-wall mesh. The ribbon top sits <see cref="TopOffset"/>
+    /// optional red/white kerb stripes as a second submesh, an optional extruded
+    /// edge-wall mesh, and optional painted lane lines as a separate
+    /// collider-less mesh. The ribbon top sits <see cref="TopOffset"/>
     /// above each control point's y with a solid downward skirt, so ground-level
     /// ribbons sink into the floor slab (no knife edges, no z-fighting).
     /// </summary>
@@ -26,7 +27,18 @@ namespace AIHWSim.TrackEd
         public const float WallHeight = 0.09f;
         public const float WallWidth = 0.20f;
 
+        /// <summary>How far painted lane lines float above the ribbon top. Enough
+        /// to beat depth precision on a banked ribbon, small enough that it is
+        /// paint rather than a kerb — and it never reaches the physics, because
+        /// the line mesh carries no collider.</summary>
+        public const float LineLift = 0.005f;
+
         private static Material _kerbMat, _wallMat;
+
+        /// <summary>Lane-line materials by (colour, dash ratio). Small and bounded:
+        /// a scene has one or two line styles, not one per ribbon.</summary>
+        private static readonly Dictionary<long, Material> _lineMats =
+            new Dictionary<long, Material>();
 
         private static Material KerbMat
         {
@@ -74,6 +86,8 @@ namespace AIHWSim.TrackEd
 
             if (s.edgeWalls)
                 BuildWalls(root.transform, samples, right, up, n, quadCount, colliders);
+
+            BuildLines(root.transform, s, samples, right, up, n, quadCount, totalLen);
 
             return root;
         }
@@ -281,6 +295,195 @@ namespace AIHWSim.TrackEd
             go.AddComponent<MeshRenderer>().sharedMaterial = WallMat;
             go.AddComponent<RibbonMeshMarker>().mesh = mesh;
             if (colliders) go.AddComponent<MeshCollider>().sharedMesh = mesh;
+        }
+
+        // ---- painted lane lines ---------------------------------------------------
+
+        /// <summary>
+        /// Paint <see cref="RoadLineStyle"/> onto the ribbon: a centre line or a
+        /// double line, an optional pair inside the edges, solid or dashed.
+        ///
+        /// <b>Its own GameObject, with no collider and no <see cref="SurfaceTag"/>,
+        /// and that is the whole safety argument.</b> The surface runs above are not
+        /// touched by this feature at all, so a spline with no markings produces the
+        /// same vertices it always did — inert by construction rather than by a test.
+        /// It also keeps 5 mm of paint out of the MeshCollider: a lane line down the
+        /// middle of the road is exactly where the wheels are, and a step there is
+        /// suspension input, not decoration. (The kerb stripes DO ride in the
+        /// collider, which is tolerable only because they sit at the edges.)
+        ///
+        /// One mesh for the whole spline rather than one per surface run: paint does
+        /// not care what the road is made of, and a single strip keeps the dash phase
+        /// continuous across a surface change.
+        /// </summary>
+        private static void BuildLines(Transform parent, SplineSpec s,
+            List<SplineMath.Sample> samples, Vector3[] right, Vector3[] up,
+            int n, int quadCount, float totalLen)
+        {
+            var style = s.lines;
+            int lines = style != null ? style.LineCount : 0;
+            if (lines == 0) return;
+
+            int rings = quadCount + 1;
+            int stride = lines * 2;
+            float half = Mathf.Max(0.005f, style.width) * 0.5f;
+
+            // Dash phase across the seam of a closed loop: stretch the period to the
+            // nearest whole number of dashes, so the loop closes on a dash boundary
+            // instead of showing one short dash wherever the start line happens to be.
+            float period = style.DashPeriod;
+            if (period > 0f && s.closed && totalLen > period)
+                period = totalLen / Mathf.Max(1f, Mathf.Round(totalLen / period));
+
+            var verts = new Vector3[rings * stride];
+            var norms = new Vector3[rings * stride];
+            var uvs = new Vector2[rings * stride];
+            var offsets = new float[lines];
+
+            for (int k = 0; k < rings; k++)
+            {
+                var (top, r, u, w, v) = Ring(samples, right, up, k, n, totalLen);
+                LineOffsets(style, w, offsets);
+
+                // Ring's v is distance/4 (the surface's own tiling); the dash pattern
+                // wants whole periods, so undo that and re-scale.
+                float dv = period > 0f ? v * 4f / period : v;
+                Vector3 lift = u * LineLift;
+                int b = k * stride;
+
+                for (int i = 0; i < lines; i++)
+                {
+                    Vector3 c = top + r * offsets[i] + lift;
+                    int o = b + i * 2;
+                    verts[o + 0] = c - r * half;
+                    verts[o + 1] = c + r * half;
+                    norms[o + 0] = norms[o + 1] = u;
+                    uvs[o + 0] = new Vector2(0f, dv);
+                    uvs[o + 1] = new Vector2(1f, dv);
+                }
+            }
+
+            var tris = new List<int>(quadCount * lines * 6);
+            for (int q = 0; q < quadCount; q++)
+            {
+                int a = q * stride, c = (q + 1) * stride;
+                for (int i = 0; i < lines; i++)
+                {
+                    int o = i * 2;
+                    Quad(tris, a + o + 0, c + o + 0, a + o + 1, c + o + 1);
+                }
+            }
+
+            var mesh = new Mesh { name = "RibbonLines" };
+            if (verts.Length > 65000) mesh.indexFormat = UnityEngine.Rendering.IndexFormat.UInt32;
+            mesh.vertices = verts;
+            mesh.normals = norms;
+            mesh.uv = uvs;
+            mesh.SetTriangles(tris, 0);
+            mesh.RecalculateBounds();
+
+            var go = new GameObject("Lines");
+            go.transform.SetParent(parent, false);
+            go.AddComponent<MeshFilter>().sharedMesh = mesh;
+            go.AddComponent<MeshRenderer>().sharedMaterial = LineMat(style);
+            go.AddComponent<RibbonMeshMarker>().mesh = mesh;
+        }
+
+        /// <summary>
+        /// Where each painted line sits, as a signed offset from the centreline of a
+        /// ring <paramref name="w"/> metres wide. The COUNT is fixed by the style so
+        /// the mesh stride is constant; only the offsets move, which is what lets an
+        /// edge line follow a corner that widens.
+        /// </summary>
+        private static void LineOffsets(RoadLineStyle st, float w, float[] into)
+        {
+            int i = 0;
+            float gap = Mathf.Max(0f, st.spacing);
+            float lineW = Mathf.Max(0.005f, st.width);
+
+            int centre = Mathf.Clamp(st.centreLines, 0, 2);
+            if (centre == 1) into[i++] = 0f;
+            else if (centre == 2)
+            {
+                // The gap is between the two lines, not between their centres.
+                float d = (gap + lineW) * 0.5f;
+                into[i++] = -d;
+                into[i++] = d;
+            }
+
+            if (st.edgeLines)
+            {
+                // Inset from the edge by `spacing`, then in again by half the paint,
+                // clamped so a line never hangs off a road narrower than its own trim.
+                float e = Mathf.Max(0f, w * 0.5f - gap - lineW * 0.5f);
+                into[i++] = -e;
+                into[i++] = e;
+            }
+        }
+
+        /// <summary>
+        /// A material per (colour, dash ratio). Solid lines are a plain matte
+        /// Standard material; dashed ones add an alpha-cutout mask whose v axis is
+        /// one dash period, so the dash length is exact rather than quantised to the
+        /// 0.4 m ribbon sampling — dashes shorter than one sample are the normal case
+        /// at this scale, so per-quad culling was never an option.
+        /// </summary>
+        private static Material LineMat(RoadLineStyle st)
+        {
+            int steps = Mathf.RoundToInt(st.DashRatio * DashTexHeight);
+            long key = ((long)st.color.GetHashCode() << 8) | (uint)steps;
+            if (_lineMats.TryGetValue(key, out var cached) && cached != null) return cached;
+
+            var mat = TrackBuilder.StandardMat(st.color);
+            mat.name = $"RoadLine_{steps}";
+            if (mat.HasProperty("_Glossiness")) mat.SetFloat("_Glossiness", 0.15f);
+            if (steps < DashTexHeight) MakeCutout(mat, DashTexture(steps));
+
+            _lineMats[key] = mat;
+            return mat;
+        }
+
+        private const int DashTexHeight = 64;
+
+        /// <summary>One dash period as an alpha ramp: opaque for the painted part,
+        /// transparent for the gap. Four pixels wide because a 1-pixel texture is a
+        /// portability trap on some import paths, not because the width carries
+        /// anything.</summary>
+        private static Texture2D DashTexture(int paintedRows)
+        {
+            var tex = new Texture2D(4, DashTexHeight, TextureFormat.RGBA32, false)
+            {
+                filterMode = FilterMode.Point,
+                wrapMode = TextureWrapMode.Repeat,
+            };
+            for (int y = 0; y < DashTexHeight; y++)
+            {
+                var c = new Color(1f, 1f, 1f, y < paintedRows ? 1f : 0f);
+                for (int x = 0; x < 4; x++) tex.SetPixel(x, y, c);
+            }
+            tex.Apply();
+            return tex;
+        }
+
+        /// <summary>
+        /// Put a Standard material into cutout mode. Every one of these matters:
+        /// setting <c>_Mode</c> alone changes what the inspector SAYS and nothing
+        /// about what renders, because the shader branches on keywords and blend
+        /// state that only the inspector's own code normally writes.
+        /// </summary>
+        private static void MakeCutout(Material mat, Texture2D mask)
+        {
+            mat.mainTexture = mask;
+            mat.SetFloat("_Mode", 1f);
+            mat.SetOverrideTag("RenderType", "TransparentCutout");
+            mat.SetInt("_SrcBlend", (int)UnityEngine.Rendering.BlendMode.One);
+            mat.SetInt("_DstBlend", (int)UnityEngine.Rendering.BlendMode.Zero);
+            mat.SetInt("_ZWrite", 1);
+            mat.SetFloat("_Cutoff", 0.5f);
+            mat.EnableKeyword("_ALPHATEST_ON");
+            mat.DisableKeyword("_ALPHABLEND_ON");
+            mat.DisableKeyword("_ALPHAPREMULTIPLY_ON");
+            mat.renderQueue = (int)UnityEngine.Rendering.RenderQueue.AlphaTest;
         }
 
         private static void Quad(List<int> tris, int a0, int a1, int b0, int b1)

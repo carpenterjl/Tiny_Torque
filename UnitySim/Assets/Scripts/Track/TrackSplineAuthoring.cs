@@ -47,6 +47,11 @@ namespace AIHWSim.Track
         public bool edgeWalls;
         public bool edgeStripes = true;
 
+        [Header("Lane markings")]
+        [Tooltip("Paint on the road: a centre line or a double line, optional edge " +
+                 "lines, solid or dashed. Set Centre Lines to 0 for a bare road.")]
+        public RoadLineStyle lines = new RoadLineStyle();
+
         [Header("Channels (optional — empty means use the defaults above)")]
         [Tooltip("Road width in metres, keyed along the spline.")]
         public SplineData<float> widthChannel = new SplineData<float>();
@@ -101,6 +106,7 @@ namespace AIHWSim.Track
                 defaultSurface = defaultSurface,
                 edgeWalls = edgeWalls,
                 edgeStripes = edgeStripes,
+                lines = lines,
             };
             return UnitySplineSampler.ToSpec(Container, splineIndex, settings,
                 widthChannel, rollChannel, surfaceChannel);

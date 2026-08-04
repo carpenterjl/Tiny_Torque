@@ -175,6 +175,42 @@ means track limits **never trigger anywhere**. That is a property of the paint j
 
 ---
 
+## Road lines
+
+`Track Spline Authoring ▸ Lane markings` paints lines on the ribbon: a centre line, a
+double line, an optional pair of edge lines, solid or dashed. They rebuild live with
+everything else on that component, so a marking is something you look at rather than
+something you bake and then check.
+
+| | |
+|---|---|
+| Centre lines | 0 = none, 1 = a single centre line, 2 = a double line |
+| Edge lines | a line just inside each edge of the road, following the width channel |
+| Width | one painted line, in metres (0.05 default — 50 cm of real road at 1:10) |
+| Spacing | the gap between the two lines of a double, **and** how far an edge line sits in from the edge |
+| Dash / Dash gap | metres. Dash 0 paints a solid line |
+| Colour | the paint |
+
+The in-game track builder has the same controls under **ROAD LINES** in its spline panel,
+with a fixed palette instead of a colour picker, and the style is saved in the track JSON.
+Old saves carry no `lines` key at all and deserialize to "none", so every track already on
+disk builds the road it always built.
+
+**Lane paint is its own mesh, with no collider and no `SurfaceTag`.** Two reasons, both
+worth keeping. The ribbon's surface runs are not touched by this feature at all, so a road
+with no markings is inert by construction rather than by a test. And a line down the
+middle of the road is exactly where the wheels are: 5 mm of paint in a `MeshCollider` is
+suspension input, not decoration. (The kerb stripes DO ride in the collider — tolerable
+only because they sit at the outer edge, where a car is already having a bad time.)
+
+Dashes come from an alpha-cutout mask whose v axis is one dash period, not from dropping
+quads. Ribbon sampling is 0.4 m, which at this scale is longer than most dashes, so a
+geometric dash could only ever be a rumble strip. On a closed loop the period is stretched
+to the nearest whole number of dashes so the seam lands on a boundary instead of showing
+one short dash wherever the start line happens to be.
+
+---
+
 ## Racing line
 
 `4. Bake racing line` solves the ideal line inside the corridor and puts a

@@ -1296,6 +1296,8 @@ namespace AIHWSim.TrackEd
                 bootstrap.RequestRebuild();
             }
 
+            DrawLinePanel(s);
+
             if (_selPoint >= 0 && _selPoint < s.Count)
             {
                 GUILayout.Space(4);
@@ -1346,11 +1348,87 @@ namespace AIHWSim.TrackEd
             if (GUILayout.Button("Delete spline")) DeleteSpline(_selSpline);
         }
 
+        /// <summary>Names for the line palette. A full colour picker is the wrong
+        /// control here: road paint is white or yellow, and everything else on this
+        /// panel is a slider or a cycle.</summary>
+        private static readonly (string label, Color color)[] LineColors =
+        {
+            ("White", new Color(0.95f, 0.95f, 0.90f)),
+            ("Yellow", new Color(0.95f, 0.78f, 0.15f)),
+            ("Red", new Color(0.85f, 0.20f, 0.18f)),
+            ("Blue", new Color(0.30f, 0.55f, 0.95f)),
+        };
+
+        private static readonly string[] CentreLabels = { "None", "Single", "Double" };
+
+        /// <summary>
+        /// Painted lane markings for the selected spline. Every control writes
+        /// through to <see cref="SplineSpec.lines"/> and asks for a rebuild, the
+        /// same way the width and bank sliders do — the ribbon is the preview.
+        /// </summary>
+        private void DrawLinePanel(SplineSpec s)
+        {
+            var ln = s.lines ??= new RoadLineStyle();
+
+            GUILayout.Space(4);
+            GUILayout.Label("ROAD LINES", GarageSkin.Header);
+
+            int centre = Mathf.Clamp(ln.centreLines, 0, 2);
+            GUILayout.BeginHorizontal();
+            GUILayout.Label("Centre", GUILayout.Width(52));
+            if (GUILayout.Button("◀", GUILayout.Width(24)))
+                SetLine(s, () => ln.centreLines = (centre + 2) % 3);
+            GUILayout.Label(CentreLabels[centre], GarageSkin.Header);
+            if (GUILayout.Button("▶", GUILayout.Width(24)))
+                SetLine(s, () => ln.centreLines = (centre + 1) % 3);
+            GUILayout.EndHorizontal();
+
+            bool edges = GUILayout.Toggle(ln.edgeLines, " Edge lines");
+            if (edges != ln.edgeLines) SetLine(s, () => ln.edgeLines = edges);
+
+            if (!ln.Any) return;   // the rest only describes lines that exist
+
+            float w = SliderRow("Width", ln.width, 0.01f, 0.20f, "0.00");
+            if (!Mathf.Approximately(w, ln.width)) SetLine(s, () => ln.width = w);
+
+            float gap = SliderRow("Spacing", ln.spacing, 0f, 0.30f, "0.00");
+            if (!Mathf.Approximately(gap, ln.spacing)) SetLine(s, () => ln.spacing = gap);
+
+            float dash = SliderRow("Dash", ln.dashLength, 0f, 1f, "0.00");
+            if (!Mathf.Approximately(dash, ln.dashLength)) SetLine(s, () => ln.dashLength = dash);
+
+            if (ln.dashLength > 0f)
+            {
+                float dg = SliderRow("Dash gap", ln.dashGap, 0.02f, 1f, "0.00");
+                if (!Mathf.Approximately(dg, ln.dashGap)) SetLine(s, () => ln.dashGap = dg);
+            }
+
+            int ci = 0;
+            for (int i = 0; i < LineColors.Length; i++)
+                if (LineColors[i].color == ln.color) { ci = i; break; }
+            GUILayout.BeginHorizontal();
+            GUILayout.Label("Colour", GUILayout.Width(52));
+            if (GUILayout.Button("◀", GUILayout.Width(24)))
+                SetLine(s, () => ln.color = LineColors[(ci + LineColors.Length - 1) % LineColors.Length].color);
+            GUILayout.Label(LineColors[ci].label, GarageSkin.Header);
+            if (GUILayout.Button("▶", GUILayout.Width(24)))
+                SetLine(s, () => ln.color = LineColors[(ci + 1) % LineColors.Length].color);
+            GUILayout.EndHorizontal();
+        }
+
+        private void SetLine(SplineSpec s, System.Action apply)
+        {
+            bootstrap.PushUndo("spline_lines");
+            apply();
+            bootstrap.RequestRebuild();
+        }
+
         // GUILayout slider row helper (label + slider + value).
-        private float SliderRow(string label, float value, float min, float max)
+        private float SliderRow(string label, float value, float min, float max,
+                                string fmt = "0.0")
         {
             GUILayout.BeginHorizontal();
-            GUILayout.Label($"{label} {value:0.0}", GUILayout.Width(80));
+            GUILayout.Label($"{label} {value.ToString(fmt)}", GUILayout.Width(80));
             float nv = GUILayout.HorizontalSlider(value, min, max);
             GUILayout.EndHorizontal();
             return nv;

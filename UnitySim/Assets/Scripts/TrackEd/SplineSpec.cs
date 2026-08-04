@@ -22,6 +22,11 @@ namespace AIHWSim.TrackEd
         public bool edgeWalls;
         public bool edgeStripes;
 
+        /// <summary>Painted lane markings. Defaults to none, so old saves — which
+        /// carry no "lines" key at all — deserialize to the initializer and build
+        /// the road they always built.</summary>
+        public RoadLineStyle lines = new RoadLineStyle();
+
         public const float DefaultWidth = 1.5f;
         public const int DefaultSurface = 1; // asphalt
 
@@ -31,6 +36,7 @@ namespace AIHWSim.TrackEd
         public void EnsureArrays()
         {
             points ??= new List<Vector3>();
+            lines ??= new RoadLineStyle();
             rollDeg ??= new List<float>();
             widths ??= new List<float>();
             surface ??= new List<int>();

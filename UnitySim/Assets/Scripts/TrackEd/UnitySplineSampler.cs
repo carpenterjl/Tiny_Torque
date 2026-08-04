@@ -47,6 +47,10 @@ namespace AIHWSim.TrackEd
             public bool edgeWalls;
             public bool edgeStripes;
 
+            /// <summary>Painted lane markings. Null means none, which is what every
+            /// caller written before this field existed passes.</summary>
+            public RoadLineStyle lines;
+
             public static Settings Default => new Settings
             {
                 spacing = DefaultSpacing,
@@ -54,6 +58,7 @@ namespace AIHWSim.TrackEd
                 defaultSurface = SplineSpec.DefaultSurface,
                 edgeWalls = false,
                 edgeStripes = false,
+                lines = null,
             };
         }
 
@@ -83,6 +88,10 @@ namespace AIHWSim.TrackEd
             spec.closed = spline.Closed;
             spec.edgeWalls = settings.edgeWalls;
             spec.edgeStripes = settings.edgeStripes;
+            // Cloned, not aliased: the spec outlives the call and is handed to the
+            // ribbon builder, and a shared style would let a later inspector edit
+            // change a spec that was already sampled.
+            if (settings.lines != null) spec.lines = settings.lines.Clone();
 
             var table = BuildArcTable(spline, l2w);
             float total = table[table.Count - 1].dist;
