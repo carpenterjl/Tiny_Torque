@@ -8,11 +8,278 @@ describe is documented in [README.md](../README.md).
 Active work lives in the session plan file, not here; a plan moves into this archive
 once its milestones are done.
 
-Covering the project bootstrap through the Asset Studio import pipeline (44 plans).
-Last updated 2026-08-03. (The RC-airplane F0–F9 and slipstream/phugoid G-series plans
+Covering the project bootstrap through the driving-scene config layer (45 plans).
+Last updated 2026-08-04. (The RC-airplane F0–F9 and slipstream/phugoid G-series plans
 completed between Track Studio and the HUD pass but their session files were
 overwritten before archiving; their results live in README's RC-airplane section and
 the [AERO]/[ABENCH] gates.)
+
+---
+
+# Driving-scene bootstrap refactor + Editor-tunable configs (2026-08-03)
+
+## Context
+
+Every driving scene today is composed by `TrackBootstrap.cs` — a 1498-line monolith — and
+its settings arrive through static mutable globals (`SessionConfig`, `GameFlow`) written by
+the menu. Five independent bootstrap stacks duplicate the same blocks: the
+Camera.main-or-create sequence exists in **11 copies**, `BuildLighting` in 7, the chase-camera
+setup in 5, and the ~14-field `SimulationRunner` assignment block in 6 (the flight side
+already extracted its version as `DebugPlaneRig.ConfigureRunner`; the car side never did).
+Tuning values live in four tiers — per-design JSON, runtime-only public fields on
+`CarVehicle`, `public const` classes (`ModeConfig`, `ArcadeConfig`, `AssistTuning`,
+`PhysicsTuning`), and code-overridden project physics — and none of them is editable in the
+Unity Inspector, because nothing gameplay-side is a prefab or an asset.
+
+The user wanted: (1) a reusable bootstrap loading the elements present on any level (player
+rig — the "character controller" IS the car rig; there is no on-foot player — camera,
+environment, vehicles at spawn points); (2) a per-scene descriptor defining scene-specific
+settings (game mode, rules, physics); (3) tuning parameters exposed as public parameters
+editable **live** through the Unity Editor.
+
+### Decisions taken with the user
+
+| | |
+|---|---|
+| Scene scope | **Driving scenes first**: TrackScene, TTA_Interlagos/Monza/Spa, TTA_Sandbox, PhysicsDebugScene. Flight and menu/garage keep their bootstraps but shared helpers are extracted. A0–A7 and the Opus mission stay bit-identical. |
+| Tuning home | **ScriptableObject configs** (`LevelSettings`, `PhysicsSettings`, `HandlingTuning`, per-const-class overrides) referenced by the scene descriptor. **No asset assigned ⇒ literals verbatim** — the same defaults-equal-literals rule `VehicleDesign` already enforces. |
+| Live apply | Per-step values (grip, aero, brakes, steer rate, assists, arcade channels) apply instantly. Build-time values (suspension, mass, motors, body size) trigger a **debounced in-place rebuild** of the car, modeled on `GarageBootstrap.RequestRebuild` (0.15 s). |
+
+### Architecture (settled)
+
+`TrackBootstrap` stays the single driving bootstrap — **no new base class**. Its LAN branches
+and match-director wiring make inheritance a trap; what it needs is extraction, not a
+hierarchy. Three moves:
+
+1. Duplicated composition blocks → static helpers in `Assets/Scripts/Core/Boot/`
+   (`SceneRig`, `CarRunnerRig`).
+2. A new `DrivingSceneDescriptor` MonoBehaviour per driving scene, next to the existing
+   `SceneTrackDescriptor`, referencing the SO configs and supplying defaults to
+   `SessionConfig`/`GameFlow` **only when they are unset** (Play-pressed-directly). The menu
+   still writes the globals and still wins.
+3. A `LiveCarTuner` component on the built (human, solo) car: Inspector-native public
+   fields, instant write-through for live channels, debounced rebuild-in-place for
+   build-time values, via a new `CarRebuilder` + `SimulationRunner.Rebind()`.
+
+### Facts the design rests on
+
+- `PlayerRig` is a **sealed class** — in-place mutation of its fields propagates to
+  `SplitScreenHud`, `PauseMenu.rigs`, arcade HUD, etc.
+- `SimulationRunner.Start()` caches four things a rebuild must redo: the
+  `IControlledVehicle`/`IManualDriver`/`ISetpointSource` casts, the `VehicleReset`
+  subscription, `sensorRig.Initialize`, and `RegisterChannels()`. Field writes alone leave
+  the runner driving a destroyed component.
+- `CarVehicle` has **no re-apply path**. The only precedent is destroy-and-rebuild:
+  `GarageBootstrap.RebuildPreview` / `RequestRebuild`.
+- `Time.fixedDeltaTime` is written by every `SimulationRunner.ConfigureRates()` —
+  **last runner wins**, documented as a hazard in `DebugVehicleSpawner`.
+- `DebugVehicleSpawner` is `[DefaultExecutionOrder(-5000)]` and swaps `GameFlow.ActiveDesign`
+  before any bootstrap; the descriptor must run after it and honour its writes.
+- `PhysicsTuning` is a `[RuntimeInitializeOnLoadMethod]` hard-coded static (contactOffset
+  0.002, solver 10/2, maxDepenetrationVelocity 2, maximumDeltaTime 0.05).
+- Zero `[SerializeField]` in Assets/Scripts (all public fields), zero `OnValidate` anywhere.
+  `SceneTrackCatalog` records a conscious preference for static tables where
+  index-persistence matters — **catalogs are not SO-ified**.
+- `VehicleDesign`/`WheelSpec` invariant: field initializers ARE the literals they replaced;
+  `0` is a sentinel meaning "legacy expression verbatim". The Opus mission is a
+  bit-identical gate; the design dump (3722 rows) and `[PHYS]` (ten scenes) are the
+  regression gates. Unity batch: never `-nographics`; PowerShell must poll.
+
+### Standing constraints
+
+- Menu `Tools/`, bracketed tags, one RESULT line for any validator; `-quit` for edit-mode
+  runs only. Explicit git pathspecs, never `-A`/`-u`.
+- `[PHYS]` and Opus-mission scenes never receive descriptors with override assets — the
+  gates run with zero assets assigned, which is what makes "no asset ⇒ literals" testable.
+- Do not touch flight test call sites except in the deferred M6.
+
+---
+
+## Milestones
+
+### M0 — Archive + baseline (no product code)
+
+- [x] Splice the completed Asset Studio plan into `Docs/plan-archive.md`.
+- [x] Capture baselines: design dump, binding dump, `[PHYS]` (ten scenes), Opus mission.
+
+### M1 — Shared helpers, provably inert
+
+- [x] `SceneRig.cs` — `CameraOrCreate` (the 11-copy block), `BuildLighting` (7 copies),
+      `AttachChase` (5 sites; offset `(0,1.1,-2.2)`, followLerp 5), `ApplyAmbience`.
+      Parameterise only what actually differs; mechanical relocation, no reordering.
+- [x] `CarRunnerRig.cs` — `ConfigureCarRunner(...)` mirroring `DebugPlaneRig.ConfigureRunner`,
+      replacing the ~14-assignment block at the six car sites. A small `CarRunnerOptions`
+      struct carries the bot/split/firmware discriminators. Keep the AddComponent-then-assign
+      order intact (`SimulationRunner`'s Start-not-Awake contract).
+- [x] Flight call sites untouched this milestone.
+
+**Verify:** design dump diff **empty**; `[PHYS]` green; manual play of TrackScene +
+PhysicsDebugScene + Garage. Opus mission cheap to run once as belt-and-braces.
+
+### M2 — ScriptableObject config layer, inert (nothing assigned)
+
+- [x] `LevelSettings.cs` (SO): match mode, target laps, countdown, results wait, arcade,
+      track limits, target score, time limit, default design name — initializers = current
+      `SessionConfig` defaults.
+- [x] `PhysicsSettings.cs` (SO): physicsRateHz/controlRateHz, contactOffset, solver 10/2,
+      maxDepenetrationVelocity, maximumDeltaTime. `PhysicsTuning.Apply()` gains an optional
+      parameter; the `[RuntimeInitializeOnLoadMethod]` path passes null → literals verbatim.
+- [x] Const-class overrides — pattern once on the smallest (`AssistTuningOverride`): each
+      overridden `public const float X = lit;` becomes `public static float X => Ov != null
+      ? Ov.x : lit;`. Consts needed in const contexts stay `const` (the compile error is the
+      detector). `TyreModel`, `AeroDynamics`, `TrackCatalog.Floors` are **out of scope**.
+- [x] `HandlingTuning.cs` (SO) — folded into M5 instead; see "Also deferred".
+
+**Verify:** design dump empty; `[PHYS]` green; **Opus mission bit-identical** (mandatory —
+const→property conversion touches physics-adjacent paths).
+
+### M3 — `DrivingSceneDescriptor` + adoption in TrackBootstrap
+
+- [x] `Core/Boot/DrivingSceneDescriptor.cs`, `[DefaultExecutionOrder(-4000)]` (after
+      `DebugVehicleSpawner` −5000, before `TrackBootstrap`). `Awake()`: install const
+      overrides (null fine) → `PhysicsTuning.Apply(physics)` when assigned → apply `level`
+      to `SessionConfig` **only** on the Play-pressed-directly branch, honouring
+      `GameFlow.ActiveDesign == null` so `DebugVehicleSpawner.ReplacePlayerCar` wins, and
+      skipping entirely when `NetSession.Instance` is live.
+- [x] `TrackBootstrap.Awake` delegates its repair branch to the descriptor when one exists;
+      the inline fallback stays so a descriptor-less TrackScene keeps working.
+- [x] The `Tools ▸ AIHWSim ▸ Driving Scene` menu and the `[DSC]` gate.
+- [x] LAN paths untouched.
+
+**Verify:** design dump empty; `[PHYS]` green. Manual matrix: (a) menu → race on each
+circuit unchanged; (b) Play pressed directly in TTA_Monza yields the descriptor's mode/laps;
+(c) LAN host+client smoke; (d) `DebugVehicleSpawner` still works.
+
+### M4 — PhysicsDebugScene adoption + fixedDeltaTime authority
+
+- [x] `PhysicsDebugBootstrap` gains the descriptor lookup; rate fields defer to a
+      `PhysicsSettings` asset when present.
+- [x] `PhysicsRateAuthority.cs`: `ConfigureRates()` reports through a static that applies
+      the write exactly as today but warns (once per conflicting pair) when two live runners
+      request different `fixedDeltaTime`. No behaviour change.
+
+**Verify:** `[PHYS]` green (and read the new warning output for false positives — P9/A7
+intentionally change timestep); design dump empty; Opus mission.
+
+### M5 — Live tuning
+
+- [x] **ITunable expansion**: `CarVehicle.GetTunables()` from 4 params to the full live-safe
+      set, using the `SetGrip` write-through pattern where a setter must reach colliders.
+      Ranges scale with the design (a [0.1,3] clamp destroys a full-scale car's 2400 N·m brake).
+- [x] **`LiveCarTuner.cs`**, added in `BuildPlayerRig` to the solo human car only. Public
+      fields mirroring (a) live channels, (b) the build-time `VehicleDesign` subset.
+      `Update()` diffs: live edits → instant write-through; build-time edits → clone the
+      design, `RequestRebuild()` (0.15 s debounce). The Inspector shows **effective** values,
+      never raw 0-sentinels.
+- [x] **`CarRebuilder.cs`** — `RebuildInPlace(PlayerRig rig, VehicleDesign d)`: capture
+      pose/velocity/spawn/assists/input source → destroy → `VehicleFactory.Build` → restore.
+      Rewire checklist: new `CarInput` (+`.car`, `.lapTimer`, `.source`, `.chase`),
+      `VehicleAudio.Attach`, runner fields + a new `SimulationRunner.Rebind()`, the
+      `VehicleReset` subscription, `sensorRig.Initialize`, channel re-registration;
+      `ChaseCamera` target; `PlayerRig` fields mutated in place; `PauseMenu.tunableBehaviour`;
+      re-run `AttachHandlingFloor(rig)`. Refuses under split-screen, LAN, or firmware runners.
+- [x] **SO OnValidate push**: `TuningBus.Raise(this)` (`Config/TuningBus.cs`); subscribers
+      re-apply. Editor-only; strips to no-ops in player builds.
+
+**Verify:** design dump empty **with no assets assigned and tuner untouched**; `[PHYS]`;
+Opus mission. Manual: edit spring in Play → car rebuilds in ~0.15 s in place with velocity
+preserved and camera/audio/HUD/pause-tuner still bound.
+
+### M6 — Deferred consolidation — **carried forward, still open**
+
+- [ ] `CarRunnerRig` into `BuildLanRig` — needs a two-machine LAN smoke test this session
+      cannot run. The LAN *camera* already moved in M1; what is left is the block that
+      decides which car this machine SIMULATES, which is exactly the thing two machines
+      have to watch.
+- [x] Menu/garage bootstraps consume `SceneRig` — **done early, in M1**.
+- [ ] Flight consumption of camera/lighting helpers. `SceneRig.BuildLighting` already returns
+      the Light it made so `FlightTestEnvironment`'s create-only `ambientIntensity` tail can
+      join without changing shape — but the move costs a full `[AERO]` run to prove
+      bit-identity, and it is five lines.
+
+### M7 — Per-mode live tuning (delivered, `6047690`)
+
+- [x] `ModeConfigOverride` + `ArcadeConfigOverride`, installed by the descriptor beside
+      `assists`. Same "no asset ⇒ literals verbatim" contract; the literals stay in private
+      consts beside their accessors.
+- [x] `Core/Config/TuningBus.cs` — the M5 idea, finally needed. Raised from each asset's
+      `OnValidate`; subscribed by the only three consumers that BAKE a value (`SoccerBall`'s
+      Rigidbody, `MatchRacer`'s health bar, `ArenaGravity`). Everything else is live purely
+      because of where it is read.
+- [x] Two new knobs, both scales that write nothing at 1: `ballGravityScale` (a force, so the
+      shipped path is untouched) and `arenaGravityScale`, owned by a new `ArenaGravity`
+      component so the global is restored on `OnDestroy` — a component rather than director
+      code, because a base-class `OnDestroy` would be shadowed by `SoccerDirector`'s own.
+- [x] `[DSC]` 47 → 146 checks, the new ones by reflection over the assets' fields; a field
+      with no matching accessor FAILS rather than being skipped. Proved able to fail (3
+      deliberate breaks → 3 named failures). Opus mission bit-identical.
+- Mid-match max-health edits keep each car's **fraction**, not its number.
+
+### Also deferred, with reasons
+
+- ~~**`ModeConfig` / `ArcadeConfig` overrides**~~ — **shipped**, see M7. The "no headless
+  gate can watch either" worry was answered by writing the gate: `[DSC]` now checks them by
+  reflection over the assets' own fields, so the check cannot fall behind the knobs.
+- **`HandlingTuning` SO** (planned for M2). Folded into M5 instead: `LiveCarTuner` holds the
+  `VehicleDesign` itself, which Unity draws natively because every type in the tree is
+  already `[Serializable]` for the save format. A parallel SO of the same numbers would have
+  been a second source with nothing to make them agree.
+
+---
+
+## Delivered (M0–M5, M7), seven commits
+
+| | |
+|---|---|
+| `7de8bf0` M0 | Asset Studio plan archived (44th entry). Baselines: design 3722 rows, binding 1760 rows, Opus `total_err_mm 58.238983154296878` — bit-identical to the numbers K0 and K3b recorded. |
+| `3777355` M1 | `SceneRig` + `CarRunnerRig`, −119 lines over 11 files. 10 camera copies, 7 lighting, 3 chase, 3 runner blocks. |
+| `c8aeaf3` M2 | `LevelSettings`, `PhysicsSettings`, `AssistTuningOverride`; `AssistTuning`'s 13 consts became accessors. |
+| `87459fd` M3 | `DrivingSceneDescriptor`, the `Tools ▸ AIHWSim ▸ Driving Scene` menu, and the `[DSC]` gate. |
+| `0cad6e7` M4 | `PhysicsRateAuthority`; `PhysicsDebugBootstrap` reads a descriptor. |
+| `fbc6721` M5 | `LiveCarTuner`, `CarRebuilder`, `SimulationRunner.Rebind`, `GetTunables` 4 → 12 with scale-aware ranges. |
+| `6047690` M7 | `ModeConfigOverride` + `ArcadeConfigOverride`, `TuningBus`, `ArenaGravity`; `[DSC]` 47 → 146 checks. |
+
+Three later commits on the same layer: level settings apply to any driving scene rather than
+only self-named tracks (`5c30961`), the car is chosen from a list rather than a typed name
+(`97d905e`), and the oval became optional so a race with no finish line says so (`25b124b`).
+
+**Every gate green at every milestone**: design dump byte-identical (3722), binding dump
+byte-identical (1760), `[PHYS] ALL PASS (10 × 2, spread 0 %)`, Opus mission bit-identical,
+`[DSC] ALL PASS` (47, then 146).
+
+Two things the runs found that reading would not have:
+
+- **The rate warning's first version was wrong**, and it took a clean `[PHYS]` run to say so:
+  comparing rates alone fired **20 times**, because `ConfigureRates` deliberately runs twice
+  on every rig (Awake on the component defaults, Start on the builder's). It keys on the
+  requester's instance now — a conflict is two objects, not one changing its mind.
+- **`[DSC]` was proved able to fail** — four deliberate breaks produced five named failures,
+  the fifth being a ramp catching a moved base, which is why the ramps are sampled halfway
+  between anchor and 1 rather than at 1 (at 1 a ramp returns its top-end literal and would
+  have caught nothing).
+
+**Owed to a human** — nothing headless does any of these: TTA_Monza direct Play; menu → race
+on each circuit; LAN host + client smoke; drag a spring in Play and confirm the rebuild keeps
+momentum with camera/audio/HUD/pause-Tune bound; menu attract / garage / track-builder cameras
+and lighting unchanged; `Unity_Map_Scene_Backup` with and without the default oval; and
+dragging ball mass, ball gravity, max health, drift torque and arena gravity mid-match.
+
+## Risks (as recorded)
+
+- **Rebuild-in-place dangling references** — the M5 checklist + `SimulationRunner.Rebind()`;
+  the failure mode throws immediately in Play, so the manual gate catches it. Graph channel
+  re-registration is the subtle one.
+- **const→property drift** — a const needed in a const context fails compilation (loud);
+  Opus mission is the semantic gate.
+- **Last-runner-wins fixedDeltaTime** — mitigated by M4's authority warning, not by changing
+  behaviour.
+- **LAN** — untouched until M6; the live-session guard isolates descriptors.
+- **DebugVehicleSpawner** — runs at −5000 before the descriptor's −4000; the
+  `ActiveDesign == null` guard preserves its wins.
+- **One semantic wrinkle**: `SessionConfig` fields persist across scene loads within a
+  session. A descriptor applying defaults on direct Play must not clobber values a *previous*
+  menu visit legitimately set — the existing condition (no scene track adopted / roster empty)
+  is the discriminator to reuse, not a null-check per field.
 
 ---
 

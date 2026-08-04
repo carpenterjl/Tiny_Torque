@@ -25,15 +25,20 @@ namespace AIHWSim.Track
             var built = new BuiltTrack { root = new GameObject("SceneTrack") };
             var rootT = built.root.transform;
 
-            // floorCollider stays NULL, and that is a decision rather than an
+            // floorCollider is normally NULL, and that is a decision rather than an
             // omission. There is no single slab under a hand-authored scene —
             // there is terrain, road mesh and props, each with its own collider.
             // Of its consumers, TrackFactory.DropToSurface's two callers
             // (ArcadeDirector item-box drops, TrackRespawn) already fall back to
-            // Physics.RaycastAll when it returns false, so they cope. ArenaNav.Drop
-            // does NOT, which is exactly why TrackKind.Arena is refused here and by
-            // the validator rather than half-working.
-            built.floorCollider = null;
+            // Physics.RaycastAll when it returns false, so they cope.
+            //
+            // ArenaNav does NOT cope: it wants the floor's bounds for the arena's
+            // centre, its radius and its containment test. An arena scene therefore
+            // has to NAME its floor, which is what `playfield` is — and a scene
+            // claiming TrackKind.Arena without one is refused by the Track Studio
+            // window and by [TRK] rather than half-working. Every scene that does
+            // not name one lands here exactly as it did before.
+            built.floorCollider = d.playfield;
             built.tileRenderers = null;
 
             BuildSurfaces(d, built);
@@ -75,6 +80,9 @@ namespace AIHWSim.Track
                     gatesRoot.transform, Mathf.Max(0.2f, finish.gateWidth));
                 built.lapTimer = trig.AddComponent<LapTimer>();
                 built.lapTimer.minLapTime = finish.minLapTime;
+                // The one place a sprint differs from a lap: whether this gate is
+                // the start of the run or the end of it.
+                built.lapTimer.armAtStart = d.pointToPoint;
             }
 
             var cps = d.Checkpoints();

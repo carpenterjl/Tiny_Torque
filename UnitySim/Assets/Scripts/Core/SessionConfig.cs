@@ -183,6 +183,37 @@ namespace AIHWSim.Core
             };
         }
 
+        /// <summary>
+        /// One AI opponent: a preset car with a distinct paint colour.
+        ///
+        /// Lives here rather than in the menu because it now has two callers — the
+        /// menu's race and championship starts, and a scene whose
+        /// <c>LevelSettings</c> asks for opponents on a direct Play. Two copies of
+        /// "what a bot slot is" would drift in the one field that matters
+        /// (<c>assists</c>, which is deliberately empty so bots race on raw
+        /// physics) and the drift would present as bots that handle differently
+        /// depending on how you started.
+        /// </summary>
+        /// <param name="k">1-based opponent number: picks the preset and the hue,
+        /// so opponent 1 always looks the same.</param>
+        public static PlayerSlot MakeBotSlot(int k, int difficulty)
+        {
+            var preset = VehiclePresets.All[(k - 1) % VehiclePresets.All.Length];
+            var design = preset.build();
+            design.liveryPng = "";                                   // show the flat colour
+            design.bodyColor = Color.HSVToRGB((k * 0.137f) % 1f, 0.65f, 0.95f);
+            return new PlayerSlot
+            {
+                name = $"Bot {k} · {preset.name}",
+                profileId = $"Bot {k}",
+                design = design,
+                isBot = true,
+                control = DriveControl.BotAI,
+                botDifficulty = difficulty,
+                assists = new Vehicles.AssistSettings(),   // bots race on raw physics
+            };
+        }
+
         /// <summary>Named assist levels. Custom means "use the four sliders".</summary>
         public enum AssistPreset { Off = 0, Standard = 1, Full = 2, Custom = 3 }
 

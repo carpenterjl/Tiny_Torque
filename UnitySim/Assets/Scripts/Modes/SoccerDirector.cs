@@ -31,6 +31,14 @@ namespace AIHWSim.Modes
         /// volume test rather than a trigger, so these are the box.</summary>
         private static readonly Vector3 GoalHalf = new Vector3(0.9f, 0.5f, 0.35f);
 
+        /// <summary>Each goal's orientation and size, alongside its position in
+        /// <see cref="_goals"/>. Filled with identity and <see cref="GoalHalf"/>
+        /// when the arena authored no <see cref="ArenaGoalMarker"/>, which is what
+        /// makes the derived and the authored pitch the same code: a point test
+        /// rotated by identity IS the world-axis test this mode shipped with.</summary>
+        private readonly Quaternion[] _goalRot = { Quaternion.identity, Quaternion.identity };
+        private readonly Vector3[] _goalHalf = { GoalHalf, GoalHalf };
+
         public SoccerBall Ball => _ball;
         public Vector3 GoalOf(int team) => _goals[Mathf.Clamp(team, 0, 1)];
 
@@ -58,25 +66,69 @@ namespace AIHWSim.Modes
         private void BuildPitch()
         {
             var root = new GameObject("SoccerPitch").transform;
+            ResolveGoals();
+
             for (int team = 0; team < 2; team++)
             {
-                _goals[team] = ArenaNav.Drop(TeamEnd(team)) + Vector3.up * GoalHalf.y;
                 var mat = TrackBuilder.StandardMat(TeamColors[team] * 0.8f);
+                var rot = _goalRot[team];
+                var half = _goalHalf[team];
                 // A visible mouth: two posts and a bar. Collider-less, because a
-                // goal that blocks the ball is not a goal.
+                // goal that blocks the ball is not a goal. Offsets go through the
+                // goal's rotation so an angled goal gets angled posts; with the
+                // derived pitch that rotation is identity and the arithmetic is
+                // the world-axis one this mode shipped with.
                 for (int s = -1; s <= 1; s += 2)
                     TrackBuilder.Box($"post_{team}_{s}",
-                        _goals[team] + new Vector3(s * GoalHalf.x, 0f, 0f),
-                        new Vector3(0.05f, GoalHalf.y * 2f, 0.05f),
-                        Quaternion.identity, mat, root, collider: false);
+                        _goals[team] + rot * new Vector3(s * half.x, 0f, 0f),
+                        new Vector3(0.05f, half.y * 2f, 0.05f),
+                        rot, mat, root, collider: false);
                 TrackBuilder.Box($"bar_{team}",
-                    _goals[team] + new Vector3(0f, GoalHalf.y, 0f),
-                    new Vector3(GoalHalf.x * 2f, 0.05f, 0.05f),
-                    Quaternion.identity, mat, root, collider: false);
+                    _goals[team] + rot * new Vector3(0f, half.y, 0f),
+                    new Vector3(half.x * 2f, 0.05f, 0.05f),
+                    rot, mat, root, collider: false);
             }
 
-            _ball = SoccerBall.Create(root, ArenaNav.Drop(ArenaNav.Centre) + Vector3.up * 0.2f,
-                IsAuthority);
+            // The centre spot, authored if the pitch says where it is. The
+            // marker's height is taken verbatim — see ArenaBallSpawn for why.
+            var spot = ArenaBallSpawn.Find();
+            Vector3 home = spot != null
+                ? spot.transform.position
+                : ArenaNav.Drop(ArenaNav.Centre) + Vector3.up * 0.2f;
+            _ball = SoccerBall.Create(root, home, IsAuthority);
+        }
+
+        /// <summary>
+        /// Where the two goals are, how they are turned and how big they are.
+        ///
+        /// A team's <see cref="ArenaGoalMarker"/> wins when the scene has one;
+        /// otherwise that team's goal is derived the way it always was — the
+        /// centroid of its spawns, dropped onto the floor, lifted half a mouth
+        /// height, unrotated, at the shipped size. The two are resolved per team
+        /// rather than all-or-nothing so a pitch that authored one end and not the
+        /// other still plays, with the unauthored end where it would have been.
+        /// </summary>
+        private void ResolveGoals()
+        {
+            var marks = FindObjectsByType<ArenaGoalMarker>(FindObjectsSortMode.None);
+            for (int team = 0; team < 2; team++)
+            {
+                ArenaGoalMarker mine = null;
+                foreach (var m in marks)
+                    if (m != null && Mathf.Clamp(m.team, 0, 1) == team) { mine = m; break; }
+
+                if (mine != null)
+                {
+                    _goals[team] = mine.transform.position;
+                    _goalRot[team] = mine.transform.rotation;
+                    _goalHalf[team] = mine.halfExtents;
+                    continue;
+                }
+
+                _goals[team] = ArenaNav.Drop(TeamEnd(team)) + Vector3.up * GoalHalf.y;
+                _goalRot[team] = Quaternion.identity;
+                _goalHalf[team] = GoalHalf;
+            }
         }
 
         /// <summary>Centroid of a team's spawns — the end they defend.</summary>
@@ -126,10 +178,14 @@ namespace AIHWSim.Modes
 
             for (int team = 0; team < 2; team++)
             {
-                Vector3 d = _ball.Position - _goals[team];
-                if (Mathf.Abs(d.x) > GoalHalf.x ||
-                    Mathf.Abs(d.y) > GoalHalf.y ||
-                    Mathf.Abs(d.z) > GoalHalf.z) continue;
+                // Into the goal's own axes first. On the derived pitch the
+                // rotation is identity, so this reduces to the world-axis delta
+                // the mode has always tested.
+                Vector3 d = Quaternion.Inverse(_goalRot[team]) * (_ball.Position - _goals[team]);
+                var half = _goalHalf[team];
+                if (Mathf.Abs(d.x) > half.x ||
+                    Mathf.Abs(d.y) > half.y ||
+                    Mathf.Abs(d.z) > half.z) continue;
                 // Scored ON team `team`, so the OTHER side gets the point.
                 Score(1 - team);
                 break;

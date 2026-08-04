@@ -49,10 +49,11 @@ namespace AIHWSim.TrackTools
 
             EditorGUILayout.LabelField("Descriptor", d.gameObject.name);
             EditorGUILayout.LabelField("Kind", d.kind.ToString());
-            if (d.kind == TrackPresets.TrackKind.Arena)
+            if (d.kind == TrackPresets.TrackKind.Arena && d.playfield == null)
                 EditorGUILayout.HelpBox(
-                    "Arena scene tracks are not supported. ArenaNav needs playfield " +
-                    "bounds from a floor collider, and a hand-authored scene has none.",
+                    "This Arena scene track has no Playfield collider. ArenaNav needs " +
+                    "the floor's bounds for the arena's centre, radius and containment " +
+                    "test — assign the floor collider to the descriptor's Playfield field.",
                     MessageType.Error);
             if (GUILayout.Button("Select descriptor")) Selection.activeGameObject = d.gameObject;
 

@@ -118,6 +118,39 @@ namespace AIHWSim.Core.Boot
                 ? null : level.defaultDesignName;
         }
 
+        /// <summary>
+        /// Put this level's AI opponents on the grid.
+        ///
+        /// Called from the same one place as <see cref="ApplyLevelDefaults"/> and
+        /// under the same condition — nobody outside the scene chose this session
+        /// — but AFTER the car has been resolved, because the human slot is
+        /// synthesised from <c>GameFlow.ActiveDesign</c> and building the roster
+        /// before that would put an empty-handed player on pole.
+        ///
+        /// Refuses the moment a roster already exists. A roster is somebody's
+        /// explicit answer to "who is playing", and a level asset is not entitled
+        /// to a second opinion.
+        /// </summary>
+        public void ApplyLevelRoster()
+        {
+            if (level == null || level.botOpponents <= 0) return;
+            if (SessionConfig.Players.Count > 0) return;
+
+            // ResolvePlayers builds a fresh list holding the synthesised human and
+            // does not touch Players, so this is the human first, then the field.
+            SessionConfig.Players.AddRange(SessionConfig.ResolvePlayers());
+            for (int k = 1; k <= level.botOpponents; k++)
+                SessionConfig.Players.Add(
+                    SessionConfig.MakeBotSlot(k, level.botDifficulty));
+
+            // Alternate sides down the grid in a team mode, free-for-all in
+            // everything else — the same split the menu makes, for the same
+            // reason: it is the fairest one available without asking.
+            bool teams = SessionConfig.IsTeamMatch;
+            for (int i = 0; i < SessionConfig.Players.Count; i++)
+                SessionConfig.Players[i].team = teams ? i % 2 : -1;
+        }
+
         /// <summary>The scene's physics rate, or <paramref name="fallback"/> when
         /// it does not name one. Kept as a pair with <see cref="ControlRate"/> so a
         /// caller cannot take one from the asset and the other from itself.</summary>

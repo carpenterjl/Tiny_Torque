@@ -77,10 +77,17 @@ namespace AIHWSim.TrackTools
                 Fail($"'{row.scene}' kind mismatch: catalog says {row.kind}, " +
                      $"descriptor says {d.kind}");
 
-            if (d.kind == TrackPresets.TrackKind.Arena)
-                Fail($"'{row.scene}' is an Arena scene track, which is not supported: " +
-                     "ArenaNav.Drop reads BuiltTrack.floorCollider.bounds and has no " +
-                     "raycast fallback, and a hand-authored scene has no floor slab");
+            // An Arena scene track is supported exactly as far as it can answer
+            // "where is the floor" — ArenaNav takes the arena's centre, its radius,
+            // its containment test and every drop from those bounds. Without a
+            // playfield the mode would compose and then place goals, pickups and
+            // the ball by averaging the spawn ring, which looks like it works right
+            // up until the pitch is not centred on its spawns.
+            if (d.kind == TrackPresets.TrackKind.Arena && d.playfield == null)
+                Fail($"'{row.scene}' is an Arena scene track with no Playfield collider. " +
+                     "ArenaNav reads BuiltTrack.floorCollider.bounds for the arena's " +
+                     "centre, radius and containment test; assign the floor collider to " +
+                     "the descriptor's Playfield field");
 
             CheckMarkers(row.scene, d);
             CheckSurfaces(row.scene, d);

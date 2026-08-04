@@ -132,6 +132,13 @@ namespace AIHWSim.Core
                     if (wanted != null || GameFlow.HasSceneTrack)
                         GameFlow.ActiveDesign = chosen ?? VehiclePresets.Resolve("TT Patrol");
                 }
+
+                // Opponents, if the level asked for any. After the car above, not
+                // before: the human's slot is synthesised from ActiveDesign, and a
+                // roster built ahead of that would seat the player in nothing.
+                // A level that asks for none — which is every level today — leaves
+                // the roster exactly as SetSinglePlayer left it.
+                if (driving != null) driving.ApplyLevelRoster();
             }
 
             // The scene's step, if it authored one. Read before any rig is built:

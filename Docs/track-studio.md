@@ -40,6 +40,34 @@ being dropped onto the oval and desynced silently.
 
 ---
 
+## Start from a template
+
+`Tools ▸ AIHWSim ▸ Mode Templates` holds one already-built scene per mode — simulation
+physics, arcade physics, free roam, lapped race, point-to-point race, soccer, capture
+the flag, demolition derby and RC plane. Open one, press Play, and it runs the mode it
+is named after with the opponents its `LevelSettings` asks for. Each contains the
+minimum that mode actually needs and nothing else: a flattened-cube floor with a
+`SurfaceTag`, a sun and a skybox, a kill plane under the world, the descriptors, the
+grid, and whatever the mode itself requires — gates and a spline for the races, goal
+and ball markers for soccer, base markers for CTF, pickup markers for the derby, an
+airspace box for the aircraft.
+
+**Copy one before you build a real level in it.** The templates are *generated*:
+`Create All Template Scenes` rebuilds every one of them from
+`Editor/ModeTemplates/ModeTemplateBuilder.cs` and replaces anything edited by hand.
+That is what stops nine scene files drifting away from the code they demonstrate, and
+it is the same bargain the ten physics-test scenes make. `[TPL]`
+(`Validate Templates`, or `ModeTemplateValidator.Report` headless) is the gate: it
+opens all nine and checks the mode matches the name, the grid is dense, the race gates
+form a lap, an arena has its playfield, there is exactly one sun and nothing reloaded
+as a Missing Script.
+
+None of the templates is in Build Settings or `SceneTrackCatalog`. They are tools, not
+levels; the in-game track pickers are unchanged. A copy you intend to ship needs both,
+as any scene track does.
+
+---
+
 ## Making a track
 
 1. **Open or create a scene** and build geometry however you like.
@@ -228,11 +256,15 @@ solves.
 
 ## Deliberate limits
 
-- **Arena scene tracks are refused.** `ArenaNav.Drop` reads
-  `BuiltTrack.floorCollider.bounds` with no raycast fallback, and a hand-authored
-  scene has no floor slab. Circuit and FreeRoam only.
-- **`BuiltTrack.floorCollider` is null** on a scene track. `ArcadeDirector` and
-  `TrackRespawn` already fall back to `Physics.RaycastAll`, so they cope.
+- **An Arena scene track needs a `playfield` collider.** `ArenaNav` takes the arena's
+  centre, its radius and its "has the ball escaped" test from
+  `BuiltTrack.floorCollider.bounds`, so a scene claiming `TrackKind.Arena` has to name
+  the collider that IS its floor. Assign it to the descriptor's **Playfield** field;
+  the Track Studio window and `[TRK]` both refuse an Arena without one. Circuit and
+  FreeRoam leave it empty, which is every scene that existed before this.
+- **`BuiltTrack.floorCollider` is null** on a scene track unless `playfield` says
+  otherwise. `ArcadeDirector` and `TrackRespawn` already fall back to
+  `Physics.RaycastAll`, so they cope either way.
 - **Protocol v15.** A scene track crosses the wire as a name. A v14 client would read
   an empty `trackJson`, conclude "classic oval", and exchange perfectly well-formed
   position updates about a track nobody else is on.

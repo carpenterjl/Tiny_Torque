@@ -44,13 +44,23 @@ namespace AIHWSim.Modes
         /// Put a base and a flag at each team's end. The arena states where
         /// those ends are through its spawn ring: the average of a team's own
         /// spawns is, by construction, that team's half.
+        ///
+        /// A <see cref="CtfBaseMarker"/> overrides that for the team it names, and
+        /// only for that team — an arena that authored one base and not the other
+        /// still plays, with the unauthored end where the spawn ring puts it.
         /// </summary>
         private void BuildField()
         {
             var root = new GameObject("CtfField").transform;
+            var marks = FindObjectsByType<CtfBaseMarker>(FindObjectsSortMode.None);
             for (int team = 0; team < 2; team++)
             {
-                _bases[team] = ArenaNav.Drop(TeamEnd(team));
+                CtfBaseMarker mine = null;
+                foreach (var m in marks)
+                    if (m != null && Mathf.Clamp(m.team, 0, 1) == team) { mine = m; break; }
+
+                _bases[team] = ArenaNav.Drop(mine != null ? mine.transform.position
+                                                          : TeamEnd(team));
                 var plate = TrackBuilder.StandardMat(TeamColors[team] * 0.7f);
                 TrackBuilder.Cylinder($"base_{team}", _bases[team] + Vector3.up * 0.005f,
                     new Vector3(0.9f, 0.005f, 0.9f), Quaternion.identity, plate, root,

@@ -56,6 +56,29 @@ namespace AIHWSim.Core.Config
         [Tooltip("Catch-up assist for bot opponents.")]
         public bool rubberBand = false;
 
+        [Header("Opponents, when this scene is entered directly")]
+        /// <summary>
+        /// AI cars to put on the grid when nobody outside the scene chose a
+        /// roster — pressing Play in the Editor, and nothing else.
+        ///
+        /// 0 is the shipped behaviour exactly: one car, yours. It is here because
+        /// the mini-game modes are not demonstrable without opponents — a soccer
+        /// pitch with a single car and no teams composes fine and is not a match —
+        /// and because a scene that IS a soccer level has an opinion about that
+        /// which no menu is around to ask for.
+        ///
+        /// Never applied to a session the menu, a championship, a LAN join or a
+        /// snapshot resume chose: those all arrive through <c>GameFlow.LoadTrack</c>
+        /// with a roster already built, and a level asset never overrules a player.
+        /// </summary>
+        [Tooltip("AI opponents added on a direct Play only. 0 = just your car, " +
+                 "which is what every entry path produces today. A team mode " +
+                 "alternates sides down the grid, so an even number gives even teams.")]
+        [Range(0, 7)] public int botOpponents = 0;
+
+        [Tooltip("0 Easy / 1 Medium / 2 Hard, for the opponents above.")]
+        [Range(0, 2)] public int botDifficulty = 1;
+
         [Header("Arcade layer")]
         [Tooltip("Item boxes, power-ups, weapons and the arcade scoreboard. " +
                  "Needs a finish line and a lap count: power-ups in a free drive would " +

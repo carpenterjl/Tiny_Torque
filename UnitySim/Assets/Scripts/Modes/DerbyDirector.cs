@@ -42,12 +42,28 @@ namespace AIHWSim.Modes
         /// Scatter repairs and bomb crates on two rings inside the arena —
         /// repairs further out (a wounded car has to leave the middle to heal),
         /// bombs nearer the centre (arming one means going where the fight is).
-        /// Placed procedurally rather than authored so any arena works, the same
-        /// way ArcadeDirector generates item boxes on a map that has none.
+        /// Placed procedurally so any arena works, the same way ArcadeDirector
+        /// generates item boxes on a map that has none.
+        ///
+        /// An arena that authored <see cref="ArenaPickupMarker"/>s gets those
+        /// instead, and gets ONLY those: mixing four authored crates with eight
+        /// invented ones is the outcome nobody asks for and nobody notices until
+        /// they count. The rings below are untouched by that branch — they are
+        /// what runs whenever the scene has said nothing.
         /// </summary>
         private void BuildPickups()
         {
             var root = new GameObject("DerbyPickups").transform;
+
+            var marks = FindObjectsByType<ArenaPickupMarker>(FindObjectsSortMode.None);
+            if (marks.Length > 0)
+            {
+                foreach (var m in marks)
+                    ArenaPickup.Create(root,
+                        ArenaNav.Drop(m.transform.position) + Vector3.up * 0.06f, m.kind);
+                return;
+            }
+
             const int Repairs = 4, Mines = 4;
 
             for (int i = 0; i < Repairs; i++)

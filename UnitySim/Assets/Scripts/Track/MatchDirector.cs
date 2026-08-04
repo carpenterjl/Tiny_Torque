@@ -97,8 +97,26 @@ namespace AIHWSim.Track
                 _countdown = countdownSeconds;
                 _counting = true;
                 FreezeCars(true);
+                return;
             }
+            // No countdown means the grid was never held, so the moment of release
+            // is now. Said out loud rather than left implicit, because a mode that
+            // starts a clock at GO has to start it in BOTH shapes of start — and
+            // "0 seconds of countdown" is the shape every legacy entry path uses.
+            OnGridReleased();
         }
+
+        /// <summary>
+        /// The grid is free and the rules are live. Called exactly once per start
+        /// or restart, from all three places a start can happen: a countdown
+        /// reaching zero, a match with no countdown at all, and a restart.
+        ///
+        /// Empty here on purpose — the base class has nothing that happens at GO.
+        /// It exists so a mode that does (a point-to-point race, whose clock
+        /// starts at GO rather than at a line) has one place to say so instead of
+        /// three.
+        /// </summary>
+        protected virtual void OnGridReleased() { }
 
         protected void FreezeCars(bool frozen)
         {
@@ -120,6 +138,7 @@ namespace AIHWSim.Track
                     _counting = false;
                     _goTimer = 0.8f;
                     FreezeCars(false);
+                    OnGridReleased();
                 }
                 return;                       // grid is held — no rules yet
             }
@@ -156,6 +175,7 @@ namespace AIHWSim.Track
             {
                 _counting = false;
                 FreezeCars(false);
+                OnGridReleased();
             }
         }
 

@@ -21,8 +21,50 @@ namespace AIHWSim.Track
     {
         public float minLapTime = 3f;
 
+        /// <summary>
+        /// Point-to-point: the run is already under way when the grid is released,
+        /// so the FIRST crossing of this gate counts instead of arming.
+        ///
+        /// A closed circuit has one gate that is both start and finish, which is
+        /// why the classic behaviour is "the first crossing arms you and the
+        /// second counts" — you have to have driven a lap to have driven a lap.
+        /// A sprint has two different gates: you start behind one and the other is
+        /// somewhere else entirely, so there is no first crossing to throw away.
+        /// The clock is started by <see cref="ArmAll"/> at GO rather than here, so
+        /// a countdown does not run into the run time.
+        ///
+        /// Default false — every existing track is a circuit, and with this off
+        /// nothing below behaves differently in any way.
+        /// </summary>
+        public bool armAtStart;
+
         /// <summary>Number of ordered checkpoints on this track (0 = none).</summary>
         public int CheckpointCount { get; set; }
+
+        /// <summary>
+        /// Start every car's run now, at zero. Called when the grid is released,
+        /// on a point-to-point course only.
+        ///
+        /// Arms the cars that already have a tracker; the rest arm themselves on
+        /// creation via <see cref="GetTracker"/>, which is why that method — not
+        /// this one — is where the flag is read for a car that has never been
+        /// seen. A car built after GO would otherwise never start its clock.
+        /// </summary>
+        public void ArmAll()
+        {
+            foreach (var t in _trackers.Values)
+            {
+                t.Armed = true;
+                t.CurrentLap = 0f;
+                t.LapCount = 0;
+                t.NextCheckpoint = 0;
+            }
+            _armed = true;
+        }
+
+        /// <summary>Has <see cref="ArmAll"/> run? Only meaningful when
+        /// <see cref="armAtStart"/> is set.</summary>
+        private bool _armed;
 
         /// <summary>Draw the classic bottom-right lap box (disabled by split-screen HUD).</summary>
         public bool showDefaultHud = true;
@@ -58,6 +100,11 @@ namespace AIHWSim.Track
             if (!_trackers.TryGetValue(car, out var t))
             {
                 t = new LapTracker();
+                // On a point-to-point course a car that appears after GO is
+                // already running — it did not miss its start, there was no gate
+                // to miss. Arming here rather than only in ArmAll is what keeps a
+                // respawned or late-built car from having a clock that never ticks.
+                t.Armed = armAtStart && _armed;
                 _trackers[car] = t;
             }
             return t;
@@ -143,11 +190,17 @@ namespace AIHWSim.Track
             var t = First;
             var style = new GUIStyle(GUI.skin.box) { alignment = TextAnchor.MiddleLeft, fontSize = 13 };
             bool cps = CheckpointCount > 0;
+            // "cross line to start" is only true on a circuit. On a sprint the
+            // clock starts at GO, so an unarmed tracker there is a car waiting on
+            // the grid, not a car that has yet to find the line.
+            string current = t != null && t.Armed ? Fmt(t.CurrentLap)
+                           : armAtStart ? "waiting for GO"
+                           : "cross line to start";
             float w = 210f, h = cps ? 110f : 92f;
             var rect = new Rect(UI.UIScale.W - w - 10f, UI.UIScale.H - h - 10f, w, h);
             string body =
                 $"Lap: {(t?.LapCount ?? 0)}\n" +
-                $"Current: {(t != null && t.Armed ? Fmt(t.CurrentLap) : "cross line to start")}\n" +
+                $"Current: {current}\n" +
                 $"Last:    {Fmt(t?.LastLap ?? 0f)}\n" +
                 $"Best:    {(t != null && t.HasBest ? Fmt(t.BestLap) : "--:--.---")}" +
                 (cps ? $"\nCP:      {(t?.NextCheckpoint ?? 0)}/{CheckpointCount}" : "");

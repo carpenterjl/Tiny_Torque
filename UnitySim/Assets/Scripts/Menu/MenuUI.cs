@@ -1480,24 +1480,12 @@ namespace AIHWSim.Menu
             LoadIfBuilt(GameFlow.TrackSceneName, GameFlow.LoadTrack);
         }
 
-        /// <summary>Build one AI opponent: a preset car with a distinct paint colour.</summary>
-        private static PlayerSlot MakeBotSlot(int k, int difficulty)
-        {
-            var preset = VehiclePresets.All[(k - 1) % VehiclePresets.All.Length];
-            var design = preset.build();
-            design.liveryPng = "";                                   // show the flat colour
-            design.bodyColor = Color.HSVToRGB((k * 0.137f) % 1f, 0.65f, 0.95f);
-            return new PlayerSlot
-            {
-                name = $"Bot {k} · {preset.name}",
-                profileId = $"Bot {k}",
-                design = design,
-                isBot = true,
-                control = DriveControl.BotAI,
-                botDifficulty = difficulty,
-                assists = new AIHWSim.Vehicles.AssistSettings(), // bots race on raw physics
-            };
-        }
+        /// <summary>Build one AI opponent: a preset car with a distinct paint
+        /// colour. The body moved to <see cref="SessionConfig.MakeBotSlot"/> when a
+        /// second caller appeared (a scene asking for opponents on a direct Play);
+        /// this stays as the name every start path here already calls.</summary>
+        private static PlayerSlot MakeBotSlot(int k, int difficulty) =>
+            SessionConfig.MakeBotSlot(k, difficulty);
 
         private void DrawMultiplayer()
         {

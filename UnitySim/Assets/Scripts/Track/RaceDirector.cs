@@ -70,6 +70,17 @@ namespace AIHWSim.Track
             if (timer != null) timer.LapCompleted -= OnLap;
         }
 
+        /// <summary>
+        /// On a point-to-point course the run starts here rather than at a line,
+        /// so every car's clock starts together when the grid is released. On a
+        /// circuit this is a no-op: the timer's flag is off and arming stays what
+        /// it has always been, the first crossing of the start/finish gate.
+        /// </summary>
+        protected override void OnGridReleased()
+        {
+            if (timer != null && timer.armAtStart) timer.ArmAll();
+        }
+
         public override void RestartMatch()
         {
             base.RestartMatch();

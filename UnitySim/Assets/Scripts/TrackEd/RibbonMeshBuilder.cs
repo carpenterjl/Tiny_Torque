@@ -4,24 +4,11 @@ using UnityEngine;
 
 namespace AIHWSim.TrackEd
 {
-    /// <summary>Destroys the runtime-generated Mesh when its GameObject goes away.</summary>
-    public sealed class RibbonMeshMarker : MonoBehaviour
-    {
-        public Mesh mesh;
-        private void OnDestroy() { if (mesh != null) Destroy(mesh); }
-    }
-
-    /// <summary>
-    /// Tag on a ribbon surface-run GameObject: which spline it belongs to plus
-    /// baked sample data so the editor can map a raycast hit to the nearest
-    /// sample / owning control point (paint, insert) without recomputing.
-    /// </summary>
-    public sealed class SplineRunMarker : MonoBehaviour
-    {
-        public int splineIndex;
-        public Vector3[] samplePos;
-        public int[] samplePointIndex;
-    }
+    // RibbonMeshMarker and SplineRunMarker used to live here. They moved to their
+    // own files — see either one for the whole story: a ribbon baked at EDIT time
+    // and saved serialized them against a MonoScript stub, because Unity creates
+    // one MonoScript per .cs file named after the file, and reloaded them as
+    // Missing Scripts. Invisible while every ribbon was built at Play.
 
     /// <summary>
     /// Turns a <see cref="SplineSpec"/> into ribbon geometry: one Mesh (+

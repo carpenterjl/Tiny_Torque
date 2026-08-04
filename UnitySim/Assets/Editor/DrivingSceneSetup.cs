@@ -90,13 +90,20 @@ namespace AIHWSim.EditorTools
         /// uniquifies a name that already exists and would quietly produce
         /// "Driving 1" — the same trap PackPaths documents.
         /// </summary>
-        private static T LoadOrCreate<T>(string name) where T : ScriptableObject
+        internal static T LoadOrCreate<T>(string name) where T : ScriptableObject =>
+            LoadOrCreate<T>(Dir, name);
+
+        /// <summary>Same, into a caller-chosen folder — what the mode templates
+        /// use for their per-scene <c>LevelSettings</c>, so there is still exactly
+        /// one piece of code in the project that decides what "find or create a
+        /// settings asset" means.</summary>
+        internal static T LoadOrCreate<T>(string dir, string name) where T : ScriptableObject
         {
-            string path = $"{Dir}/{name}.asset";
+            string path = $"{dir}/{name}.asset";
             var found = AssetDatabase.LoadAssetAtPath<T>(path);
             if (found != null) return found;
 
-            string abs = Path.Combine(Directory.GetCurrentDirectory(), Dir);
+            string abs = Path.Combine(Directory.GetCurrentDirectory(), dir);
             if (!Directory.Exists(abs)) { Directory.CreateDirectory(abs); AssetDatabase.Refresh(); }
 
             var made = ScriptableObject.CreateInstance<T>();

@@ -35,18 +35,38 @@ namespace AIHWSim.Track
         public string displayName = "";
 
         /// <summary>
-        /// Circuit or FreeRoam only. <b>Arena is refused</b> — <c>ArenaNav.Drop</c>
-        /// reads <c>BuiltTrack.floorCollider.bounds</c> with no raycast fallback,
-        /// and a hand-authored scene has no floor slab to give it. Arena scene
-        /// tracks need an explicit playfield volume, which is a separate pass.
+        /// Circuit, FreeRoam, or Arena — and <b>Arena requires
+        /// <see cref="playfield"/></b>. <c>ArenaNav</c> reads
+        /// <c>BuiltTrack.floorCollider.bounds</c> for the arena's centre, its
+        /// radius and its "has the ball escaped" test, and a hand-authored scene
+        /// has no floor slab to give it unless the author names one. Claiming
+        /// Arena without a playfield is refused, by the Track Studio window and
+        /// by the validator, for exactly that reason.
         /// </summary>
         /// <remarks>Defaults to FreeRoam because that is what a brand-new track
         /// scene actually IS: no finish line, no checkpoints, nothing to lap.
         /// Defaulting to Circuit would make every freshly promoted scene fail
         /// validation for a claim its author never made.</remarks>
         [Tooltip("Circuit = laps, finish line, ordered checkpoints. " +
-                 "FreeRoam = spawn only, no race. Arena is not supported.")]
+                 "FreeRoam = spawn only, no race. Arena = a mini-game floor, and " +
+                 "needs the Playfield collider below.")]
         public TrackPresets.TrackKind kind = TrackPresets.TrackKind.FreeRoam;
+
+        /// <summary>
+        /// The collider that IS the arena floor — normally the flattened box the
+        /// cars drive on. Its bounds become <c>ArenaNav.Centre</c>,
+        /// <c>ArenaNav.Radius</c> and the containment test, and its raycast is
+        /// what <c>ArenaNav.Drop</c> settles goals, pickups and the ball onto.
+        ///
+        /// Null on a circuit or a free-roam scene, which is every scene that
+        /// exists today — leaving <c>BuiltTrack.floorCollider</c> null exactly as
+        /// before. It is a Collider rather than a Bounds because a bounds authored
+        /// as six numbers goes stale the moment the floor is moved, and because
+        /// the drop raycast needs a collider to hit.
+        /// </summary>
+        [Tooltip("Arena only: the floor collider whose bounds are the playfield. " +
+                 "Leave empty on a circuit or free-roam scene.")]
+        public Collider playfield;
 
         // ---- atmosphere -----------------------------------------------------
 
@@ -110,6 +130,25 @@ namespace AIHWSim.Track
         public float[] halfWidths = System.Array.Empty<float>();
 
         public bool corridorClosed = true;
+
+        /// <summary>
+        /// This course starts in one place and ends in another: the finish marker
+        /// is a destination, not a start/finish line.
+        ///
+        /// It changes exactly one thing — <c>LapTimer.armAtStart</c> — so the run
+        /// is timed from GO and the FIRST crossing of the finish gate ends it. On
+        /// a circuit, where the one gate is both ends of the lap, that would be
+        /// wrong, which is why this is a claim the scene has to make rather than
+        /// something inferred from <see cref="corridorClosed"/>: a closed corridor
+        /// with a sprint layout and an open corridor lapped twice are both things
+        /// an author may legitimately want.
+        ///
+        /// Set it with <c>targetLaps = 1</c>. More than one lap of a course you
+        /// cannot get back to the start of is not a race anyone can finish.
+        /// </summary>
+        [Tooltip("Point-to-point: the run is timed from GO and ends the first time " +
+                 "a car crosses the finish gate. Pair with 1 lap.")]
+        public bool pointToPoint;
 
         /// <summary>
         /// The baked ideal line for this track, if one has been solved.
