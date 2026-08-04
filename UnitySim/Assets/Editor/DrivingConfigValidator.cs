@@ -1,7 +1,9 @@
 using System.Collections.Generic;
+using AIHWSim.Arcade;
 using AIHWSim.Core;
 using AIHWSim.Core.Boot;
 using AIHWSim.Core.Config;
+using AIHWSim.Modes;
 using AIHWSim.Vehicles;
 using UnityEditor;
 using UnityEngine;
@@ -52,6 +54,8 @@ namespace AIHWSim.EditorTools
             CheckLevelClamps();
             CheckPhysicsDefaults();
             CheckAssistDefaults();
+            CheckModeDefaults();
+            CheckArcadeDefaults();
             CheckRateAuthority();
 
             foreach (string f in Fails) Debug.LogError($"{Tag} FAIL {f}");
@@ -249,6 +253,94 @@ namespace AIHWSim.EditorTools
             AssistTuning.StabilityClamp(0.85f), AssistTuning.SteerLimitRef(0.90f),
             AssistTuning.TractionOnsetFor(0.95f), AssistTuning.AbsOnsetFor(0.95f),
         };
+
+        /// <summary>
+        /// Every <see cref="ModeConfig"/> accessor must read the same with a
+        /// fresh <see cref="ModeConfigOverride"/> installed as with none.
+        /// </summary>
+        private static void CheckModeDefaults()
+        {
+            var prev = ModeConfig.Override;
+            try
+            {
+                var ov = ScriptableObject.CreateInstance<ModeConfigOverride>();
+                CheckMirror("ModeConfig", typeof(ModeConfig), ov,
+                            a => ModeConfig.Override = (ModeConfigOverride)a);
+                Object.DestroyImmediate(ov);
+
+                // The two knobs with no literal behind them: both are scales,
+                // and both are documented as writing nothing at all at 1. A
+                // default of anything else would silently retune every arena.
+                Near("ModeConfig.BallGravityScale default is 1", 1f, ModeConfig.BallGravityScale);
+                Near("ModeConfig.ArenaGravityScale default is 1", 1f, ModeConfig.ArenaGravityScale);
+            }
+            finally { ModeConfig.Override = prev; }
+        }
+
+        /// <summary>
+        /// The same for the arcade layer's tunables. Roughly seventy numbers,
+        /// which is exactly why this is written by reflection rather than as a
+        /// list somebody has to remember to extend.
+        /// </summary>
+        private static void CheckArcadeDefaults()
+        {
+            var prev = ArcadeConfig.Override;
+            try
+            {
+                var ov = ScriptableObject.CreateInstance<ArcadeConfigOverride>();
+                CheckMirror("ArcadeConfig", typeof(ArcadeConfig), ov,
+                            a => ArcadeConfig.Override = (ArcadeConfigOverride)a);
+                Object.DestroyImmediate(ov);
+            }
+            finally { ArcadeConfig.Override = prev; }
+        }
+
+        /// <summary>
+        /// Read every accessor twice — with no asset, then with a fresh one —
+        /// and require the two answers to be identical.
+        ///
+        /// <b>Driven from the ASSET's fields, not from a written-out list.</b>
+        /// Each public field on the override must have a static property of the
+        /// matching PascalCase name on the static class, and a field with no
+        /// such property is a FAILURE rather than a skip — otherwise the one
+        /// mistake this is here to catch (a knob added to the asset and wired to
+        /// nothing, or wired to a differently-named accessor) would be the one
+        /// it cannot see. Adding a knob therefore adds its own check.
+        /// </summary>
+        private static void CheckMirror(string label, System.Type statics,
+                                        ScriptableObject asset,
+                                        System.Action<ScriptableObject> install)
+        {
+            const System.Reflection.BindingFlags Fields =
+                System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance;
+            const System.Reflection.BindingFlags Props =
+                System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Static;
+
+            foreach (var f in asset.GetType().GetFields(Fields))
+            {
+                string propName = char.ToUpperInvariant(f.Name[0]) + f.Name.Substring(1);
+                var p = statics.GetProperty(propName, Props);
+                _checks++;
+                if (p == null)
+                {
+                    Fails.Add($"{label}.{propName}: the asset has a '{f.Name}' field but the "
+                              + "static class has no accessor of that name — the value is "
+                              + "authored and then ignored");
+                    continue;
+                }
+
+                install(null);
+                object shipped = p.GetValue(null);
+                install(asset);
+                object fromAsset = p.GetValue(null);
+                install(null);
+
+                // Boxed Equals rather than a float compare, so this also covers
+                // AssistSettings, whose five channels must all match.
+                if (!Equals(shipped, fromAsset))
+                    Fails.Add($"{label}.{propName}: asset says {fromAsset}, code says {shipped}");
+            }
+        }
 
         /// <summary>
         /// The two-rates warning must fire for two objects and stay silent for

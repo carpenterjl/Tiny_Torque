@@ -67,6 +67,22 @@ namespace AIHWSim.Core.Boot
                  "nothing caches these, so a slider drag lands on the next physics step.")]
         public Vehicles.AssistTuningOverride assists;
 
+        [Tooltip("How the arena mini-games feel: derby health and hit strength, mine and " +
+                 "pickup strengths, the ball's weight and gravity, jump and flip " +
+                 "impulses, and the arena-wide gravity scale. Leave empty for the " +
+                 "shipped values. Editable while playing — the numbers are read where " +
+                 "they are used, and the two that are not (the ball's Rigidbody, each " +
+                 "car's health bar) re-apply themselves on the edit.")]
+        public Modes.ModeConfigOverride modes;
+
+        [Tooltip("How the arcade layer feels: the arcade handling floor (grip, drive " +
+                 "scale, downforce, stability boost), the whole drift model, boost, what " +
+                 "being hit does, the missile's chase and the slipstream. Leave empty " +
+                 "for the shipped values. Editable while playing: HandlingFloor " +
+                 "re-asserts its channels every frame and the drift controller reads its " +
+                 "torques every physics step.")]
+        public Arcade.ArcadeConfigOverride arcade;
+
         private void Awake() => InstallGlobals();
 
         /// <summary>
@@ -81,6 +97,8 @@ namespace AIHWSim.Core.Boot
         public void InstallGlobals()
         {
             Vehicles.AssistTuning.Override = assists;
+            Modes.ModeConfig.Override = modes;
+            Arcade.ArcadeConfig.Override = arcade;
             if (physics != null) PhysicsTuning.Apply(physics);
         }
 

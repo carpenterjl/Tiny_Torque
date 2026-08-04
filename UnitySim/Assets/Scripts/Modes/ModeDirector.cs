@@ -52,6 +52,12 @@ namespace AIHWSim.Modes
 
         protected override void OnMatchStart()
         {
+            // Owns world gravity for the life of this director, and hands it
+            // back when the director dies — see ArenaGravity for why that
+            // ownership is a component rather than two lines here. At the
+            // default scale of 1 it captures nothing and writes nothing.
+            ArenaGravity.Ensure(gameObject);
+
             foreach (var rig in players) Register(rig);
             foreach (var r in _racers) r.ResetForMatch(Clock);
         }

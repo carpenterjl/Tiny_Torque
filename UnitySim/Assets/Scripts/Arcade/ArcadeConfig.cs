@@ -7,9 +7,26 @@ namespace AIHWSim.Arcade
     /// physics — they are meant to be edited by feel. Magnitudes assume the RC
     /// scale the rest of the sim runs at: a ~1.8 kg car, 0.42 m long, topping out
     /// near 10 m/s, on 1 m tiles.
+    ///
+    /// The ones a person would actually want to drag while driving — handling,
+    /// the whole drift model, boost, what a hit does, the missile's chase, the
+    /// tow — read through <see cref="Override"/> and can be retuned mid-session
+    /// from an <see cref="ArcadeConfigOverride"/> asset. The rest stay plain
+    /// consts: item weights, tier colours and bot decision rates are rules and
+    /// presentation, and a knob nobody would drag is better read here beside the
+    /// reasoning for it.
     /// </summary>
     public static class ArcadeConfig
     {
+        /// <summary>
+        /// The asset a scene has chosen to tune the arcade layer with, or null —
+        /// and null is what every tunable below falls back to its shipped literal
+        /// for. Installed by <c>DrivingSceneDescriptor</c>; static, so it outlives
+        /// a scene load within a session exactly as <c>AssistTuning.Override</c>
+        /// does.
+        /// </summary>
+        public static ArcadeConfigOverride Override;
+
         // ---- item boxes ----
         public const float BoxRespawnSeconds = 4f;
         public const float RouletteSeconds = 0.9f;   // spin time before the item lands
@@ -26,8 +43,14 @@ namespace AIHWSim.Arcade
         public const float AutoBoxHeight = 0.10f;    // hover above the surface
 
         // ---- boost ----
-        public const float BoostAccel = 14f;         // m/s² (a boost pad is 9)
-        public const float BoostSeconds = 1.6f;
+        private const float BoostAccelDefault = 14f;     // m/s² (a boost pad is 9)
+        private const float BoostSecondsDefault = 1.6f;
+
+        public static float BoostAccel =>
+            Override != null ? Override.boostAccel : BoostAccelDefault;
+        public static float BoostSeconds =>
+            Override != null ? Override.boostSeconds : BoostSecondsDefault;
+
         public const int TripleBoostCharges = 3;
         /// <summary>Speed (m/s) the item boost stops pushing towards.
         ///
@@ -41,17 +64,28 @@ namespace AIHWSim.Arcade
         /// in CarVehicle: surface boost PADS are maxed in separately from
         /// <c>surf.boostAccel</c>, so they keep their authored 9 m/s² untouched.
         /// </summary>
-        public const float BoostTopSpeed = 11f;
+        private const float BoostTopSpeedDefault = 11f;
+        public static float BoostTopSpeed =>
+            Override != null ? Override.boostTopSpeed : BoostTopSpeedDefault;
+
         /// <summary>Speed band over which the boost fades out below the cap, so
         /// it tapers instead of switching off.</summary>
-        public const float BoostFadeBand = 1.5f;
+        private const float BoostFadeBandDefault = 1.5f;
+        public static float BoostFadeBand =>
+            Override != null ? Override.boostFadeBand : BoostFadeBandDefault;
 
         // ---- shield ----
-        public const float ShieldSeconds = 8f;
+        private const float ShieldSecondsDefault = 8f;
+        public static float ShieldSeconds =>
+            Override != null ? Override.shieldSeconds : ShieldSecondsDefault;
 
         // ---- being hit: a banana spins you, a missile wrecks you ----
-        public const float SpinGripMult = 0.35f;
-        public const float SpinSeconds = 1.4f;
+        private const float SpinGripMultDefault = 0.35f;
+        private const float SpinSecondsDefault = 1.4f;
+        public static float SpinGripMult =>
+            Override != null ? Override.spinGripMult : SpinGripMultDefault;
+        public static float SpinSeconds =>
+            Override != null ? Override.spinSeconds : SpinSecondsDefault;
         /// <summary>Yaw torque while spun out (N·m).
         ///
         /// The first pass used 0.10 here on the reasoning that the car's yaw
@@ -61,26 +95,46 @@ namespace AIHWSim.Arcade
         /// resisting moment about the CoM even at SpinGripMult. 0.10 N·m lost to
         /// them outright and the hit was invisible. This has to beat the tyres,
         /// not the inertia.</summary>
-        public const float SpinTorque = 1.2f;
+        private const float SpinTorqueDefault = 1.2f;
+        public static float SpinTorque =>
+            Override != null ? Override.spinTorque : SpinTorqueDefault;
+
         /// <summary>Drive is cut while spinning, so a hit costs momentum and you
         /// cannot simply power out of it.</summary>
-        public const float SpinDriveMult = 0f;
-        public const float HitImpulseFwd = 0.6f;     // kg·m/s along the hit's heading
-        public const float HitImpulseUp = 0.9f;
+        private const float SpinDriveMultDefault = 0f;
+        public static float SpinDriveMult =>
+            Override != null ? Override.spinDriveMult : SpinDriveMultDefault;
+
+        private const float HitImpulseFwdDefault = 0.6f;  // kg·m/s along the hit's heading
+        private const float HitImpulseUpDefault = 0.9f;
+        public static float HitImpulseFwd =>
+            Override != null ? Override.hitImpulseFwd : HitImpulseFwdDefault;
+        public static float HitImpulseUp =>
+            Override != null ? Override.hitImpulseUp : HitImpulseUpDefault;
 
         // ---- missile wreck + recovery ----
         /// <summary>Limp time after a missile hit, before the car is lifted back
         /// onto the racing line.</summary>
-        public const float WreckSeconds = 1.5f;
-        public const float WreckImpulseUp = 3.2f;    // enough to visibly leave the ground
-        public const float WreckImpulseFwd = 1.4f;
-        public const float WreckTorque = 3.0f;       // tumble, applied as one impulse
+        private const float WreckSecondsDefault = 1.5f;
+        private const float WreckImpulseUpDefault = 3.2f;  // visibly leaves the ground
+        private const float WreckImpulseFwdDefault = 1.4f;
+        private const float WreckTorqueDefault = 3.0f;     // tumble, as one impulse
+        public static float WreckSeconds =>
+            Override != null ? Override.wreckSeconds : WreckSecondsDefault;
+        public static float WreckImpulseUp =>
+            Override != null ? Override.wreckImpulseUp : WreckImpulseUpDefault;
+        public static float WreckImpulseFwd =>
+            Override != null ? Override.wreckImpulseFwd : WreckImpulseFwdDefault;
+        public static float WreckTorque =>
+            Override != null ? Override.wreckTorque : WreckTorqueDefault;
         /// <summary>Metres further along the spine to place the recovered car, so
         /// it never lands exactly on top of whatever it was hit next to.</summary>
         public const float WreckRecoverAhead = 1.0f;
         /// <summary>Immunity after recovering. Without it a second missile already
         /// in flight re-kills you the instant you reappear.</summary>
-        public const float InvulnSeconds = 1.0f;
+        private const float InvulnSecondsDefault = 1.0f;
+        public static float InvulnSeconds =>
+            Override != null ? Override.invulnSeconds : InvulnSecondsDefault;
         public const float ExplosionSeconds = 0.8f;
 
         // ---- on-screen hit feedback ----
@@ -105,7 +159,9 @@ namespace AIHWSim.Arcade
         public static bool LogHits = false;
 
         // ---- missile ----
-        public const float MissileSpeed = 11f;       // ≈1.4× a Hard bot: catches, but dodgeable
+        private const float MissileSpeedDefault = 11f;  // ≈1.4× a Hard bot: catches, but dodgeable
+        public static float MissileSpeed =>
+            Override != null ? Override.missileSpeed : MissileSpeedDefault;
         /// <summary>Homing rate at range (rad/s).
         ///
         /// Was 3.2, which at 11 m/s is a 3.4 m turning radius — about as tight as
@@ -113,13 +169,19 @@ namespace AIHWSim.Arcade
         /// was a claim the geometry did not support. 2.2 rad/s is a 5.0 m radius:
         /// still corners hard enough to chase down a straight, no longer glued to
         /// the target's own line.</summary>
-        public const float MissileTurnRate = 2.2f;
+        private const float MissileTurnRateDefault = 2.2f;
+        public static float MissileTurnRate =>
+            Override != null ? Override.missileTurnRate : MissileTurnRateDefault;
         /// <summary>Inside this range the missile has committed and steers only
         /// weakly, so a late swerve genuinely makes it miss. Without a commit
         /// window any turn rate high enough to be threatening is also high enough
         /// to track a last-moment dodge.</summary>
-        public const float MissileCommitRange = 1.5f;
-        public const float MissileCommitTurnRate = 0.6f;
+        private const float MissileCommitRangeDefault = 1.5f;
+        private const float MissileCommitTurnRateDefault = 0.6f;
+        public static float MissileCommitRange =>
+            Override != null ? Override.missileCommitRange : MissileCommitRangeDefault;
+        public static float MissileCommitTurnRate =>
+            Override != null ? Override.missileCommitTurnRate : MissileCommitTurnRateDefault;
         public const float MissileLifetime = 6f;
         public const float MissileArmSeconds = 0.15f;
         public const float MissileMuzzleOffset = 0.45f;  // clears the 0.42 m chassis
@@ -134,7 +196,9 @@ namespace AIHWSim.Arcade
         /// left only ~6 cm of vertical overlap to catch a car crossing it at
         /// 10 m/s. The visual mesh is unchanged — gameplay volumes are authored
         /// in code precisely so they don't depend on the art.</summary>
-        public const float BananaRadius = 0.13f;
+        private const float BananaRadiusDefault = 0.13f;
+        public static float BananaRadius =>
+            Override != null ? Override.bananaRadius : BananaRadiusDefault;
         public const float BananaHeight = 0.05f;     // centre above the surface
         public const float BananaLifetime = 25f;
         public const float BananaOwnerGrace = 0.4f;  // then it can hit its owner too
@@ -152,7 +216,9 @@ namespace AIHWSim.Arcade
         /// effect would need — stops firing once a parked car's body sleeps. A
         /// distance test has neither failure, and a hazard with no collider can never
         /// accidentally become a wall.</summary>
-        public const float SmokeRadius = 0.75f;
+        private const float SmokeRadiusDefault = 0.75f;
+        public static float SmokeRadius =>
+            Override != null ? Override.smokeRadius : SmokeRadiusDefault;
         public const float SmokeStartRadius = 0.18f;
         /// <summary>Grow-in time. The gameplay radius follows the visual so an
         /// unexpanded puff cannot blind someone two car-lengths away.</summary>
@@ -161,9 +227,13 @@ namespace AIHWSim.Arcade
         public const float SmokeFadeSeconds = 1.5f;
         public const float SmokeDriftSpeed = 0.12f;  // m/s, flat, rolled once at spawn
         /// <summary>Oil spreads flatter and wider than smoke billows.</summary>
-        public const float SlickRadius = 0.85f;
+        private const float SlickRadiusDefault = 0.85f;
+        public static float SlickRadius =>
+            Override != null ? Override.slickRadius : SlickRadiusDefault;
         public const float SlickLifetime = 12f;
-        public const float SlickGripMult = 0.45f;
+        private const float SlickGripMultDefault = 0.45f;
+        public static float SlickGripMult =>
+            Override != null ? Override.slickGripMult : SlickGripMultDefault;
         /// <summary>Grace before a hazard can catch its own dropper. Longer than the
         /// banana's 0.4 s because an area you are still inside of would otherwise
         /// catch you the instant you laid it.</summary>
@@ -183,7 +253,9 @@ namespace AIHWSim.Arcade
         public const float SlickLingerSeconds = 0.4f;
 
         // ---- blinded (smoke cloud) ----
-        public const float BlindSeconds = 2.6f;
+        private const float BlindSecondsDefault = 2.6f;
+        public static float BlindSeconds =>
+            Override != null ? Override.blindSeconds : BlindSecondsDefault;
         public const float BlindRampSeconds = 0.15f;
         public const float BlindFadeSeconds = 0.9f;
         /// <summary>Peak tint alpha. Much heavier than the hit flash's 0.30: that is
@@ -206,81 +278,119 @@ namespace AIHWSim.Arcade
         // that direction and holds it there until you let go.
 
         /// <summary>Below this the handbrake is a handbrake, not a drift.</summary>
-        public const float DriftMinSpeed = 3.5f;
+        private const float DriftMinSpeedDefault = 3.5f;
+        public static float DriftMinSpeed =>
+            Override != null ? Override.driftMinSpeed : DriftMinSpeedDefault;
         /// <summary>Steering deflection needed to commit. Above a keyboard's own
         /// smoothed ramp (SteerSmoother reaches ~0.35 in the first 100 ms) so a
         /// twitch of the wheel while braking in a straight line cannot latch a
         /// drift, and low enough that a deliberate turn always does.</summary>
-        public const float DriftEntrySteer = 0.30f;
+        private const float DriftEntrySteerDefault = 0.30f;
+        public static float DriftEntrySteer =>
+            Override != null ? Override.driftEntrySteer : DriftEntrySteerDefault;
         /// <summary>Speed at which a latched drift gives up. Hysteresis against
         /// <see cref="DriftMinSpeed"/> — a drift that scrubs momentarily below
         /// the entry speed should not drop you out mid-corner.</summary>
-        public const float DriftHoldSpeed = 2.2f;
+        private const float DriftHoldSpeedDefault = 2.2f;
+        public static float DriftHoldSpeed =>
+            Override != null ? Override.driftHoldSpeed : DriftHoldSpeedDefault;
 
         /// <summary>The "jump": a small vertical impulse (N·s) on the moment of
         /// commitment. It is mostly theatre — you see the car set itself — but it
         /// also briefly unloads the tyres, which is exactly what makes the slide
         /// start crisply instead of washing in.</summary>
-        public const float DriftHopImpulse = 1.1f;
+        private const float DriftHopImpulseDefault = 1.1f;
+        public static float DriftHopImpulse =>
+            Override != null ? Override.driftHopImpulse : DriftHopImpulseDefault;
         /// <summary>How long the yaw controller may use <see cref="DriftYawKick"/>
         /// instead of <see cref="DriftYawHold"/>. This is what snaps the car into
         /// the slide; after it, the same controller only maintains the angle.</summary>
-        public const float DriftKickSeconds = 0.28f;
+        private const float DriftKickSecondsDefault = 0.28f;
+        public static float DriftKickSeconds =>
+            Override != null ? Override.driftKickSeconds : DriftKickSecondsDefault;
 
         /// <summary>Slip angle held at full counter-steer (steering out of the
         /// slide) and at full lock into it. The player picks a point on this band
         /// with the stick, which is what turns the drift into an arc you steer
         /// rather than a state you are in.</summary>
-        public const float DriftAngleMinDeg = 11f;
-        public const float DriftAngleMaxDeg = 34f;
+        private const float DriftAngleMinDegDefault = 11f;
+        public static float DriftAngleMinDeg =>
+            Override != null ? Override.driftAngleMinDeg : DriftAngleMinDegDefault;
+        private const float DriftAngleMaxDegDefault = 34f;
+        public static float DriftAngleMaxDeg =>
+            Override != null ? Override.driftAngleMaxDeg : DriftAngleMaxDegDefault;
 
         /// <summary>Yaw torque per degree of angle error (N·m/deg).</summary>
-        public const float DriftYawGain = 0.055f;
+        private const float DriftYawGainDefault = 0.055f;
+        public static float DriftYawGain =>
+            Override != null ? Override.driftYawGain : DriftYawGainDefault;
         /// <summary>Torque clamp during <see cref="DriftKickSeconds"/>. Under the
         /// spin-out's 1.2 N·m on purpose: getting hit must always out-rotate
         /// anything you can do to yourself.</summary>
-        public const float DriftYawKick = 0.95f;
+        private const float DriftYawKickDefault = 0.95f;
+        public static float DriftYawKick =>
+            Override != null ? Override.driftYawKick : DriftYawKickDefault;
         /// <summary>Torque clamp once the slide is established.</summary>
-        public const float DriftYawHold = 0.45f;
+        private const float DriftYawHoldDefault = 0.45f;
+        public static float DriftYawHold =>
+            Override != null ? Override.driftYawHold : DriftYawHoldDefault;
         /// <summary>Torque clamp while straightening out on release.</summary>
-        public const float DriftYawStraighten = 0.70f;
+        private const float DriftYawStraightenDefault = 0.70f;
+        public static float DriftYawStraighten =>
+            Override != null ? Override.driftYawStraighten : DriftYawStraightenDefault;
         /// <summary>Longest the exit straighten may run. It also ends early, the
         /// moment the slip angle is small — this is the ceiling, not the duration.</summary>
-        public const float DriftStraightenSeconds = 0.5f;
+        private const float DriftStraightenSecondsDefault = 0.5f;
+        public static float DriftStraightenSeconds =>
+            Override != null ? Override.driftStraightenSeconds : DriftStraightenSecondsDefault;
         /// <summary>Residual slip angle that counts as "pointing where you are
         /// going", ending the straighten.</summary>
-        public const float DriftStraightenDoneDeg = 4f;
+        private const float DriftStraightenDoneDegDefault = 4f;
+        public static float DriftStraightenDoneDeg =>
+            Override != null ? Override.driftStraightenDoneDeg : DriftStraightenDoneDegDefault;
 
         /// <summary>Grip while sliding. Between neutral and the spin-out's 0.35:
         /// enough to keep the slide alive without the tyres giving up entirely,
         /// which would make the angle uncontrollable rather than steerable.</summary>
-        public const float DriftGripMult = 0.70f;
+        private const float DriftGripMultDefault = 0.70f;
+        public static float DriftGripMult =>
+            Override != null ? Override.driftGripMult : DriftGripMultDefault;
         /// <summary>Assist scale while sliding — see CarVehicle.arcadeAssistMult.
         /// Not zero: a fifth of the countersteer assist keeps a full-lock entry
         /// from becoming a spin, which is a help rather than a correction.</summary>
-        public const float DriftAssistMult = 0.20f;
+        private const float DriftAssistMultDefault = 0.20f;
+        public static float DriftAssistMult =>
+            Override != null ? Override.driftAssistMult : DriftAssistMultDefault;
         /// <summary>Handbrake torque scale while sliding — see
         /// CarVehicle.arcadeHandbrakeMult. This is the single most important
         /// number here: a drift button that keeps the rear axle locked scrubs the
         /// speed out of the arc, and no amount of carry acceleration buys it back.
         /// A quarter leaves the back end willing without braking the corner
         /// away.</summary>
-        public const float DriftHandbrakeMult = 0.25f;
+        private const float DriftHandbrakeMultDefault = 0.25f;
+        public static float DriftHandbrakeMult =>
+            Override != null ? Override.driftHandbrakeMult : DriftHandbrakeMultDefault;
 
         /// <summary>Forward acceleration (m/s²) fed into the boost channel while
         /// sliding, so the arc CARRIES momentum instead of scrubbing to a halt.
         /// Applied along the car's NOSE, which is why it also rotates the velocity
         /// vector toward where the car is pointing — the slide tightens onto its
         /// own heading rather than washing out sideways forever.</summary>
-        public const float DriftCarryAccel = 4.5f;
+        private const float DriftCarryAccelDefault = 4.5f;
+        public static float DriftCarryAccel =>
+            Override != null ? Override.driftCarryAccel : DriftCarryAccelDefault;
         /// <summary>Ceiling for the carry, below <see cref="BoostTopSpeed"/>: a
         /// drift must never be a way to exceed the straight-line pace. It used to
         /// be 8.5, which several designs simply cruise past — a carry that is
         /// already faded to nothing at corner-entry speed is a carry that does not
         /// exist.</summary>
-        public const float DriftCarryTopSpeed = 10f;
+        private const float DriftCarryTopSpeedDefault = 10f;
+        public static float DriftCarryTopSpeed =>
+            Override != null ? Override.driftCarryTopSpeed : DriftCarryTopSpeedDefault;
         /// <summary>Speed band over which the carry fades out below the ceiling.</summary>
-        public const float DriftCarryFadeBand = 2.5f;
+        private const float DriftCarryFadeBandDefault = 2.5f;
+        public static float DriftCarryFadeBand =>
+            Override != null ? Override.driftCarryFadeBand : DriftCarryFadeBandDefault;
 
         /// <summary>
         /// Charge multipliers at full lock INTO the slide and at full counter-steer.
@@ -291,26 +401,42 @@ namespace AIHWSim.Arcade
         /// stick axis, one decision — commit or bail — and the reward follows the
         /// commitment rather than the stopwatch.
         /// </summary>
-        public const float DriftChargeInto = 1.5f;
-        public const float DriftChargeOut = 0.35f;
+        private const float DriftChargeIntoDefault = 1.5f;
+        public static float DriftChargeInto =>
+            Override != null ? Override.driftChargeInto : DriftChargeIntoDefault;
+        private const float DriftChargeOutDefault = 0.35f;
+        public static float DriftChargeOut =>
+            Override != null ? Override.driftChargeOut : DriftChargeOutDefault;
 
         // Tier gates, in units of CHARGE, not seconds — at full commitment they
         // arrive in about 0.6 / 1.3 / 2.0 s, and a car being nursed sideways on
         // counter-steer may never reach tier 3 at all.
-        public const float DriftTier1Seconds = 0.9f;
-        public const float DriftTier2Seconds = 1.9f;
-        public const float DriftTier3Seconds = 3.0f;
+        private const float DriftTier1SecondsDefault = 0.9f;
+        public static float DriftTier1Seconds =>
+            Override != null ? Override.driftTier1Seconds : DriftTier1SecondsDefault;
+        private const float DriftTier2SecondsDefault = 1.9f;
+        public static float DriftTier2Seconds =>
+            Override != null ? Override.driftTier2Seconds : DriftTier2SecondsDefault;
+        private const float DriftTier3SecondsDefault = 3.0f;
+        public static float DriftTier3Seconds =>
+            Override != null ? Override.driftTier3Seconds : DriftTier3SecondsDefault;
         /// <summary>Charge at which the meter reads full (tier 3 plus a little, so
         /// the bar has somewhere to go once the last tier lands).</summary>
-        public const float DriftChargeFull = 3.5f;
+        private const float DriftChargeFullDefault = 3.5f;
+        public static float DriftChargeFull =>
+            Override != null ? Override.driftChargeFull : DriftChargeFullDefault;
         /// <summary>Boost duration granted per tier on release.</summary>
-        public const float DriftBoostSeconds = 0.8f;
+        private const float DriftBoostSecondsDefault = 0.8f;
+        public static float DriftBoostSeconds =>
+            Override != null ? Override.driftBoostSeconds : DriftBoostSecondsDefault;
         /// <summary>Forward impulse (N·s) per tier on release, through the centre
         /// of mass. The timed acceleration alone ramps in over a few frames, which
         /// reads as the car gradually recovering rather than as being fired out of
         /// the corner; this is the kick that makes the exit an event. At ~1.8 kg,
         /// tier 3 is a shade under 1 m/s of instant speed.</summary>
-        public const float DriftExitImpulse = 0.55f;
+        private const float DriftExitImpulseDefault = 0.55f;
+        public static float DriftExitImpulse =>
+            Override != null ? Override.driftExitImpulse : DriftExitImpulseDefault;
         public static readonly Color[] DriftTierColors =
         {
             new Color(0.35f, 0.70f, 1.00f),   // tier 1 — blue
@@ -321,10 +447,18 @@ namespace AIHWSim.Arcade
         public static readonly Color DriftChargeColor = new Color(0.72f, 0.76f, 0.82f);
 
         // ---- slipstream ----
-        public const float DraftRange = 3.0f;        // metres behind the car ahead
-        public const float DraftConeDeg = 25f;       // heading alignment required
-        public const float DraftAccel = 4f;          // m/s², well under a boost's 14
-        public const float DraftTopSpeed = 11f;
+        private const float DraftRangeDefault = 3.0f; // metres behind the car ahead
+        public static float DraftRange =>
+            Override != null ? Override.draftRange : DraftRangeDefault;
+        private const float DraftConeDegDefault = 25f; // heading alignment required
+        public static float DraftConeDeg =>
+            Override != null ? Override.draftConeDeg : DraftConeDegDefault;
+        private const float DraftAccelDefault = 4f; // m/s², well under a boost's 14
+        public static float DraftAccel =>
+            Override != null ? Override.draftAccel : DraftAccelDefault;
+        private const float DraftTopSpeedDefault = 11f;
+        public static float DraftTopSpeed =>
+            Override != null ? Override.draftTopSpeed : DraftTopSpeedDefault;
 
         // ---- track limits ----
         /// <summary>A surface at or below this friction multiplier is off-track.
@@ -365,11 +499,14 @@ namespace AIHWSim.Arcade
         /// racing speed. Lap time in arcade is meant to come from the line and
         /// the items, never from catching slides.
         /// </summary>
-        public static readonly Vehicles.AssistSettings HandlingAssists =
+        private static readonly Vehicles.AssistSettings HandlingAssistsDefault =
             new Vehicles.AssistSettings
             {
                 steer = 1f, stability = 1f, traction = 1f, abs = 1f, launch = 1f,
             };
+
+        public static Vehicles.AssistSettings HandlingAssists =>
+            Override != null ? Override.handlingAssists : HandlingAssistsDefault;
 
         /// <summary>Tyre grip baseline in arcade. Rides the existing
         /// <c>CarVehicle.arcadeGripMult</c> channel, which is already folded into
@@ -380,7 +517,9 @@ namespace AIHWSim.Arcade
         /// of the full-throttle-launch fix. Raised again 1.45 → 1.60 on user
         /// feedback ("slips way too much" — free roam's grass verges sit at
         /// 0.85 µ, and 0.85 × 1.60 ≈ 1.36 keeps even the lawn planted).</summary>
-        public const float HandlingGripBonus = 1.60f;
+        private const float HandlingGripBonusDefault = 1.60f;
+        public static float HandlingGripBonus =>
+            Override != null ? Override.handlingGripBonus : HandlingGripBonusDefault;
 
         /// <summary>
         /// Multiplier on the stability assist's gain and torque clamp in arcade
@@ -393,7 +532,9 @@ namespace AIHWSim.Arcade
         /// wreck (both must out-rotate anything helping you), so none of those
         /// mechanics is retuned by this.
         /// </summary>
-        public const float HandlingStabilityBoost = 3f;
+        private const float HandlingStabilityBoostDefault = 3f;
+        public static float HandlingStabilityBoost =>
+            Override != null ? Override.handlingStabilityBoost : HandlingStabilityBoostDefault;
 
         /// <summary>
         /// Drive-command scale in arcade — the "slow the cars down" knob.
@@ -410,7 +551,9 @@ namespace AIHWSim.Arcade
         /// than a direct write, because ApplyEffects re-asserts arcadeDriveMult
         /// every frame and would otherwise stomp it.
         /// </summary>
-        public const float HandlingDriveScale = 0.85f;
+        private const float HandlingDriveScaleDefault = 0.85f;
+        public static float HandlingDriveScale =>
+            Override != null ? Override.handlingDriveScale : HandlingDriveScaleDefault;
 
         /// <summary>
         /// Arcade downforce, N per (m/s)² of forward speed — the "car should
@@ -422,7 +565,9 @@ namespace AIHWSim.Arcade
         /// this scale is ~0.6 N (AeroDynamics' own doc), which is why this is
         /// an arcade channel and not a wing coefficient.
         /// </summary>
-        public const float HandlingDownforce = 0.10f;
+        private const float HandlingDownforceDefault = 0.10f;
+        public static float HandlingDownforce =>
+            Override != null ? Override.handlingDownforce : HandlingDownforceDefault;
 
         // ---- positions / scoring ----
         public const float PositionUpdateHz = 5f;

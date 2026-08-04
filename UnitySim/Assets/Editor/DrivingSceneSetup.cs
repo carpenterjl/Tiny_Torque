@@ -19,8 +19,8 @@ namespace AIHWSim.EditorTools
     /// undoable, and it leaves the same result.
     ///
     /// <b>The assets it writes are inert by construction.</b> Every field
-    /// initialiser in <see cref="LevelSettings"/> and
-    /// <see cref="PhysicsSettings"/> is the number the code already used, so a
+    /// initialiser in all five — level rules, physics, assists, mode tuning and
+    /// arcade tuning — is the number the code already used, so a
     /// scene that has just been given a descriptor behaves exactly as it did
     /// before — until somebody edits a value on purpose. Assets are created only
     /// when absent; running this twice reuses them and moves no bytes.
@@ -53,6 +53,9 @@ namespace AIHWSim.EditorTools
             var d = Undo.AddComponent<DrivingSceneDescriptor>(host);
             d.level = LoadOrCreate<LevelSettings>("LevelSettings_Default");
             d.physics = LoadOrCreate<PhysicsSettings>("PhysicsSettings_Default");
+            d.assists = LoadOrCreate<AIHWSim.Vehicles.AssistTuningOverride>("AssistTuning_Default");
+            d.modes = LoadOrCreate<AIHWSim.Modes.ModeConfigOverride>("ModeTuning_Default");
+            d.arcade = LoadOrCreate<AIHWSim.Arcade.ArcadeConfigOverride>("ArcadeTuning_Default");
             EditorUtility.SetDirty(d);
             EditorSceneManager.MarkSceneDirty(host.scene);
             Selection.activeGameObject = host;
@@ -67,10 +70,15 @@ namespace AIHWSim.EditorTools
         public static void CreateDefaults()
         {
             var lvl = LoadOrCreate<LevelSettings>("LevelSettings_Default");
-            var phys = LoadOrCreate<PhysicsSettings>("PhysicsSettings_Default");
+            LoadOrCreate<PhysicsSettings>("PhysicsSettings_Default");
+            LoadOrCreate<AIHWSim.Vehicles.AssistTuningOverride>("AssistTuning_Default");
+            LoadOrCreate<AIHWSim.Modes.ModeConfigOverride>("ModeTuning_Default");
+            LoadOrCreate<AIHWSim.Arcade.ArcadeConfigOverride>("ArcadeTuning_Default");
             Selection.activeObject = lvl;
-            Debug.Log($"{Tag} defaults ready: {AssetDatabase.GetAssetPath(lvl)}, "
-                      + $"{AssetDatabase.GetAssetPath(phys)}");
+            Debug.Log($"{Tag} defaults ready under {Dir}: level rules, physics, assists, "
+                      + "mode tuning and arcade tuning. Every one of them holds the numbers "
+                      + "the code already used, so assigning them changes nothing until you "
+                      + "edit a value — and you can edit them while the game is playing.");
         }
 
         /// <summary>

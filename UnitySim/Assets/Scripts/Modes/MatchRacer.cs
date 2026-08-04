@@ -83,5 +83,30 @@ namespace AIHWSim.Modes
 
         public void Heal(float amount) =>
             health = Mathf.Clamp(health + amount, 0f, maxHealth);
+
+        private void OnEnable() => Core.Config.TuningBus.Changed += OnTuningChanged;
+        private void OnDisable() => Core.Config.TuningBus.Changed -= OnTuningChanged;
+
+        /// <summary>
+        /// Follow a mid-match edit of the derby's starting health.
+        ///
+        /// <b>The fraction is what is preserved, not the number.</b> This is the
+        /// one place a tuning slider meets state that already exists, and the
+        /// two obvious readings differ sharply: keeping raw health would kill
+        /// half the field the moment somebody drags the maximum down, while
+        /// refilling everyone would undo the match. Keeping the ratio means the
+        /// bars do not move at all — what changes is how much damage the rest of
+        /// the fight costs, which is the question the slider is actually asking.
+        ///
+        /// A car that is already out stays out: 0 scales to 0.
+        /// </summary>
+        private void OnTuningChanged(ScriptableObject _)
+        {
+            float target = ModeConfig.DerbyMaxHealth;
+            if (target <= 0f || Mathf.Approximately(target, maxHealth)) return;
+            float frac = Health01;
+            maxHealth = target;
+            health = frac * target;
+        }
     }
 }
