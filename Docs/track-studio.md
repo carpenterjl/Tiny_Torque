@@ -66,6 +66,35 @@ None of the templates is in Build Settings or `SceneTrackCatalog`. They are tool
 levels; the in-game track pickers are unchanged. A copy you intend to ship needs both,
 as any scene track does.
 
+### Each scene owns its settings
+
+A `DrivingSceneDescriptor` points at *assets*, and Save As copies the scene but not what
+it points at. Left alone, that means saving a template as `Arcade_Test_Scene` and setting
+it to three laps sets the *template* to three laps — and every other scene ever saved from
+it — and the next `Create All Template Scenes` writes the template's own values back over
+yours. Neither step says anything, which is the part that costs you an evening: the file
+you edited is not the file you were looking at.
+
+So an asset's owner is read from where it sits, and a scene saved under a name that does
+not own what it points at takes private copies on the way out:
+
+| Where the asset lives | Who owns it |
+|---|---|
+| `Assets/Settings/Driving/*.asset` | **shared on purpose** — the `_Default` assets. One project-wide answer to how the physics steps. Never cloned behind your back. |
+| `Assets/Settings/Driving/Templates/` | the mode templates, which regenerate |
+| `Assets/Settings/Driving/Scenes/<SceneName>/` | that scene, alone |
+
+The clone happens in `sceneSaving`, before the file is written, so the save that renames
+the scene is the save that gives it its own rules — and it carries the values verbatim, so
+nothing about the scene changes except which file it edits. Only the **rules** are taken
+automatically; world tuning (physics, assists, mode and arcade numbers) stays on the shared
+defaults, because a scene pointing at `PhysicsSettings_Default` is not a mistake. When a
+scene does need its own feel, the descriptor's inspector button — or
+`Driving Scene ▸ Give This Scene Its Own Settings` — takes copies of all five.
+
+The inspector names the owner of anything this scene does not own, because an object field
+renders a shared asset and a private one identically.
+
 ---
 
 ## Making a track
