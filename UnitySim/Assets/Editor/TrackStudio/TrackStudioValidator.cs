@@ -190,25 +190,36 @@ namespace AIHWSim.TrackTools
                         Fail($"'{scene}' spawns '{spawns[i].name}' and '{spawns[j].name}' " +
                              "are within 0.5 m — cars would spawn inside each other");
 
-            if (d.kind == TrackPresets.TrackKind.Circuit)
+            // What is checked is the MARKERS, not the kind — because that is what
+            // SceneTrackBuilder.BuildGates reads. A finish marker builds a LapTimer
+            // on any scene track, so a FreeRoam map is allowed to carry one and time
+            // laps: a place to practise a line, with a clock, and nothing to win.
+            // The kind decides what the map is offered FOR (the race picker drops
+            // FreeRoam), not whether its gates work.
+            if (d.kind == TrackPresets.TrackKind.Circuit && finish == null)
+                Fail($"'{scene}' is a Circuit with no finish marker — no LapTimer, " +
+                     "so no lap can ever be counted");
+
+            // Arena is the one kind where a finish line is still wrong: the arena
+            // modes are won on goals, flags or survival, and ArenaNav never asks a
+            // lap timer anything. A gate there is an authoring slip, not a feature.
+            if (d.kind == TrackPresets.TrackKind.Arena && finishes.Length > 0)
+                Fail($"'{scene}' is an Arena but carries a finish marker — the arena " +
+                     "modes have no lap to time");
+
+            if (finishes.Length > 1)
+                Fail($"'{scene}' has {finishes.Length} finish markers; only the first " +
+                     "would become the LapTimer");
+
+            if (finish != null)
             {
-                if (finish == null)
-                    Fail($"'{scene}' is a Circuit with no finish marker — no LapTimer, " +
-                         "so no lap can ever be counted");
-                if (finishes.Length > 1)
-                    Fail($"'{scene}' has {finishes.Length} finish markers; only the first " +
-                         "would become the LapTimer");
                 if (cps.Count == 0)
-                    Fail($"'{scene}' is a Circuit with no checkpoints — a lap would count " +
-                         "on any crossing of the line, including driving backwards over it");
+                    Fail($"'{scene}' has a finish marker and no checkpoints — a lap " +
+                         "would count on any crossing of the line, including driving " +
+                         "backwards over it");
 
                 string orders = TrackStudioWindow.CheckOrders(cps);
                 if (orders != null) Fail($"'{scene}': {orders}");
-            }
-            else if (finishes.Length > 0)
-            {
-                Fail($"'{scene}' is {d.kind} but carries a finish marker — " +
-                     "FreeRoam has no lap to time");
             }
 
             // A gate narrower than the road is a gate cars drive around. This is the

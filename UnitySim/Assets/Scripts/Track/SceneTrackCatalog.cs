@@ -52,12 +52,15 @@ namespace AIHWSim.Track
         {
             new Row { scene = "TTA_Sandbox", label = "Sandbox",
                       kind = TrackPresets.TrackKind.FreeRoam },
-            // A closed circuit with a finish line and four checkpoints, so laps
-            // are timed if you ask for them — but the Simulate Controller screen
-            // opens it at 0 laps, because "does my code get round" is a question
-            // you ask over and over rather than a race.
+            // FreeRoam, and it still times laps. The kind decides what the map is
+            // FOR — this one is a place to test a controller, not a race to enter,
+            // so it stays out of the race picker and starts with nothing to win.
+            // The finish line and four checkpoints it carries are there so a
+            // line-following controller can be scored: SceneTrackBuilder builds
+            // the gates and the LapTimer from the markers, never from the kind, so
+            // the lap box is on the HUD whatever mode you arrived in.
             new Row { scene = "UCSD_TrackScene", label = ControllerLabel,
-                      kind = TrackPresets.TrackKind.Circuit },
+                      kind = TrackPresets.TrackKind.FreeRoam },
         };
 
         /// <summary>Display names for the pickers. <paramref name="raceable"/>

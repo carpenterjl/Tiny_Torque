@@ -33,7 +33,17 @@ loads a black screen is worse than no entry.
 | Scene | Picker | Kind |
 |---|---|---|
 | `TTA_Sandbox` | ▣ Sandbox | FreeRoam |
-| `UCSD_TrackScene` | ▣ UCSD Test Track | Circuit |
+| `UCSD_TrackScene` | ▣ UCSD Test Track | FreeRoam (timed) |
+
+**A FreeRoam track may still time laps.** `SceneTrackBuilder.BuildGates` builds the
+gate triggers and the `LapTimer` from the MARKERS the descriptor carries, never from
+the kind — so a free-roam map with a finish line and checkpoints shows the lap box on
+the HUD in any mode, and `[TRK]` checks the markers rather than the kind to match.
+That is what the UCSD track is: somewhere to practise a line and read a lap time, not
+a race to enter. The kind is what a map is offered FOR — FreeRoam keeps it out of the
+race picker and starts it with nothing to win. Arena is the one kind where a finish
+marker is still a failure: those modes are won on goals, flags or survival, and no
+lap timer is ever consulted.
 
 Both live under `Assets/TinyTorqueAssets/`, which normally ships nothing — they
 are listed in `PackValidator.PromotedScenes`, the mechanism for "this pack scene

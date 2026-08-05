@@ -2954,7 +2954,7 @@ MonoBehaviour:
   m_Name: 
   m_EditorClassIdentifier: 
   displayName: Simulation physics
-  kind: 0
+  kind: 2
   playfield: {fileID: 0}
   ambience: 
   sceneOwnsSky: 1
