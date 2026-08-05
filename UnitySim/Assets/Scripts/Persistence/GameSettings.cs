@@ -116,6 +116,14 @@ namespace AIHWSim.Persistence
         /// as a bare file name in Assets/Plugins/x86_64.</summary>
         public string simControllerDll = "controller.dll";
 
+        /// <summary>Map last chosen on the Simulate Controller screen, as a picker
+        /// display name. Its own key for the same reason <c>lastRoamMap</c> is:
+        /// that screen picks from free roam's list, so one shared index would mean
+        /// two different maps. The initializer — not "" — is what makes the test
+        /// track the DEFAULT: a settings file that predates this key reads as the
+        /// track rather than as the classic oval.</summary>
+        public string lastControllerMap = AIHWSim.Track.SceneTrackCatalog.ControllerMap;
+
         // ══════════════ TEMPORARY DEV SWITCH — delete before shipping ═════════════
         /// <summary>Backs <c>Progression.DevUnlockAll</c>; see that property for
         /// what it does and the full removal list. Persisted only so it survives a

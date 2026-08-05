@@ -53,6 +53,22 @@ namespace AIHWSim.Core
         private int _respawnHint = -1;
 
         /// <summary>
+        /// Send the respawn key to the SPAWN POINT instead of the nearest point on
+        /// the racing line. Set for the firmware rig and nothing else
+        /// (<c>TrackBootstrap</c>).
+        ///
+        /// The two answers are right for different questions. A human who is
+        /// wedged against a wall wants to keep driving, and the nearest point on
+        /// the line is where they were. A controller under test wants to run the
+        /// same course from the same place again — dropped mid-track it starts
+        /// from a pose it was never written for, and the run tells you nothing.
+        /// Either way the DLL is re-armed: <c>ResetVehicleTo</c> raises
+        /// <c>VehicleReset</c>, which is where <c>SimulationRunner</c> calls
+        /// ctrl_init/ctrl_configure again and flushes the actuation pipe.
+        /// </summary>
+        public bool respawnAtSpawnPoint;
+
+        /// <summary>
         /// State of the automatic reverse blip. Per-CarInput, so split-screen
         /// players are independent of each other.
         /// </summary>
@@ -129,10 +145,20 @@ namespace AIHWSim.Core
         /// a shortcut past any corner you were about to lose time in.
         ///
         /// Falls back to the spawn point when there is no racing line at all — a
-        /// finish-less tile map, where there is nothing better to aim at.
+        /// finish-less tile map, where there is nothing better to aim at — and
+        /// goes there by choice on a firmware rig, which is asking to repeat a
+        /// run rather than to carry on driving. See
+        /// <see cref="respawnAtSpawnPoint"/>.
         /// </summary>
         private void Respawn()
         {
+            if (respawnAtSpawnPoint)
+            {
+                car.ResetVehicle();
+                if (lapTimer != null) lapTimer.ResetTimer(car);
+                return;
+            }
+
             if (TrackRespawn.TryPose(car.transform.position, ref _respawnHint,
                     out var pos, out var rot))
                 car.ResetVehicleTo(pos, rot);

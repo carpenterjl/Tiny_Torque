@@ -59,6 +59,11 @@ namespace AIHWSim.Pack
         private static readonly string[] PromotedScenes =
         {
             "Assets/TinyTorqueAssets/Scenes/TTA_Sandbox.unity",
+            // The Simulate Controller screen's default map (SceneTrackCatalog
+            // .ControllerMap). Authored in the pack because that is where the
+            // road kit and the ProBuilder geometry are; shipped because the
+            // player drives it.
+            "Assets/TinyTorqueAssets/Scenes/UCSD_TrackScene.unity",
         };
 
         private static int _fail;

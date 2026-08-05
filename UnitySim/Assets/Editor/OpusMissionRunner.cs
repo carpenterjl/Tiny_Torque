@@ -56,7 +56,12 @@ namespace AIHWSim.EditorTools
 
             string scene = EditorBuildSettings.scenes
                 .Select(s => s.path)
-                .FirstOrDefault(p => p != null && p.EndsWith("TrackScene.unity", StringComparison.OrdinalIgnoreCase));
+                // Exact file name, not EndsWith: "UCSD_TrackScene.unity" ends with
+                // "TrackScene.unity" too, and the only thing keeping the mission
+                // off it would be that it happens to be registered later.
+                .FirstOrDefault(p => p != null && string.Equals(
+                    Path.GetFileName(p), GameFlow.TrackSceneName + ".unity",
+                    StringComparison.OrdinalIgnoreCase));
             if (string.IsNullOrEmpty(scene))
             {
                 Debug.LogError("[OpusMissionRunner] TrackScene is not in the build settings.");

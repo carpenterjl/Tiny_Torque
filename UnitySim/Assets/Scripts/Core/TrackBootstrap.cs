@@ -1060,6 +1060,11 @@ namespace AIHWSim.Core
             // closed-loop instead of in Manual.
             bool botOrSplit = slot.isBot || splitScreen;
             bool firmware = !botOrSplit && slot.control == DriveControl.Firmware;
+            // A controller under test respawns to its spawn point, not to the
+            // nearest point on the line: the run is meant to be repeatable, and
+            // the reset also re-arms the DLL (CarVehicle.VehicleReset →
+            // SimulationRunner.OnVehicleReset). See CarInput.respawnAtSpawnPoint.
+            carInput.respawnAtSpawnPoint = firmware;
             // Telemetry logging is opt-in (Options / pause Settings → "Log
             // sensor/telemetry data"). Default OFF; can also start after the
             // menu closes via SimulationRunner.EnableLogging. Never for bots.

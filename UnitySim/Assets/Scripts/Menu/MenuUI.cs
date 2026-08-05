@@ -38,6 +38,12 @@ namespace AIHWSim.Menu
         // Picker state (indices into the option lists; 0 = stock/oval).
         private int _vehicleIdx;
         private int _trackIdx;
+        /// <summary>The Simulate Controller screen's own map pick, into
+        /// <c>_roamMaps</c>. Separate from <see cref="_trackIdx"/> so choosing a
+        /// test track to validate a DLL on cannot silently change which circuit
+        /// the race page starts. Defaults to
+        /// <c>SceneTrackCatalog.ControllerMap</c>; see <see cref="ControllerMapIndex"/>.</summary>
+        private int _ctlTrackIdx;
         private List<string> _vehicles = new List<string>();
         private List<string> _tracks = new List<string>();
 
@@ -144,6 +150,7 @@ namespace AIHWSim.Menu
             // was never written — which for the roam list is the town, i.e. the
             // map free roam has always started on.
             _roamIdx = Mathf.Max(0, _roamMaps.IndexOf(s.lastRoamMap));
+            _ctlTrackIdx = ControllerMapIndex(s.lastControllerMap);
             _spLaps = Mathf.Clamp(s.lastLaps, 0, 50);
             _spBots = Mathf.Clamp(s.spBots, 0, 7);
             _spDiff = Mathf.Clamp(s.spDifficulty, 0, 2);
@@ -167,6 +174,8 @@ namespace AIHWSim.Menu
                 ? _vehicles[Mathf.Clamp(_vehicleIdx, 0, _vehicles.Count - 1)] : null;
             string prevRoam = _roamMaps.Count > 0
                 ? _roamMaps[Mathf.Clamp(_roamIdx, 0, _roamMaps.Count - 1)] : null;
+            string prevCtl = _roamMaps.Count > 0
+                ? _roamMaps[Mathf.Clamp(_ctlTrackIdx, 0, _roamMaps.Count - 1)] : null;
 
             _vehicles = new List<string> { "" };  // "" = stock default
             foreach (var name in VehiclePresets.DisplayNames())
@@ -198,9 +207,31 @@ namespace AIHWSim.Menu
                 int found = _roamMaps.IndexOf(prevRoam);
                 if (found >= 0) _roamIdx = found;
             }
+            if (prevCtl != null) _ctlTrackIdx = ControllerMapIndex(prevCtl);
             _vehicleIdx = Mathf.Clamp(_vehicleIdx, 0, _vehicles.Count - 1);
             _trackIdx = Mathf.Clamp(_trackIdx, 0, _tracks.Count - 1);
             _roamIdx = Mathf.Clamp(_roamIdx, 0, _roamMaps.Count - 1);
+            _ctlTrackIdx = Mathf.Clamp(_ctlTrackIdx, 0, _roamMaps.Count - 1);
+        }
+
+        /// <summary>
+        /// Where the Simulate Controller screen's picker should sit for a saved
+        /// map name.
+        ///
+        /// Unlike the other pickers this does NOT fall to index 0 when the saved
+        /// name is gone: index 0 of the roam list is the town, and a controller
+        /// screen quietly opening on the town instead of the test track is the
+        /// one outcome this whole default exists to prevent. The test track is
+        /// the fallback; 0 is only the fallback's fallback, for a build where the
+        /// scene has been removed from the catalogue.
+        /// </summary>
+        private int ControllerMapIndex(string want)
+        {
+            // want == "" is NOT "unset" — it is the classic oval, a legitimate
+            // pick. Only a name that is absent from the list falls through.
+            int i = want == null ? -1 : _roamMaps.IndexOf(want);
+            if (i < 0) i = _roamMaps.IndexOf(AIHWSim.Track.SceneTrackCatalog.ControllerMap);
+            return Mathf.Max(0, i);
         }
 
         /// <summary>Resolve a picker vehicle name: "" = stock, ★-preset, or a
@@ -1182,7 +1213,13 @@ namespace AIHWSim.Menu
             ControllerBuildPanel.Draw(logHeight: 120f, followDll: SelectedControllerDll);
             GUILayout.Space(6);
             DrawVehicleRow(Page.SpController);
-            DrawTrackRow(MatchMode.Race);
+            // Not DrawTrackRow: this screen picks from free roam's list, which is
+            // the union of all three track sources. The race list deliberately
+            // hides the maps with no finish line, and a map with no finish line is
+            // exactly what a controller test wants — laps below default to "Free
+            // drive". Its own index, so a pick here never moves the race page's.
+            _ctlTrackIdx = CyclePicker("Map", _roamMaps, _ctlTrackIdx,
+                                       m => m == "" ? "Classic Oval" : m);
             DrawOpponentsRows();
             _spLaps = MenuNav.Stepper("Race laps", _spLaps, 0, 50,
                 v => v == 0 ? "Free drive" : $"{v} laps");
@@ -1234,7 +1271,11 @@ namespace AIHWSim.Menu
 
             var s = SettingsStore.Current;
             s.simControllerDll = _pendingControllerDll;
-            StartSinglePlayer(MatchMode.Race);
+
+            string map = _roamMaps.Count > 0
+                ? _roamMaps[Mathf.Clamp(_ctlTrackIdx, 0, _roamMaps.Count - 1)] : "";
+            s.lastControllerMap = map;
+            StartSinglePlayer(MatchMode.Race, map);
         }
 
         /// <summary>DLL the Simulate Controller screen wants this car to load, or
@@ -1272,12 +1313,16 @@ namespace AIHWSim.Menu
         /// from — and no handler has to read live page state, which
         /// <see cref="GoTo"/> is allowed to change mid-pass.
         /// </summary>
-        private void StartSinglePlayer(MatchMode mode)
+        /// <param name="trackOverride">A picker display name from a screen that
+        /// keeps its own map pick — today only Simulate Controller. Non-null also
+        /// suppresses the <c>lastTrack</c> write below, so that screen cannot
+        /// overwrite the race page's saved circuit with a test track.</param>
+        private void StartSinglePlayer(MatchMode mode, string trackOverride = null)
         {
             bool roam = mode == MatchMode.FreeRoam;
             bool arena = mode != MatchMode.Race && !roam;
             string vehicle = _vehicles[_vehicleIdx];
-            string track = _tracks[_trackIdx];
+            string track = trackOverride ?? _tracks[_trackIdx];
             string roamMap = _roamMaps.Count > 0
                 ? _roamMaps[Mathf.Clamp(_roamIdx, 0, _roamMaps.Count - 1)] : "";
             int bots = roam ? 0 : _spBots;
@@ -1333,7 +1378,7 @@ namespace AIHWSim.Menu
             ApplyMatchRules(mode);
 
             s.lastVehicle = vehicle;
-            s.lastTrack = track;
+            if (trackOverride == null) s.lastTrack = track;
             s.lastRoamMap = roamMap;
             s.lastLaps = _spLaps;
             s.spBots = _spBots;

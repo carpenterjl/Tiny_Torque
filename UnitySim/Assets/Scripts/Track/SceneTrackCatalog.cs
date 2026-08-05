@@ -27,6 +27,20 @@ namespace AIHWSim.Track
         /// </summary>
         public const string Prefix = "▣ ";
 
+        /// <summary>
+        /// The map the Simulate Controller screen opens on, as a picker display
+        /// name. A hand-authored scene rather than a generated oval because that
+        /// screen's job is "does my C code drive", and answering it wants a real
+        /// road with corners, kerbs and walls that stay put between runs — a
+        /// procedural track is regenerated per session and is a moving reference.
+        ///
+        /// Public and const so <c>GameSettings.lastControllerMap</c> can use it as
+        /// its field initializer: a settings file that predates the key reads as
+        /// this map rather than as the classic oval.
+        /// </summary>
+        public const string ControllerMap = Prefix + ControllerLabel;
+        private const string ControllerLabel = "UCSD Test Track";
+
         public struct Row
         {
             public string scene;    // scene name, the persisted identifier
@@ -38,6 +52,12 @@ namespace AIHWSim.Track
         {
             new Row { scene = "TTA_Sandbox", label = "Sandbox",
                       kind = TrackPresets.TrackKind.FreeRoam },
+            // A closed circuit with a finish line and four checkpoints, so laps
+            // are timed if you ask for them — but the Simulate Controller screen
+            // opens it at 0 laps, because "does my code get round" is a question
+            // you ask over and over rather than a race.
+            new Row { scene = "UCSD_TrackScene", label = ControllerLabel,
+                      kind = TrackPresets.TrackKind.Circuit },
         };
 
         /// <summary>Display names for the pickers. <paramref name="raceable"/>

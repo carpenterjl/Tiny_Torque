@@ -23,6 +23,43 @@ are live. See "Which builder do I want?" below.
 The two `GameFlow` properties are mutually exclusive by construction — assigning
 either clears the other — so a stale value cannot quietly load the wrong track.
 
+### The shipped scene tracks
+
+`SceneTrackCatalog.All` is the list, and registering there is only half of it: the
+scene must also be in Build Settings or `SceneManager.LoadScene` cannot find it.
+`[TRK]` fails a row that has one without the other, because a picker entry that
+loads a black screen is worse than no entry.
+
+| Scene | Picker | Kind |
+|---|---|---|
+| `TTA_Sandbox` | ▣ Sandbox | FreeRoam |
+| `UCSD_TrackScene` | ▣ UCSD Test Track | Circuit |
+
+Both live under `Assets/TinyTorqueAssets/`, which normally ships nothing — they
+are listed in `PackValidator.PromotedScenes`, the mechanism for "this pack scene
+became real game content". Promote by adding a row there, never by loosening the
+isolation check.
+
+**The test track is the Simulate Controller screen's default map**
+(`SceneTrackCatalog.ControllerMap`, initializing `GameSettings.lastControllerMap`,
+so an existing settings file picks it up too). That screen has its own map picker
+over free roam's list rather than the race list, and its own saved index — picking
+a track to validate a DLL on must not change which circuit the race page starts.
+Two things behave differently once a firmware rig is driving:
+
+- **Respawn goes to the spawn point**, not to the nearest point on the racing
+  line (`CarInput.respawnAtSpawnPoint`, set only for that rig). A human wedged
+  against a wall wants to carry on from where they are; a controller under test
+  wants the same course from the same place again.
+- **The DLL is re-armed** on that reset — `CarVehicle.VehicleReset` →
+  `SimulationRunner.OnVehicleReset`, which calls `ctrl_init`/`ctrl_configure`
+  again and flushes the actuation-delay pipe. That has always been true of every
+  reset; what is new is that the respawn key now reliably produces one.
+
+Because the track is the scene, editing it in Unity and rebuilding is the whole
+update path — there is no catalogue of geometry to regenerate and no JSON to
+re-export. `BuildMenu` builds whatever is in Build Settings.
+
 ---
 
 ## Which builder do I want?
