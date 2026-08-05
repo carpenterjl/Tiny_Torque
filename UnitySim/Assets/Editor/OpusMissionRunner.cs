@@ -33,9 +33,12 @@ namespace AIHWSim.EditorTools
         {
             string result = ArgValue("-opusResult") ?? DefaultResultPath();
             float timeout = float.TryParse(ArgValue("-opusTimeout"), out float t) ? t : 45f;
-            // -opusController runs a different DLL on the same car and track.
-            // Absent — every mission run — leaves the design's own firmware alone.
-            Begin(result, timeout, ArgValue("-opusController") ?? "");
+            // -opusController runs a different DLL on the same car and track;
+            // -opusTrack names a different one (a preset OR a scene track);
+            // -opusCam WxH forces the camera resolution. All absent — which is
+            // every mission run — leaves the scored mission exactly as it was.
+            Begin(result, timeout, ArgValue("-opusController") ?? "",
+                  ArgValue("-opusTrack"), ArgValue("-opusCam"));
         }
 
         private static string DefaultResultPath() =>
@@ -50,7 +53,9 @@ namespace AIHWSim.EditorTools
             return null;
         }
 
-        private static void Begin(string resultPath, float timeoutSec, string controllerDll = "")
+        private static void Begin(string resultPath, float timeoutSec,
+                                  string controllerDll = "", string track = null,
+                                  string cam = null)
         {
             var req = new MissionAutorun.Request
             {
@@ -58,8 +63,34 @@ namespace AIHWSim.EditorTools
                 timeoutSec = timeoutSec,
                 controllerDll = controllerDll ?? "",
             };
+            if (!string.IsNullOrEmpty(track)) req.track = track;
+            // "128x128". Both halves or neither — a half-parsed size would run at
+            // some resolution nobody asked for, which is worse than refusing.
+            if (!string.IsNullOrEmpty(cam))
+            {
+                var parts = cam.Split('x', 'X');
+                if (parts.Length == 2 &&
+                    int.TryParse(parts[0], out int cw) && int.TryParse(parts[1], out int ch) &&
+                    cw > 0 && ch > 0)
+                {
+                    req.camWidth = cw;
+                    req.camHeight = ch;
+                }
+                else
+                {
+                    Debug.LogError($"[OpusMissionRunner] -opusCam '{cam}' is not WxH.");
+                    EditorApplication.Exit(4);
+                    return;
+                }
+            }
             File.WriteAllText(MissionAutorun.RequestPath, JsonUtility.ToJson(req, true));
             if (File.Exists(resultPath)) File.Delete(resultPath);
+
+            // A scene track opens ITSELF; MissionAutorun pulls TrackScene in
+            // additively on top, exactly as GameFlow.LoadTrack does. Anything else
+            // opens TrackScene directly, which is every scored mission run.
+            string want = AIHWSim.Track.SceneTrackCatalog.Resolve(req.track)
+                          ?? GameFlow.TrackSceneName;
 
             string scene = EditorBuildSettings.scenes
                 .Select(s => s.path)
@@ -67,11 +98,11 @@ namespace AIHWSim.EditorTools
                 // "TrackScene.unity" too, and the only thing keeping the mission
                 // off it would be that it happens to be registered later.
                 .FirstOrDefault(p => p != null && string.Equals(
-                    Path.GetFileName(p), GameFlow.TrackSceneName + ".unity",
+                    Path.GetFileName(p), want + ".unity",
                     StringComparison.OrdinalIgnoreCase));
             if (string.IsNullOrEmpty(scene))
             {
-                Debug.LogError("[OpusMissionRunner] TrackScene is not in the build settings.");
+                Debug.LogError($"[OpusMissionRunner] '{want}' is not in the build settings.");
                 Cleanup();
                 EditorApplication.Exit(3);
                 return;

@@ -1,6 +1,8 @@
 using System;
 using System.IO;
+using AIHWSim.Bridge;
 using AIHWSim.Garage;
+using AIHWSim.Track;
 using AIHWSim.TrackEd;
 using AIHWSim.Telemetry;
 using AIHWSim.Vehicles;
@@ -38,6 +40,10 @@ namespace AIHWSim.Core
             /// controller on a known car and a known track, unattended, is the
             /// same job with a different subject.</summary>
             public string controllerDll = "";
+            /// <summary>Camera resolution to force on every camera the design
+            /// carries. 0 (both) leaves them exactly as authored, which is what
+            /// the scored mission uses.</summary>
+            public int camWidth, camHeight;
         }
 
         [Serializable]
@@ -94,8 +100,12 @@ namespace AIHWSim.Core
             // Configure the session before any scene Awake runs, which is the
             // whole reason this hooks BeforeSceneLoad.
             var design = VehiclePresets.Resolve(_req.vehicle);
+            // Two track sources, the same two the menu offers: a tile-map preset
+            // and a hand-authored scene. They are mutually exclusive on GameFlow
+            // by construction, so this picks one and assigns only that one.
             var track = TrackPresets.Resolve(_req.track);
-            if (design == null || track == null)
+            string sceneTrack = track == null ? SceneTrackCatalog.Resolve(_req.track) : null;
+            if (design == null || (track == null && sceneTrack == null))
             {
                 Debug.LogError($"[MissionAutorun] unknown vehicle '{_req.vehicle}' or track '{_req.track}'");
                 _req = null;
@@ -103,12 +113,31 @@ namespace AIHWSim.Core
             }
 
             // Resolve hands back a freshly built design every call, so overwriting
-            // the DLL name here cannot leak into anything else.
+            // these cannot leak into anything else.
             if (!string.IsNullOrEmpty(_req.controllerDll))
                 design.controllerDll = _req.controllerDll;
+            // 0 leaves the design's own camera alone, which is what every mission
+            // run does. Set both to run the same car at a different resolution —
+            // a perception loop is judged on the frame it is given, so the frame
+            // has to be something the harness can vary. CameraSensor clamps to
+            // 8..128 on both axes whatever arrives here.
+            if (_req.camWidth > 0 && _req.camHeight > 0)
+                foreach (var s in design.sensors)
+                    if (s.kind == SensorType.Camera)
+                    {
+                        s.camWidth = _req.camWidth;
+                        s.camHeight = _req.camHeight;
+                    }
 
             GameFlow.ActiveDesign = design;
-            GameFlow.ActiveTrack = track;
+            if (track != null)
+            {
+                GameFlow.ActiveTrack = track;
+            }
+            else
+            {
+                GameFlow.ActiveSceneTrack = sceneTrack;
+            }
             SessionConfig.Mode = SessionMode.SinglePlayer;
             SessionConfig.TargetLaps = 0;
             SessionConfig.Players.Clear();
@@ -128,6 +157,17 @@ namespace AIHWSim.Core
         private static void Attach()
         {
             if (_req == null) return;
+
+            // A scene track needs TrackScene on top of it: that is where the one
+            // inspector-authored TrackBootstrap lives, and without it the scene is
+            // scenery with nothing to compose a session. The runner opened the
+            // track scene itself, so this is LoadTrack's second half only — the
+            // flag it sets matters as much as the load, or the scene would apply
+            // its own DrivingSceneDescriptor rules over the session configured in
+            // Boot. Also sets LaunchedFromMenu, which the tile-map mission has
+            // always run without: its numbers are a baseline, so it is left alone.
+            if (GameFlow.HasSceneTrack) GameFlow.AdoptOpenSceneTrack();
+
             var go = new GameObject("MissionWatcher");
             UnityEngine.Object.DontDestroyOnLoad(go);
             go.AddComponent<MissionWatcher>().Configure(_req);

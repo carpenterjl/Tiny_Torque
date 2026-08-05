@@ -373,9 +373,9 @@ static inline float tt_cam_balance(const CtrlInputs* in, int rows) {
  *
  * ─── cost ─────────────────────────────────────────────────────────────────
  *
- * A TtFrame is a fixed 128x96 block whatever the camera's real size, so the
- * [y][x] indexing needs no arithmetic and no allocation: 12 KB each, times
- * TT_CAM_FRAMES. The default 4 is about 48 KB of static memory. Define
+ * A TtFrame is a fixed 128x128 block whatever the camera's real size, so the
+ * [y][x] indexing needs no arithmetic and no allocation: 16 KB each, times
+ * TT_CAM_FRAMES. The default 4 is about 64 KB of static memory. Define
  * TT_CAM_FRAMES before including this header to keep more (a longer history)
  * or fewer (less memory). 1 is legal and means "the current frame only".
  *
@@ -384,12 +384,13 @@ static inline float tt_cam_balance(const CtrlInputs* in, int rows) {
  * per build waiting to be forgotten.
  */
 
-/* The camera's own clamps, from CameraSensor: width 8..128, height 8..96. A
- * frame larger than this cannot arrive from the game — but it is checked
- * anyway rather than trusted, because a silently cropped image is a bug you
- * find by wondering why the right-hand side of the world is missing. */
+/* The camera's own clamps, from CameraSensor: 8..128 on both axes. A frame
+ * larger than this cannot arrive from the game — but it is checked anyway
+ * rather than trusted, because a silently cropped image is a bug you find by
+ * wondering why the right-hand side of the world is missing. If those clamps
+ * ever move, these move with them; the two are a pair. */
 #define TT_CAM_MAX_W 128
-#define TT_CAM_MAX_H 96
+#define TT_CAM_MAX_H 128
 
 #ifndef TT_CAM_FRAMES
 #define TT_CAM_FRAMES 4

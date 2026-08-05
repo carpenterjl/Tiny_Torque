@@ -19,7 +19,11 @@ namespace AIHWSim.Sensors
     {
         [Header("Camera")]
         [Range(8, 128)] public int width = 64;
-        [Range(8, 96)] public int height = 48;
+        // 128 rather than the 96 it was: the cap used to be shaped like a
+        // letterboxed viewport, and a perception loop wants a square frame at
+        // least as often as it wants a wide one. Nothing downstream cared —
+        // the readback, the grayscale pack and the ABI are all width x height.
+        [Range(8, 128)] public int height = 48;
         public float fieldOfView = 60f;
         [Tooltip("Capture frame rate (Hz). Independent of the control rate.")]
         public float frameRateHz = 10f;
@@ -54,7 +58,7 @@ namespace AIHWSim.Sensors
         private void EnsureCamera(Transform vehicleRoot)
         {
             width = Mathf.Clamp(width, 8, 128);
-            height = Mathf.Clamp(height, 8, 96);
+            height = Mathf.Clamp(height, 8, 128);
 
             _rt = new RenderTexture(width, height, 16, RenderTextureFormat.ARGB32) { name = sensorName + "_RT" };
             _rt.Create();

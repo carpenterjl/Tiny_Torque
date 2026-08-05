@@ -114,6 +114,23 @@ namespace AIHWSim.Core
             SceneManager.LoadScene(TrackSceneName);
         }
 
+        /// <summary>
+        /// The second half of <see cref="LoadTrack"/>, for a caller that already
+        /// has the scene track open rather than needing it loaded — a headless
+        /// runner opens a scene directly, and reloading it here would tear down
+        /// the very thing it just opened.
+        ///
+        /// Pulls <c>TrackScene</c> in on top and sets the same
+        /// <see cref="LaunchedFromMenu"/> flag, so the two entry points cannot
+        /// drift on what "something outside the scene chose this" means.
+        /// </summary>
+        public static void AdoptOpenSceneTrack()
+        {
+            LaunchedFromMenu = true;
+            if (!SceneManager.GetSceneByName(TrackSceneName).isLoaded)
+                SceneManager.LoadScene(TrackSceneName, LoadSceneMode.Additive);
+        }
+
         public static void LoadGarage() => SceneManager.LoadScene(GarageSceneName);
         public static void LoadTrackBuilder() => SceneManager.LoadScene(TrackBuilderSceneName);
         public static void LoadMenu() => SceneManager.LoadScene(MenuSceneName);

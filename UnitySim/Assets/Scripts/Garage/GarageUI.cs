@@ -1623,7 +1623,7 @@ namespace AIHWSim.Garage
                     break;
                 case SensorType.Camera:
                     spec.camWidth = IntSlider("Width", spec.camWidth, 16, 128);
-                    spec.camHeight = IntSlider("Height", spec.camHeight, 16, 96);
+                    spec.camHeight = IntSlider("Height", spec.camHeight, 16, 128);
                     spec.camFov = Slider("FOV", spec.camFov, 20f, 110f);
                     spec.camRateHz = Slider("Rate Hz", spec.camRateHz, 1f, 30f);
                     break;

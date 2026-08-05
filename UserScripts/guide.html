@@ -168,8 +168,10 @@ preferred automatically if you already have it.</div>
 │   │   └── tt_controller.h <span class="c">helper library — shared by every script below</span>
 │   ├── <span class="y">MyController/</span>       <span class="c">one folder = one controller = one DLL</span>
 │   │   └── my_controller.c <span class="c">EDIT THIS — a working controller, speed loop and all</span>
-│   └── <span class="y">user_sim_skeleton/</span>   <span class="c">or start from nothing</span>
-│       └── user_sim_skeleton.c <span class="c">plumbing only: one voltage to change</span>
+│   ├── <span class="y">user_sim_skeleton/</span>   <span class="c">or start from nothing</span>
+│   │   └── user_sim_skeleton.c <span class="c">plumbing only: one voltage to change</span>
+│   └── <span class="y">camsnap/</span>            <span class="c">saves a camera frame you can open and look at</span>
+│       └── camsnap.c       <span class="c">writes camsnap.pgm and camsnap.txt</span>
 │
 ├── Controllers/            <span class="c">the game's own firmware, and the build system</span>
 │   ├── hal/controller_api.h  <span class="c">the actual contract. Worth reading.</span>
@@ -630,7 +632,7 @@ returns 1 only when it changed. Put your image processing behind that test and i
 times a second instead of a hundred.</p>
 
 <p><code>f-&gt;px[y][x]</code> is the picture, row 0 at the top, same as the live buffer.
-The block is a fixed 128×96 whatever the camera's real size — so the indexing needs no
+The block is a fixed 128×128 whatever the camera's real size — so the indexing needs no
 arithmetic — and <code>f-&gt;width</code>/<code>f-&gt;height</code> say how much of it is the
 image. The padding beyond that is black and stays black. Use <code>tt_frame_px(f, x, y)</code>
 when <code>x</code> and <code>y</code> come from a calculation rather than from a loop whose
@@ -645,7 +647,7 @@ will tell you how stale the newest frame is: at 10 Hz it swings between 0 and 0.
 steering from an image is steering from something up to a tenth of a second out of date. That
 is the camera, not the buffering, and a real one does the same.</div>
 
-<div class="note"><b>Memory.</b> One kept frame is 12 KB; the default four is about 48 KB of
+<div class="note"><b>Memory.</b> One kept frame is 16 KB; the default four is about 64 KB of
 static. <code>#define TT_CAM_FRAMES</code> before including the header to keep more or fewer
 — <code>1</code> is legal and means "the current frame only", in which case
 <code>tt_cam_frame(c, 1)</code> is always NULL. There is no <code>malloc</code> anywhere in

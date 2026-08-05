@@ -15,6 +15,8 @@ UserScripts/
     my_controller.c       edit this — a working controller with a speed loop
   user_sim_skeleton/
     user_sim_skeleton.c   or start here — plumbing only, one voltage to change
+  camsnap/
+    camsnap.c             saves a camera frame to disk, as a picture and as numbers
 ```
 
 One folder = one controller = one DLL, named after the folder. `MyController/` becomes
