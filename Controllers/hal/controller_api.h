@@ -12,13 +12,17 @@
  * original offset, so a v1 controller DLL (which never reads the new fields and
  * doesn't export ctrl_configure) still loads and runs.
  *
- * ABI v4 (this file) changes NO layout. It only pins down a convention that was
- * previously unstated: cam_pixels is TOP-DOWN (row 0 = top of the image). It
- * used to arrive bottom-up by accident of Unity's texture space. The version
- * bump exists purely so a controller written against v3 that assumed the old
- * order has something to notice — nothing about the struct moved, and any
- * controller that treats the frame symmetrically (left/right sums, whole-frame
- * brightness) is unaffected either way.
+ * ABI v4 changes NO layout. It only pins down a convention that was previously
+ * unstated: cam_pixels is TOP-DOWN (row 0 = top of the image). It used to arrive
+ * bottom-up by accident of Unity's texture space. The version bump exists purely
+ * so a controller written against v3 that assumed the old order has something to
+ * notice — nothing about the struct moved, and any controller that treats the
+ * frame symmetrically (left/right sums, whole-frame brightness) is unaffected
+ * either way.
+ *
+ * ABI v5 (this file) changes no layout either. It adds one OPTIONAL export,
+ * ctrl_get_vehicle(), which lets a controller name the car it wants to be
+ * loaded into. A DLL that does not export it is driven exactly as in v4.
  */
 #ifndef CONTROLLER_API_H
 #define CONTROLLER_API_H
@@ -33,7 +37,7 @@ extern "C" {
 #define CTRL_EXPORT __attribute__((visibility("default")))
 #endif
 
-#define CTRL_ABI_VERSION 4
+#define CTRL_ABI_VERSION 5
 
 /*
  * Sensor type tags. A vehicle in the sim is assembled from these parts; the
@@ -47,6 +51,34 @@ enum {
     SENSOR_CAMERA     = 5,  /* grayscale camera (pixels via cam_pixels)  */
     SENSOR_SUSPENSION = 6,  /* per-wheel strut: spring force, compression, tilt */
     SENSOR_BATTERY    = 7   /* pack: terminal voltage, total current, SoC (2026-07 append) */
+};
+
+/*
+ * Cars the controller may ask to be loaded into (ABI v5), for ctrl_get_vehicle()
+ * below. These are the built-in designs the game's own picker offers, by name —
+ * the numbers here are the stable identifier, and the host maps each one back to
+ * the picker entry it names.
+ *
+ * Cars only. The debug VW Tiguan (a full-scale physics reference, not a playable
+ * car) and the aircraft are deliberately absent: neither is something a car
+ * controller can drive, so there is no value in being able to name them.
+ *
+ * A design you saved yourself in the garage has no number here and never will —
+ * it did not exist when this header was compiled. Pick those in the menu; the
+ * pick is what CTRL_VEHICLE_MENU keeps.
+ */
+enum {
+    CTRL_VEHICLE_MENU        = 0,  /* no override — whatever the menu picked   */
+    CTRL_VEHICLE_STOCK       = 1,  /* "Stock Default", the plain 1/10 chassis  */
+    CTRL_VEHICLE_REAL_TWIN   = 2,  /* Real Twin 1/10 — every realism feature on */
+    CTRL_VEHICLE_TT_COUPE    = 3,
+    CTRL_VEHICLE_TT_BAJA     = 4,
+    CTRL_VEHICLE_TT_PATROL   = 5,
+    CTRL_VEHICLE_TT_RATTLETRAP = 6,
+    CTRL_VEHICLE_TT_REDLINE  = 7,
+    CTRL_VEHICLE_TT_HIGHWING = 8,
+    CTRL_VEHICLE_TT_AUTOPIA  = 9,
+    CTRL_VEHICLE_OPUS_VECTOR = 10  /* the F1TENTH-class research platform      */
 };
 
 /*
@@ -132,6 +164,24 @@ CTRL_EXPORT const char* ctrl_get_debug_names(void); /* comma-separated labels fo
  * duration of the call — copy anything you need to keep.
  */
 CTRL_EXPORT void        ctrl_configure(const SensorInfo* sensors, int count);
+
+/*
+ * OPTIONAL export (v5). One of the CTRL_VEHICLE_* values above: the car this
+ * controller wants to be loaded into. CTRL_VEHICLE_MENU (0) — and a DLL that
+ * does not export this at all — means "whatever the menu picked", which is the
+ * behaviour every controller had before v5.
+ *
+ * Called from the Simulate Controller screen BEFORE the car is built, and
+ * therefore before ctrl_init: at that point there is no car to configure and no
+ * state to consult, so this must answer from a constant. Anything else is a
+ * question asked too early. It is not called again once a session is running —
+ * a Build & Reload swaps the code driving the car, never the car.
+ *
+ * The host is the authority on what it can honour: a number it does not
+ * recognise, or a car the player has not unlocked, is reported on the console
+ * and the menu's own pick stands.
+ */
+CTRL_EXPORT int         ctrl_get_vehicle(void);
 
 #ifdef __cplusplus
 }

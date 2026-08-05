@@ -12,7 +12,9 @@ Simulate Controller → *Open the guide*.
 UserScripts/
   lib/tt_controller.h     helper library, shared by every script below
   MyController/
-    my_controller.c       edit this
+    my_controller.c       edit this — a working controller with a speed loop
+  user_sim_skeleton/
+    user_sim_skeleton.c   or start here — plumbing only, one voltage to change
 ```
 
 One folder = one controller = one DLL, named after the folder. `MyController/` becomes
@@ -22,6 +24,25 @@ One folder = one controller = one DLL, named after the folder. `MyController/` b
 2. Edit `MyController/my_controller.c` — the game can be running the whole time.
 3. Press **Build & Reload** again (it is in the pause menu too). The car keeps driving; the
    code behind it changes.
+
+## Choosing the car
+
+A controller can name the car it wants to be loaded into, with one optional
+function:
+
+```c
+CTRL_EXPORT int ctrl_get_vehicle(void) { return CTRL_VEHICLE_TT_COUPE; }
+```
+
+The Simulate Controller screen then builds that car and ignores its own Vehicle
+picker, saying so on the screen so it is not a mystery. `CTRL_VEHICLE_MENU` — and
+leaving the function out entirely — means "whatever the menu picked". The list of
+numbers is in `Controllers/hal/controller_api.h`: the stock chassis and the nine
+built-in cars. A design you saved yourself has no number (it did not exist when
+your DLL was compiled), and a car you have not unlocked is refused — pick those
+in the menu.
+
+## More controllers
 
 To make a second controller, copy the folder and rename it. Letters, digits and underscores
 only — the name has to work as both a build target and a file name. There is no list to add

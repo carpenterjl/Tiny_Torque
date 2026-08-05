@@ -104,9 +104,30 @@ name these. A wheel with no motor free-rolls. Manual mode drives the same slots
 | `ctrl_shutdown`         | `void (void)`                                | Called on unload / play-mode exit.       |
 | `ctrl_get_debug_names`  | `const char* (void)`                         | Comma-separated labels for `debug[]`.    |
 | `ctrl_configure`        | `void (const SensorInfo*, int count)`        | **Optional** (ABI v2). Sensor manifest; called once after `ctrl_init`. |
+| `ctrl_get_vehicle`      | `int (void)`                                 | **Optional** (ABI v5). One `CTRL_VEHICLE_*` value; the car to load into. |
 
 `debug[i]` is graphed/logged as `dbg/<name_i>`, where names come from
 `ctrl_get_debug_names()` in order.
+
+### Choosing a vehicle (ABI v5)
+
+`ctrl_get_vehicle()` returns one of the `CTRL_VEHICLE_*` numbers in
+`controller_api.h` — `CTRL_VEHICLE_MENU` (0), the stock chassis, or one of the
+nine built-in cars. It is read by the **Simulate Controller** screen only, and
+only at start: the answer decides which car gets built, so it is asked *before*
+`ctrl_init`, with no car and no manifest in existence yet. It must therefore
+answer from a constant. A **Build & Reload** mid-session swaps the code driving
+the car and never the car.
+
+Aircraft and the debug VW Tiguan have no numbers: neither is something a car
+controller drives. Designs saved in the garage have none either — they did not
+exist when the DLL was compiled, so those are picked in the menu.
+
+The host is the authority on what it honours. An unrecognised number, or a car
+the player has not unlocked, is reported on the console and the menu's own pick
+stands; the number is never a way around the picker's list. `0`, a controller
+built before v5, and a DLL with no such export are all the same answer: whatever
+the menu picked.
 
 ## Per-vehicle conventions
 

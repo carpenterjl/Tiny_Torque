@@ -21,6 +21,9 @@
  * All five must exist. The game loads this DLL by looking those names up: if
  * one is missing the car quietly coasts, because there is nothing to ask.
  *
+ * There is a sixth, ctrl_get_vehicle(), which is genuinely optional and is
+ * below: it lets this file choose which car it is loaded into.
+ *
  * ─── who is driving ───────────────────────────────────────────────────────
  *
  * By default your code is a DRIVER'S AID, not an autopilot. `in->setpoint[]`
@@ -119,6 +122,30 @@ CTRL_EXPORT int ctrl_init(float control_rate_hz) {
 
     g_ready = 1;
     return 0;
+}
+
+/*
+ * OPTIONAL: which car to drive.
+ *
+ * Return one of the CTRL_VEHICLE_* values from controller_api.h and the
+ * Simulate Controller screen builds that car, ignoring its own Vehicle picker.
+ * CTRL_VEHICLE_MENU — the default here — means "whatever the menu picked",
+ * which is how every controller behaved before this export existed. Delete the
+ * function entirely and you get the same thing.
+ *
+ * Useful when a controller is written for one specific machine: the gains below
+ * were tuned against a particular car, and returning CTRL_VEHICLE_OPUS_VECTOR
+ * (or STOCK, REAL_TWIN, TT_COUPE, TT_BAJA, TT_PATROL, TT_RATTLETRAP,
+ * TT_REDLINE, TT_HIGHWING, TT_AUTOPIA) is how you stop them being judged on a
+ * car they were never meant for. A design you saved yourself in the garage has
+ * no number — pick those in the menu.
+ *
+ * The game asks BEFORE the car exists, so this runs before ctrl_init and has to
+ * answer from a constant. A car you have not unlocked is refused, the menu's
+ * pick stands, and the console says so.
+ */
+CTRL_EXPORT int ctrl_get_vehicle(void) {
+    return CTRL_VEHICLE_MENU;
 }
 
 /*

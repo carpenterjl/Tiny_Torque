@@ -166,8 +166,10 @@ preferred automatically if you already have it.</div>
 │   ├── guide.html          <span class="c">this page</span>
 │   ├── lib/
 │   │   └── tt_controller.h <span class="c">helper library — shared by every script below</span>
-│   └── <span class="y">MyController/</span>       <span class="c">one folder = one controller = one DLL</span>
-│       └── my_controller.c <span class="c">EDIT THIS</span>
+│   ├── <span class="y">MyController/</span>       <span class="c">one folder = one controller = one DLL</span>
+│   │   └── my_controller.c <span class="c">EDIT THIS — a working controller, speed loop and all</span>
+│   └── <span class="y">user_sim_skeleton/</span>   <span class="c">or start from nothing</span>
+│       └── user_sim_skeleton.c <span class="c">plumbing only: one voltage to change</span>
 │
 ├── Controllers/            <span class="c">the game's own firmware, and the build system</span>
 │   ├── hal/controller_api.h  <span class="c">the actual contract. Worth reading.</span>
@@ -355,6 +357,8 @@ registration step and no header you have to implement.</p>
     <td>Free anything you allocated. Runs once per Build &amp; Reload, so a leak here is a leak per build.</td></tr>
 <tr><td><code>ctrl_get_debug_names()</code></td><td>at load</td>
     <td>Comma-separated names for your <code>debug[]</code> channels, so the graphs are labelled.</td></tr>
+<tr><td><code>ctrl_get_vehicle()</code></td><td>before the car exists</td>
+    <td><b>Genuinely optional.</b> Which car to drive — see below. Leave it out and the menu decides.</td></tr>
 </table>
 </div>
 
@@ -362,6 +366,35 @@ registration step and no header you have to implement.</p>
 — the game just cannot find the function, so the car coasts with no explanation. The build
 pane checks your sources for the four required names before it compiles and warns you if one
 is missing, because this failure is otherwise completely silent.</div>
+
+<h3>Choosing the car</h3>
+
+<p>The sixth function is the odd one out: it runs <em>before</em> there is a car, and its
+answer is which car gets built.</p>
+
+<pre><code>CTRL_EXPORT int ctrl_get_vehicle(void) {
+    return CTRL_VEHICLE_TT_COUPE;
+}</code></pre>
+
+<p>The Simulate Controller screen then builds a TT Coupe and ignores its own Vehicle picker —
+and says so on the screen, right under that picker, so a car you did not choose is never a
+mystery. Useful when your gains were tuned against one particular machine and judging them on
+anything else would be unfair to both.</p>
+
+<p>The numbers are listed in <code>Controllers/hal/controller_api.h</code>:
+<code>CTRL_VEHICLE_MENU</code> (the default — whatever the menu picked),
+<code>CTRL_VEHICLE_STOCK</code>, and one each for Real Twin 1/10, TT Coupe, TT Baja,
+TT Patrol, TT Rattletrap, TT Redline, TT Highwing, TT Autopia and Opus Vector.</p>
+
+<div class="note"><b>Two things it cannot do.</b> A car you designed and saved yourself has no
+number — it did not exist when your DLL was compiled, so pick those in the menu. And a car you
+have not unlocked is refused: the menu's pick stands and the console says why. Compiling a
+number is not a way around the picker's list.</div>
+
+<div class="note"><b>It must answer from a constant.</b> There is no car and no parts list at
+the moment this is called — that is the whole point of calling it then. Do not try to read
+anything. A <b>Build &amp; Reload</b> mid-drive swaps the code driving the car and never the
+car itself, so this is not asked again.</div>
 
 
 <h2 id="inputs">6. What your code can see</h2>

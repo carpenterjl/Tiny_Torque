@@ -98,4 +98,31 @@ namespace AIHWSim.Bridge
     // v2 optional export. Null when the loaded DLL predates ABI v2.
     [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
     public unsafe delegate void CtrlConfigureDelegate(SensorInfo* sensors, int count);
+
+    // v5 optional export. Null when the loaded DLL predates ABI v5.
+    [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+    public delegate int CtrlGetVehicleDelegate();
+
+    /// <summary>
+    /// Mirror of the CTRL_VEHICLE_* enum in controller_api.h — the cars a
+    /// controller may ask to be loaded into.
+    ///
+    /// The NUMBERS are the ABI; the names below are only how C# spells them. A
+    /// value here is compiled into somebody's DLL, so a row may be added but a
+    /// row's number may never be reused for a different car.
+    /// </summary>
+    public enum ControllerVehicle
+    {
+        Menu        = 0,   // no override — whatever the menu picked
+        Stock       = 1,
+        RealTwin    = 2,
+        TtCoupe     = 3,
+        TtBaja      = 4,
+        TtPatrol    = 5,
+        TtRattletrap= 6,
+        TtRedline   = 7,
+        TtHighwing  = 8,
+        TtAutopia   = 9,
+        OpusVector  = 10,
+    }
 }

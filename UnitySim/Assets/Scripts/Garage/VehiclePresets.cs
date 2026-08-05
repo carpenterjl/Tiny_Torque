@@ -92,6 +92,38 @@ namespace AIHWSim.Garage
 
         public static bool IsPreset(string display) => Resolve(display) != null;
 
+        /// <summary>
+        /// The picker entry a <c>CTRL_VEHICLE_*</c> number names — a prefixed
+        /// display name, <c>""</c> for the stock default, or null for
+        /// <see cref="ControllerVehicle.Menu"/> and for any number this build has
+        /// never heard of.
+        ///
+        /// Written out by NAME rather than indexed off <see cref="All"/>, because
+        /// the numbers are an ABI that is compiled into somebody's DLL and the
+        /// order of the rows above is not: reordering that array must not change
+        /// which car an existing controller asks for. The cost is that renaming a
+        /// preset without editing this table produces a name nothing resolves —
+        /// which is why the caller checks the answer against the picker's own list
+        /// and says so, rather than trusting it.
+        /// </summary>
+        public static string DisplayFor(ControllerVehicle v)
+        {
+            switch (v)
+            {
+                case ControllerVehicle.Stock:        return "";
+                case ControllerVehicle.RealTwin:     return Prefix + "Real Twin 1/10";
+                case ControllerVehicle.TtCoupe:      return Prefix + "TT Coupe";
+                case ControllerVehicle.TtBaja:       return Prefix + "TT Baja";
+                case ControllerVehicle.TtPatrol:     return Prefix + "TT Patrol";
+                case ControllerVehicle.TtRattletrap: return Prefix + "TT Rattletrap";
+                case ControllerVehicle.TtRedline:    return Prefix + "TT Redline";
+                case ControllerVehicle.TtHighwing:   return Prefix + "TT Highwing";
+                case ControllerVehicle.TtAutopia:    return Prefix + "TT Autopia";
+                case ControllerVehicle.OpusVector:   return Prefix + "Opus Vector";
+                default:                             return null;
+            }
+        }
+
         // ---- shared helpers --------------------------------------------------
 
         private static WheelSpec Wheel(string name, float x, float z, bool steer, bool powered)

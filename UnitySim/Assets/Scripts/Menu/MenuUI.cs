@@ -1074,6 +1074,53 @@ namespace AIHWSim.Menu
         private string SelectedControllerDll =>
             _ctlDlls.Count > 0 ? _ctlDlls[Mathf.Clamp(_ctlDllIdx, 0, _ctlDlls.Count - 1)] : "";
 
+        /// <summary>
+        /// The car the selected controller DLL asks for through its optional
+        /// <c>ctrl_get_vehicle()</c> export, as a picker display name — or null
+        /// when it asks for nothing, which is every controller written before
+        /// ABI v5.
+        ///
+        /// <paramref name="note"/> is a sentence for the screen, and it is not
+        /// empty only when there is something the player would otherwise have to
+        /// work out from a car they did not choose appearing on the grid. The
+        /// answer is checked against <c>_vehicles</c> — the picker's own list —
+        /// so a number naming a car this player has not unlocked, or a preset
+        /// that has been renamed out from under the table, is refused here
+        /// rather than resolved into a surprise.
+        /// </summary>
+        private string ControllerVehiclePick(out string note)
+        {
+            note = "";
+            string dll = SelectedControllerDll;
+            if (string.IsNullOrEmpty(dll)) return null;
+
+            string path = System.IO.Path.Combine(
+                AIHWSim.Build.ControllerWorkspace.PluginDir(), dll);
+            var want = AIHWSim.Bridge.ControllerVehicleProbe.Read(path);
+            if (want == AIHWSim.Bridge.ControllerVehicle.Menu) return null;
+
+            string name = VehiclePresets.DisplayFor(want);
+            if (name == null)
+            {
+                note = $"{dll} asks for vehicle #{(int)want}, which this build does " +
+                       "not have. Using the pick above.";
+                return null;
+            }
+            if (!_vehicles.Contains(name))
+            {
+                // Locked, or a preset renamed without its table. Either way the
+                // picker is the authority on what may be driven; compiling a
+                // number is not a way around it.
+                note = $"{dll} asks for {(name == "" ? "Stock Default" : name)}, " +
+                       "which is not available to you. Using the pick above.";
+                return null;
+            }
+
+            note = $"{dll} drives {(name == "" ? "Stock Default" : name)} — " +
+                   "the controller chose it, so the Vehicle row above is ignored.";
+            return name;
+        }
+
         private Vector2 _ctlScroll;
         private Vector2 _raceScroll;
 
@@ -1213,6 +1260,14 @@ namespace AIHWSim.Menu
             ControllerBuildPanel.Draw(logHeight: 120f, followDll: SelectedControllerDll);
             GUILayout.Space(6);
             DrawVehicleRow(Page.SpController);
+            // A controller may name its own car (ctrl_get_vehicle, ABI v5). Said
+            // here rather than left to be discovered on the grid: the Vehicle row
+            // is right above, and a picker that is being overruled without a word
+            // is worse than no picker at all.
+            string ctlVehNote;
+            ControllerVehiclePick(out ctlVehNote);
+            if (!string.IsNullOrEmpty(ctlVehNote))
+                GUILayout.Label("   " + ctlVehNote, GarageSkin.StatLabel);
             // Not DrawTrackRow: this screen picks from free roam's list, which is
             // the union of all three track sources. The race list deliberately
             // hides the maps with no finish line, and a map with no finish line is
@@ -1275,7 +1330,14 @@ namespace AIHWSim.Menu
             string map = _roamMaps.Count > 0
                 ? _roamMaps[Mathf.Clamp(_ctlTrackIdx, 0, _roamMaps.Count - 1)] : "";
             s.lastControllerMap = map;
-            StartSinglePlayer(MatchMode.Race, map);
+
+            // The DLL's own choice of car, if it made one. Only this screen asks:
+            // it is the one place where the controller is the thing under test and
+            // the car is its subject. A race entered from any other page runs the
+            // car that page picked, whatever DLL the design happens to name.
+            string veh = ControllerVehiclePick(out string why);
+            if (!string.IsNullOrEmpty(why)) Debug.Log("[ControllerVehicle] " + why);
+            StartSinglePlayer(MatchMode.Race, map, veh);
         }
 
         /// <summary>DLL the Simulate Controller screen wants this car to load, or
@@ -1317,11 +1379,18 @@ namespace AIHWSim.Menu
         /// keeps its own map pick — today only Simulate Controller. Non-null also
         /// suppresses the <c>lastTrack</c> write below, so that screen cannot
         /// overwrite the race page's saved circuit with a test track.</param>
-        private void StartSinglePlayer(MatchMode mode, string trackOverride = null)
+        /// <param name="vehicleOverride">A picker vehicle name chosen by something
+        /// other than the player — today only a controller DLL's
+        /// <c>ctrl_get_vehicle()</c>. Like the track override it is deliberately
+        /// NOT saved: the vehicle index is shared across every setup screen, and a
+        /// controller that asks for a Baja must not leave the race page in one.</param>
+        private void StartSinglePlayer(MatchMode mode, string trackOverride = null,
+                                       string vehicleOverride = null)
         {
             bool roam = mode == MatchMode.FreeRoam;
             bool arena = mode != MatchMode.Race && !roam;
-            string vehicle = _vehicles[_vehicleIdx];
+            string picked = _vehicles[_vehicleIdx];
+            string vehicle = vehicleOverride ?? picked;
             string track = trackOverride ?? _tracks[_trackIdx];
             string roamMap = _roamMaps.Count > 0
                 ? _roamMaps[Mathf.Clamp(_roamIdx, 0, _roamMaps.Count - 1)] : "";
@@ -1377,7 +1446,8 @@ namespace AIHWSim.Menu
             // After the roster exists: a team mode has to split it.
             ApplyMatchRules(mode);
 
-            s.lastVehicle = vehicle;
+            // The PICK, never the override — see the vehicleOverride doc above.
+            s.lastVehicle = picked;
             if (trackOverride == null) s.lastTrack = track;
             s.lastRoamMap = roamMap;
             s.lastLaps = _spLaps;
