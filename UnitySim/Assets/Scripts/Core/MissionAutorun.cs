@@ -31,6 +31,13 @@ namespace AIHWSim.Core
             public float timeoutSec = 45f;
             public string vehicle = "Opus Vector";
             public string track = "Opus Proving Ground";
+            /// <summary>Firmware to run instead of the one the vehicle names.
+            /// Empty — the default, and what every mission run uses — leaves the
+            /// design untouched. It exists so the harness can be pointed at a
+            /// different DLL without inventing a second one: running some other
+            /// controller on a known car and a known track, unattended, is the
+            /// same job with a different subject.</summary>
+            public string controllerDll = "";
         }
 
         [Serializable]
@@ -94,6 +101,11 @@ namespace AIHWSim.Core
                 _req = null;
                 return;
             }
+
+            // Resolve hands back a freshly built design every call, so overwriting
+            // the DLL name here cannot leak into anything else.
+            if (!string.IsNullOrEmpty(_req.controllerDll))
+                design.controllerDll = _req.controllerDll;
 
             GameFlow.ActiveDesign = design;
             GameFlow.ActiveTrack = track;

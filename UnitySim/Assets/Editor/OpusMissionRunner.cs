@@ -33,7 +33,9 @@ namespace AIHWSim.EditorTools
         {
             string result = ArgValue("-opusResult") ?? DefaultResultPath();
             float timeout = float.TryParse(ArgValue("-opusTimeout"), out float t) ? t : 45f;
-            Begin(result, timeout);
+            // -opusController runs a different DLL on the same car and track.
+            // Absent — every mission run — leaves the design's own firmware alone.
+            Begin(result, timeout, ArgValue("-opusController") ?? "");
         }
 
         private static string DefaultResultPath() =>
@@ -48,9 +50,14 @@ namespace AIHWSim.EditorTools
             return null;
         }
 
-        private static void Begin(string resultPath, float timeoutSec)
+        private static void Begin(string resultPath, float timeoutSec, string controllerDll = "")
         {
-            var req = new MissionAutorun.Request { resultPath = resultPath, timeoutSec = timeoutSec };
+            var req = new MissionAutorun.Request
+            {
+                resultPath = resultPath,
+                timeoutSec = timeoutSec,
+                controllerDll = controllerDll ?? "",
+            };
             File.WriteAllText(MissionAutorun.RequestPath, JsonUtility.ToJson(req, true));
             if (File.Exists(resultPath)) File.Delete(resultPath);
 
