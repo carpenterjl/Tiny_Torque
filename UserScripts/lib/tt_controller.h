@@ -332,4 +332,226 @@ static inline float tt_cam_balance(const CtrlInputs* in, int rows) {
     return (r - l) / 255.0f;
 }
 
+/* ──────────────────────── kept frames (2D, buffered) ─────────────────────── */
+
+/*
+ * Everything above reads the LIVE frame — in->cam_pixels, which is the game's
+ * own buffer handed to you by pointer and dead the instant ctrl_step returns.
+ * That is fine for "which side is brighter". It is no good at all for anything
+ * that has to compare this frame with the last one, or scan an image over more
+ * than one tick, or keep a picture of the moment something went wrong.
+ *
+ * TtCamera is the fix: your own storage, on your side of the boundary, holding
+ * the last few frames as plain 2D arrays.
+ *
+ *     static TtCamera g_cam;                  // ~48 KB of static, see below
+ *
+ *     CTRL_EXPORT int ctrl_init(float hz) { tt_cam_init(&g_cam); ... }
+ *
+ *     CTRL_EXPORT void ctrl_step(const CtrlInputs* in, CtrlOutputs* out) {
+ *         if (tt_cam_update(&g_cam, in)) {
+ *             const TtFrame* f = tt_cam_newest(&g_cam);
+ *             int p = f->px[10][32];          // row 10 from the TOP, column 32
+ *             ...                             // your perception, once per frame
+ *         }
+ *     }
+ *
+ * ─── why the `if` ─────────────────────────────────────────────────────────
+ *
+ * ctrl_step runs at 100 Hz. The camera captures at its own rate — 10 Hz on the
+ * Opus Vector — so you are handed the SAME picture about ten times in a row,
+ * and the ABI carries no frame counter to tell you which reads are new.
+ * tt_cam_update works it out by comparing the bytes, and returns 1 only when
+ * the image actually changed. Putting your image processing behind that test
+ * is the difference between running it 10 times a second and 100.
+ *
+ * The honest edge of that: two identical captures are indistinguishable from
+ * one capture. Park facing a blank wall and the sequence number stops
+ * advancing, because nothing about the picture is new. For a controller that
+ * reacts to what it sees, that is the right answer; if you need to know the
+ * camera is still alive, watch in->time_s, not this.
+ *
+ * ─── cost ─────────────────────────────────────────────────────────────────
+ *
+ * A TtFrame is a fixed 128x96 block whatever the camera's real size, so the
+ * [y][x] indexing needs no arithmetic and no allocation: 12 KB each, times
+ * TT_CAM_FRAMES. The default 4 is about 48 KB of static memory. Define
+ * TT_CAM_FRAMES before including this header to keep more (a longer history)
+ * or fewer (less memory). 1 is legal and means "the current frame only".
+ *
+ * There is no malloc anywhere in here, deliberately. The DLL is torn down and
+ * rebuilt on every Build & Reload, and a buffer that has to be freed is a leak
+ * per build waiting to be forgotten.
+ */
+
+/* The camera's own clamps, from CameraSensor: width 8..128, height 8..96. A
+ * frame larger than this cannot arrive from the game — but it is checked
+ * anyway rather than trusted, because a silently cropped image is a bug you
+ * find by wondering why the right-hand side of the world is missing. */
+#define TT_CAM_MAX_W 128
+#define TT_CAM_MAX_H 96
+
+#ifndef TT_CAM_FRAMES
+#define TT_CAM_FRAMES 4
+#endif
+
+/*
+ * One kept frame. `px` is the picture: px[y][x], 0 (black) .. 255 (white),
+ * ROW 0 IS THE TOP exactly as the live buffer is.
+ *
+ * Only [0..height) x [0..width) is the image. The rest of the block is zero
+ * and stays zero — it is padding that exists so the row stride is a constant.
+ * Read px[y][x] outside the real image and you get black, not garbage, but you
+ * are still reading something that is not a picture: use tt_frame_px when x
+ * and y come from a calculation rather than from a loop you wrote the bounds
+ * of yourself.
+ */
+typedef struct TtFrame {
+    unsigned char px[TT_CAM_MAX_H][TT_CAM_MAX_W];
+    int   width, height;   /* the real image size inside px                  */
+    float time_s;          /* in->time_s when this frame was first seen      */
+    unsigned long seq;     /* 1 for the first frame kept, then 2, 3, ...      */
+} TtFrame;
+
+/*
+ * A ring of the last TT_CAM_FRAMES distinct frames. Declare one `static` at
+ * file scope and initialise it in ctrl_init.
+ */
+typedef struct TtCamera {
+    TtFrame frames[TT_CAM_FRAMES];
+    int  newest;           /* ring index of the newest frame                 */
+    int  held;             /* how many frames are valid (0..TT_CAM_FRAMES)   */
+    unsigned long seq;     /* distinct frames seen since tt_cam_init         */
+    int  oversize;         /* set if a frame arrived too big to keep         */
+} TtCamera;
+
+/* Zeroes the ring and forgets everything. Call from ctrl_init — the struct is
+ * static, so on a hot reload it is fresh anyway, but a controller that is ever
+ * reset mid-session must not carry a stale history across it. */
+static inline void tt_cam_init(TtCamera* c) {
+    if (c == 0) return;
+    memset(c, 0, sizeof(*c));
+    c->newest = -1;
+}
+
+/* How many frames are being held right now, 0 .. TT_CAM_FRAMES. */
+static inline int tt_cam_held(const TtCamera* c) { return c == 0 ? 0 : c->held; }
+
+/*
+ * A kept frame by age: 0 is the newest, 1 the one before it, and so on.
+ * Returns NULL when that many frames have not been seen yet, or when age is
+ * outside the ring — so `const TtFrame* prev = tt_cam_frame(&g_cam, 1);
+ * if (prev) ...` is the shape of every comparison against the past.
+ */
+static inline const TtFrame* tt_cam_frame(const TtCamera* c, int age) {
+    if (c == 0 || age < 0 || age >= c->held) return 0;
+    int i = c->newest - age;
+    while (i < 0) i += TT_CAM_FRAMES;
+    return &c->frames[i];
+}
+
+/* The newest kept frame, or NULL before the first one arrives. */
+static inline const TtFrame* tt_cam_newest(const TtCamera* c) {
+    return tt_cam_frame(c, 0);
+}
+
+/*
+ * Take a copy of the live frame if it is one you have not seen.
+ *
+ * Returns 1 when a new frame was stored (this is the tick to do your image
+ * work on), 0 when the picture is unchanged, when there is no camera fitted,
+ * or when the frame is too large for TtFrame to hold — that last case also
+ * sets c->oversize, which stays set, so it is worth reporting on a debug
+ * channel once rather than testing every tick.
+ */
+static inline int tt_cam_update(TtCamera* c, const CtrlInputs* in) {
+    if (c == 0 || in == 0 || in->cam_pixels == 0) return 0;
+
+    int w = in->cam_width, h = in->cam_height;
+    if (w <= 0 || h <= 0) return 0;
+    if (w > TT_CAM_MAX_W || h > TT_CAM_MAX_H) { c->oversize = 1; return 0; }
+
+    /* Same size and same bytes as the newest kept frame? Then the camera has
+     * not captured since — the game hands the identical buffer over and over
+     * between captures, and there is no flag in the ABI that says so. */
+    const TtFrame* last = tt_cam_newest(c);
+    if (last != 0 && last->width == w && last->height == h) {
+        int same = 1;
+        for (int y = 0; y < h; y++)
+            if (memcmp(last->px[y], in->cam_pixels + (long)y * w, (size_t)w) != 0) {
+                same = 0;
+                break;
+            }
+        if (same) return 0;
+    }
+
+    int i = c->newest + 1;
+    if (i >= TT_CAM_FRAMES) i = 0;
+    TtFrame* f = &c->frames[i];
+
+    /* Clear only the region the last tenant used but this frame will not, so a
+     * camera that shrinks cannot leave the old image showing through the
+     * padding. The common case — same size every frame — copies and no more. */
+    if (f->width > w || f->height > h) memset(f->px, 0, sizeof(f->px));
+
+    for (int y = 0; y < h; y++)
+        memcpy(f->px[y], in->cam_pixels + (long)y * w, (size_t)w);
+
+    f->width  = w;
+    f->height = h;
+    f->time_s = in->time_s;
+    f->seq    = ++c->seq;
+
+    c->newest = i;
+    if (c->held < TT_CAM_FRAMES) c->held++;
+    return 1;
+}
+
+/* One pixel of a kept frame, bounds-checked against the REAL image rather than
+ * the padded block: 0 for off-frame, for a NULL frame, and for black. Use
+ * f->px[y][x] directly when you control the loop bounds and want the speed. */
+static inline int tt_frame_px(const TtFrame* f, int x, int y) {
+    if (f == 0) return 0;
+    if (x < 0 || y < 0 || x >= f->width || y >= f->height) return 0;
+    return f->px[y][x];
+}
+
+/*
+ * Mean brightness (0..255) of a rectangle of a kept frame, clipped to the
+ * image. -1 when the frame is NULL or the rectangle misses it entirely — the
+ * same "not there" / "very dark" distinction tt_cam_brightness makes on the
+ * live buffer, because the mistake it prevents is the same one.
+ */
+static inline float tt_frame_mean(const TtFrame* f,
+                                  int x0, int y0, int x1, int y1) {
+    if (f == 0 || f->width <= 0 || f->height <= 0) return -1.0f;
+    if (x0 > x1) { int t = x0; x0 = x1; x1 = t; }
+    if (y0 > y1) { int t = y0; y0 = y1; y1 = t; }
+    if (x0 < 0) x0 = 0;
+    if (y0 < 0) y0 = 0;
+    if (x1 > f->width  - 1) x1 = f->width  - 1;
+    if (y1 > f->height - 1) y1 = f->height - 1;
+    if (x0 > x1 || y0 > y1) return -1.0f;
+
+    long sum = 0, n = 0;
+    for (int y = y0; y <= y1; y++)
+        for (int x = x0; x <= x1; x++) { sum += f->px[y][x]; n++; }
+    return n > 0 ? (float)sum / (float)n : -1.0f;
+}
+
+/*
+ * Seconds since the newest kept frame was captured, or -1 with nothing kept.
+ *
+ * Worth watching once: at a 10 Hz camera and a 100 Hz control loop this swings
+ * between 0 and 0.1 s every frame, and a controller that steers from an image
+ * is steering from something up to a tenth of a second out of date. That is
+ * not a bug in the buffering, it is the camera, and it is the same lag a real
+ * one has.
+ */
+static inline float tt_cam_age(const TtCamera* c, const CtrlInputs* in) {
+    const TtFrame* f = tt_cam_newest(c);
+    if (f == 0 || in == 0) return -1.0f;
+    return in->time_s - f->time_s;
+}
+
 #endif /* TT_CONTROLLER_H */

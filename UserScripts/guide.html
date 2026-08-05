@@ -596,6 +596,62 @@ pale road across dark ground; negate it to follow a dark line across a pale floo
 while <code>ctrl_step</code> runs at 100, so the same frame is handed to you ten times over.
 Do not treat consecutive frames as consecutive moments in time.</div>
 
+<h3>Keeping frames: <code>TtCamera</code></h3>
+
+<p>Everything above reads the <b>live</b> frame. <code>in-&gt;cam_pixels</code> is the game's
+own buffer, handed to you by pointer, and it is <b>dead the instant <code>ctrl_step</code>
+returns</b> — keeping that pointer is a use-after-free that will not announce itself. That is
+fine for "which side is brighter". It is no good for comparing this frame with the last one,
+or scanning an image across several ticks, or holding a picture of the moment something went
+wrong.</p>
+
+<p><code>TtCamera</code> is your own storage on your side of the boundary, holding the last
+few frames as plain 2D arrays:</p>
+
+<pre><code>static TtCamera g_cam;                       /* ~48 KB of static memory */
+
+CTRL_EXPORT int ctrl_init(float hz) { tt_cam_init(&amp;g_cam); return 0; }
+
+CTRL_EXPORT void ctrl_step(const CtrlInputs* in, CtrlOutputs* out) {
+    memset(out, 0, sizeof(*out));
+
+    if (tt_cam_update(&amp;g_cam, in)) {         /* true only on a NEW frame */
+        const TtFrame* f = tt_cam_newest(&amp;g_cam);
+        int p = f-&gt;px[10][32];               /* row 10 from the TOP, column 32 */
+
+        const TtFrame* prev = tt_cam_frame(&amp;g_cam, 1);   /* NULL until there is one */
+        if (prev) { /* ...what moved between the two... */ }
+    }
+}</code></pre>
+
+<p>The <code>if</code> is the point. Since the ABI carries no frame counter,
+<code>tt_cam_update</code> works out whether the picture is new by comparing the bytes, and
+returns 1 only when it changed. Put your image processing behind that test and it runs ten
+times a second instead of a hundred.</p>
+
+<p><code>f-&gt;px[y][x]</code> is the picture, row 0 at the top, same as the live buffer.
+The block is a fixed 128×96 whatever the camera's real size — so the indexing needs no
+arithmetic — and <code>f-&gt;width</code>/<code>f-&gt;height</code> say how much of it is the
+image. The padding beyond that is black and stays black. Use <code>tt_frame_px(f, x, y)</code>
+when <code>x</code> and <code>y</code> come from a calculation rather than from a loop whose
+bounds you wrote yourself.</p>
+
+<div class="note"><b>Two identical captures look like one.</b> The history is of
+<em>distinct</em> frames, not of captures. Park facing a blank wall and
+<code>f-&gt;seq</code> stops advancing, because nothing about the picture is new — which is
+the right answer for a controller that reacts to what it sees. If you need to know the camera
+is still alive, watch <code>in-&gt;time_s</code>. And <code>tt_cam_age(&amp;g_cam, in)</code>
+will tell you how stale the newest frame is: at 10 Hz it swings between 0 and 0.1 s, so a car
+steering from an image is steering from something up to a tenth of a second out of date. That
+is the camera, not the buffering, and a real one does the same.</div>
+
+<div class="note"><b>Memory.</b> One kept frame is 12 KB; the default four is about 48 KB of
+static. <code>#define TT_CAM_FRAMES</code> before including the header to keep more or fewer
+— <code>1</code> is legal and means "the current frame only", in which case
+<code>tt_cam_frame(c, 1)</code> is always NULL. There is no <code>malloc</code> anywhere in
+it: the DLL is torn down and rebuilt on every Build &amp; Reload, and a buffer that has to be
+freed is a leak per build waiting to be forgotten.</div>
+
 
 <h2 id="helpers">10. The helper library</h2>
 
@@ -616,7 +672,9 @@ in the structs, so you can ignore it entirely and write against
 <tr><td><code>tt_speed</code></td><td>Ground speed in m/s from the four wheels.</td></tr>
 <tr><td><code>tt_drive_volts / tt_drive</code></td><td>Same command to every motor, clamped per motor.</td></tr>
 <tr><td><code>tt_steer / tt_brake</code></td><td>Write the steering and brake slots, clamped.</td></tr>
-<tr><td><code>tt_cam_pixel / _brightness / _balance</code></td><td>Camera reads that cannot run off the end of the frame.</td></tr>
+<tr><td><code>tt_cam_pixel / _brightness / _balance</code></td><td>Camera reads of the LIVE frame that cannot run off the end of it.</td></tr>
+<tr><td><code>tt_cam_init / _update / _newest / _frame</code></td><td>Keep the last few frames on your side of the boundary; <code>_update</code> is true only when the picture is new.</td></tr>
+<tr><td><code>tt_frame_px / _mean</code>, <code>tt_cam_age / _held</code></td><td>Read a kept frame as <code>px[y][x]</code>, average a region, ask how stale it is.</td></tr>
 </table>
 </div>
 

@@ -876,6 +876,16 @@ per-car motor manifest. Everything in it is `static inline`, so there is nothing
 to link, and a controller that ignores it entirely is equally valid —
 `car_sensors.c` is written that way on purpose.
 
+It also carries the one thing that is not a wrapper: `TtCamera`, a fixed-size
+ring of kept frames. `in->cam_pixels` is the game's own buffer, pinned only for
+the duration of the `ctrl_step` call, so anything that compares one frame with
+the next has to copy first. `tt_cam_update` does that copy, exposes each frame as
+a 2D `px[y][x]` block with row 0 at the top, and returns true only when the
+picture actually changed — which matters because the camera captures at ~10 Hz
+while `ctrl_step` runs at 100, and the ABI carries no frame counter to say which
+reads are new. No allocation: the DLL is rebuilt on every hot reload, and a
+buffer that has to be freed is a leak per build.
+
 Three things on the C# side make this feel like part of the game rather than a
 folder convention:
 
