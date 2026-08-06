@@ -169,6 +169,11 @@ namespace AIHWSim.Garage
             {
                 w.loadSensitivity = 0.15f;
                 w.balloonPct = 3f;
+                // Cold pressure, which turns on warm-up grip, the gas-law pressure
+                // rise, and pressure's effect on rolling resistance and radius.
+                // 180 kPa is the optimum, so this preset starts correctly inflated
+                // and cold — the tyre's first lap is its worst, which is the point.
+                w.pressureKpa = TyreThermal.PressOptKpa;
                 if (w.powered)
                 {
                     // MotorParams.Default() already carries Coulomb 1 / rotor J /
@@ -214,6 +219,27 @@ namespace AIHWSim.Garage
         // (coupepaint/bajapaint/patrolpaint tokens) and no renderer binds the
         // tintable channel any more, so the colour is never seen.
 
+        /// <summary>
+        /// Give a preset's tyres a cold pressure, which is what switches the
+        /// thermal model on for it.
+        ///
+        /// <b>Deliberately not applied to everything.</b> The Tiguan and the Opus
+        /// Vector author no pressure and must not: the physics suite's braking,
+        /// skidpad and understeer figures are measurements of the TYRE FORCE
+        /// model, and warming tyres underneath them would turn every one of those
+        /// into a measurement of this instead. The Opus mission has a second
+        /// reason of its own — pressure moves the rolling radius, and that car's
+        /// front wheels are its odometry.
+        ///
+        /// 180 kPa is the grip optimum, so a preset starts correctly inflated and
+        /// COLD. The first lap being the worst one is the feature.
+        /// </summary>
+        private static VehicleDesign Inflate(VehicleDesign d)
+        {
+            foreach (var w in d.wheels) w.pressureKpa = TyreThermal.PressOptKpa;
+            return d;
+        }
+
         /// <summary>TT Coupe — RWD street sports coupe, gold trim, glass canopy.</summary>
         private static VehicleDesign TTCoupe()
         {
@@ -245,7 +271,7 @@ namespace AIHWSim.Garage
             AddEncoders(d);
             // The rear-deck whip with the amber tip, exactly where it is modeled.
             d.antennas.Add(new AntennaSpec { name = "whip", localPos = new Vector3(0.0609f, 0.005f, -0.1569f), tiltDeg = 0f, antennaStyle = 1 });
-            return d;
+            return Inflate(d);
         }
 
         /// <summary>TT Baja — 4WD tube-frame trophy buggy, roof pods, flag whip.</summary>
@@ -285,7 +311,7 @@ namespace AIHWSim.Garage
             // Roof pod cluster + the rear flag whip, at their authored mounts.
             d.lights.Add(new LightSpec { name = "pods", localPos = new Vector3(0f, 0.0397f, 0.0301f), style = 1 });
             d.antennas.Add(new AntennaSpec { name = "flag", localPos = new Vector3(0.0695f, -0.0124f, -0.1416f), tiltDeg = 0f, antennaStyle = 2 });
-            return d;
+            return Inflate(d);
         }
 
         /// <summary>TT Patrol — RWD sedan with push bar, strobing light bar and twin whips.</summary>
@@ -321,7 +347,7 @@ namespace AIHWSim.Garage
             // Roof light bar (strobes at runtime) + the twin trunk whips.
             d.lights.Add(new LightSpec { name = "bar", localPos = new Vector3(0f, 0.0341f, -0.0229f), style = 0 });
             d.antennas.Add(new AntennaSpec { name = "whips", localPos = new Vector3(0f, -0.0008f, -0.161f), tiltDeg = 0f, antennaStyle = 3 });
-            return d;
+            return Inflate(d);
         }
 
         // ---- the four Legendary cars ------------------------------------------
@@ -369,7 +395,9 @@ namespace AIHWSim.Garage
             d.sensors.Add(new SensorSpec { name = "cam_front", kind = SensorType.Camera, localPos = new Vector3(0f, 0.10f, 0.05f), aimEuler = new Vector3(6f, 0f, 0f) });
             d.sensors.Add(new SensorSpec { name = "tof_front", kind = SensorType.Tof, localPos = new Vector3(0f, 0.03f, 0.22f), range = 4f });
             AddEncoders(d);
-            return d;
+            // One call for all four Legendary cars — the shared spine is the right
+            // place, since none of them has a reason to differ on tyre pressure.
+            return Inflate(d);
         }
 
         /// <summary>TT Rattletrap — rusted-out wrecker, boom and hook on the deck.

@@ -13,6 +13,15 @@ namespace AIHWSim.Garage
         public float totalStallTorqueNm;   // summed geared stall torque at the wheels
         public float estTopSpeedMs;        // drag-limited (motor thrust = aero drag)
         public float dragAtTopN;           // aero drag at the estimated top speed
+
+        /// <summary>The body's own drag coefficient and reference area, as the
+        /// physics will use them. <see cref="bodyCdEstimated"/> is false when the
+        /// design or the asset authored the figure, which is the difference
+        /// between "we measured your car" and "somebody published this".</summary>
+        public float bodyCd;
+        public float bodyFrontalArea;      // m²
+        public bool bodyCdEstimated;
+
         public float downforceAtTopN;      // aero downforce at the estimated top speed
         public float rideFreqHz;           // suspension natural frequency (sprung)
         public float sagPct;               // static compression as % of travel
@@ -96,6 +105,20 @@ namespace AIHWSim.Garage
                 if (top < noLoadTop) noLoadTop = top;
             }
 
+            // The body's wheels, for the estimator's exposed-wheel term: an
+            // open-wheel car drags like one, and the garage should say so before
+            // the player finds out on the straight.
+            var discs = new System.Collections.Generic.List<WheelDisc>(d.wheels.Count);
+            foreach (var w in d.wheels) discs.Add(new WheelDisc(w.localPos, w.radius));
+
+            // Through the SAME resolution the physics uses, overrides and all.
+            // Reading the raw table here is what used to make the Tiguan's panel
+            // quote a Cd of 0.80 for a car driving around on its published 0.31.
+            // Resolved BEFORE the unpowered early-out, because a rolling chassis
+            // still has a shape and the panel still shows it.
+            r.bodyCdEstimated = AeroDynamics.ResolveBodyAero(d.Body, d.bodySize, discs,
+                d.dragCd, d.frontalAreaM2, out r.bodyCd, out r.bodyFrontalArea);
+
             if (r.powered == 0) { r.estTopSpeedMs = 0f; return r; }
 
             // Aero drag/downforce areas including parts.
@@ -110,7 +133,8 @@ namespace AIHWSim.Garage
                         yawDeg = a.yawDeg,
                         sizeScale = Mathf.Clamp(a.sizeScale <= 0f ? 1f : a.sizeScale, 0.6f, 1.6f),
                     });
-            float cdA = AeroDynamics.TotalCdA(d.Body, d.bodySize, parts);
+            float cdA = AeroDynamics.TotalCdA(d.Body, d.bodySize, parts, discs,
+                                              d.dragCd, d.frontalAreaM2);
             float clA = AeroDynamics.TotalClA(d.Body, parts);
 
             // Aero balance: straight-line downforce share ahead of the CoM (the

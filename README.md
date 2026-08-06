@@ -268,8 +268,14 @@ tires, 540-class brushed motors on a 2S pack with an ESC current limit,
 VL53L1X-class ToF), tracks, and cameras all sized to match — 1 Unity unit is
 still 1 real meter, so sensor readings and speeds (shown in **m/s**) transfer
 directly to real hardware. **Aerodynamics** is modeled physically: quadratic
-body drag from a per-shape drag coefficient (new **Shell** and **LowRacer**
-body styles are the slippery ones) and placeable **AERO parts** in the garage —
+body drag whose coefficient and reference area are **measured off the body's own
+geometry** — the game projects the shell's mesh onto a frontal grid at sixteen
+stations down its length and reads the true silhouette area, how abruptly the
+body builds and then abandons that area, how much of the outline is holes rather
+than car, and which wheels are standing out in the airstream. So a bare tube
+frame drags less than an enclosed cabin because it genuinely has less area, a
+square-fronted box drags more than either, and reshaping a car in the garage
+changes its top speed. Plus placeable **AERO parts** in the garage —
 a rear **wing** with an attack-angle slider (more angle = more rear downforce,
 more drag), a front **splitter**, **side dams**, and **canards** — each
 applying its force at its mounted position, so a rear wing genuinely plants
@@ -798,6 +804,21 @@ Iteration 22 replaced the physics floor itself (these apply to **all** vehicles)
   were simulator artifacts; under the brush model they measure ~0.0 % and ~1 %
   — physical values (see `Opus_Car_Spec/calibration.md`). Dev A/B switch:
   `TyreModel.Enabled`.
+- **Tyre temperature and pressure** — set a cold pressure per wheel in the
+  garage (▸ Tire realism) and the tyre becomes a thing that changes during a
+  run. Temperature integrates from the friction power the tyre model is already
+  producing, cooled by airflow; grip follows a cold/optimal/overheated window,
+  so the first lap is the worst one and a sustained drift eventually goes
+  greasy. Running pressure follows the temperature by the gas law — 180 kPa cold
+  reads about 207 hot — and pressure in turn moves the grip optimum, the rolling
+  resistance and the rolling radius, damping the centrifugal ballooning that
+  inflation physically resists. A soft tyre drags more, the drag makes heat, and
+  the heat takes some of the drag back.
+  **0 kPa means the model is off**, which is every design saved before this
+  existed; the shipped presets and new garage cars start at the 180 kPa optimum.
+  Under **arcade handling** it is off unless you tick *Tyre temperature +
+  pressure* beside the handling toggle, because the arcade grip floor was
+  balanced against tyres that are always warm.
 - **ESC drive/brake/reverse state machine** — negative throttle while rolling
   is a proportional shorted-winding brake (force ∝ duty × speed, fading to
   nothing at rest, drawing nothing from the pack); reverse engages only after

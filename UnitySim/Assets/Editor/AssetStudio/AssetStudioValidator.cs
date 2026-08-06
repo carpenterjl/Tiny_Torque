@@ -463,9 +463,13 @@ namespace AIHWSim.AssetTools
                     if (b == null || b.id != m.Key) why.Add(Missing("BodyCatalog"));
                     else if (b.meshKey != m.Key)
                         why.Add($"BodyCatalog has \"{m.Key}\" pointing at mesh \"{b.meshKey}\"");
-                    else if (m.Man.vehicle.cd < 0f)
-                        why.Add("no drag coefficient — the row would build with a fallback "
-                              + "nobody chose");
+                    // A blank cd is fine — DragEstimator measures one off the mesh.
+                    // What is not fine is a mesh that cannot BE measured, because
+                    // then the row really does fall back to a constant nobody
+                    // chose. That is what this asks now.
+                    else if (m.Man.vehicle.cd < 0f && DragEstimator.SilhouetteFor(b) == null)
+                        why.Add("no drag coefficient and no measurable geometry — check the "
+                              + "model's Read/Write flag, or state a cd in the manifest");
                     break;
 
                 case AssetKind.Wheel:

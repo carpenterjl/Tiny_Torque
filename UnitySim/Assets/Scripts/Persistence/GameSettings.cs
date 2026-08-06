@@ -106,6 +106,12 @@ namespace AIHWSim.Persistence
         /// so an existing install reads as Arcade rather than as false.</summary>
         public bool spArcadeHandling = true;
 
+        /// <summary>Keep tyre temperature and pressure running under the arcade
+        /// grip floor. False initializer, and here that is not just back-compat:
+        /// the arcade floor was balanced against tyres that are always warm, so
+        /// off is the state an existing install should keep reading as.</summary>
+        public bool spArcadeTyreThermal = false;
+
         /// <summary>Free-roam map last chosen, as a picker display name. Separate
         /// from <c>lastTrack</c> because the two lists are different: free roam
         /// offers the maps the race picker hides (no finish line) as well as every

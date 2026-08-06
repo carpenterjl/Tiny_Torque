@@ -148,6 +148,25 @@ namespace AIHWSim.Vehicles
         public AssistSettings assists;         // per-player prefs (rig build)
         public bool assistsActive = true;      // false in Autonomous mode
 
+        /// <summary>
+        /// Whether this car's tyres warm up, cool down and change pressure.
+        ///
+        /// <b>Two conditions, and this is only one of them.</b> A wheel runs the
+        /// thermal path when this is true AND its own <c>pressureKpa</c> is
+        /// positive — so a design that never opted in is inert no matter what this
+        /// says, and a design that did can still be put back on flat physics by an
+        /// arcade session. Written every frame by <see cref="Core.HandlingFloor"/>
+        /// from the session's handling mode plus the player's opt-in; true here so
+        /// that a car built with no handling floor at all — a firmware rig, a
+        /// physics test, the design dump — gets whatever its wheels ask for rather
+        /// than silently losing the feature.
+        ///
+        /// That combination is what makes the claim structural: the Opus mission's
+        /// car authors no pressure, so this being true costs it nothing, and the
+        /// mission is bit-identical because the branch is not entered.
+        /// </summary>
+        public bool tyreThermalEnable = true;
+
         // ---- Arcade layer (AIHWSim.Arcade owns these; neutral = no effect) ----
         // Written only by ArcadeDirector, which is constructed only in arcade
         // sessions. At the values below every expression that reads them reduces
@@ -391,6 +410,14 @@ namespace AIHWSim.Vehicles
             public bool grounded;        // last step's contact state (readout only)
             public float lastFy;         // last lateral tyre force (N) — servo load
 
+            // ---- tyre thermal state (cfg.pressureKpa > 0 only) ----
+            // Integrated from the friction power the tyre model already computes,
+            // and consumed by the NEXT step's grip — the same one-step-latency
+            // idiom UpdateLaunchControl uses, and for the same reason: it keeps a
+            // feedback loop out of the wheel loop and off the timestep.
+            public float tyreTempC = TyreThermal.AmbientC;
+            public float pressRunKpa;    // gas-law running pressure (kPa, readout)
+
             // ---- derived linkage kinematics (SuspensionLinkage hardpoints) ----
             // Both are 0 when no linkage is authored, and both are branch-guarded
             // at their use sites so an unauthored corner takes the identical code
@@ -564,6 +591,18 @@ namespace AIHWSim.Vehicles
         /// <summary>Whether wheel i is touching the ground this step.</summary>
         public bool WheelGrounded(int i) =>
             i >= 0 && i < _wheels.Count && _wheels[i].grounded;
+
+        /// <summary>Wheel i's tread temperature (°C). Sits at ambient forever on a
+        /// wheel that authored no pressure, which is how a telemetry trace shows
+        /// at a glance whether the thermal model is even running.</summary>
+        public float WheelTyreTempC(int i) =>
+            i >= 0 && i < _wheels.Count ? _wheels[i].tyreTempC : TyreThermal.AmbientC;
+
+        /// <summary>Wheel i's running (hot) pressure in kPa, or 0 when the wheel
+        /// has no pressure authored — deliberately 0 rather than the cold value,
+        /// so "not modelled" and "modelled and currently cold" read differently.</summary>
+        public float WheelTyrePressKpa(int i) =>
+            i >= 0 && i < _wheels.Count ? _wheels[i].pressRunKpa : 0f;
 
         /// <summary>Wheel i's chassis-local mount position. Lets a measurement
         /// tell front from rear by GEOMETRY rather than by index — nothing
@@ -910,19 +949,14 @@ namespace AIHWSim.Vehicles
                 }
             }
 
-            // The primitive builders are GEOMETRY, not data — five hand-built
-            // compounds, not five rows — so this stays a switch. It reads the
+            // The primitive compounds are still GEOMETRY rather than a catalogue
+            // row — five shapes someone modelled, not five numbers — but they are
+            // now geometry the drag estimator also reads, so they live in
+            // BodyPrimitives instead of in five builders here. It passes the
             // resolved legacy value rather than the field so that a catalogue
             // body whose FBX did not ship falls back to the primitive its own
             // row nominates, not to whatever int happened to be beside the key.
-            switch (def.legacy)
-            {
-                case BodyShape.Wedge:    BuildWedgeBody(holder); break;
-                case BodyShape.Buggy:    BuildBuggyBody(holder); break;
-                case BodyShape.Shell:    BuildShellBody(holder); break;
-                case BodyShape.LowRacer: BuildLowRacerBody(holder); break;
-                default:                 BuildBoxBody(holder); break;
-            }
+            BuildPrimitiveBody(holder, def.legacy);
         }
 
         /// <summary>
@@ -1167,67 +1201,21 @@ namespace AIHWSim.Vehicles
             _bodyRenderers.Add(r);
         }
 
-        private void BuildBoxBody(Transform holder)
+        /// <summary>
+        /// Build one of the five primitive compounds from
+        /// <see cref="BodyPrimitives"/>, scaled to this design's bodySize.
+        ///
+        /// The pieces were five hand-written builders until the drag estimator
+        /// needed to project the same geometry it renders; the literals moved to
+        /// the table unchanged, and <c>Vector3.Scale</c> reproduces each old
+        /// argument bit-for-bit because a float multiply is commutative.
+        /// </summary>
+        private void BuildPrimitiveBody(Transform holder, BodyShape shape)
         {
-            AddBodyPiece(holder, Vector3.zero, bodySize, Vector3.zero);
-        }
-
-        private void BuildWedgeBody(Transform holder)
-        {
-            Vector3 s = bodySize;
-            AddBodyPiece(holder, new Vector3(0f, -s.y * 0.22f, 0f),
-                new Vector3(s.x, s.y * 0.55f, s.z), Vector3.zero);
-            AddBodyPiece(holder, new Vector3(0f, s.y * 0.18f, -s.z * 0.12f),
-                new Vector3(s.x * 0.9f, s.y * 0.5f, s.z * 0.55f), new Vector3(8f, 0f, 0f));
-        }
-
-        private void BuildBuggyBody(Transform holder)
-        {
-            Vector3 s = bodySize;
-            AddBodyPiece(holder, new Vector3(0f, -s.y * 0.05f, 0f),
-                new Vector3(s.x * 0.5f, s.y * 0.6f, s.z * 0.85f), Vector3.zero);
-            AddBodyPiece(holder, new Vector3(0f, s.y * 0.45f, -s.z * 0.05f),
-                new Vector3(s.x * 0.55f, s.y * 0.14f, s.z * 0.3f), Vector3.zero);
-            AddBodyPiece(holder, new Vector3(0f, -s.y * 0.15f, s.z * 0.45f),
-                new Vector3(s.x * 0.35f, s.y * 0.3f, s.z * 0.22f), Vector3.zero);
-        }
-
-        /// <summary>Touring-car lexan shell: low slab, tapered cabin, faired nose + tail.</summary>
-        private void BuildShellBody(Transform holder)
-        {
-            Vector3 s = bodySize;
-            // Lower hull.
-            AddBodyPiece(holder, new Vector3(0f, -s.y * 0.25f, 0f),
-                new Vector3(s.x, s.y * 0.5f, s.z * 0.94f), Vector3.zero);
-            // Cabin: narrower, raked front and rear glass.
-            AddBodyPiece(holder, new Vector3(0f, s.y * 0.12f, -s.z * 0.06f),
-                new Vector3(s.x * 0.82f, s.y * 0.42f, s.z * 0.44f), Vector3.zero);
-            AddBodyPiece(holder, new Vector3(0f, s.y * 0.02f, s.z * 0.20f),
-                new Vector3(s.x * 0.80f, s.y * 0.34f, s.z * 0.24f), new Vector3(22f, 0f, 0f));
-            AddBodyPiece(holder, new Vector3(0f, s.y * 0.02f, -s.z * 0.30f),
-                new Vector3(s.x * 0.80f, s.y * 0.34f, s.z * 0.22f), new Vector3(-18f, 0f, 0f));
-            // Faired nose.
-            AddBodyPiece(holder, new Vector3(0f, -s.y * 0.22f, s.z * 0.44f),
-                new Vector3(s.x * 0.85f, s.y * 0.38f, s.z * 0.18f), new Vector3(10f, 0f, 0f));
-        }
-
-        /// <summary>F1TENTH-style low racer: flat deck, nose wedge, side pods.</summary>
-        private void BuildLowRacerBody(Transform holder)
-        {
-            Vector3 s = bodySize;
-            // Flat main deck, low.
-            AddBodyPiece(holder, new Vector3(0f, -s.y * 0.28f, 0f),
-                new Vector3(s.x * 0.9f, s.y * 0.44f, s.z * 0.9f), Vector3.zero);
-            // Nose wedge.
-            AddBodyPiece(holder, new Vector3(0f, -s.y * 0.14f, s.z * 0.38f),
-                new Vector3(s.x * 0.6f, s.y * 0.3f, s.z * 0.26f), new Vector3(14f, 0f, 0f));
-            // Side pods.
-            for (int e = -1; e <= 1; e += 2)
-                AddBodyPiece(holder, new Vector3(e * s.x * 0.42f, -s.y * 0.24f, -s.z * 0.05f),
-                    new Vector3(s.x * 0.18f, s.y * 0.36f, s.z * 0.5f), Vector3.zero);
-            // Electronics hump behind the (imagined) driver.
-            AddBodyPiece(holder, new Vector3(0f, s.y * 0.06f, -s.z * 0.18f),
-                new Vector3(s.x * 0.4f, s.y * 0.34f, s.z * 0.28f), Vector3.zero);
+            BodyPiece[] pieces = BodyPrimitives.For(shape);
+            for (int i = 0; i < pieces.Length; i++)
+                AddBodyPiece(holder, Vector3.Scale(pieces[i].pos, bodySize),
+                    Vector3.Scale(pieces[i].scale, bodySize), pieces[i].euler);
         }
 
         /// <summary>
@@ -1488,6 +1476,12 @@ namespace AIHWSim.Vehicles
                 w.slipNorm = 0f;
                 w.patchSpeed = 0f;
                 w.grounded = false;
+                // Cold tyres out of the pits. A respawn that kept the heat would
+                // make a lap's grip depend on how the last one ended, which is
+                // both wrong and unrepeatable — and repeatability is what the
+                // whole regression story rests on.
+                w.tyreTempC = TyreThermal.AmbientC;
+                w.pressRunKpa = 0f;
             }
             TyreSlip01 = 0f;
             imu.Reset();
@@ -1842,16 +1836,40 @@ namespace AIHWSim.Vehicles
                     loadFactor = Mathf.Round(loadFactor / 0.02f) * 0.02f;
                 }
 
+                // Running pressure, from LAST step's tyre temperature. Computed
+                // once here because three things below want it — the rolling
+                // radius, the rolling resistance and the grip — and computing it
+                // three times would be three chances for them to disagree about
+                // what pressure this tyre is at.
+                bool thermal = tyreThermalEnable && w.cfg.pressureKpa > 0f;
+                float pRun = 0f;
+                if (thermal)
+                {
+                    pRun = TyreThermal.RunningPressureKpa(w.cfg.pressureKpa, w.tyreTempC);
+                    w.pressRunKpa = pRun;
+                }
+
                 // Tire ballooning: centrifugal growth of the rolling radius with
-                // wheel speed (foam/rubber RC tires expand several % flat out).
-                if (w.cfg.balloonPct > 0f)
+                // wheel speed (foam/rubber RC tires expand several % flat out) —
+                // and, when a pressure is authored, inflation, which both stands
+                // the tyre up a little and resists that growth.
+                //
+                // The guard widened to admit the thermal case, because pressure
+                // moves the radius even at balloonPct 0. The legacy ARM below is
+                // untouched and must stay so: it is the expression every existing
+                // design's rolling radius comes from, and the physics suite reads
+                // its bits.
+                if (w.cfg.balloonPct > 0f || thermal)
                 {
                     float omegaAbs = TyreModel.Enabled
                         ? Mathf.Abs(w.omega)
                         : Mathf.Abs(w.col.rpm) * (Mathf.PI * 2f / 60f);
                     w.omegaLp += (omegaAbs - w.omegaLp) * Mathf.Clamp01(dt / 0.1f);
                     float k = Mathf.Min(1f, (w.omegaLp / 250f) * (w.omegaLp / 250f));
-                    float rb = w.baseRadius * (1f + w.cfg.balloonPct * 0.01f * k);
+                    float rb = thermal
+                        ? w.baseRadius * TyreThermal.RadiusScale(pRun) *
+                          (1f + w.cfg.balloonPct * 0.01f * k * TyreThermal.BalloonDamp(pRun))
+                        : w.baseRadius * (1f + w.cfg.balloonPct * 0.01f * k);
                     if (Mathf.Abs(rb - w.col.radius) > 0.0005f)
                     {
                         w.col.radius = rb;
@@ -1926,12 +1944,27 @@ namespace AIHWSim.Vehicles
                     // the MoveTowards below — one source of truth, so the force
                     // clamp and the spin integrator can never disagree about
                     // whether the wheel is held.
-                    float resist = b + (grounded ? surf.rollingResist * rollScale : 0f);
+                    //
+                    // The tyre's own share is scaled by inflation when a pressure
+                    // is authored: how much a surface costs to roll on belongs to
+                    // the surface, how much this tyre suffers for it belongs to the
+                    // tyre. Kept separate from the brake term because only the
+                    // rolling part heats the rubber — brake heat goes to the disc.
+                    float rollTerm = grounded ? surf.rollingResist * rollScale : 0f;
+                    if (thermal && grounded) rollTerm *= TyreThermal.RollResistScale(pRun);
+                    float resist = b + rollTerm;
 
                     float fx = 0f, fy = 0f;
                     if (grounded && fz > 0f)
                     {
                         float mu = surf.frictionMult * GripMult(w.cfg) * loadFactor * arcadeGripMult;
+                        // Temperature and pressure enter as two more multiplicands
+                        // on the same peak-µ product, from LAST step's temperature.
+                        // Inside the branch rather than as a ×1: an unauthored
+                        // wheel's µ has to be the identical float it always was.
+                        if (thermal)
+                            mu *= TyreThermal.GripVsTemp(w.tyreTempC) *
+                                  TyreThermal.GripVsPressure(pRun);
                         // _gripStiffness is the Tune "Grip (side)" knob; its legacy
                         // neutral value 2.0 maps to a lateral µ scale of 1.
                         TyreModel.Forces(vx, vy, w.omega, r, fz, mu,
@@ -1973,6 +2006,29 @@ namespace AIHWSim.Vehicles
                         }
                     }
                     w.lastFy = fy;   // next step's servo load
+
+                    // Tyre heat balance, integrated BEFORE the spin update so the
+                    // slip velocities are the ones the forces above were computed
+                    // from — heat is force times slip velocity, and taking the
+                    // force from this step and the velocity from the next would be
+                    // a power that never happened.
+                    //
+                    // The friction power at the patch, plus hysteresis in the
+                    // tread, minus what the airstream takes away. An airborne
+                    // wheel makes no heat and still cools, which is why landing
+                    // from a jump does not put a cold tyre on the road.
+                    if (thermal)
+                    {
+                        float q = 0f;
+                        if (grounded && fz > 0f)
+                        {
+                            float vsx = w.omega * r - vx;
+                            q = Mathf.Abs(fx * vsx) + Mathf.Abs(fy * -vy)
+                              + TyreThermal.RollHeatFrac * rollTerm * Mathf.Abs(w.omega);
+                        }
+                        w.tyreTempC = TyreThermal.Step(w.tyreTempC, q, w.patchSpeed,
+                            TyreThermal.HeatCapacityJPerK(w.cfg.unsprungMassKg), dt);
+                    }
 
                     // Spin: J·ω̇ = τ_drive − Fx·r, then brake + rolling resistance
                     // as a decel toward zero. MoveTowards can never flip ω's sign
@@ -2191,33 +2247,75 @@ namespace AIHWSim.Vehicles
             TyreSlip01 = Mathf.Clamp01(worst);
         }
 
+        // Resolved body aero, and the inputs it was resolved for. EffectiveAero
+        // runs once per PHYSICS STEP (ApplyAerodynamics calls it), and resolving
+        // it means measuring a mesh silhouette — a hundred thousand triangles on
+        // the Tiguan. Measured once and remembered.
+        //
+        // The guard is the inputs themselves rather than a dirty flag, because
+        // three different things write them: the factory at build, LiveCarTuner
+        // every step it sees a changed inspector, and the Tune panel. A flag would
+        // have to be set by all three, and the one that forgot would be a car
+        // dragging like the shape it used to be. The NaN seed is what makes the
+        // first call always resolve.
+        private float _aeroCd, _aeroArea;
+        private Vector3 _aeroForSize = new Vector3(float.NaN, 0f, 0f);
+        private float _aeroForCd = float.NaN, _aeroForArea = float.NaN;
+        private WheelDisc[] _aeroWheels;
+
         /// <summary>
         /// The three body-aero numbers this car will actually fly with: the
-        /// design's overrides resolved against the built-in tables.
+        /// design's overrides, resolved against the geometry estimate, resolved
+        /// against the built-in table.
         ///
         /// Cd and reference area are authored when the real car has published
-        /// ones. The built-in <see cref="AeroDynamics.BodyCd"/> table and the
-        /// width*height*0.9 estimate are reasonable guesses for a stylised
-        /// arcade shell and no substitute for a measured figure — and a
-        /// coastdown against a published Cd*A is the single strongest check
-        /// available on this whole aero model, so the numbers have to be the
-        /// real ones.
+        /// ones, and that still wins — a coastdown against a published Cd*A is
+        /// the single strongest check available on this whole aero model, so
+        /// where a real figure exists it has to be the one in use. Everything
+        /// else is now MEASURED off the body's own geometry rather than read out
+        /// of a per-shell table, which is what makes an open frame drag less than
+        /// an enclosed cabin for the reason it really does.
         ///
-        /// <b>Public because the design dump reads it.</b> Those two branches
-        /// are the entire difference between a design that authors its drag and
-        /// one that inherits it from its silhouette, which makes them exactly
-        /// what a shape→key migration could break — and a dumper carrying its
-        /// own copy of the branch would go on agreeing with itself after the
-        /// call site stopped agreeing with either. <paramref name="clA"/> is the
-        /// bare table value: <c>aeroMult</c> scales it at the force, not here.
+        /// <b>Public because the design dump reads it.</b> A dumper carrying its
+        /// own copy of the precedence would go on agreeing with itself after the
+        /// call site stopped agreeing with either, which is also why the branch
+        /// itself lives in <see cref="AeroDynamics.ResolveBodyAero"/> and is
+        /// shared with the garage's stats panel. <paramref name="clA"/> is the
+        /// bare table value — lift is not derivable from a silhouette and is not
+        /// estimated — and <c>aeroMult</c> scales it at the force, not here.
         /// </summary>
         public void EffectiveAero(out float cd, out float frontalArea, out float clA)
         {
             BodyDef def = Body;
-            cd = dragCdOverride > 0f ? dragCdOverride : AeroDynamics.BodyCd(def);
-            frontalArea = frontalAreaOverride > 0f
-                ? frontalAreaOverride : AeroDynamics.FrontalArea(bodySize);
+            if (bodySize != _aeroForSize ||
+                dragCdOverride != _aeroForCd || frontalAreaOverride != _aeroForArea)
+            {
+                _aeroWheels = WheelDiscs();
+                AeroDynamics.ResolveBodyAero(def, bodySize, _aeroWheels,
+                    dragCdOverride, frontalAreaOverride, out _aeroCd, out _aeroArea);
+                _aeroForSize = bodySize;
+                _aeroForCd = dragCdOverride;
+                _aeroForArea = frontalAreaOverride;
+            }
+            cd = _aeroCd;
+            frontalArea = _aeroArea;
             clA = AeroDynamics.BodyClA(def);
+        }
+
+        /// <summary>
+        /// This car's wheels as the drag estimator sees them, for the
+        /// exposed-wheel term. Built from the CONFIG rather than the built
+        /// colliders so it answers the same before and after
+        /// <see cref="BuildWheels"/>, and so a design dump that never activates a
+        /// car still gets the open-wheel penalty.
+        /// </summary>
+        private WheelDisc[] WheelDiscs()
+        {
+            if (wheels == null || wheels.Length == 0) return null;
+            var discs = new WheelDisc[wheels.Length];
+            for (int i = 0; i < wheels.Length; i++)
+                discs[i] = new WheelDisc(wheels[i].localPos, wheels[i].radius);
+            return discs;
         }
 
         /// <summary>

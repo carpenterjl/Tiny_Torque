@@ -294,7 +294,7 @@ path arithmetic *during* import, where `Resources.Load` does not exist yet.
       "role": "Structural", "healthHp": 0, "group": "" }
   ],
 
-  "vehicle":  { "cd": 0.34, "clA": 0.0, "garageOffered": true },
+  "vehicle":  { "cd": -1, "clA": 0.0, "garageOffered": true },   // -1 = measure it off the mesh
   "cosmetic": { "slot": "", "rarity": "", "theme": "", "description": "" },
   "notes":    { "geometryFixes": 11, "textureWarnings": 0,
                 "verificationOverridden": false, "overrideReason": "" },
@@ -353,9 +353,18 @@ prefix, an unassigned kind, a prop or a fitting (neither has a registry a manife
 can join), overwriting a shipped asset *without having chosen Replace* (§4.5), a
 failed exporter verification without an override, an override without a written
 reason, a dangling slot, an unverified multi-slot object, a non-positive scale, an
-off-quarter yaw, an unparseable cosmetic slot/rarity/theme — and, for a body,
-**no drag coefficient**. A car whose top speed was chosen by a fallback constant
-is a car nobody chose.
+off-quarter yaw, an unparseable cosmetic slot/rarity/theme, and — for a body — a
+stated drag coefficient outside anything a car can be (0.15 is a teardrop, 1.2 a
+flat plate broadside).
+
+**A body no longer has to state a drag coefficient at all.** It used to be
+refused without one, on the grounds that a car whose top speed was chosen by a
+fallback constant is a car nobody chose. The game now measures one off the shell's
+own silhouette — the mesh the manifest is already shipping — so `"cd": -1` means
+*measure it*, and that is the right answer for almost every asset. State a number
+only when you are holding a real one, measured or published; it then outranks the
+estimate. `clA` is a different question and still has to be authored: a
+silhouette cannot see whether a shape makes downforce.
 
 **Slot order is measured, not asked.** `export.json` lists a material's objects in
 Blender's material-list order, which has no reason to match an object's submesh
@@ -429,8 +438,9 @@ The manifests **are** the registry. `BodyCatalog`, `WheelCatalog` and
 manifest discovered under a `Resources` root, so there is no registry file that
 could disagree with what is on disk.
 
-- **A body** becomes a `BodyDef`: `cd`/`clA` authored, `paintable` derived from
-  whether any material claims the paint channel, and the mesh key *is* the key.
+- **A body** becomes a `BodyDef`: `clA` authored, `cd` measured off the mesh
+  unless the manifest states one, `paintable` derived from whether any material
+  claims the paint channel, and the mesh key *is* the key.
 - **A wheel** becomes a `WheelDef` whose `authorRadius` is measured off the mesh.
 - **A cosmetic** becomes a `CosmeticItem` from five authored fields; scrap value
   and shop price come from the *rarity* through the same table the 47 shipped

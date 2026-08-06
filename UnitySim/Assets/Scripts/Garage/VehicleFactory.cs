@@ -133,6 +133,7 @@ namespace AIHWSim.Garage
                     gripMult = w.gripMult,
                     loadSensitivity = w.loadSensitivity,
                     balloonPct = w.balloonPct,
+                    pressureKpa = w.pressureKpa,
                     wheelStyle = w.wheelStyle,
                     wheelKey = w.wheelKey,
                     unsprungMassKg = w.unsprungMassKg,

@@ -101,6 +101,11 @@ namespace AIHWSim.Net
         public bool arcade;
         public bool trackLimits;
         public bool arcadeHandling = true;
+        /// <summary>Whether tyre thermal survives the arcade floor. A peer
+        /// that predates this key leaves the initializer alone and reads
+        /// false, which is the safe skew: the older build had no thermal
+        /// model under arcade either.</summary>
+        public bool arcadeTyreThermal;
         // v12: which RULES the session runs. A joiner has to know before it
         // composes its scene, for the same reason the arcade flags are here —
         // the mode decides which director (if any) it builds.
@@ -169,6 +174,11 @@ namespace AIHWSim.Net
         public bool arcade;
         public bool trackLimits;
         public bool arcadeHandling = true;
+        /// <summary>Whether tyre thermal survives the arcade floor. A peer
+        /// that predates this key leaves the initializer alone and reads
+        /// false, which is the safe skew: the older build had no thermal
+        /// model under arcade either.</summary>
+        public bool arcadeTyreThermal;
         // v12: the live rules, so a mid-session mode change reaches every
         // client the same way a lap-count change already does.
         public int match;

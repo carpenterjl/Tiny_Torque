@@ -155,22 +155,31 @@ namespace AIHWSim.Vehicles
     /// <c>WheelCatalog</c> row — the handful of facts a table has that an FBX
     /// cannot carry.
     ///
-    /// <b>Only <see cref="cd"/> and <see cref="clA"/> are genuinely authored</b>;
+    /// <b><see cref="clA"/> is the one number here that must be authored</b>;
     /// everything else about a row is derived (the key is the file name, the
     /// paintable flag is whether any material claims the paint channel, the mesh
-    /// key IS the key). A drag coefficient is not derivable from geometry and the
-    /// game will not run without one, so it is asked for, with the same band
-    /// <c>[AKEY]</c> already holds the seed rows to: 0.15 is a teardrop, 1.2 a
-    /// flat plate broadside.
+    /// key IS the key).
+    ///
+    /// <b><see cref="cd"/> used to be the other one, and this doc used to say a
+    /// drag coefficient is not derivable from geometry. That is no longer
+    /// true.</b> <c>DragEstimator</c> projects the shell's own mesh — the one this
+    /// manifest already ships — and prices it from the outline, the forebody
+    /// buildup, the base and the exposed wheels. So a Cd is now OPTIONAL: leave it
+    /// at −1 and the geometry decides. State one only when you have a real figure,
+    /// measured or published, in which case it outranks the estimate, and it is
+    /// held to the same band <c>[AKEY]</c> holds the seed rows to: 0.15 is a
+    /// teardrop, 1.2 a flat plate broadside.
+    ///
+    /// Lift is a different question and keeps its authored answer. A silhouette
+    /// genuinely cannot see whether a shape makes downforce.
     ///
     /// Absent on a manifest for a cosmetic or a prop, which have no such row.
     /// </summary>
     [Serializable]
     public sealed class AssetVehicleDef
     {
-        /// <summary>Drag coefficient. −1 means "not authored", which is a refusal
-        /// to register rather than a silent 0.8: a body with no drag number is a
-        /// car whose top speed nobody decided.</summary>
+        /// <summary>Drag coefficient. −1 means "not authored", which now means
+        /// "measure it off the mesh" rather than a refusal to register.</summary>
         public float cd = -1f;
 
         /// <summary>Built-in downforce area (m²) — what the SHELL does without

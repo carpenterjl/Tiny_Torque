@@ -59,12 +59,33 @@ namespace AIHWSim.Vehicles
         /// still wins, which is how the Tiguan uses its published figures
         /// instead of the 0.80 sitting in its row.
         ///
-        /// <b>ClA is what the shell does WITHOUT parts.</b> Wings, splitters and
-        /// canards add their own on top, so a car that carries its downforce as
-        /// authored geometry has a small number here and a large one after
-        /// <c>TotalClA</c> — which is why the two race cars' 0.007/0.008 look
-        /// modest beside their actual behaviour.</summary>
+        /// <b><see cref="cd"/> is no longer the live path for a body whose
+        /// geometry can be read.</b> <see cref="Vehicles.DragEstimator"/> measures
+        /// the shell's own silhouette and prices it, so what is here is the
+        /// fallback for an unreadable mesh — and the record of what the game
+        /// believed before it started measuring, which is what the estimator was
+        /// checked against. Unless <see cref="cdAuthored"/> says otherwise; see
+        /// there.
+        ///
+        /// <b>ClA is what the shell does WITHOUT parts</b>, and it is still
+        /// authored: a silhouette cannot see whether a shape makes downforce.
+        /// Wings, splitters and canards add their own on top, so a car that
+        /// carries its downforce as authored geometry has a small number here and
+        /// a large one after <c>TotalClA</c> — which is why the two race cars'
+        /// 0.007/0.008 look modest beside their actual behaviour.</summary>
         public float cd, clA;
+
+        /// <summary>
+        /// Whether <see cref="cd"/> is a real figure somebody measured, in which
+        /// case it OUTRANKS the geometry estimate.
+        ///
+        /// False for all thirteen seed rows: those numbers were read off the
+        /// silhouettes by eye, which is exactly the job the estimator does now and
+        /// does more consistently. True only when a committed manifest states a Cd
+        /// outright — an author who has a wind-tunnel number, or a published one,
+        /// knows something a projection does not, and should not be overruled by
+        /// it.</summary>
+        public bool cdAuthored;
 
         /// <summary>Whether the garage's paint mode can work on this body — i.e.
         /// whether any renderer ends up on the tintable material. False for the
@@ -283,6 +304,14 @@ namespace AIHWSim.Vehicles
         /// claims the paint channel — the same fact, asked once rather than
         /// authored twice — and is false for a Verbatim asset, which has no
         /// material the game built and therefore nothing to tint.
+        ///
+        /// <b>An absent <c>cd</c> is no longer a refusal.</b> It used to be: a
+        /// body with no drag number was a car whose top speed nobody had decided,
+        /// and the manifest was made to ask. <see cref="Vehicles.DragEstimator"/>
+        /// decides it now, from the mesh the manifest already ships, so −1 means
+        /// "measure it" and the 0.80 below is only what an unreadable mesh falls
+        /// back to. A manifest that DOES state a Cd still outranks the estimate —
+        /// see <see cref="BodyDef.cdAuthored"/>.
         /// </summary>
         private static BodyDef FromManifest(AssetManifest m) => new BodyDef
         {
@@ -291,6 +320,7 @@ namespace AIHWSim.Vehicles
             legacy = BodyShape.Box,
             meshKey = m.key,
             cd = m.vehicle != null && m.vehicle.cd >= 0f ? m.vehicle.cd : 0.80f,
+            cdAuthored = m.vehicle != null && m.vehicle.cd >= 0f,
             clA = m.vehicle?.clA ?? 0f,
             paintable = m.HasPaintChannel && !m.IsVerbatim,
             tokens = BodyTokens.None,

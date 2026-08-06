@@ -639,7 +639,15 @@ namespace AIHWSim.Garage
             {
                 _placingKind = PartType.Wheel;
                 bool powered = key == "wheel_powered";
-                _pendingWheel = new WheelSpec { name = UniqueName(powered ? "motor" : "wheel"), powered = powered };
+                // Inflated to the optimum on placement, matching VehicleDesign's
+                // own factory: a wheel bolted on in the garage should behave like
+                // the four the car came with, not sit at the 0 that means "no
+                // thermal model" and give the car one corner that never warms up.
+                _pendingWheel = new WheelSpec
+                {
+                    name = UniqueName(powered ? "motor" : "wheel"), powered = powered,
+                    pressureKpa = TyreThermal.PressOptKpa,
+                };
                 _ghost = PartGhost.ForWheel(_pendingWheel.radius, powered, 0f);
                 if (_mirrorMode) _ghostTwin = PartGhost.ForWheel(_pendingWheel.radius, powered, 0f);
             }
@@ -1573,6 +1581,20 @@ namespace AIHWSim.Garage
             GUILayout.Label("Tire realism");
             w.loadSensitivity = Slider("Load sens", w.loadSensitivity, 0f, 0.4f);
             w.balloonPct = Slider("Balloon %", w.balloonPct, 0f, 12f);
+
+            // Cold tyre pressure, and the reason for the snap: 0 is not "very
+            // soft", it is the sentinel that turns the whole thermal model off,
+            // and a slider that could land on 40 kPa would let someone author a
+            // tyre the clamp then silently moves to 80. So the dead zone below the
+            // legal minimum reads as off, and the slider can actually get back
+            // there once it has been touched.
+            float press = Slider("Pressure kPa (0=off)", w.pressureKpa, 0f, 300f);
+            w.pressureKpa = press < TyreThermal.PressMinKpa ? 0f
+                          : Mathf.Min(press, TyreThermal.PressMaxKpa);
+            if (w.pressureKpa > 0f)
+                GUILayout.Label($"  → warms with use; {TyreThermal.PressOptKpa:0} kPa is the " +
+                                "grip optimum, and a hot tyre reads ~15 % above cold");
+
             if (D.useCompositeMass)
                 w.massKg = Slider("Mass g (0=auto)", w.massKg * 1000f, 0f, 400f) / 1000f;
 
@@ -1929,6 +1951,12 @@ namespace AIHWSim.Garage
             GUILayout.Label($"Stall torque: {s.totalStallTorqueNm:0.00} N·m", GarageSkin.StatLabel);
             GUILayout.Label($"Top speed: {s.estTopSpeedMs:0.0} m/s (drag-limited)", GarageSkin.StatLabel);
             GUILayout.Label($"@ top: drag {s.dragAtTopN:0.00} N · downforce {s.downforceAtTopN:0.00} N", GarageSkin.StatLabel);
+            // Where the drag came from. Worth a line of its own: since the body's
+            // Cd is measured off its silhouette, changing the SHAPE now changes
+            // the top speed above, and without this the player has no way to see
+            // that happen.
+            GUILayout.Label($"Body Cd {s.bodyCd:0.00} · {s.bodyFrontalArea:0.000} m² frontal " +
+                            $"({(s.bodyCdEstimated ? "measured" : "authored")})", GarageSkin.StatLabel);
             if (s.hasAeroParts)
                 GUILayout.Label($"Aero balance: {s.aeroFrontPct:0} % front / {100f - s.aeroFrontPct:0} % rear", GarageSkin.StatLabel);
             string sag = s.sagPct > 80f ? $"{s.sagPct:0} % (bottoms out!)" : $"{s.sagPct:0} %";

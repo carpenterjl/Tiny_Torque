@@ -74,6 +74,7 @@ namespace AIHWSim.Menu
         private bool _spArcade;       // power-ups, weapons, arcade board
         private bool _spTrackLimits = true;
         private bool _spArcadeHandling = true;   // false = race the circuits on raw sim physics
+        private bool _spArcadeTyreThermal;       // keep tyre warm-up under the arcade floor
         private static readonly List<string> DiffNames = new List<string> { "Easy", "Medium", "Hard" };
         private static readonly List<string> ControlNames =
             new List<string> { "Manual", "Autonomous (firmware)", "Autonomous (bot AI)" };
@@ -160,6 +161,7 @@ namespace AIHWSim.Menu
             _spResultsWait = Mathf.Clamp(s.spResultsWait, 0, 300);
             _spArcade = s.spArcade;
             _spArcadeHandling = s.spArcadeHandling;
+            _spArcadeTyreThermal = s.spArcadeTyreThermal;
             _spTrackLimits = s.spTrackLimits;
         }
 
@@ -922,7 +924,23 @@ namespace AIHWSim.Menu
                     ? "    ARCADE — everyone, bots included, gets grip, stability and assists."
                     : "    SIM — raw brush-tyre physics, no assist floor. The circuits bite.",
                 GarageSkin.StatLabel);
+            DrawTyreThermalRow();
             GUI.enabled = true;
+        }
+
+        /// <summary>
+        /// The arcade sub-choice: keep tyre warm-up under the arcade grip floor.
+        ///
+        /// Only shown when arcade handling is on, because in sim it is not a choice
+        /// — a sim session always runs whatever thermal model the car's own tyre
+        /// pressures ask for. Drawn from three pages, so it lives in one method
+        /// rather than three copies that can drift apart.
+        /// </summary>
+        private void DrawTyreThermalRow()
+        {
+            if (!_spArcadeHandling) return;
+            _spArcadeTyreThermal = MenuNav.Toggle(_spArcadeTyreThermal,
+                "    Tyre temperature + pressure (cold tyres at the start)");
         }
 
         // ══════════════ TEMPORARY DEV SWITCH — delete before shipping ═════════════
@@ -1411,6 +1429,7 @@ namespace AIHWSim.Menu
                 && _spArcade && _spLaps > 0 && _spControl != 1;
             SessionConfig.TrackLimits = SessionConfig.Arcade && _spTrackLimits;
             SessionConfig.ArcadeHandling = _spArcadeHandling;
+            SessionConfig.ArcadeTyreThermal = _spArcadeTyreThermal;
             GameFlow.ActiveDesign = ResolveVehicle(vehicle);
             // The Simulate Controller screen picks the DLL by name; TrackBootstrap
             // reads it straight off the design (through SafeDllName). ResolveVehicle
@@ -1460,6 +1479,7 @@ namespace AIHWSim.Menu
             s.spArcade = _spArcade;
             s.spTrackLimits = _spTrackLimits;
             s.spArcadeHandling = _spArcadeHandling;
+            s.spArcadeTyreThermal = _spArcadeTyreThermal;
             SettingsStore.Save();
 
             LoadIfBuilt(GameFlow.TrackSceneName, GameFlow.LoadTrack);
@@ -1631,6 +1651,7 @@ namespace AIHWSim.Menu
             // Physics choice stands on its own — see the single-player page.
             _spArcadeHandling = MenuNav.Toggle(_spArcadeHandling,
                 " Arcade handling (extra grip + driving assists)");
+            DrawTyreThermalRow();
             GUILayout.Space(6);
 
             string problem = ValidateDevices();
@@ -1703,6 +1724,7 @@ namespace AIHWSim.Menu
             SessionConfig.Arcade = _spArcade && _mpLaps > 0;
             SessionConfig.TrackLimits = SessionConfig.Arcade && _spTrackLimits;
             SessionConfig.ArcadeHandling = _spArcadeHandling;
+            SessionConfig.ArcadeTyreThermal = _spArcadeTyreThermal;
             SessionConfig.Players.Clear();
             SessionConfig.Players.Add(MakeSlot(s.player1Name, _mpVeh1, _mpDev1, SessionConfig.P1Assists(s)));
             SessionConfig.Players.Add(MakeSlot(s.player2Name, _mpVeh2, _mpDev2, SessionConfig.P2Assists(s)));
@@ -1718,6 +1740,7 @@ namespace AIHWSim.Menu
             s.spArcade = _spArcade;
             s.spTrackLimits = _spTrackLimits;
             s.spArcadeHandling = _spArcadeHandling;
+            s.spArcadeTyreThermal = _spArcadeTyreThermal;
             SettingsStore.Save();
 
             LoadIfBuilt(GameFlow.TrackSceneName, GameFlow.LoadTrack);
@@ -1858,6 +1881,7 @@ namespace AIHWSim.Menu
             // welcome, so the whole lobby drives one handling mode.
             _spArcadeHandling = MenuNav.Toggle(_spArcadeHandling,
                 " Arcade handling (extra grip + driving assists)");
+            DrawTyreThermalRow();
 
             GUILayout.Space(4);
             GUILayout.Label("Players join into free roam; you start races and\nchange maps from the in-game Esc menu.",
@@ -1887,9 +1911,11 @@ namespace AIHWSim.Menu
             SessionConfig.Arcade = _spArcade;
             SessionConfig.TrackLimits = _spArcade && _spTrackLimits;
             SessionConfig.ArcadeHandling = _spArcadeHandling;
+            SessionConfig.ArcadeTyreThermal = _spArcadeTyreThermal;
             s.spArcade = _spArcade;
             s.spTrackLimits = _spTrackLimits;
             s.spArcadeHandling = _spArcadeHandling;
+            s.spArcadeTyreThermal = _spArcadeTyreThermal;
             SettingsStore.Save();
             SessionConfig.Players.Clear();
             SessionConfig.Players.Add(new PlayerSlot

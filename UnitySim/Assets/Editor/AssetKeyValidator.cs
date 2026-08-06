@@ -94,6 +94,31 @@ namespace AIHWSim.EditorTools
                 if (d.cd < 0.15f || d.cd > 1.2f) why += $" cd {N(d.cd)} is not a car";
                 if (d.clA < 0f || d.clA > 0.05f) why += $" clA {N(d.clA)} is not a shell";
 
+                // The row's cd is only the fallback now — what the car actually
+                // drives on is measured off the mesh. So the band has to be held
+                // against the MEASUREMENT too, and the clamp inside the estimator
+                // makes that structurally true; what this really catches is the
+                // clamp engaging, i.e. the correlation having left the range a car
+                // can physically be in. Checked with no wheels, because the
+                // exposed-wheel term is a property of a design and this is a check
+                // on a shell.
+                if (DragEstimator.TryEstimate(d, d.nominalSize, null, out var est))
+                {
+                    if (est.cd <= DragEstimator.CdMin + 1e-4f ||
+                        est.cd >= DragEstimator.CdMax - 1e-4f)
+                        why += $" estimated cd {N(est.cd)} hit the clamp";
+                    if (est.frontalArea <= 0f)
+                        why += " estimated frontal area is zero";
+                }
+                else if (d.meshKey != null && PartMeshLibrary.Has(d.meshKey))
+                {
+                    // The asset is there and could not be measured, which in
+                    // practice means Read/Write is off on the import. The car
+                    // still runs — it falls back to the row's cd — but it is
+                    // running on a guess while a measurable mesh sits next to it.
+                    why += " has a mesh the drag estimator cannot read (Read/Write off?)";
+                }
+
                 // Now that the catalogue decides, "paintable" can only be checked
                 // for INTERNAL sense: a body with no mesh has nothing to paint,
                 // and one whose manifest is verbatim keeps the FBX's materials.

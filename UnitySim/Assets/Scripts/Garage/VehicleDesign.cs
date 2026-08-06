@@ -90,6 +90,18 @@ namespace AIHWSim.Garage
         public float loadSensitivity = 0f;    // tire load sensitivity exponent; 0 = off (legacy)
         public float balloonPct = 0f;         // tire ballooning: max radius growth %; 0 = off
 
+        /// <summary>Cold inflation pressure (kPa absolute); <b>0 = no thermal or
+        /// pressure model at all.</b>
+        ///
+        /// Not "0 means the default 180". The whole tyre-thermal path — warm-up
+        /// grip, the gas-law pressure rise, the rolling-resistance and
+        /// rolling-radius terms — is branch-guarded on this being positive, so an
+        /// unauthored wheel runs the identical arithmetic it ran before this
+        /// existed. That is what keeps the physics suite and the Opus mission
+        /// bit-identical: not a multiply by one, but code that is not reached.
+        /// Clamped to <see cref="Vehicles.TyreThermal"/>'s 80–300 kPa when set.</summary>
+        public float pressureKpa = 0f;
+
         public float massKg = 0f;             // wheel assembly mass; 0 = auto (30/190 g)
 
         // ---- scale-dependent constants, made authorable -------------------
@@ -455,6 +467,15 @@ namespace AIHWSim.Garage
             d.wheels.Add(new WheelSpec { name = "wheel_fr", localPos = new Vector3(0.083f, -0.015f, 0.152f), suspLength = 0.03f, allowsSteering = true });
             d.wheels.Add(new WheelSpec { name = "wheel_rl", localPos = new Vector3(-0.083f, -0.015f, -0.152f), suspLength = 0.03f, powered = true });
             d.wheels.Add(new WheelSpec { name = "wheel_rr", localPos = new Vector3(0.083f, -0.015f, -0.152f), suspLength = 0.03f, powered = true });
+
+            // Tyre pressure, set HERE and not in WheelSpec's initialiser. The
+            // difference matters: JsonUtility leaves an absent key at its
+            // initialiser, so a 180 there would silently inflate every design ever
+            // saved — including the ones the physics suite and the Opus mission
+            // measure — while a 180 here inflates only cars built from this
+            // factory. New cars get warming tyres; old files stay exactly as they
+            // were written.
+            foreach (var w in d.wheels) w.pressureKpa = Vehicles.TyreThermal.PressOptKpa;
 
             d.sensors.Add(new SensorSpec
             {

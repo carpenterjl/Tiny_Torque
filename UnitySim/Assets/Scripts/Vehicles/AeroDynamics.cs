@@ -34,19 +34,89 @@ namespace AIHWSim.Vehicles
     {
         public const float AirDensity = 1.225f;   // kg/m³
 
-        /// <summary>Effective frontal area of the body box (m²).</summary>
+        /// <summary>
+        /// Frontal area of the body BOX (m²) — the fallback, no longer the
+        /// answer.
+        ///
+        /// The 0.9 was a fudge for "a car does not quite fill its bounding box",
+        /// and it is the same 0.9 for a slab and for an open frame, which is
+        /// precisely the thing <see cref="DragEstimator"/> exists to stop doing.
+        /// This is now only reached when a body's geometry cannot be measured at
+        /// all.
+        /// </summary>
         public static float FrontalArea(Vector3 bodySize) => bodySize.x * bodySize.y * 0.9f;
 
         /// <summary>
-        /// Drag coefficient per body silhouette. The numbers, and the reasoning
-        /// behind each one, live in <see cref="BodyCatalog"/> — a body's drag is
-        /// a property of the shell, and keeping it in a second switch keyed on
-        /// the same shape was how the two could disagree.
+        /// The AUTHORED drag coefficient for a body silhouette — the last resort,
+        /// and since the estimator landed, no longer the live path for any body
+        /// whose geometry can be read.
+        ///
+        /// The numbers, and the reasoning behind each one, live in
+        /// <see cref="BodyCatalog"/>. They are kept because something has to
+        /// answer when a mesh cannot be measured, and because they are the record
+        /// of what the game believed before it started measuring — the estimator
+        /// was checked against them, and against the Tiguan's published figure,
+        /// before it replaced them.
         ///
         /// The 0.80 for a missing row is the old <c>default:</c> arm verbatim:
         /// an unknown silhouette has always been priced as a buggy.
         /// </summary>
         public static float BodyCd(BodyDef def) => def == null ? 0.80f : def.cd;
+
+        /// <summary>
+        /// The drag coefficient and reference area a body will actually fly with:
+        /// authored overrides resolved against the geometry estimate, resolved
+        /// against the table.
+        ///
+        /// <b>One function, because there are two callers and they must never
+        /// disagree.</b> <c>CarVehicle.EffectiveAero</c> asks on behalf of the
+        /// physics and the design dump; <c>VehicleStats</c> asks on behalf of the
+        /// garage's top-speed readout. A copy of this branch in either place would
+        /// go on agreeing with itself long after it stopped agreeing with the
+        /// other, and the symptom would be a car that does not do what the garage
+        /// said it would.
+        ///
+        /// <b>The overrides are checked FIRST and that ordering is load-bearing.</b>
+        /// <c>P0FreeRollTest</c> removes drag by setting a Cd of 1e-9 — a
+        /// vanishingly small POSITIVE number, because zero means "not authored" —
+        /// and the Tiguan's published 0.31 × 2.47 m² is what makes
+        /// <c>P1CoastdownTest</c> a measurement of this engine rather than of this
+        /// estimator. Both stop working the moment anything is consulted ahead of
+        /// them.
+        ///
+        /// Returns true when the estimator supplied either number, which is what
+        /// the garage prints as "estimated" rather than "authored".
+        /// </summary>
+        public static bool ResolveBodyAero(BodyDef def, Vector3 bodySize,
+            System.Collections.Generic.IReadOnlyList<WheelDisc> wheels,
+            float cdOverride, float areaOverride,
+            out float cd, out float frontalArea)
+        {
+            bool wantCd = cdOverride <= 0f;
+            bool wantArea = areaOverride <= 0f;
+
+            bool measured = false;
+            DragEstimator.Result est = default;
+            // Only measure if something is going to read it. A fully authored body
+            // must not pay for a mesh walk, and the Tiguan is exactly that body.
+            if (wantCd || wantArea)
+                measured = DragEstimator.TryEstimate(def, bodySize, wheels, out est);
+
+            // A body the estimator can see is priced by its own geometry; a
+            // manifest that states a Cd outright still outranks it, because an
+            // author who measured a real car in a real tunnel knows something a
+            // silhouette does not.
+            cd = !wantCd ? cdOverride
+               : def != null && def.cdAuthored ? def.cd
+               : measured ? est.cd
+               : BodyCd(def);
+
+            frontalArea = !wantArea ? areaOverride
+                        : measured ? est.frontalArea
+                        : FrontalArea(bodySize);
+
+            return measured && ((wantCd && !(def != null && def.cdAuthored)) || wantArea);
+        }
 
         /// <summary>Built-in body downforce area ClA (m²) — 0 for bluff shapes,
         /// and 0 for a body with no row, which is the old default arm.</summary>
@@ -159,11 +229,24 @@ namespace AIHWSim.Vehicles
             }
         }
 
-        /// <summary>Total drag area (m²) of a body + parts set (stats/top-speed solver).</summary>
+        /// <summary>
+        /// Total drag area (m²) of a body + parts set (stats/top-speed solver).
+        ///
+        /// Takes the wheels and the design's own overrides so it resolves the body
+        /// through <see cref="ResolveBodyAero"/> — i.e. the number the garage
+        /// prints is the number the car will fly with, including the geometry
+        /// estimate and including a published Cd the design authored. Before this
+        /// it read the raw table, so the Tiguan's readout quoted 0.80 while the
+        /// car itself used 0.31.
+        /// </summary>
         public static float TotalCdA(BodyDef def, Vector3 bodySize,
-            System.Collections.Generic.IReadOnlyList<AeroConfig> parts)
+            System.Collections.Generic.IReadOnlyList<AeroConfig> parts,
+            System.Collections.Generic.IReadOnlyList<WheelDisc> wheels = null,
+            float cdOverride = 0f, float areaOverride = 0f)
         {
-            float cdA = BodyCd(def) * FrontalArea(bodySize);
+            ResolveBodyAero(def, bodySize, wheels, cdOverride, areaOverride,
+                            out float bodyCd, out float bodyArea);
+            float cdA = bodyCd * bodyArea;
             if (parts != null)
                 for (int i = 0; i < parts.Count; i++)
                 {

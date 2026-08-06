@@ -117,6 +117,23 @@ namespace AIHWSim.Core
         /// </summary>
         public static bool ArcadeHandling = true;
 
+        /// <summary>
+        /// Whether tyre temperature and pressure stay switched on under
+        /// <see cref="ArcadeHandling"/>.
+        ///
+        /// Off by default, and only because the arcade grip floor was balanced
+        /// without it — a car whose tyres are cold for the first half-lap is not
+        /// what "drivable on a keyboard" was tuned against. It is a checkbox rather
+        /// than a rule because the two are genuinely independent: wanting forgiving
+        /// grip and wanting tyres that warm up is a perfectly coherent pair of
+        /// preferences, and nothing in the physics objects to it.
+        ///
+        /// Read only by <see cref="HandlingFloor"/>, and only meaningful when
+        /// arcade handling is on: a sim-handling session always leaves the thermal
+        /// model to the wheels' own <c>pressureKpa</c>.
+        /// </summary>
+        public static bool ArcadeTyreThermal;
+
         /// <summary>What rules the next session runs. Race keeps every legacy
         /// entry path behaving exactly as it did.</summary>
         public static MatchMode Match = MatchMode.Race;
@@ -152,6 +169,7 @@ namespace AIHWSim.Core
             Arcade = false;
             TrackLimits = false;
             ArcadeHandling = true;   // the default the menu offers next time
+            ArcadeTyreThermal = false;
             ChampionshipRound = false;
             Match = MatchMode.Race;
             TargetScore = 3;

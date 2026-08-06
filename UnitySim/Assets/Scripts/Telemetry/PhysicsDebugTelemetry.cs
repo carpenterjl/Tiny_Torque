@@ -69,6 +69,8 @@ namespace AIHWSim.Telemetry
                 hub.RegisterChannel($"veh/susp_{i}");
                 hub.RegisterChannel($"veh/slip_{i}");
                 hub.RegisterChannel($"veh/omega_{i}");
+                hub.RegisterChannel($"veh/tyre_temp_{i}");
+                hub.RegisterChannel($"veh/tyre_press_{i}");
             }
         }
 
@@ -131,6 +133,11 @@ namespace AIHWSim.Telemetry
                 hub.SetValue($"veh/susp_{i}", _car.GetSuspensionCompression(i));
                 hub.SetValue($"veh/slip_{i}", _car.WheelSlipRatio(i));
                 hub.SetValue($"veh/omega_{i}", _car.WheelOmega(i));
+                // Flat at ambient and 0 on a car with no pressure authored, which
+                // is how a trace shows at a glance whether the thermal model is
+                // even running on this vehicle.
+                hub.SetValue($"veh/tyre_temp_{i}", _car.WheelTyreTempC(i));
+                hub.SetValue($"veh/tyre_press_{i}", _car.WheelTyrePressKpa(i));
             }
             hub.SetValue("veh/front_load_pct", total > 1f ? 100f * front / total : 0f);
         }

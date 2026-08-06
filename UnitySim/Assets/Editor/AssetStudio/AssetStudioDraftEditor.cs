@@ -168,8 +168,11 @@ namespace AIHWSim.AssetTools
         /// the mesh key IS the key, the paintable flag is whether any material
         /// claims the paint channel, the label falls back to the key — so what is
         /// asked for here is only what genuinely cannot be measured or inferred.
-        /// A drag coefficient is the whole of that list for a body, which is why
-        /// the commit refuses without one rather than reaching for a default.
+        /// Downforce is the whole of that list for a body: a mesh cannot say
+        /// whether it makes any. Drag used to be on it too and no longer is —
+        /// <c>DragEstimator</c> measures a Cd off the silhouette, so the field
+        /// below is an override for someone holding a real figure, not a blank the
+        /// commit refuses over.
         /// </summary>
         private void DrawRegistry(AssetStudioDraft draft)
         {
@@ -188,13 +191,15 @@ namespace AIHWSim.AssetTools
 
                 if (draft.cd < 0f)
                     EditorGUILayout.HelpBox(
-                        "No drag coefficient yet, and the commit will refuse without one. "
-                        + "It cannot be measured off geometry and the game will not run "
-                        + "without it: 0.15 is a teardrop, 0.45-0.6 a saloon, 0.8-0.95 a "
-                        + "bluff off-roader or a slab-sided wrecker, 1.2 a flat plate "
-                        + "broadside. clA is what the SHELL does with no parts on it, so "
-                        + "zero is the honest answer unless a wing is modelled in.",
-                        MessageType.Warning);
+                        "No drag coefficient — which is fine, and usually right. The game "
+                        + "measures one off this body's own silhouette: its projected area, "
+                        + "how abruptly it builds and abandons that area, and how much of it "
+                        + "is holes rather than car. Type a number here only to overrule "
+                        + "that with a real measured or published figure. clA is what the "
+                        + "SHELL does with no parts on it, and it is NOT measured — a "
+                        + "silhouette cannot see downforce — so zero is the honest answer "
+                        + "unless a wing is modelled in.",
+                        MessageType.Info);
             }
             else if (kind == AssetKind.Wheel)
             {

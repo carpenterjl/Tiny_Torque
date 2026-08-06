@@ -37,6 +37,7 @@ namespace AIHWSim.Vehicles
         // Tire realism (0 = off = legacy behaviour on old JSON)
         public float loadSensitivity;   // grip ∝ (Fz/Fz0)^-s; typical 0.15
         public float balloonPct;        // max radius growth % at high wheel speed
+        public float pressureKpa;       // cold inflation (kPa); 0 = no thermal model at all
 
         // Cosmetic wheel/tyre mesh style (0 slick / 1 knobby / 2 rally), and the
         // WheelCatalog key that outranks it. Both copied unresolved off the

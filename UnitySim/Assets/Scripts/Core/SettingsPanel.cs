@@ -147,6 +147,22 @@ namespace AIHWSim.Core
                     // transition, precisely so this write is not stomped.
                     if (!ah) AssistApplier.ApplyLive(rigs);
                 }
+
+                // The arcade sub-choice, live for the same reason: HandlingFloor
+                // writes tyreThermalEnable every frame, so a tyre starts warming
+                // (or stops) on the next physics step. Hidden in sim, where the
+                // car's own tyre pressures already decide.
+                if (SessionConfig.ArcadeHandling)
+                {
+                    bool tt = MenuNav.Toggle(SessionConfig.ArcadeTyreThermal,
+                        "    Tyre temperature + pressure");
+                    if (tt != SessionConfig.ArcadeTyreThermal)
+                    {
+                        SessionConfig.ArcadeTyreThermal = tt;
+                        s.spArcadeTyreThermal = tt;
+                        changed = true;
+                    }
+                }
             }
 
             // ---- bindings ----

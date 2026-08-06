@@ -179,6 +179,7 @@ namespace AIHWSim.Net
         public bool Arcade { get; private set; }
         public bool TrackLimits { get; private set; }
         public bool ArcadeHandling { get; private set; } = true;
+        public bool ArcadeTyreThermal { get; private set; }
 
         /// <summary>Latest arcade sync from the host (clients only). Reused
         /// buffers — the consumer reads them inside the event.</summary>
@@ -282,6 +283,7 @@ namespace AIHWSim.Net
             Arcade = SessionConfig.Arcade;
             TrackLimits = SessionConfig.TrackLimits;
             ArcadeHandling = SessionConfig.ArcadeHandling;
+            ArcadeTyreThermal = SessionConfig.ArcadeTyreThermal;
 
             Roster.Add(new NetPlayer
             {
@@ -597,6 +599,7 @@ namespace AIHWSim.Net
                 arcade = Arcade,
                 trackLimits = TrackLimits,
                 arcadeHandling = ArcadeHandling,
+                arcadeTyreThermal = ArcadeTyreThermal,
                 match = (int)SessionConfig.Match,
                 targetScore = SessionConfig.TargetScore,
                 timeLimitSec = SessionConfig.TimeLimitSec,
@@ -613,7 +616,8 @@ namespace AIHWSim.Net
             State = (LanState)msg.state;
             TargetLaps = msg.targetLaps;
             ApplyRoster(msg.roster);
-            ApplyArcadeRules(msg.arcade, msg.trackLimits, msg.arcadeHandling);
+            ApplyArcadeRules(msg.arcade, msg.trackLimits, msg.arcadeHandling,
+                             msg.arcadeTyreThermal);
             ApplyMatchRules(msg.match, msg.targetScore, msg.timeLimitSec);
 
             if (!ApplyWireTrack(msg.trackScene, msg.trackJson)) return;
@@ -945,6 +949,7 @@ namespace AIHWSim.Net
                     arcade = Arcade,
                     trackLimits = TrackLimits,
                     arcadeHandling = ArcadeHandling,
+                arcadeTyreThermal = ArcadeTyreThermal,
                     match = (int)SessionConfig.Match,
                     targetScore = SessionConfig.TargetScore,
                     timeLimitSec = SessionConfig.TimeLimitSec,
@@ -957,7 +962,7 @@ namespace AIHWSim.Net
             var m = ReadJson<SessionStateMsg>(reader);
             State = (LanState)m.state;
             TargetLaps = m.targetLaps;
-            ApplyArcadeRules(m.arcade, m.trackLimits, m.arcadeHandling);
+            ApplyArcadeRules(m.arcade, m.trackLimits, m.arcadeHandling, m.arcadeTyreThermal);
             ApplyMatchRules(m.match, m.targetScore, m.timeLimitSec);
             if (State == LanState.Countdown)
                 CountdownEndTime = Time.unscaledTime + m.countdownRemaining;
@@ -979,14 +984,21 @@ namespace AIHWSim.Net
             SessionConfig.TimeLimitSec = Mathf.Max(0, timeLimitSec);
         }
 
-        private void ApplyArcadeRules(bool arcade, bool limits, bool handling)
+        private void ApplyArcadeRules(bool arcade, bool limits, bool handling,
+                                      bool tyreThermal)
         {
             Arcade = arcade;
             TrackLimits = limits;
             ArcadeHandling = handling;
+            ArcadeTyreThermal = tyreThermal;
             SessionConfig.Arcade = arcade;
             SessionConfig.TrackLimits = limits;
             SessionConfig.ArcadeHandling = handling;
+            // Not cosmetic: this decides whether a peer's tyres warm up, and a
+            // car with cold tyres brakes and turns differently from one without.
+            // Two machines disagreeing about it is two machines running
+            // different physics on the same race.
+            SessionConfig.ArcadeTyreThermal = tyreThermal;
         }
 
         // ---- map / race control (full flows wired in the session-control step) ---

@@ -82,6 +82,14 @@ namespace AIHWSim.Core
             // Downforce is HandlingFloor's channel in BOTH session kinds — the
             // director's ApplyEffects deliberately does not own it.
             car.arcadeDownforce = on ? Arcade.ArcadeConfig.HandlingDownforce : 0f;
+
+            // Tyre thermal is the one channel that defaults to ON and is switched
+            // OFF by arcade, which is the opposite of every line above and is why
+            // it reads inverted. Sim handling leaves the decision entirely to the
+            // wheels' own pressureKpa; arcade overrides that unless the player
+            // asked for it back. Written every frame like the rest, so the
+            // checkbox is live mid-session.
+            car.tyreThermalEnable = !on || SessionConfig.ArcadeTyreThermal;
             // Bots included, mirroring the old ApplyArcadeHandling's deliberate
             // bot inclusion (the arcade floor is a physics change, not a
             // player preference). Max per channel, so higher Options sliders

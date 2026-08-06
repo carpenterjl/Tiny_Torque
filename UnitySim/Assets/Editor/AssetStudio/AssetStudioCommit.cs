@@ -50,8 +50,11 @@ namespace AIHWSim.AssetTools
     ///
     /// <b>What it does not do is decide anything.</b> Every number it writes came
     /// off the draft or off the imported prefab; the gates below refuse rather
-    /// than filling a blank in, because a drag coefficient chosen by a fallback
-    /// constant is a car nobody chose.
+    /// than filling a blank in. A drag coefficient is the one thing that changed
+    /// hands: it used to be refused when blank, because a Cd chosen by a fallback
+    /// constant is a car nobody chose — but <c>DragEstimator</c> now measures it
+    /// off the mesh, which is deciding it from the asset rather than from a
+    /// constant, so blank is allowed and means "measure it".
     /// </summary>
     public static class AssetStudioCommit
     {
@@ -389,9 +392,15 @@ namespace AIHWSim.AssetTools
                       + "order. The import gives the slot count and nothing else, so which "
                       + "material sits in which slot is a guess until someone looks");
 
-            if (kind == AssetKind.CarBody && draft.cd < 0f)
-                why.Add("no drag coefficient. A body needs one and it cannot be measured off "
-                      + "geometry; 0.15 is a teardrop, 1.2 a flat plate broadside");
+            // No longer a refusal. A body with cd −1 is measured off its own mesh
+            // by DragEstimator, which is where every shipped body's number comes
+            // from now; stating one is how an author overrules that with a real
+            // measurement, and it is only the STATED ones that have to be sane.
+            if (kind == AssetKind.CarBody && draft.cd >= 0f &&
+                (draft.cd < DragEstimator.CdMin || draft.cd > DragEstimator.CdMax))
+                why.Add($"drag coefficient {draft.cd} is not a car; {DragEstimator.CdMin} is a "
+                      + $"teardrop, {DragEstimator.CdMax} a flat plate broadside. Leave it at "
+                      + "−1 to have it measured off the geometry instead");
             if (draft.authorScale <= 0f)
                 why.Add("the uniform scale is zero or negative — press \"Propose\"");
             if (Mathf.Abs(Mathf.Repeat(draft.authorYawDeg, 90f)) > 0.01f)
