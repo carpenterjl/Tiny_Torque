@@ -231,9 +231,23 @@ In a shipped build, saves/vehicles/tracks/telemetry live in the per-user
 `AppData/LocalLow/AIHWSim/…` folder, so it runs from any install location. Zip
 the release folder to share it as a portable game, or build a Windows installer
 with the included **Inno Setup** script — see `UnitySim/Installer/LAN-Setup.md`
-for the full build-and-share + LAN/firewall walkthrough. The shared build ships
-without a controller DLL, so *Autonomous (C firmware)* is open-loop there; Manual,
-Bot AI, split-screen, and LAN all work fully.
+for the full build-and-share + LAN/firewall walkthrough.
+
+A release build carries the **whole C workspace**: `Controllers/` and
+`UserScripts/` are copied next to the exe by `ControllerSourceShipper`, a
+post-build hook, and the installer packs them along with everything else. So a
+downloaded copy can write, compile and reload firmware exactly as the editor
+does — *Simulate Controller ▸ Build & Reload* is not an editor-only button. What
+the build cannot carry is the **compiler**: MSVC's licence forbids redistributing
+it, and GCC is GPLv3 and about a gigabyte. `BUILDING_CONTROLLERS.txt`, written
+beside the exe, says so and gives the one `winget` line that fixes it — or a
+toolchain unpacked into `Toolchain\mingw64\bin` next to the game, which
+`build.ps1` prefers over anything installed. Note that the controller DLLs
+themselves are git-ignored, so a clone that has never run `build.ps1` produces a
+build with no firmware in it; the post-build hook warns when that happens.
+The installer installs per-user (`PrivilegesRequired=lowest`) for the same
+reason — compiling a controller writes into the install folder, which Program
+Files does not allow.
 
 Split-screen races share the map with real collisions, per-player lap/checkpoint
 HUDs in each viewport, per-player respawn, and a results screen (Keep driving /

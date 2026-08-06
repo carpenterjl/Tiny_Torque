@@ -13,8 +13,17 @@
 ;      Output: UnitySim\Builds\Installer\AI-Hardware-Control-Sim-Setup.exe
 ;
 ; Saves/vehicles/tracks/telemetry are written to the per-user AppData\LocalLow
-; folder at runtime (see Persistence/AppPaths.cs), so installing under Program
-; Files is safe — no admin-only writes into the install directory.
+; folder at runtime (see Persistence/AppPaths.cs).
+;
+; The install directory, however, is NOT read-only here, which is why this
+; installs per-user rather than into Program Files. "Build & Reload" compiles
+; the player's C controller in {app}\Controllers\build and drops the DLL into
+; {app}\<name>_Data\Plugins\x86_64 — both inside the install directory, and
+; neither writable under Program Files without elevation. PrivilegesRequired
+; below turns {autopf} into %LocalAppData%\Programs, which is writable, prompts
+; for nothing, and is what other self-modifying tools do. Reverting it would
+; not break the game; it would break writing controllers, and only for people
+; who installed rather than unzipped.
 
 #define AppName "AI Hardware Control Sim"
 #define AppVersion "1.0"
@@ -29,6 +38,9 @@ AppVersion={#AppVersion}
 AppPublisher={#AppPublisher}
 DefaultDirName={autopf}\{#AppName}
 DefaultGroupName={#AppName}
+; Per-user: {autopf} becomes %LocalAppData%\Programs, so the game can compile
+; controllers into its own folder. See the note at the top of this file.
+PrivilegesRequired=lowest
 UninstallDisplayIcon={app}\{#AppExe}
 OutputDir=..\Builds\Installer
 OutputBaseFilename=AI-Hardware-Control-Sim-Setup
@@ -47,7 +59,11 @@ Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{
 [Files]
 ; Pack the entire release player folder (exe, _Data, UnityPlayer.dll, MonoBleedingEdge),
 ; minus the Burst debug symbols folder Unity marks "DoNotShip".
-Source: "..\Builds\Release\*"; DestDir: "{app}"; Excludes: "*_BurstDebugInformation_DoNotShip\*,*_BurstDebugInformation_DoNotShip"; Flags: ignoreversion recursesubdirs createallsubdirs
+; Controllers\build is excluded because testing "Build & Reload" in the release
+; folder leaves a CMake cache there, and a CMakeCache.txt records the absolute
+; paths it was generated for — shipping one hands every player a cache stamped
+; with a path from the build machine.
+Source: "..\Builds\Release\*"; DestDir: "{app}"; Excludes: "*_BurstDebugInformation_DoNotShip\*,*_BurstDebugInformation_DoNotShip,Controllers\build\*,Controllers\build"; Flags: ignoreversion recursesubdirs createallsubdirs
 
 [Icons]
 Name: "{group}\{#AppName}"; Filename: "{app}\{#AppExe}"

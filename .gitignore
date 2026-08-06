@@ -88,6 +88,10 @@ UnitySim/Installer/Output/
 # ---- Native controller build ----
 Controllers/build/
 
+# A compiler unpacked beside the game (see build.ps1). Redistributable, but a
+# gigabyte of it, and never a source file in this repo.
+Toolchain/
+
 # ---- Blender authoring artifacts (source .blend + .py stay tracked) ----
 Blender/*.blend1
 Blender/*.fbx.bak*

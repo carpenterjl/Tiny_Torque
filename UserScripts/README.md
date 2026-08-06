@@ -58,3 +58,11 @@ but `Controllers/hal/controller_api.h` is the real contract and it is worth read
 
 Built DLLs land in `UnitySim/Assets/Plugins/x86_64/` and are not committed — they are
 rebuilt from source, by the button in the game or by `Controllers/build.ps1`.
+
+## In a shipped build
+
+This folder and `Controllers/` are copied next to the exe by a post-build hook
+(`Assets/Editor/ControllerSourceShipper.cs`), so everything above works in a
+downloaded copy of the game and not only in the editor. The compiler is the one
+thing not in the box — see `BUILDING_CONTROLLERS.txt` beside the exe for why,
+and for the one command that installs one.

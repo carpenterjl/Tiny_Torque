@@ -19,6 +19,13 @@
         winget install --id BrechtSanders.WinLibs.POSIX.UCRT --exact
     which bundles gcc, cmake, ninja and mingw32-make in one directory.
 
+    A toolchain unpacked NEXT TO the game -- ..\Toolchain\mingw64\bin -- is used
+    before anything on PATH. That folder is how a shipped copy of this game can
+    carry a compiler without one being installed system-wide; it is deliberately
+    not part of the build, because the compiler cannot be redistributed inside
+    the game (MSVC's licence forbids it, and GCC is GPLv3 and about a gigabyte).
+    See BUILDING_CONTROLLERS.txt beside the game.
+
     Unity can hot-reload the DLLs at runtime (see NativeControllerLoader): it
     loads a shadow copy, so this script can overwrite them even while the
     editor is in Play mode.
@@ -57,6 +64,20 @@ function Find-Exe {
 $winlibsGlob = Join-Path $env:LOCALAPPDATA `
     "Microsoft\WinGet\Packages\BrechtSanders.WinLibs*\mingw64\bin"
 
+# A toolchain the player unpacked beside the game. Put on PATH rather than
+# handed to Find-Exe one executable at a time, because gcc has to find its own
+# ar/ld/windres too -- and PATH is the only thing that tells it where they are.
+# Winning over an installed compiler is the intent: someone who put a toolchain
+# here chose it, and a build that silently used a different one would be a very
+# quiet way to produce a DLL they cannot explain.
+$localToolchain = Join-Path $here "..\Toolchain\mingw64\bin"
+$haveLocalToolchain = Test-Path (Join-Path $localToolchain "gcc.exe")
+if ($haveLocalToolchain) {
+    $localToolchain = (Resolve-Path $localToolchain).Path
+    Write-Host "Using the toolchain beside the game: $localToolchain" -ForegroundColor Cyan
+    $env:PATH = "$localToolchain;$env:PATH"
+}
+
 $cmakeExe = Find-Exe "cmake" @(
     "C:\Program Files\CMake\bin\cmake.exe",
     (Join-Path $winlibsGlob "cmake.exe"))
@@ -68,7 +89,9 @@ if (-not $cmakeExe) {
 
 $useMsvc = $false
 $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
-if (Test-Path $vswhere) {
+# A toolchain beside the game is an explicit choice and outranks an installed
+# MSVC, which would otherwise win this probe and make that folder do nothing.
+if (-not $haveLocalToolchain -and (Test-Path $vswhere)) {
     $vsPath = & $vswhere -latest -products * `
         -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 `
         -property installationPath 2>$null
