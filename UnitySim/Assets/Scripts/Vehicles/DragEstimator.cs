@@ -285,6 +285,50 @@ namespace AIHWSim.Vehicles
                               bodySize.y / CarVehicle.BodyMeshAuthorSize.y,
                               bodySize.z / CarVehicle.BodyMeshAuthorSize.z);
 
+            res = Evaluate(sil, toM, wheels);
+            return true;
+        }
+
+        /// <summary>
+        /// Estimate from an explicit triangle soup, already in metres, nose +Z.
+        ///
+        /// <b>Uncached, deliberately.</b> Every other entry point measures a
+        /// catalogue body, whose geometry is fixed for the session and therefore
+        /// worth remembering. A soup is a shape somebody has just this second
+        /// changed, and the caller is the only thing that knows when that
+        /// happened — see <c>BodyEd.BodyDragReadout</c>, which measures once per
+        /// committed edit and never per frame. Keying a cache on a mesh that
+        /// mutates is how a deformed car ends up quietly dragging like the
+        /// catalogue row it started as.
+        ///
+        /// <c>toM</c> is one because the vertices arrive scaled; the fractions in
+        /// <see cref="BodySilhouette"/> are still measured against the soup's own
+        /// bounding box, so everything downstream is unchanged.
+        /// </summary>
+        public static bool TryEstimateSoup(List<Vector3> trisMetres,
+                                           IReadOnlyList<WheelDisc> wheels,
+                                           string source, out Result res)
+        {
+            res = default;
+            if (trisMetres == null || trisMetres.Count < 3) return false;
+            BodySilhouette sil = Rasterise(trisMetres, source);
+            if (sil == null) return false;
+            res = Evaluate(sil, Vector3.one, wheels);
+            return true;
+        }
+
+        /// <summary>
+        /// The correlation itself: silhouette fractions plus a scale, in; a drag
+        /// coefficient and a frontal area, out.
+        ///
+        /// Split out from <see cref="TryEstimate"/> so a measured-in-place shape
+        /// can be priced by exactly the same arithmetic as a catalogue row —
+        /// nothing here changed when it moved, and <c>[DRAG]</c>'s pins are what
+        /// says so.
+        /// </summary>
+        private static Result Evaluate(BodySilhouette sil, Vector3 toM,
+                                       IReadOnlyList<WheelDisc> wheels)
+        {
             Vector3 ext = Vector3.Scale(sil.boundsSize, toM);
             float w = Mathf.Max(1e-4f, Mathf.Abs(ext.x));
             float h = Mathf.Max(1e-4f, Mathf.Abs(ext.y));
@@ -319,13 +363,12 @@ namespace AIHWSim.Vehicles
 
             float cd = Mathf.Clamp((cdBody * aRef + wheelCdA) / aRef, CdMin, CdMax);
 
-            res = new Result
+            return new Result
             {
                 cd = cd, frontalArea = aRef, cdBody = cdBody, wheelCdA = wheelCdA,
                 bNose = bNose, noseFrac = noseFrac, recover = recover, rBase = rBase,
                 wetOverRef = wetOverRef, extentsM = new Vector3(w, h, l), sil = sil,
             };
-            return true;
         }
 
         /// <summary>

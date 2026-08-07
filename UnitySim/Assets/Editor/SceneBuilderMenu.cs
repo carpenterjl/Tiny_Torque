@@ -148,6 +148,40 @@ namespace AIHWSim.EditorTools
                 "Tip: also create the Track Scene so Drive can load your map.", "OK");
         }
 
+        /// <summary>
+        /// The runtime body-deformation editor: a turntable, one catalogue shell
+        /// on it, and the morph/sculpt tools.
+        ///
+        /// Deliberately NOT added to Build Settings, on the same terms as
+        /// <see cref="CreatePhysicsDebugScene"/>: it is a tool rather than
+        /// content, nothing in the shipped flow loads it by name, and leaving
+        /// EditorBuildSettings.asset alone keeps the Release build byte-identical.
+        /// It also keeps this development entirely off the garage's path, which is
+        /// the whole reason the editor is a separate scene at this stage — a
+        /// menu entry and a build registration belong with the port, not with the
+        /// prototype.
+        /// </summary>
+        [MenuItem("Tools/AIHWSim/Create Body Editor Scene")]
+        public static void CreateBodyEditorScene()
+        {
+            var scene = EditorSceneManager.NewScene(
+                NewSceneSetup.DefaultGameObjects, NewSceneMode.Single);
+
+            var go = new GameObject("BodyEditorBootstrap");
+            go.AddComponent<AIHWSim.BodyEd.BodyEditorBootstrap>();
+            Selection.activeGameObject = go;
+
+            if (!AssetDatabase.IsValidFolder("Assets/Scenes"))
+                AssetDatabase.CreateFolder("Assets", "Scenes");
+
+            const string path = "Assets/Scenes/BodyEditorScene.unity";
+            EditorSceneManager.SaveScene(scene, path);
+            EditorUtility.DisplayDialog("AIHWSim",
+                $"Created {path}.\nPress Play, then morph or sculpt the body on the stand.\n"
+                + "Layouts save to <project>/BodyLayouts.\n"
+                + "Debug-only: not in Build Settings.", "OK");
+        }
+
         [MenuItem("Tools/AIHWSim/Create Map Debug Scene")]
         public static void CreateMapDebugScene()
         {

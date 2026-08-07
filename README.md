@@ -2207,6 +2207,71 @@ times, race balance and difficulty tiers are exactly what they were.
 Validate with `-executeMethod AIHWSim.TrackTools.TrackStudioValidator.Report` and grep
 `[TRK] RESULT`. Full detail in [Docs/track-studio.md](Docs/track-studio.md).
 
+## Body editor (debug-only)
+
+**Tools ▸ AIHWSim ▸ Create Body Editor Scene.** A shell on a turntable that you can
+reshape while the game is running — morph sliders and free-form vertex pulling, with
+the physics collider re-cooked and the drag re-measured every time you let go of the
+mouse. It is **deliberately separate from the garage**: its own scene, its own rig, no
+`CarVehicle` and no `VehicleDesign`, so none of the assembly flow that ships can be
+broken by work on it. Not in Build Settings, like the physics debug scene. Porting it
+into the garage is a later step, and the seam it will cross is `VehicleLayoutData`.
+
+**Two deformation systems on one mesh.** A Unity blendshape frame is a *delta* against
+the mesh's base vertices, so the two never contend: free-form pulls are written into
+the base vertices, morph weights ride on top, and what you see is
+`base + offsets + Σ(wᵢ·Δᵢ)`. One `BakeMesh` call is exactly that sum, and it feeds both
+the `MeshCollider` and the drag measurement — so those two can never describe different
+cars.
+
+**Four morphs, generated rather than authored.** Nothing in this project ships a
+blendshape (`PartModelPostprocessor` strips them on import), so *Nose width*, *Tail
+chop*, *Roofline* and *Side pinch* are built in code from each body's own bounding box
+— which means they work on all twelve offered shells *and* on the two primitive
+compounds that are not FBX at all. Every delta is a pure function of vertex position, so
+co-located vertices at a hard edge always move together, and the frames regenerate
+bit-identically at load. That last property is what lets a saved layout store four
+weights instead of a megabyte of displacement.
+
+**Sculpting.** Left-drag on the body. The brush gathers vertices inside a radius with a
+smoothstep falloff, welds them by position first (an FBX shell duplicates a vertex at
+every hard edge and every UV seam — pulling one copy tears the panel), and freezes that
+set for the stroke, so the stroke does not crawl as the surface runs away from it.
+Radius, strength and push direction (surface normal / vertical / lateral) are on the
+panel.
+
+**The collider updates on release, never during a drag.** Assigning a `MeshCollider`'s
+`sharedMesh` makes PhysX cook, which is milliseconds — doing it sixty times a second
+through a drag is the same slideshow the track tools found when re-cooking a road per
+brush stroke. One rule covers slider drags, sculpt strokes, loads and resets alike:
+something changed *and* the mouse is up.
+
+**Triplanar body material** (`Assets/Resources/Shaders/AIHWSimTriplanar.shader`, the
+project's first custom surface shader). A body being sculpted has no stable UV layout,
+and the editor's mesh is several prefab parts merged into one, so their UVs no longer
+relate to each other at all. World-space triplanar projection sidesteps the question:
+texel density stays even across a panel that has just been dragged out 30 %. World space
+is correct only *because the editor's body never moves* — a driving car would swim, and
+that is the one line to change at port time.
+
+**Measured drag, live.** The panel shows the deformed body's Cd, frontal area and Cd·A
+beside the undeformed catalogue row, re-measured from the same bake the collider gets,
+once per edit. It is read-only: `CarVehicle.EffectiveAero` is untouched, and a driving
+car still gets its drag from the catalogue silhouette cache, which is keyed by body key
+and knows nothing about deformation. Closing that gap is part of the port.
+
+**Layouts save as small readable JSON** under `<project>/BodyLayouts/`, beside
+`Vehicles/` and `Tracks/`: the base body key, four morph weights, the wheelbase, and a
+*sparse* list of the vertices actually pulled. Morph weights are matched back **by
+name**, so adding or reordering a morph cannot apply a roofline weight to a nose slider;
+vertex offsets are refused outright if the base mesh's vertex count has changed, because
+an index into a re-exported mesh does not address the point it used to.
+
+Gate: `-executeMethod AIHWSim.EditorTools.BodyDeformBench.Report`, grep `[BDEF] RESULT`.
+It runs scene-free and covers the morph frames (including bit-identical regeneration),
+the falloff and weld arithmetic, sparse apply and refusal, the JSON round trip, the bake,
+and whether a deformation moves the measured drag in the right direction.
+
 ## Layout
 
 ```
