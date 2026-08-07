@@ -806,6 +806,8 @@ namespace AIHWSim.Menu
                 });
             GUILayout.Space(8);
             if (MenuButton("Garage")) LoadIfBuilt(GameFlow.GarageSceneName, GameFlow.LoadGarage);
+            if (MenuButton("Vehicle Studio"))
+                LoadIfBuilt(GameFlow.BodyEditorSceneName, GameFlow.LoadBodyEditor);
             if (MenuButton("Track Builder")) LoadIfBuilt(GameFlow.TrackBuilderSceneName, GameFlow.LoadTrackBuilder);
             GUILayout.Space(8);
             if (MenuButton("← Back")) GoTo(Page.Root);

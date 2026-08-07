@@ -18,6 +18,9 @@ EditorBuildSettings:
     path: Assets/Scenes/MenuScene.unity
     guid: b899b06cc3cf117428e10dcf39799e11
   - enabled: 1
+    path: Assets/Scenes/BodyEditorScene.unity
+    guid: ef6883ccd1596ea44ab2dbdcd7442961
+  - enabled: 1
     path: Assets/TinyTorqueAssets/Scenes/TTA_Sandbox.unity
     guid: 7c5304fbc525f7c45b6ad54f74ddc031
   - enabled: 1

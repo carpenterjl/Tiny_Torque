@@ -76,6 +76,12 @@ namespace AIHWSim.Garage
                 }
                 catch (System.FormatException) { }
             }
+            // Vehicle Studio's body customisation. Handed over unresolved, like
+            // the body key above: the car decides what an empty layout means, so a
+            // car built by any other route (the debug spawner, a physics scene, a
+            // preset) goes through the same rule.
+            car.bodyLayout = design.bodyLayout;
+
             car.steerRateDegPerSec = design.steerRate;
             car.servoStallNm = Mathf.Max(0f, design.servoStallNm);
             car.ackermannPct = design.ackermannPct;

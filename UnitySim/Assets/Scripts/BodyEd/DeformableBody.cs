@@ -91,6 +91,19 @@ namespace AIHWSim.BodyEd
 
         public int VertexCount => _baseVerts != null ? _baseVerts.Length : 0;
 
+        /// <summary>
+        /// The body's paintable channels — one per submesh of the flattened mesh,
+        /// named by the pieces the FBX was built from
+        /// (<see cref="BodyMeshSource.ChannelsOf"/>).
+        /// </summary>
+        public FeatureChannels.Binding Channels { get; private set; }
+
+        /// <summary>Channels currently switched off. Their triangles are removed
+        /// from the mesh, so they are absent from the collider bake and the drag
+        /// measurement as well as from the picture — a spoiler somebody deleted
+        /// should not still be making drag.</summary>
+        public IReadOnlyList<string> HiddenChannels => _hidden;
+
         /// <summary>How many vertices currently carry a free-form offset.</summary>
         public int OffsetCount { get; private set; }
 
@@ -107,6 +120,12 @@ namespace AIHWSim.BodyEd
         private List<int>[] _members;
         private Bounds _baseBounds;
         private bool _dirty;
+
+        // paint + removal
+        private string[] _channelNames = System.Array.Empty<string>();
+        private int[][] _baseTriangles = System.Array.Empty<int[]>();
+        private readonly List<string> _hidden = new List<string>();
+        private FeatureTint[] _tints;
 
         // stroke
         private bool _sculpting;
@@ -170,6 +189,17 @@ namespace AIHWSim.BodyEd
             // a CPU-writable allocation instead of re-uploading a static one.
             WorkMesh.MarkDynamic();
 
+            // The channel split, and a pristine copy of each submesh's triangles —
+            // which is what makes hiding a channel reversible: the triangles are
+            // taken out of the mesh, not marked, so getting them back means having
+            // kept them.
+            _channelNames = BodyMeshSource.ChannelsOf(def);
+            _baseTriangles = new int[WorkMesh.subMeshCount][];
+            for (int c = 0; c < _baseTriangles.Length; c++)
+                _baseTriangles[c] = WorkMesh.GetTriangles(c);
+            _hidden.Clear();
+            _tints = null;
+
             _baseVerts = WorkMesh.vertices;
             _offsets = new Vector3[_baseVerts.Length];
             _composed = new Vector3[_baseVerts.Length];
@@ -204,7 +234,18 @@ namespace AIHWSim.BodyEd
 
             Smr = go.AddComponent<SkinnedMeshRenderer>();
             Smr.sharedMesh = WorkMesh;
-            Smr.sharedMaterial = BodyEdMaterials.Body();
+
+            // One material slot per channel, all starting on the triplanar body
+            // material. The slots are what the paint panel writes into; a body
+            // nobody has painted therefore renders through one shared material and
+            // batches exactly as it did when the mesh was a single surface.
+            int slots = Mathf.Max(1, WorkMesh.subMeshCount);
+            var mats = new Material[slots];
+            for (int i = 0; i < slots; i++) mats[i] = BodyEdMaterials.Body();
+            Smr.sharedMaterials = mats;
+
+            Channels?.Dispose();
+            Channels = FeatureChannels.ForSubmeshes(Smr, _channelNames);
             // Explicit bounds rather than updateWhenOffscreen: that flag makes
             // Unity bake the skin every frame purely to measure it, and this
             // component already knows exactly when the shape changed.
@@ -326,6 +367,67 @@ namespace AIHWSim.BodyEd
         {
             if (_morphWeights == null) return;
             for (int i = 0; i < _morphWeights.Length; i++) UpdateVehicleMorph(i, 0f);
+        }
+
+        // ---- paint and removal ---------------------------------------------------------
+
+        /// <summary>The body's current paint, as saved. Null when nothing is
+        /// painted, which is the same thing an unpainted layout stores.</summary>
+        public FeatureTint[] Tints => _tints;
+
+        /// <summary>Repaint the body's channels. Passing null puts every channel
+        /// back to the plain triplanar material.</summary>
+        public void SetTints(FeatureTint[] tints)
+        {
+            _tints = tints;
+            Channels?.Apply(tints);
+        }
+
+        /// <summary>Whether a channel is currently switched off.</summary>
+        public bool IsHidden(string channel) => _hidden.Contains(channel);
+
+        /// <summary>
+        /// Switch a channel of the base body on or off.
+        ///
+        /// Implemented by emptying that submesh's triangle list rather than by
+        /// hiding a renderer, because there is only one renderer — and because
+        /// emptying it is also the RIGHT answer: the collider bake and the drag
+        /// measurement both read this mesh, so a removed part stops colliding and
+        /// stops making drag, which is what removing it means.
+        /// </summary>
+        public void SetChannelHidden(string channel, bool hidden)
+        {
+            if (WorkMesh == null || string.IsNullOrEmpty(channel)) return;
+            bool now = _hidden.Contains(channel);
+            if (now == hidden) return;
+
+            if (hidden) _hidden.Add(channel);
+            else _hidden.Remove(channel);
+            ApplyHidden();
+        }
+
+        /// <summary>Replace the hidden set wholesale — for a load.</summary>
+        public void SetHiddenChannels(string[] hidden)
+        {
+            _hidden.Clear();
+            if (hidden != null)
+                foreach (string h in hidden)
+                    if (!string.IsNullOrEmpty(h) && !_hidden.Contains(h)) _hidden.Add(h);
+            ApplyHidden();
+        }
+
+        private void ApplyHidden()
+        {
+            if (WorkMesh == null || _baseTriangles == null) return;
+            for (int c = 0; c < _baseTriangles.Length && c < WorkMesh.subMeshCount; c++)
+            {
+                bool hide = c < _channelNames.Length && _hidden.Contains(_channelNames[c]);
+                WorkMesh.SetTriangles(hide ? System.Array.Empty<int>() : _baseTriangles[c],
+                                      c, false);
+            }
+            WorkMesh.RecalculateBounds();
+            UpdateRendererBounds();
+            _dirty = true;
         }
 
         // ---- free-form sculpting ------------------------------------------------------
@@ -495,7 +597,6 @@ namespace AIHWSim.BodyEd
         {
             var d = new VehicleLayoutData
             {
-                version = 1,
                 carBasePrefabID = Def != null ? Def.id : "",
                 wheelbaseLength = _wheelbase,
                 bodySize = Def != null && Def.nominalSize.sqrMagnitude > 1e-9f
@@ -517,6 +618,8 @@ namespace AIHWSim.BodyEd
                 }
             d.offsetIndex = idx.ToArray();
             d.offsetValue = val.ToArray();
+            d.tints = _tints;
+            d.hiddenChannels = _hidden.Count > 0 ? _hidden.ToArray() : null;
             return d;
         }
 
@@ -589,6 +692,13 @@ namespace AIHWSim.BodyEd
 
             if (d.wheelbaseLength > 0f) SetWheelbase(d.wheelbaseLength);
 
+            // Paint and removal LAST, and by name: a channel this build does not
+            // have simply never matches, which is the same forgiveness the morph
+            // names get and for the same reason — a layout must survive being
+            // opened on a body whose FBX has been re-exported since.
+            SetHiddenChannels(d.hiddenChannels);
+            SetTints(d.tints);
+
             Recompose();
             _dirty = true;
             return true;
@@ -633,6 +743,8 @@ namespace AIHWSim.BodyEd
         private void Teardown()
         {
             EndSculpt();
+            Channels?.Dispose();
+            Channels = null;
             for (int i = transform.childCount - 1; i >= 0; i--)
                 Kill(transform.GetChild(i).gameObject);
             _wheelMarkers.Clear();
@@ -646,6 +758,8 @@ namespace AIHWSim.BodyEd
 
         private void OnDestroy()
         {
+            Channels?.Dispose();
+            Channels = null;
             BodyMeshSource.DestroyMesh(WorkMesh);
             WorkMesh = null;
         }

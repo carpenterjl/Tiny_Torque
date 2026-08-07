@@ -8,11 +8,155 @@ describe is documented in [README.md](../README.md).
 Active work lives in the session plan file, not here; a plan moves into this archive
 once its milestones are done.
 
-Covering the project bootstrap through the driving-scene config layer (45 plans).
-Last updated 2026-08-04. (The RC-airplane F0–F9 and slipstream/phugoid G-series plans
+Covering the project bootstrap through the runtime body editor (46 plans).
+Last updated 2026-08-07. (The RC-airplane F0–F9 and slipstream/phugoid G-series plans
 completed between Track Studio and the HUD pass but their session files were
 overwritten before archiving; their results live in README's RC-airplane section and
 the [AERO]/[ABENCH] gates.)
+
+---
+
+# BodyEd: runtime vehicle body-deformation editor, standalone dev scene (2026-08-06)
+
+## Context
+
+An in-game editor that lets players deform car body geometry — blendshape morphs plus
+free-form vertex sculpting — with the physics collider re-baked at runtime and the layout
+saved to JSON. Deliberately **separate from the existing garage**: its own scene, its own
+rig, no VehicleFactory/CarVehicle changes; porting into the garage/driving path comes later.
+
+**Codebase facts that shaped the design** (verified by exploration):
+- No `SkinnedMeshRenderer` or blendshape exists anywhere; the FBX importer strips
+  blendshapes (`PartModelPostprocessor.cs:70`). → **morph targets are generated
+  procedurally at runtime** via `Mesh.AddBlendShapeFrame` (user decision — importer untouched).
+- Cars collide with one root `BoxCollider` (`CarVehicle.cs:719-733`); the MeshCollider
+  here is new and lives only in this scene.
+- Built-in RP, no Shader Graph → the triplanar shader is a hand-written surface shader,
+  the project's first.
+- Body FBX meshes are `isReadable` (`PartModelPostprocessor.cs:109`, `body_*` only).
+- `DragEstimator.Rasterise(List<Vector3>, string)` (:553) is already a pure
+  triangle-soup entry, but **private**; its cache is keyed by body key only.
+
+**User decisions:** procedural blendshapes · dev-only scene (menu-item-created, NOT in
+EditorBuildSettings, like PhysicsDebugScene) · **include** the live drag re-measure readout
+(read-only; no physics feedback).
+
+## Architecture — how the two morph systems coexist
+
+One authoritative renderer: a **bone-less SkinnedMeshRenderer** on a runtime mesh clone.
+Blendshape deltas are stored relative to base vertices, so:
+
+- **Sculpt offsets write into the clone's base vertices** (`mesh.vertices = base + offsets`);
+  blendshape deltas stay valid because they're relative.
+- **Morph weights** apply on top via `SetBlendShapeWeight`.
+- Final geometry = base + offsets + Σ(wᵢ·Δᵢ), and `SkinnedMeshRenderer.BakeMesh` yields
+  exactly that — **one bake serves both the MeshCollider and the drag readout**, so they
+  can never disagree.
+- Save/load is exact because morph deltas are deterministic pure functions of base
+  vertices: reload base mesh by `carBasePrefabID`, regenerate identical frames, apply
+  weights + sparse offsets. Nothing baked is serialized.
+
+**Weld map**: FBX shells duplicate vertices at normal/UV splits; pulling one copy tears
+the mesh. Build a quantized-position→indices map once at Init; sculpt and morph deltas
+operate on weld groups (morph deltas are position-functions, so consistent inherently).
+
+**Commit rule** (covers slider release, sculpt release, load, reset in one line — zero
+physics work during any drag): `DeformableBody.Update()` fires `DeformCommitted` when
+`_dirty && !InputReader.LeftMouseHeld()`.
+
+```
+BodyDef → BodyMeshSource.Build(def)  merged readable Mesh (author units) + renderScale
+        → DeformableBody             clone, MarkDynamic, BodyMorphs.AddTo, weld map, SMR
+            ├─ UpdateVehicleMorph(i,w)   live
+            ├─ sculpt drag               offsets → vertices, RecalculateNormals/Bounds, live
+            └─ commit ── DeformCommitted ──► BodyDeformCollision.Rebake (BakeMesh →
+                 MeshCollider.sharedMesh → Physics.SyncTransforms)
+                 ──► BodyDragReadout.Remeasure (baked tris → TryEstimateSoup)
+```
+
+## New files
+
+Runtime area `Assets/Scripts/BodyEd/`, namespace `AIHWSim.BodyEd` (mirrors TrackEd):
+
+| File | Class | Job |
+|---|---|---|
+| `BodyEditorBootstrap.cs` | `BodyEditorBootstrap` | Awake builds lighting/camera/stand/body/UI; `SetBody(def)` rebuild |
+| `BodyMeshSource.cs` | static `BodyMeshSource` | `Mesh Build(BodyDef, out Vector3 renderScale)` — FBX: CombineInstances mirroring `DragEstimator.MeasureMesh` (incl. manifest yaw/offset), UInt32 index >65k; primitive: 12-tri boxes from `BodyPrimitives.For` at author units |
+| `BodyMorphs.cs` | static `BodyMorphs` | `enum MorphKind { NoseWidth, TailChop, RooflineDrop, SidePinch }`; pure `Deltas(baseVerts, bounds, kind)`; `AddTo(Mesh)` → one `AddBlendShapeFrame(name, 100, deltas, null, null)` each |
+| `DeformableBody.cs` | `DeformableBody` | SMR owner; `UpdateVehicleMorph(int,float)`; `TryBeginSculpt/SculptTo/EndSculpt`; `Capture()/Apply(VehicleLayoutData)`; commit event; weld map |
+| `DeformFalloff.cs` | static `DeformFalloff` | `Weight(d,r)` = smoothstep decay `s²(3−2s)`, `GatherIndices/GatherWelded` — pure, benchable |
+| `BodyDeformCollision.cs` | `BodyDeformCollision` | `Rebake(body)`: reused `_baked` Mesh, `BakeMesh`, `sharedMesh = null` then `= _baked`, `Physics.SyncTransforms()`, log verts/tris |
+| `BodyDragReadout.cs` | plain class | baked soup → `DragEstimator.TryEstimateSoup`; catalogue baseline once per body |
+| `VehicleLayoutData.cs` | `VehicleLayoutData` | version · carBasePrefabID · wheelbaseLength · bodySize · blendShapeNames/Weights · sparse offsetIndex/offsetValue · baseVertexCount |
+| `BodyLayoutLibrary.cs` | static | `AppPaths.BaseDir/BodyLayouts`; `SaveVehicleToFile`/`LoadVehicleFromFile` (VehicleLibrary pattern) |
+| `BodyEditorUI.cs` | `BodyEditorUI` | IMGUI + MenuNav; Layout-snapshot discipline; sculpt input |
+| `Assets/Resources/Shaders/AIHWSimTriplanar.shader` | `"AIHWSim/TriplanarBody"` | world-space triplanar surface shader |
+| `Assets/Editor/BodyDeformBench.cs` | static `BodyDeformBench` | `[BDEF]` bench, DragBench harness |
+
+**Edits to existing files (only two):** `SceneBuilderMenu.cs` gained
+`Create Body Editor Scene` (no `AddSceneToBuild`); `DragEstimator.cs` extracted
+`private static Result Evaluate(sil, toM, wheels)` out of `TryEstimate` and added
+`TryEstimateSoup(trisMetres, wheels, source, out res)` — uncached, the caller owns
+"when did the shape change".
+
+## Milestones
+
+- [x] M1 — `BodyMeshSource` + `BodyMorphs` + `DeformFalloff` + `VehicleLayoutData` +
+      `BodyLayoutLibrary` (pure logic, no scene)
+- [x] M2 — Scene menu item, `BodyEditorBootstrap`, `DeformableBody`, triplanar shader
+      + `BodyEdMaterials`
+- [x] M3 — Sculpt input wiring (grab-plane pointer delta, screen-projected brush ring)
+- [x] M4 — `BodyDeformCollision` re-bake on commit
+- [x] M5 — Save/load end-to-end (by-name morph matching, sparse offsets, vertex-count refusal)
+- [x] M6 — `DragEstimator` refactor + `TryEstimateSoup` + `BodyDragReadout` —
+      **`[DRAG] ALL PASS (51 checks)`**, every per-body pin bit-identical
+- [x] M7 — Full UI panel + MenuNav Layout-snapshot discipline + deferred intents
+- [x] `[BDEF] ALL PASS (113 checks)` across 8 groups
+- [x] Docs note (README ▸ *Body editor (debug-only)*)
+- [x] Manual pass — done by hand; the editor reads as intended
+
+## What the bench found
+
+Four real defects, all caught by `[BDEF]` before anything was driven by hand:
+
+1. **`BakeMesh(mesh, useScale: true)` is a no-op on a bone-less renderer.** Doubling
+   the renderer's scale did not move the baked geometry. Left alone, `body_patrol` —
+   whose mesh arrives 12.573× oversized and is rendered down by `authorScale` — would
+   have collided as a **5.28 m** object instead of a 0.42 m one, silently. Fixed by
+   baking in author units (`useScale: false`, unambiguous) and applying `RenderScale`
+   in one pass in `BodyDeformCollision.Rebake`. Pinned by a check on `body_patrol`
+   specifically: `author 5.281 units → baked 0.4200 m, scale 0.0795`.
+2. **`BakeMesh` leaves `Mesh.bounds` where `Clear()` put them — at zero.** Every
+   physics query starts from those bounds. Fixed with `RecalculateBounds()`.
+3. **`SidePinch` was a dead slider on the default body.** Its midspan-peaked window is
+   exactly zero on a primitive box, whose only vertices are its end caps — and `box`
+   is the first row in the picker. Fixed with a 0.35 floor on the window.
+4. **The render check's own control was wrong** — disabling only the skinned renderer
+   left the four wheel markers drawing, so "an empty frame" was 673 px. Three renders
+   now: rig 2146 px, body hidden 673 px, nothing 0 px.
+
+Risk 2 in the plan (bone-less `SkinnedMeshRenderer`) is **closed**: it renders, verified
+by rendering the rig to a RenderTexture in the bench rather than left to the manual pass.
+
+Also worth recording: **a primitive box is too coarse a shape to bench the drag
+estimator on.** `Rasterise` stamps a triangle's whole frontal footprint into every
+station its z-range spans, so a tapered box — a frustum whose side faces are two
+full-length triangles — reads as nearly prismatic (0.8831 → 0.8668, a 2 % drop for a
+65 % nose pinch). The same taper on `body_shell` measures 0.3474 → 0.3096. The check
+is on the shell; the box is not a case a sculptor is ever in.
+
+## Risks (as written before the work)
+
+1. **BakeMesh useScale polarity** — bench 5 + M4 manual catch it first. *(It was the
+   one that fired.)*
+2. **Bone-less SMR** — documented Unity path, unexercised in this project; fallback =
+   one bone (own transform, identity bindpose). *(Closed by the bench.)*
+3. **Per-frame RecalculateNormals** on >65 k-vert bodies may dip fps — acceptable for a
+   dev tool; mitigation is recalc-every-other-frame during drag.
+4. **Weld quantization over-merge** (glass vs body within 1e-4) — cosmetically fine here.
+5. **MenuNav layout discipline** — mode/body/file cycles change control counts; snapshot
+   pattern mandatory.
+6. **DragEstimator refactor touches the physics-facing path** — `[DRAG]` pins are the net.
 
 ---
 

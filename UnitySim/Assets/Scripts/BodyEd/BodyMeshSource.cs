@@ -15,9 +15,17 @@ namespace AIHWSim.BodyEd
     /// or a single coherent vertex array, so this flattens the lot into one mesh
     /// in the body's own author units, applying exactly the transforms the
     /// renderer and <see cref="DragEstimator"/> apply — the manifest's author yaw
-    /// and offset, and the child-to-root chain. Flattening loses the per-piece
-    /// materials, which is precisely what makes the triplanar body material the
-    /// right choice rather than a compromise: there is one surface now.
+    /// and offset, and the child-to-root chain.
+    ///
+    /// <b>One mesh, but not one surface.</b> The flatten keeps each renderer group
+    /// as its own SUBMESH, named by <see cref="FeatureChannels"/> — so
+    /// <c>paint</c>, <c>chrome</c>, <c>glass</c> and <c>em_tail</c> survive as
+    /// separately paintable channels while sharing one vertex array. That sharing
+    /// is what matters: a blendshape delta, a weld group and a sculpt offset are
+    /// all indices into vertices, and they stay valid however the triangles are
+    /// divided up. Merging every group into one surface (which this did first)
+    /// would have made per-feature paint impossible for the one body in the editor
+    /// that most needs it.
     ///
     /// <b>Author units, with the scale handed back separately.</b> The mesh comes
     /// out at the size the FBX was authored at and
@@ -32,7 +40,14 @@ namespace AIHWSim.BodyEd
     public static class BodyMeshSource
     {
         private static readonly Dictionary<string, Mesh> _cache = new Dictionary<string, Mesh>();
+        private static readonly Dictionary<string, string[]> _channels =
+            new Dictionary<string, string[]>();
         private static List<BodyDef> _eligible;
+
+        /// <summary>The channel name a body with no separable groups gets — the
+        /// two primitive compounds, and any shell whose pieces all fold into
+        /// one.</summary>
+        public const string WholeBodyChannel = "body";
 
         /// <summary>
         /// Forget every built mesh, destroying the cached originals.
@@ -46,6 +61,7 @@ namespace AIHWSim.BodyEd
         {
             foreach (var kv in _cache) DestroyMesh(kv.Value);
             _cache.Clear();
+            _channels.Clear();
             _eligible = null;
         }
 
@@ -82,19 +98,21 @@ namespace AIHWSim.BodyEd
         public static Mesh Build(BodyDef def, out Vector3 renderScale)
         {
             renderScale = RenderScaleOf(def);
-            string key = def == null ? "prim:Box"
-                       : !string.IsNullOrEmpty(def.meshKey) ? "mesh:" + def.meshKey
-                       : "prim:" + def.legacy;
-
+            string key = KeyOf(def);
             if (_cache.TryGetValue(key, out Mesh cached)) return cached;
 
+            string[] channels = null;
             Mesh built = def != null && !string.IsNullOrEmpty(def.meshKey)
-                ? BuildFromPrefab(def.meshKey)
+                ? BuildFromPrefab(def.meshKey, out channels)
                 : null;
             // The renderer's own fallback: a catalogue body whose FBX did not ship
             // draws the primitive its row nominates, so it should be sculptable as
             // one too.
-            built ??= BuildFromPrimitives(def == null ? BodyShape.Box : def.legacy);
+            if (built == null)
+            {
+                built = BuildFromPrimitives(def == null ? BodyShape.Box : def.legacy);
+                channels = new[] { WholeBodyChannel };
+            }
 
             if (built != null)
             {
@@ -102,8 +120,27 @@ namespace AIHWSim.BodyEd
                 built.hideFlags = HideFlags.HideAndDontSave;   // runtime-owned, never an asset
             }
             _cache[key] = built;
+            _channels[key] = built != null ? channels : null;
             return built;
         }
+
+        /// <summary>
+        /// The paintable channels of a body's flattened mesh, one per submesh and
+        /// index-aligned with them. Never null for a body that built; empty only
+        /// for one that did not.
+        /// </summary>
+        public static string[] ChannelsOf(BodyDef def)
+        {
+            Build(def, out _);   // fills the cache if this body has not been opened yet
+            string key = KeyOf(def);
+            return _channels.TryGetValue(key, out string[] c) && c != null
+                ? c : System.Array.Empty<string>();
+        }
+
+        private static string KeyOf(BodyDef def) =>
+            def == null ? "prim:Box"
+            : !string.IsNullOrEmpty(def.meshKey) ? "mesh:" + def.meshKey
+            : "prim:" + def.legacy;
 
         /// <summary>Metres per author unit for this body at its nominal size —
         /// whatever <see cref="CarVehicle"/> would instantiate it at, so the
@@ -124,8 +161,9 @@ namespace AIHWSim.BodyEd
         /// does not: this runs on whatever frame the editor opens, and a throwaway
         /// GameObject on that frame buys nothing.
         /// </summary>
-        private static Mesh BuildFromPrefab(string meshKey)
+        private static Mesh BuildFromPrefab(string meshKey, out string[] channels)
         {
+            channels = null;
             var src = Resources.Load<GameObject>(PartMeshLibrary.PartRoot + meshKey);
             if (src == null) return null;
 
@@ -140,6 +178,11 @@ namespace AIHWSim.BodyEd
             Matrix4x4 fix = Matrix4x4.Rotate(yawRot) * Matrix4x4.Translate(off);
 
             var combine = new List<CombineInstance>();
+            // Channel of each CombineInstance, index-aligned, plus the order the
+            // channels were first seen — which is the prefab's own child order, so
+            // the picker lists a body's features the way the artist laid them out.
+            var instChannel = new List<string>();
+            var order = new List<string>();
             long verts = 0;
             bool unreadable = false;
 
@@ -149,6 +192,9 @@ namespace AIHWSim.BodyEd
                 if (m == null) continue;
                 if (!m.isReadable) { unreadable = true; continue; }
 
+                string channel = FeatureChannels.NameOf(mf.gameObject.name);
+                if (!order.Contains(channel)) order.Add(channel);
+
                 Matrix4x4 toRoot = fix * LocalToRoot(mf.transform, src.transform);
                 for (int s = 0; s < m.subMeshCount; s++)
                 {
@@ -156,6 +202,7 @@ namespace AIHWSim.BodyEd
                     {
                         mesh = m, subMeshIndex = s, transform = toRoot,
                     });
+                    instChannel.Add(channel);
                     verts += m.vertexCount;
                 }
             }
@@ -166,7 +213,9 @@ namespace AIHWSim.BodyEd
                                  "missing from the deformable body.");
             if (combine.Count == 0) return null;
 
-            return Weld(combine, verts, "mesh " + meshKey);
+            Mesh mesh = Weld(combine, verts, "mesh " + meshKey, instChannel, order);
+            channels = mesh != null ? order.ToArray() : null;
+            return mesh;
         }
 
         /// <summary>Child-to-prefab-root matrix, walked by hand rather than read
@@ -180,13 +229,26 @@ namespace AIHWSim.BodyEd
             return m;
         }
 
-        private static Mesh Weld(List<CombineInstance> combine, long verts, string what)
+        /// <summary>
+        /// Combine the pieces into one vertex array, then re-cut the triangles into
+        /// one submesh per channel.
+        ///
+        /// <b>Combined WITHOUT merging submeshes, then regrouped</b> — rather than
+        /// combining each channel separately and combining those. The difference is
+        /// that this way the vertex array is produced exactly once, in one order,
+        /// by one call; regrouping only moves index lists about. Combining per
+        /// channel and then again would build the vertices twice and make their
+        /// final order a property of two nested combines, which is precisely the
+        /// thing every sculpt offset in every saved layout is an index into.
+        /// </summary>
+        private static Mesh Weld(List<CombineInstance> combine, long verts, string what,
+                                 List<string> instChannel, List<string> order)
         {
             var mesh = new Mesh();
             // Set BEFORE combining: the format decides whether the combine can
             // address the result at all, and a shell with accents can pass 65 k.
             if (verts > 60000) mesh.indexFormat = IndexFormat.UInt32;
-            mesh.CombineMeshes(combine.ToArray(), true, true);
+            mesh.CombineMeshes(combine.ToArray(), false, true);
 
             if (mesh.vertexCount == 0)
             {
@@ -195,12 +257,38 @@ namespace AIHWSim.BodyEd
                 return null;
             }
 
+            Regroup(mesh, instChannel, order);
+
             // Recomputed rather than carried over from the FBX, so the shading a
             // body has before its first sculpt is the same shading every sculpt
             // produces. Splits in the vertex array survive, so hard edges do.
             mesh.RecalculateNormals();
             mesh.RecalculateBounds();
             return mesh;
+        }
+
+        /// <summary>
+        /// Re-cut a just-combined mesh's per-instance submeshes into one submesh
+        /// per channel, in first-seen order. Vertices are untouched.
+        /// </summary>
+        private static void Regroup(Mesh mesh, List<string> instChannel, List<string> order)
+        {
+            int n = Mathf.Min(mesh.subMeshCount, instChannel.Count);
+            var buckets = new List<int>[order.Count];
+            for (int c = 0; c < buckets.Length; c++) buckets[c] = new List<int>();
+
+            var scratch = new List<int>(1024);
+            for (int s = 0; s < n; s++)
+            {
+                int c = order.IndexOf(instChannel[s]);
+                if (c < 0) continue;
+                mesh.GetTriangles(scratch, s);
+                buckets[c].AddRange(scratch);
+            }
+
+            mesh.subMeshCount = buckets.Length;
+            for (int c = 0; c < buckets.Length; c++)
+                mesh.SetTriangles(buckets[c], c, false);   // bounds recalculated below
         }
 
         // ---- the primitive path -----------------------------------------------------

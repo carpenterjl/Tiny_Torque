@@ -5,18 +5,15 @@ using UnityEngine;
 namespace AIHWSim.BodyEd
 {
     /// <summary>
-    /// Builds the body-deformation editor scene at runtime: lighting, an orbit
-    /// camera, a turntable, one <see cref="DeformableBody"/> on it, and the
-    /// <see cref="BodyEditorUI"/>. Drop on one empty GameObject
-    /// (Tools ▸ AIHWSim ▸ Create Body Editor Scene).
+    /// Builds Vehicle Studio at runtime: lighting, an orbit camera, a turntable, a
+    /// <see cref="StudioVehicle"/> on it, the transform gizmo, and the UI. Drop on
+    /// one empty GameObject (Tools ▸ AIHWSim ▸ Create Body Editor Scene).
     ///
-    /// <b>Standalone on purpose.</b> This scene builds no <c>CarVehicle</c>, no
-    /// <c>Rigidbody</c> and no <c>VehicleDesign</c>; it does not read
-    /// <c>GameFlow.ActiveDesign</c> and it cannot write one. That is the point of
-    /// introducing it beside the garage rather than inside it — the deformation
-    /// pipeline can be built, benched and driven by hand without any risk to the
-    /// assembly flow that ships. Porting it into the garage is a later, deliberate
-    /// step, and the seam it will cross is <see cref="VehicleLayoutData"/>.
+    /// <b>It builds no car and starts no physics.</b> The studio shows a body, its
+    /// parts and its paint; the moment a real vehicle is wanted — to drive, to save
+    /// — the layout goes through <see cref="StudioSession"/> and the existing
+    /// <c>VehicleFactory</c> builds it. That keeps one construction path for cars
+    /// and leaves this scene free to be about shape.
     ///
     /// Same shape as <c>GarageBootstrap</c> and <c>TrackBuilderBootstrap</c>: the
     /// scene asset holds one object, everything else is made in <c>Awake</c>.
@@ -25,13 +22,16 @@ namespace AIHWSim.BodyEd
     {
         public Camera Cam { get; private set; }
         public OrbitCamera Orbit { get; private set; }
-        public DeformableBody Body { get; private set; }
+        public StudioVehicle Vehicle { get; private set; }
+        public TransformGizmo Gizmo { get; private set; }
         public BodyDragReadout Readout { get; private set; }
-        public BodyDef CurrentDef { get; private set; }
+
+        public DeformableBody Body => Vehicle != null ? Vehicle.Body : null;
+        public BodyDef CurrentDef => Vehicle != null ? Vehicle.Def : null;
 
         private Transform _stand;
 
-        /// <summary>Top of the turntable, in metres. The body is placed so its
+        /// <summary>Top of the turntable, in metres. The vehicle is placed so its
         /// wheels rest here.</summary>
         private const float StandTopY = 0.01f;
 
@@ -41,13 +41,20 @@ namespace AIHWSim.BodyEd
 
             BuildLighting();
             BuildCamera();
+            BuildVehicle();
+            BuildGizmo();
 
             var uiGo = new GameObject("BodyEditorUI");
             var ui = uiGo.AddComponent<BodyEditorUI>();
             ui.bootstrap = this;
 
-            var eligible = BodyMeshSource.Eligible();
-            SetBody(eligible.Count > 0 ? eligible[0] : null);
+            // Coming back from a test drive: reopen the car exactly as it left.
+            VehicleLayoutData pending = StudioSession.TakePending();
+            if (pending != null)
+            {
+                Debug.Log("[BodyEditorBootstrap] Reopening the vehicle that was test driven.");
+                LoadLayout(pending);
+            }
         }
 
         private void BuildLighting()
@@ -70,58 +77,68 @@ namespace AIHWSim.BodyEd
             Orbit.pitch = 18f;
         }
 
+        private void BuildVehicle()
+        {
+            var go = new GameObject("Vehicle");
+            go.transform.SetParent(transform, false);
+            Vehicle = go.AddComponent<StudioVehicle>();
+            Vehicle.DeformCommitted += OnDeformCommitted;
+
+            var eligible = BodyMeshSource.Eligible();
+            SetBody(eligible.Count > 0 ? eligible[0] : null);
+        }
+
+        private void BuildGizmo()
+        {
+            var go = new GameObject("Gizmo");
+            go.transform.SetParent(transform, false);
+            Gizmo = go.AddComponent<TransformGizmo>();
+            Gizmo.Detach();
+        }
+
         // ---- the body ----------------------------------------------------------------
 
         /// <summary>
-        /// Open a catalogue body, replacing whatever was on the stand. Rebuilds
-        /// the turntable to suit and re-frames the camera, then commits once so
-        /// the collider and the drag readout exist before the first frame anybody
-        /// can click on.
+        /// Open a catalogue body, keeping every placed part. Rebuilds the turntable
+        /// to suit and re-frames the camera, then commits once so the collider and
+        /// the drag readout exist before the first frame anybody can click on.
         /// </summary>
         public void SetBody(BodyDef def)
         {
-            if (Body != null)
-            {
-                Body.DeformCommitted -= OnDeformCommitted;
-                Destroy(Body.gameObject);
-                Body = null;
-            }
-
-            CurrentDef = def;
             if (def == null)
             {
                 Debug.LogError("[BodyEditorBootstrap] No body to open.");
                 return;
             }
+            if (Vehicle == null || !Vehicle.SetBody(def)) return;
 
-            var rig = new GameObject("BodyRig");
-            rig.transform.SetParent(transform, false);
-            var body = rig.AddComponent<DeformableBody>();
-            if (!body.Init(def))
-            {
-                Destroy(rig);
-                return;
-            }
-            Body = body;
-            Body.DeformCommitted += OnDeformCommitted;
-
-            float len = body.BodyLengthM;
-            rig.transform.localPosition = new Vector3(0f, StandTopY - body.WheelBottomLocalY, 0f);
+            float len = Vehicle.Body.BodyLengthM;
+            // The VEHICLE root is what gets lifted, not the body — so the parts and
+            // the body agree about where the middle of the car is, and a part's
+            // saved position means the same thing here and on the track.
+            Vehicle.transform.localPosition =
+                new Vector3(0f, StandTopY - Vehicle.Body.WheelBottomLocalY, 0f);
 
             BuildStand(len);
             FrameBody(len);
 
-            Readout.SetBody(def, body.Wheels);
-            Body.CommitDeform();
+            Readout.SetBody(def, Vehicle.Body.Wheels);
+            Vehicle.Body.CommitDeform();
         }
 
-        /// <summary>Load a layout, switching to the body it was sculpted on first
-        /// so its vertex offsets still address the mesh they were authored
-        /// against.</summary>
+        /// <summary>Load a layout by file name, switching to the body it was
+        /// sculpted on first so its vertex offsets still address the mesh they were
+        /// authored against.</summary>
         public bool LoadLayout(string fileName)
         {
             VehicleLayoutData d = BodyLayoutLibrary.LoadVehicleFromFile(fileName);
-            if (d == null) return false;
+            return d != null && LoadLayout(d);
+        }
+
+        /// <summary>Apply a layout that is already in hand.</summary>
+        public bool LoadLayout(VehicleLayoutData d)
+        {
+            if (d == null || Vehicle == null) return false;
 
             BodyDef want = BodyCatalog.ById(d.carBasePrefabID);
             if (want != null && (CurrentDef == null || want.id != CurrentDef.id))
@@ -131,7 +148,7 @@ namespace AIHWSim.BodyEd
                                  $"'{d.carBasePrefabID}', which this build does not have. " +
                                  "Applying to the body that is open.");
 
-            return Body != null && Body.Apply(d);
+            return Vehicle.Apply(d);
         }
 
         private void OnDeformCommitted(DeformableBody body)

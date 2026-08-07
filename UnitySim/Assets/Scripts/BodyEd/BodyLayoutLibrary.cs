@@ -63,10 +63,7 @@ namespace AIHWSim.BodyEd
                 string path = PathFor(fileName);
                 File.WriteAllText(path, JsonUtility.ToJson(data, true));
 
-                int morphs = data.blendShapeWeights != null ? data.blendShapeWeights.Length : 0;
-                int offsets = data.offsetIndex != null ? data.offsetIndex.Length : 0;
-                Debug.Log($"[BodyLayoutLibrary] Saved '{fileName}' — body '{data.carBasePrefabID}', " +
-                          $"{morphs} morph weights, {offsets} vertex offsets → {path}");
+                Debug.Log($"[BodyLayoutLibrary] Saved '{fileName}' — {Describe(data)} → {path}");
                 return path;
             }
             catch (System.Exception e)
@@ -94,10 +91,7 @@ namespace AIHWSim.BodyEd
                                    "the file is not a vehicle layout.");
                     return null;
                 }
-                int morphs = d.blendShapeWeights != null ? d.blendShapeWeights.Length : 0;
-                int offsets = d.offsetIndex != null ? d.offsetIndex.Length : 0;
-                Debug.Log($"[BodyLayoutLibrary] Loaded '{fileName}' — body '{d.carBasePrefabID}', " +
-                          $"{morphs} morph weights, {offsets} vertex offsets.");
+                Debug.Log($"[BodyLayoutLibrary] Loaded '{fileName}' — {Describe(d)}.");
                 return d;
             }
             catch (System.Exception e)
@@ -105,6 +99,25 @@ namespace AIHWSim.BodyEd
                 Debug.LogError($"[BodyLayoutLibrary] Failed to load '{fileName}': {e.Message}");
                 return null;
             }
+        }
+
+        /// <summary>
+        /// What a layout actually contains, for the save/load log lines.
+        ///
+        /// Reporting the CONTENTS rather than that something happened is the
+        /// point: a save that silently wrote zero offsets, or a load that quietly
+        /// dropped every prop, is the failure worth being able to see at a glance
+        /// in the console.
+        /// </summary>
+        private static string Describe(VehicleLayoutData d)
+        {
+            int morphs = d.blendShapeWeights?.Length ?? 0;
+            int offsets = d.offsetIndex?.Length ?? 0;
+            int props = d.props?.Length ?? 0;
+            int tints = d.tints?.Length ?? 0;
+            int hidden = d.hiddenChannels?.Length ?? 0;
+            return $"body '{d.carBasePrefabID}', v{d.version}, {morphs} morph weights, " +
+                   $"{offsets} vertex offsets, {props} parts, {tints} tints, {hidden} hidden";
         }
 
         public static void Delete(string fileName)

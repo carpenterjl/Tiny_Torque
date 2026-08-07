@@ -14,7 +14,7 @@ namespace AIHWSim.BodyEd
         /// <c>Assets/Resources/Shaders/AIHWSimTriplanar.shader</c>.</summary>
         public const string TriplanarShader = "AIHWSim/TriplanarBody";
 
-        private static Material _body, _stand, _wheel;
+        private static Material _body, _stand, _wheel, _shellPaint;
         private static Texture2D _checker, _ring;
         private static bool _warnedMissingShader;
 
@@ -90,6 +90,25 @@ namespace AIHWSim.BodyEd
             if (_body.HasProperty("_Glossiness")) _body.SetFloat("_Glossiness", 0.45f);
             if (_body.HasProperty("_Metallic")) _body.SetFloat("_Metallic", 0.15f);
             return _body;
+        }
+
+        /// <summary>
+        /// The tintable channel a harvested shell piece is bound with.
+        ///
+        /// A shell binds its renderers by token against one "paint" material — the
+        /// car's <c>bodyColor</c> in the game. A piece lifted out of a shell has no
+        /// design to take a colour from, so it wears a neutral one and the studio's
+        /// paint panel takes it from there. Light rather than mid-grey so an
+        /// unpainted piece reads as unfinished rather than as deliberately dark.
+        /// </summary>
+        public static Material ShellPaint()
+        {
+            if (_shellPaint != null) return _shellPaint;
+            _shellPaint = new Material(Shader.Find("Standard")) { name = "BodyEd_ShellPaint" };
+            _shellPaint.color = new Color(0.74f, 0.76f, 0.80f);
+            _shellPaint.SetFloat("_Glossiness", 0.5f);
+            _shellPaint.SetFloat("_Metallic", 0.05f);
+            return _shellPaint;
         }
 
         /// <summary>The turntable the body sits on.</summary>

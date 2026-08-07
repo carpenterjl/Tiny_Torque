@@ -914,13 +914,49 @@ namespace AIHWSim.Vehicles
 
             _bodyMat = new Material(Shader.Find("Standard")) { color = bodyColor };
 
+            BodyDef def = Body;
+
+            // Vehicle Studio path: this design's body was reshaped, had parts
+            // bolted to it, or was painted per feature. The mesh is rebuilt with
+            // the deformation baked into its vertices (see DeformedBodyFactory) —
+            // the same base + offsets + Σ(wᵢ·Δᵢ) the editor draws, so the car on
+            // the track is the car that was designed.
+            //
+            // Nothing below this branch changes for a design without a layout, and
+            // "without" is the state every design that predates the studio
+            // deserialises into. The chassis BoxCollider is untouched either way:
+            // deformation is what the car LOOKS like and what the drag estimate
+            // measures, never what it collides as.
+            if (bodyLayout != null && !bodyLayout.IsEmpty)
+            {
+                if (liveryTex != null)
+                {
+                    _bodyMat.mainTexture = liveryTex;
+                    _bodyMat.color = Color.white;
+                }
+                GameObject deformed = BodyEd.DeformedBodyFactory.Build(
+                    holder, def, bodyLayout, bodySize, _bodyMat, gameObject.layer,
+                    out Mesh owned);
+                if (deformed != null)
+                {
+                    _bodyMeshInstance = deformed.transform;
+                    _deformedMesh = owned;
+                    foreach (var r in deformed.GetComponentsInChildren<MeshRenderer>(true))
+                        _bodyRenderers.Add(r);
+                    BodyEd.DeformedBodyFactory.BuildProps(transform, bodyLayout);
+                    return;
+                }
+                Debug.LogWarning($"[CarVehicle] '{name}' carries a body layout, but " +
+                                 $"'{(def != null ? def.id : "?")}' could not be rebuilt from " +
+                                 "it — falling back to the plain shell.");
+            }
+
             // Authored-mesh path (Shell / LowRacer / Buggy have FBX shells): instantiate
             // the mesh, scale it to the design's bodySize, and drive its look with the
             // body material so bodyColor + SetBodyMaterial keep working. Falls through to
             // the primitive shape builders when the asset is absent (and always for
             // Box/Wedge). The body stays on the car's own layer (not the viz layer) so
             // the on-car camera sees it exactly as with the primitive body.
-            BodyDef def = Body;
             string meshKey = def.meshKey;
             if (meshKey != null)
             {
@@ -1132,6 +1168,19 @@ namespace AIHWSim.Vehicles
         [System.NonSerialized] public Texture2D liveryTex;
 
         /// <summary>
+        /// Body customisation from Vehicle Studio (set by <c>VehicleFactory</c>
+        /// before Awake, from <c>VehicleDesign.bodyLayout</c>). Null or empty — the
+        /// state every design that predates the studio arrives in — builds exactly
+        /// the body this class has always built.
+        /// </summary>
+        [System.NonSerialized] public BodyEd.VehicleLayoutData bodyLayout;
+
+        /// <summary>The rebuilt mesh a layout produced, owned by this car and
+        /// destroyed with it. Null on every ordinary car, which instantiates
+        /// shared catalogue geometry it does not own.</summary>
+        private Mesh _deformedMesh;
+
+        /// <summary>
         /// Swap the body's albedo texture live (garage paint mode). The caller
         /// keeps ownership of <paramref name="tex"/>; passing null restores the
         /// plain bodyColor look.
@@ -1185,6 +1234,7 @@ namespace AIHWSim.Vehicles
         private void OnDestroy()
         {
             if (liveryTex != null) Destroy(liveryTex);
+            if (_deformedMesh != null) Destroy(_deformedMesh);
         }
 
         private void AddBodyPiece(Transform holder, Vector3 localPos, Vector3 localScale, Vector3 localEuler)

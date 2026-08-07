@@ -17,6 +17,7 @@ namespace AIHWSim.Core
         public const string GarageSceneName = "GarageScene";
         public const string TrackBuilderSceneName = "TrackBuilderScene";
         public const string MenuSceneName = "MenuScene";
+        public const string BodyEditorSceneName = "BodyEditorScene";
 
         /// <summary>Design to spawn on the track; null means the stock default.</summary>
         public static VehicleDesign ActiveDesign;
@@ -131,8 +132,39 @@ namespace AIHWSim.Core
                 SceneManager.LoadScene(TrackSceneName, LoadSceneMode.Additive);
         }
 
-        public static void LoadGarage() => SceneManager.LoadScene(GarageSceneName);
+        /// <summary>
+        /// Where "back to the garage" should actually go. Null = the garage.
+        ///
+        /// Set by an editor that launched a test drive and wants the driver
+        /// returned to IT rather than to the garage — Vehicle Studio does, because
+        /// a car whose body has just been sculpted is being edited there and
+        /// nowhere else. Consumed and cleared by <see cref="LoadGarage"/>, so one
+        /// test drive returns once and the next trip through a race ends up where
+        /// it always did.
+        ///
+        /// A string rather than a bool per editor, for the reason
+        /// <see cref="ActiveSceneTrack"/> is one: the scene is the thing being
+        /// named, and a name works for an editor this class has never heard of.
+        /// </summary>
+        public static string ReturnScene;
+
+        /// <summary>
+        /// Go to the garage — or to whoever set <see cref="ReturnScene"/>.
+        ///
+        /// Keeps <see cref="ActiveDesign"/> either way, which is what carries the
+        /// car back with its edits intact.
+        /// </summary>
+        public static void LoadGarage()
+        {
+            string dest = ReturnScene;
+            ReturnScene = null;
+            SceneManager.LoadScene(string.IsNullOrEmpty(dest) ? GarageSceneName : dest);
+        }
         public static void LoadTrackBuilder() => SceneManager.LoadScene(TrackBuilderSceneName);
+
+        /// <summary>Open Vehicle Studio. Keeps <see cref="ActiveDesign"/>, which is
+        /// how the car you were just racing is the car you start editing.</summary>
+        public static void LoadBodyEditor() => SceneManager.LoadScene(BodyEditorSceneName);
         public static void LoadMenu() => SceneManager.LoadScene(MenuSceneName);
     }
 }

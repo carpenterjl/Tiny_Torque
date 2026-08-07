@@ -149,17 +149,17 @@ namespace AIHWSim.EditorTools
         }
 
         /// <summary>
-        /// The runtime body-deformation editor: a turntable, one catalogue shell
-        /// on it, and the morph/sculpt tools.
+        /// Vehicle Studio: a turntable, one catalogue shell on it, and the whole
+        /// morph / sculpt / parts / paint tool set.
         ///
-        /// Deliberately NOT added to Build Settings, on the same terms as
-        /// <see cref="CreatePhysicsDebugScene"/>: it is a tool rather than
-        /// content, nothing in the shipped flow loads it by name, and leaving
-        /// EditorBuildSettings.asset alone keeps the Release build byte-identical.
-        /// It also keeps this development entirely off the garage's path, which is
-        /// the whole reason the editor is a separate scene at this stage — a
-        /// menu entry and a build registration belong with the port, not with the
-        /// prototype.
+        /// <b>It IS in Build Settings now, and that is a deliberate reversal.</b>
+        /// It was kept out while the editor was a deformation prototype, on the
+        /// same terms as <see cref="CreatePhysicsDebugScene"/> — a tool nothing
+        /// loads by name costs the shipped build nothing by staying out. Test drive
+        /// changed that: the studio sends the player to the track and
+        /// <c>GameFlow.ReturnScene</c> brings them back BY NAME, and a scene that
+        /// is not in the build cannot be returned to. A round trip that only worked
+        /// in the editor would be a feature that fails exactly where it is used.
         /// </summary>
         [MenuItem("Tools/AIHWSim/Create Body Editor Scene")]
         public static void CreateBodyEditorScene()
@@ -176,10 +176,12 @@ namespace AIHWSim.EditorTools
 
             const string path = "Assets/Scenes/BodyEditorScene.unity";
             EditorSceneManager.SaveScene(scene, path);
+            AddSceneToBuild(path);
             EditorUtility.DisplayDialog("AIHWSim",
-                $"Created {path}.\nPress Play, then morph or sculpt the body on the stand.\n"
-                + "Layouts save to <project>/BodyLayouts.\n"
-                + "Debug-only: not in Build Settings.", "OK");
+                $"Created {path}.\nPress Play, then shape the body, bolt parts on and paint it.\n"
+                + "Layouts save to <project>/BodyLayouts; Save vehicle writes a real\n"
+                + "design to <project>/Vehicles that the garage will offer.\n"
+                + "In Build Settings, so Test drive can return here.", "OK");
         }
 
         [MenuItem("Tools/AIHWSim/Create Map Debug Scene")]

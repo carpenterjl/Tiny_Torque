@@ -2207,15 +2207,15 @@ times, race balance and difficulty tiers are exactly what they were.
 Validate with `-executeMethod AIHWSim.TrackTools.TrackStudioValidator.Report` and grep
 `[TRK] RESULT`. Full detail in [Docs/track-studio.md](Docs/track-studio.md).
 
-## Body editor (debug-only)
+## Vehicle Studio
 
-**Tools ▸ AIHWSim ▸ Create Body Editor Scene.** A shell on a turntable that you can
-reshape while the game is running — morph sliders and free-form vertex pulling, with
-the physics collider re-cooked and the drag re-measured every time you let go of the
-mouse. It is **deliberately separate from the garage**: its own scene, its own rig, no
-`CarVehicle` and no `VehicleDesign`, so none of the assembly flow that ships can be
-broken by work on it. Not in Build Settings, like the physics debug scene. Porting it
-into the garage is a later step, and the seam it will cross is `VehicleLayoutData`.
+**Menu ▸ Single Player ▸ Vehicle Studio**, or Tools ▸ AIHWSim ▸ Create Body Editor Scene.
+A car on a turntable that you can reshape, rebuild, repaint and then drive — morph
+sliders and free-form vertex pulling, a parts palette with a proper transform gizmo,
+per-feature colour and finish, and a test drive that comes back with every edit intact.
+It is still its own scene rather than a rewrite of the garage: the garage's assembly flow
+(wheels, sensors, motors, aero) is untouched and will be ported across later. The seam
+between them is `VehicleLayoutData`, and it is now a field on `VehicleDesign`.
 
 **Two deformation systems on one mesh.** A Unity blendshape frame is a *delta* against
 the mesh's base vertices, so the two never contend: free-form pulls are written into
@@ -2258,14 +2258,95 @@ that is the one line to change at port time.
 beside the undeformed catalogue row, re-measured from the same bake the collider gets,
 once per edit. It is read-only: `CarVehicle.EffectiveAero` is untouched, and a driving
 car still gets its drag from the catalogue silhouette cache, which is keyed by body key
-and knows nothing about deformation. Closing that gap is part of the port.
+and knows nothing about deformation. Closing that gap is still open.
+
+### Parts
+
+**A feature is a renderer group, and that one definition does both jobs.** The shipped
+shells are joined *per material* — `body_redline` arrives as `paint_1..8`, `dark_1..9`,
+`em_tail_1..2`, `glass_1` — while the two manifest assets are named *per part*:
+`body_patrol` carries `Police_PushBar`, `Police_HeadLights`, `Police_Mirrors`,
+`_spotlens`, twenty-eight pieces in all. `FeatureChannels.NameOf` reduces either to a
+channel, and a channel is both the thing you paint and the thing you can lift off a shell
+and bolt to another car. (The pieces *were* modelled as parts in Blender —
+`build_lights`, `build_aero`, `build_scoop` — and joined per material on the way out, so
+the group is the finest cut the shipped FBX support. Richer semantic parts are an export
+job through Asset Studio, not something the in-game editor can invent.)
+
+**The palette enumerates four sources and types out none of them**: the 47-item cosmetics
+pack, every harvestable group on all thirteen shells, the procedural aero / antenna /
+light / battery builders, and the wheel catalogue. A body or a cosmetic that Asset Studio
+commits appears here with no code change.
+
+**The gizmo** is three arrows and three plane squares to move with, three discs to turn
+with, and three stalked cubes plus a centre cube to resize with — screen-constant in
+size, with a 5 mm / 15° / 0.05× snapping toggle and a part-axes / car-axes switch. An
+arm stretches **one axis only**, so a wing can be widened without being thickened; the
+centre cube takes all three together, and `Size 1×` puts a part back to square.
+
+Three rules worth knowing. A drag whose ray runs within 2° of the axis being dragged is
+**refused rather than clamped** (that ratio of two vanishing numbers is where every
+misbehaving gizmo misbehaves). Snapping quantises the *result* in the frame of the drag,
+so a snapped part is on the grid rather than a grid-step from wherever it started. And
+**the frame a drag measures in is frozen at mouse-down** — the gizmo is re-posed from the
+spec every frame and so chases the part it is moving, and measuring against its live
+transform subtracts the motion just produced: the part lands, the gizmo follows, the next
+frame reads the displacement as already spent and puts the part back. That is a one-frame
+oscillation no arithmetic check can see, because every function involved is correct; the
+bench catches it by holding the pointer still and stepping the loop twice.
+
+Handles get their own raycast pass ahead of parts, so a handle in front of the thing it
+moves wins the click — and the scale arms start clear of the centre cube, or they swallow
+the click meant for it.
+
+**Removing a feature empties its submesh** rather than hiding a renderer — so a spoiler
+you delete leaves the collider bake and the drag figure too, which is what deleting it
+means. It is reversible: the triangles are kept, not destroyed.
+
+### Paint
+
+Per channel: colour, metallic, gloss, glow, and a procedural finish (checker, stripes,
+carbon weave, grid, dots, speckle — generated masks, multiplied by the colour, so one
+texture serves every colour). Materials are **cloned from the authored one**, never built
+fresh, so painting the police car's chrome red gives red chrome rather than red plastic —
+the normal map, the metallic map and the render state all survive.
+
+### Driving it, and saving it
+
+**Test drive** attaches the layout to a real `VehicleDesign` and hands it to the ordinary
+`VehicleFactory`; Pause ▸ Garage on the track returns to the studio with the car intact
+(`GameFlow.ReturnScene`). The scene is in Build Settings for exactly that reason.
+
+**On the driving side the morphs are baked into the vertices and there is no
+`SkinnedMeshRenderer` at all.** A blendshape's contribution is `weight/100 × delta`
+summed over frames, which is the sum `DeformedBodyFactory` computes directly — so the car
+on the track is geometry-identical to the editor's bake, with no per-frame skinning. The
+bench pins that: it builds the same layout both ways and compares vertex by vertex.
+
+**Deformation is visual and aerodynamic, never collision.** Cars in this project collide
+as a root `BoxCollider`; making collision follow a sculpted mesh would change how every
+car drives rather than how one looks. Parts mount as cosmetic children exactly like the
+antennas and light clusters beside them — no mass, no collider, no aero.
+
+**Nothing that predates the studio moves.** `VehicleDesign.bodyLayout` deserialises to a
+layout whose `IsEmpty` is true for every design ever written, and every apply site tests
+exactly that before taking the new path — so "no regression" is a property of the data's
+shape, not of a flag somebody has to remember to set.
+
+**Save vehicle** writes a real design through `VehicleLibrary` to
+`<project>/UnitySim/Vehicles/`, so a studio car appears in the garage's load list and can
+be raced. That is where vehicles live: hand-editable, diffable, and present in a shipped
+build — unlike the Unity `Assets/` folder, which is the editor-only Asset Studio path for
+making permanent *content*.
 
 **Layouts save as small readable JSON** under `<project>/BodyLayouts/`, beside
-`Vehicles/` and `Tracks/`: the base body key, four morph weights, the wheelbase, and a
-*sparse* list of the vertices actually pulled. Morph weights are matched back **by
-name**, so adding or reordering a morph cannot apply a roofline weight to a nose slider;
-vertex offsets are refused outright if the base mesh's vertex count has changed, because
-an index into a re-exported mesh does not address the point it used to.
+`Vehicles/` and `Tracks/`: the base body key, four morph weights, the wheelbase, a
+*sparse* list of the vertices actually pulled, and the parts, paint and hidden features.
+Morph weights are matched back **by name**, so adding or reordering a morph cannot apply
+a roofline weight to a nose slider; vertex offsets are refused outright if the base
+mesh's vertex count has changed, because an index into a re-exported mesh does not
+address the point it used to. A part whose source key this build does not recognise
+survives being loaded, edited around and saved again.
 
 Gate: `-executeMethod AIHWSim.EditorTools.BodyDeformBench.Report`, grep `[BDEF] RESULT`.
 It runs scene-free and covers the morph frames (including bit-identical regeneration),

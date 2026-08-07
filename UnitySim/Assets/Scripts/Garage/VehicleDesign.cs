@@ -369,6 +369,32 @@ namespace AIHWSim.Garage
         public string cosBobble = "";
         public string cosWing = "";
 
+        /// <summary>
+        /// The body customisation from Vehicle Studio: morph weights, sculpted
+        /// vertices, added parts, per-feature paint. Empty on every design that
+        /// predates the studio, and empty is the whole compatibility story — see
+        /// <see cref="BodyEd.VehicleLayoutData.IsEmpty"/>, which every apply site
+        /// tests before taking the new path.
+        ///
+        /// <b>It rides the design</b> for the same reason <c>liveryPng</c>,
+        /// <c>hornStyle</c> and the five cosmetic slots do: a field on the design
+        /// reaches races, split-screen, snapshots and LAN peers with no further
+        /// plumbing, and a car that looks different in the garage from how it looks
+        /// on the track is a bug this shape cannot have.
+        ///
+        /// <b>Purely visual, deliberately.</b> A deformed body changes what is
+        /// drawn and what the drag estimate measures; it does not change the
+        /// chassis <c>BoxCollider</c>, the mass, or the inertia. Cars in this
+        /// project collide as a box (<c>CarVehicle.cs</c>), and making collision
+        /// follow a sculpted mesh would be a change to how every car drives rather
+        /// than to how one looks.
+        /// </summary>
+        public BodyEd.VehicleLayoutData bodyLayout;
+
+        /// <summary>True when <see cref="bodyLayout"/> asks for anything at all.
+        /// The one test every consumer makes.</summary>
+        public bool HasBodyLayout => bodyLayout != null && !bodyLayout.IsEmpty;
+
         // ---- vehicle-level scale-dependent constants ----------------------
         // Same contract as the WheelSpec block above: every initialiser IS the
         // literal it replaced, so absent JSON and all ten code presets are
