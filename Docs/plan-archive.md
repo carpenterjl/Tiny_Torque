@@ -8,11 +8,761 @@ describe is documented in [README.md](../README.md).
 Active work lives in the session plan file, not here; a plan moves into this archive
 once its milestones are done.
 
-Covering the project bootstrap through the runtime body editor (46 plans).
+Covering the project bootstrap through the crash frame (48 plans).
 Last updated 2026-08-07. (The RC-airplane F0–F9 and slipstream/phugoid G-series plans
 completed between Track Studio and the HUD pass but their session files were
 overwritten before archiving; their results live in README's RC-airplane section and
 the [AERO]/[ABENCH] gates.)
+
+---
+
+# Crash Frame: a point-mass lattice that wraps, dents, and breaks the car (2026-08-07)
+
+## Context
+
+Vehicle Studio can reshape, decorate and paint a car, but damage is still a number on a
+health bar — a demolition hit changes nothing you can see. This adds a **soft-body
+wrapper**: a generated point-mass node + spring-damper beam lattice tightly wrapping the
+body geometry, editable in the studio (a new FRAME tab: fidelity slider, node/beam
+add/remove/drag, per-node mass, per-beam spring/damping/break), persisted with the
+vehicle, and consumed on the driving path where contact forces spread through the beams,
+permanently dent the visual mesh, and — past a break threshold — detach feature-channel
+chunks as debris. Hits are synced over LAN so ghosts dent identically.
+
+**User decisions (locked):** runs in ALL driving scenes · breaking = dents + detaching
+chunks · LAN hits synced to peers (protocol bump).
+
+**Constraint stated, not asked:** the lattice is a WRAPPER, never collision geometry.
+Cars collide as a root `BoxCollider` + 4 `WheelCollider`s and four systems + the physics
+gates are written against exactly that (`CarVehicle.cs:723`, `AreaHazard`, `CarImpact`
+debounce, kinematic LAN ghosts). No collider changes, no mass/CoM changes, no forces on
+the car rigidbody, no `Time.*`/`Physics.*` writes. Cars without a lattice build nothing —
+`[PHYS]`, P0/P1/P9, `[DSC]` and the Opus mission are untouched **by construction**
+(their cars have no `bodyLayout`).
+
+**Scale facts the constants come from:** body ~0.42 m, `bodyMass = 1.6 kg`
+(`CarVehicle.cs:79`), driving scenes run `fixedDeltaTime = 1/400 s`
+(`PhysicsRateAuthority.cs:74`). House style: semi-implicit Euler with a comment saying
+so; damping stored as ratio ζ, damper derived `c = 2ζ√(k·m)` (`CarVehicle.cs:1376`).
+
+## Architecture
+
+```
+VehicleLayoutData v4  (the document — JSON)
+   latticeNodes[]  { localPos (vehicle frame, m), mass (0 = derive) }
+   latticeBeams[]  { a, b, spring (0 = derive), dampingRatio (−1 = derive),
+                     breakStrain (−1 = derive) }
+   latticeSpacing, latticeFidelity01 (= 0.5 slider memory)
+        │
+        ├── LatticeBuilder (pure static, shared)     ← the ONE sentinel/derivation site
+        │      SpacingFor · Generate · Sanitize · Resolve{Mass,Spring,Zeta,BreakStrain}
+        │      RestLength · BindVertices · ChannelSupport · PickNode/PickBeam (ray math)
+        │
+        ├── EDITOR: StudioLattice (under the vehicle's "Lattice" child)
+        │      overlay: pooled node spheres + ONE MeshTopology.Lines beam mesh
+        │      FRAME tab in BodyEditorUI · gizmo drags a node via a PropPlacement wrapper
+        │
+        └── RUNTIME: CarSoftLattice (on the car root) + LatticeSolver (pure C#)
+               OnCollisionEnter → quantized LatticeHit → nodes · FixedUpdate substeps
+               LateUpdate writes _deformedMesh.vertices · chunks detach as LatticeDebris
+               LAN: LatticeHitMsg (protocol 16 → 17), owner-authoritative, peers replay
+```
+
+Gate everywhere: `layout.HasLattice` (nodes non-null and non-empty). `IsEmpty` extended.
+
+## Files
+
+**New:**
+- `Assets/Scripts/BodyEd/LatticeBuilder.cs` — pure static, benchable, shared by both sides
+- `Assets/Scripts/BodyEd/StudioLattice.cs` — editor component: lists, overlay, edit ops
+- `Assets/Scripts/Vehicles/LatticeSolver.cs` — pure C# solver (no MonoBehaviour/Time)
+- `Assets/Scripts/Vehicles/CarSoftLattice.cs` — runtime: contacts, stepping, mesh, chunks
+- `Assets/Scripts/Vehicles/LatticeDebris.cs` — chunk lifetime + global live cap
+- `Assets/Editor/LatticeBench.cs` — `[LATT]` edit-mode bench (modeled on BodyDeformBench)
+
+**Modified:** `BodyEd/VehicleLayoutData.cs` (v4), `BodyEd/StudioVehicle.cs`,
+`BodyEd/BodyEditorUI.cs`, `BodyEd/StudioHints.cs`, `BodyEd/BodyEdMaterials.cs`,
+`BodyEd/BodyLayoutLibrary.cs` (Describe), `Vehicles/CarVehicle.cs` (~6 lines in
+BuildBodyVisual), `Net/NetMessages.cs`, `Net/NetSession.cs` (ProtocolVersion:119,
+RegisterHandlers), `Core/TrackBootstrap.cs` (hit routing; ghosts via AddGhost:883),
+`Editor/BodyDeformBench.cs` (Lattice() group + RoundTrip v4), `README.md`.
+
+## Data model (v4)
+
+`LatticeNode`/`LatticeBeam` beside PropPlacement/FeatureTint in VehicleLayoutData.cs.
+Sentinels per house rule (initialiser IS the do-nothing value; −1 where 0 is legal:
+ζ = 0 is undamped, so its sentinel is −1). **Generation writes explicit values into every
+field** — sentinels exist for hand-edited JSON and are interpreted only in
+`LatticeBuilder.Resolve*`. `version` 3 → 4 (additive: absent keys = no lattice; v4 file
+in a v3 reader = car without lattice). `IsEmpty` gains the two arrays;
+`HasLattice => latticeNodes != null && latticeNodes.Length > 0` is THE gate.
+`Clone()` unchanged (JSON round-trip carries public serializable fields).
+`BodyLayoutLibrary.Describe` reports node/beam counts.
+
+**Derived at load, never stored** (same reasoning the file header gives for morphs):
+rest lengths (= |pos[a]−pos[b]| — dragging a node redefines the rest shape), vertex
+bindings (function of lattice + built mesh; stale on FBX re-export), damper c from ζ.
+
+## Generation (LatticeBuilder)
+
+Input: `body.Collision.BakedMesh` (metres, vehicle frame, valid after last commit).
+Deterministic — no RNG, sorted emission, pure function of (mesh, h).
+
+1. Spacing `h = Lerp(0.16, 0.05, fidelity01) · bodyLengthM` → 67/44/21 mm at fid 0/½/1.
+2. Grid anchored so **x = 0 is a cell-corner plane** → symmetric body ⇒ symmetric lattice.
+3. Voxel occupancy: per triangle, Akenine-Möller tri/box SAT over its cell AABB;
+   occupied keys sorted before emission.
+4. Nodes = deduplicated corners of occupied cells; beams = 12 axis edges + 12 face
+   diagonals + 4 body diagonals per cell (diagonals are the shear rigidity), deduped.
+5. Defaults: shell mass 0.5 kg split equally → node mass; per-node aggregate frequency
+   pinned at 40 Hz: `k = m·(2π·40)²/n_avg` (n_avg = 2B/N); ζ = 0.35; breakStrain = 0.35.
+
+Expected counts (0.42 m car): fid 0 ≈ 110–150 N / 600–900 B · fid ½ ≈ 250–350 N /
+1400–2100 B · fid 1 ≈ 900–1300 N / 5000–8000 B. **Hard cap 6000 beams** — generation
+refuses above with a status message (the runtime budget is the reason, stated there).
+
+`BindVertices`: per vertex, 3 nearest nodes within 2h, inverse-distance weights
+normalised, nearest bound unconditionally, ties by node index; sparse output (unbound
+vertices never move). `ChannelSupport`: per submesh channel, the beams whose endpoints
+bind that channel's vertices (drives detachment).
+
+## Editor (FRAME tab)
+
+- `enum StudioTab { Body, Parts, Frame, Paint, Drive }`; TabNames gains "FRAME" (five
+  short names fit the 330 px row); `DrawPanel` switch, `UpdateGizmo` guard (line 284) and
+  `UpdateSelectionKeys` guard (296) gain the Frame tab; tab-change deselects + detaches
+  the gizmo + toggles `Lattice.SetVisible`.
+- **StudioLattice** under a "Lattice" child parallel to "Parts"; `StudioVehicle.Capture()`
+  → `Lattice?.CaptureInto(d)`; `Apply()` → `Lattice.ApplyFrom(d)` (Sanitize first).
+  Subscribes the vehicle's forwarded `DeformCommitted`: **keep + warn** policy — sculpting
+  after generation sets `Stale`, the tab shows a Danger line ("Body changed since the
+  frame was made — Generate refits it; manual edits are lost"). Never auto-regenerate.
+- **Overlay**: beams = ONE procedural `MeshTopology.Lines` mesh (UInt32 indices when
+  needed) on VizLayer, rebuilt once per dirty frame; nodes = pooled sphere primitives
+  (DriftSmoke pattern), colliders destroyed, diameter max(4 mm, 0.12h). **No colliders in
+  the lattice — picking is pure ray math** (`PickNode` ray-sphere / `PickBeam`
+  ray-segment, nearest wins; benchable). Materials `Node()`/`NodeHot()`/`Beam()` in
+  BodyEdMaterials via the TransformGizmo.Unlit recipe (emission ⇒ Lines render solid).
+- **Gizmo reuse = PropPlacement wrapper**: `NodeDragSpec(i)` returns a cached
+  `PropPlacement { source = "node:" + i, localPos }`; attach via the existing
+  `giz.Attach(spec, Vehicle.transform)`; on `Changed` copy `spec.localPos` →
+  `SetNodePos(i)`. Frame tab forces `Mode = Move` each Update. Zero edits to the benched
+  gizmo; snapping and Escape-cancel come free.
+- **Editing**: click node → select (gizmo attaches, mass slider log-mapped 0.1–10× of
+  default, label in grams); click beam → select (spring log 0.1–10×, ζ 0–1,
+  `Breaks at {strain·100:0}%` Lerp 0.05–1.0); `N` = add node at
+  `Vehicle.TrySurfacePoint` under the cursor; `L` = link mode (select A, press L, click
+  B); `Delete` = remove node (drops its beams, remaps indices) or beam; Escape cancels.
+  Keys go in StudioHints (N/L are free), both `For()` and `Pad()` switches gain a Frame
+  case (they currently default to Drive text).
+- **Fidelity slider**: `MenuNav.Slider01($"Detail {spacingMm:0} mm", ref _fidelity01)`,
+  starts 0.5. **Generate is two-press armed** (first press warns via status line that
+  manual edits are discarded; no modal dialogs exist in this UI).
+- IMGUI discipline: new snapshot fields (`_hasLatticeDraw, _latNodeCountDraw,
+  _latBeamCountDraw, _latSelDraw, _latIndexDraw` clamped, `_generateArmedDraw,
+  _latticeStaleDraw, _linkArmedDraw`) all set in `Snapshot()`; new intents
+  (`_pendingGenerate, _pendingClearLattice, _pendingAddNode, _pendingLatDelete,
+  _pendingLink`) run in `RunIntents()`. Generate deselects first — indices die.
+- Mirror-symmetry editing: NOT in v1 (the generator is symmetric by construction).
+
+## Runtime solver
+
+**CarSoftLattice.Attach** called from `CarVehicle.BuildBodyVisual` inside the
+deformed-branch success path (after `BuildProps`, line ~946):
+component on the car ROOT (collision callbacks land there), `_deformedMesh.MarkDynamic()`,
+build via LatticeBuilder, capture `_baseVerts`. FBX-shell/primitive branches never reach
+it — shared catalogue meshes are never mutated.
+
+**LatticeSolver** (pure C#, flat arrays, forces accumulated before integration):
+- Semi-implicit Euler in **car-local space** (rigid motion of the car never enters —
+  driving fast is not a hit). Per substep: beam spring `fs = k(len−restLen)` + damper
+  `fd = c·dot(Δvel, n)`, `c = 2ζ√(k·μ)`, clamped ±Fcap; node anchor
+  `−kAnchor(pos−restPos) − cAnchor·vel`; integrate; `Vmax = 4 m/s`;
+  displacement clamp `Dmax = 0.06 m` about `restPos0` (outward velocity zeroed on clamp).
+- **Substeps**: stability needs ω·h ≤ 0.5. `ω_max = max √((Σk_node + kAnchor)/m)`
+  computed ONCE at init; `S = ceil(ω_max/200)`, `MaxSubsteps = 8`; above that, rescale
+  every k by `(MaxSubsteps/S)²` and log once — softer rather than unstable. This is the
+  explicit "limited by the fidelity of the simulator" knob.
+- **Anchor to the PLASTIC rest** (ω_anchor = 20 rad/s, critically damped): removes hit
+  momentum drift (a rigid translation has zero beam strain), never fights dents; ~0.25%
+  of ω_max.
+- **Plasticity** (once per outer step, monotone): beam `|strain| > 0.10` shifts restLen
+  by half the excess; node `|pos−restPos| > 8 mm` lerps restPos toward pos likewise.
+- **Break**: `strain > breakStrain` (strain-only — scale-free, single source in the beam
+  record), one-way, checked in the outer step.
+- **Sleep**: KE < 1e-6 J and max elastic offset < 0.2 mm and no plastic event → zero
+  velocities, sleep; step returns immediately. Wake only in ApplyHit. Steady state =
+  one branch per fixed step. NaN guard: one accumulated float; NaN ⇒ reset to rest, log.
+- **Cost**: mid fidelity (~300 N, ~1800 B, S = 2) ≈ 100–200 µs per fixed step in Mono
+  **while awake** (≈ 4–8 % of the 2.5 ms budget, and awake only ~1–2 s after a hit;
+  asleep = one bool). The 6000-beam cap bounds the worst case.
+- **Determinism**: no RNG, no Time reads, fixed iteration order, quantized hits (below),
+  deterministic k-nearest tie-break ⇒ same layout + same hit sequence = same output.
+
+**Contact injection** (`OnCollisionEnter` on CarSoftLattice — all driving scenes):
+gates `Time.timeScale > 0`, `!_body.isKinematic` (ghosts replay net hits instead);
+WheelColliders raise no collision callbacks, so every event is the root box; ground-slam
+filter (contact normal ≈ car-up needs 3× threshold). Impulse `J = c.impulse.magnitude`
+(fallback ½·bodyMass·|dot(relVel, n)|), threshold 0.02 N·s, debounce 0.08 s per collider
+(house convention). Build `LatticeHit { pointLocal, dirLocal, impulse }`, **quantize to
+wire precision immediately** (mm / 1⁄127 / 1⁄1024 N·s) and apply the quantized record
+locally — owner and peers solve identical bytes. ApplyHit: 3 nearest nodes,
+inverse-distance weights, Δv capped 2.5 m/s per node and **total energy capped 0.5 J**
+(≈ the car's KE at 0.8 m/s — crumples, never explodes). Raise `HitApplied` for the net
+layer. `OnCollisionStay` grinding deferred to a later milestone.
+
+**Mesh write** (LateUpdate, only when the solver reported dirty): frames stated exactly —
+mesh vertices are AUTHOR units, `DeformedBody.localScale = s = BodyRenderScale`;
+`δ_car = Σ wᵢ(pos−restPos0)`, `v'_author = v_author + δ_car/s` per axis (assert zero
+holder offsets at Attach). `mesh.SetVertices(_workVerts)` — no allocation. **Normals:
+no per-frame recalc** — only on plastic/break frames rate-limited 10 Hz, plus once at
+sleep. Bounds expanded once at Attach by Dmax, never recalculated.
+
+**Chunk detachment**: per outer step with breaks, per channel: detach when ≥ 60 % of its
+support beams are broken. Extract the submesh's triangles at current deformed positions
+into a new Mesh; new GameObject with the channel's current material (paint survives),
+BoxCollider (axes clamped ≥ 1 cm) + Rigidbody (0.03 kg), `Physics.IgnoreCollision`
+against every live car's box (small static registry in LatticeDebris) — **debris never
+pushes a car**; initial velocity = `GetPointVelocity(centroid)` + 1 m/s along the hit
+normal; 6 s lifetime, global cap 12 (oldest destroyed). Blank the channel in the car
+mesh via `SetTriangles(empty)` — the exact Hide precedent. Detachment is deterministic
+solver output ⇒ peers pop the same chunk; debris trajectories are cosmetic, not synced.
+Props not detachable in v1 (noted follow-up).
+
+## LAN (protocol 16 → 17)
+
+- `NetMessages.cs`: `NetMsg.LatticeHit = "aihw.lat_hit"` + `LatticeHitMsg { slot, seq,
+  pos (pre-quantized mm), dir (1/127), impulse (1/1024, ≤ 64 N·s) }` — reliable, low
+  rate, the ArcFxMsg idiom; doc paragraph: owner-authoritative like OwnState.
+- `NetSession.cs`: `ProtocolVersion = 17` (line 119); handler registration; owner sends
+  to host, host applies + relays to all; `LatticeHitReceived` event. Token bucket per
+  car: burst 10, refill 5/s; excess dropped (a crash burst keeps its first hits).
+- `TrackBootstrap.cs`: owner car's `HitApplied → session.SendLatticeHit`; on receive,
+  skip own slot, route to the follower/ghost car for that slot →
+  `CarSoftLattice.ApplyRemoteHit`. Ghosts already build via `VehicleFactory` from the
+  roster's `vehicleJson` (AddGhost:883) so their lattice attaches with zero plumbing;
+  their FixedUpdate steps replayed hits on the same 400 Hz scene clock; dents are
+  car-local so streamed pose + lattice compose trivially.
+
+## Benches
+
+**`[BDEF]` additions** (BodyDeformBench.cs, ~35–40 checks): RoundTrip v4 (exactness +
+IsEmpty contract: `{}` empty, lattice-only NOT empty, absent fidelity = 0.5) and a
+`Lattice()` group — generation determinism (twice, bit-equal), monotone counts across
+fidelities with a Line() table, beam validity (in-range, a≠b, no dups), no NaN, resolved
+values positive, rest lengths ∈ [0.99h, 1.01·√3h], **BFS full connectivity** ("an island
+falls off the car on frame one"), x-symmetry on a box, RemoveNode remap, Sanitize drops,
+pick math hit/nearest/miss, BindVertices coverage (every vertex ≥ 1 bond within 2h,
+weights sum 1), node drag end-to-end via `NodeDragSpec(0)` with the held-ray-twice
+invariant (the GizmoDrag rig pattern).
+
+**`[LATT]` new bench** (Assets/Editor/LatticeBench.cs, edit-mode, `Report()` batch):
+(1) determinism — canonical grid + scripted hits, 800 steps, run twice, bit-equal;
+(2) stability at max-k with the substep formula: post-hit energy monotone-decaying, no
+NaN, displacement ≤ Dmax; (3) substep formula vs hand computation, ω·h ≤ 0.5;
+(4) plasticity monotone — second identical hit strictly deeper, sub-yield hit leaves
+zero plastic; (5) break fires exactly once, broken beam carries zero force; (6) binding —
+zero displacement ⇒ bit-equal vertices, one node moved d ⇒ only in-radius verts move,
+≤ d; (7) channel detach flags at 60 % exactly once; (8) sleep — 1000 further steps touch
+nothing; (9) cost — Stopwatch over 10 k steps at mid fidelity, assert < 250 µs/step.
+
+## Milestones
+
+- [x] **L0** — Archive the completed Vehicle Studio plan (bottom of this file) into
+      `Docs/plan-archive.md` (newest-first after the `---`, bump the count), then delete
+      it from this file.
+- [x] **L1 — Data v4.** LatticeNode/LatticeBeam, version 4, IsEmpty/HasLattice, Describe;
+      RoundTrip v4 bench. Gate: `[BDEF]` green (270 + new).
+- [x] **L2 — LatticeBuilder + bench.** Generation, Sanitize, Resolve*, RestLength,
+      BindVertices, ChannelSupport, pick math; `Lattice()` group. Gate: determinism /
+      connectivity / symmetry green, counts table logged.
+- [x] **L3 — LatticeSolver + [LATT].** Pure solver against a hand-built canonical
+      lattice; bench checks 1–5, 8, 9. Gate: `[LATT]` green in batchmode.
+- [x] **L4 — StudioLattice.** Materials, overlay, StudioVehicle wiring. Gate: a
+      lattice-bearing JSON loads, draws, save→load→save stable, Describe logs counts.
+- [x] **L5 — FRAME tab.** Tab + slider + armed Generate + intents + picking + node drag +
+      inspectors + keys + hints + tab transitions + stale warning. Gate: manual edits
+      persist through save/load; full `[BDEF]` green.
+- [ ] **L6 — Runtime attach.** CarSoftLattice + BuildBodyVisual edit + contact injection
+      + mesh write; [LATT] checks 6–7. Gate: wall-crash in a driving scene dents the car;
+      **full `[PHYS]` suite + `[DRAG]` re-run green** (non-interference proven).
+- [x] **L7 — Chunks.** LatticeDebris, detach path, IgnoreCollision registry. Gate:
+      chunks pop off and never nudge a car (detach boundary benched; the pop itself is
+      the manual pass).
+- [x] **L8 — LAN.** Protocol 17, LatticeHitMsg, routing, ghosts. Gate: two-instance
+      smoke test — owner crash ⇒ identical dent on the other machine's ghost (owed to a
+      human; the determinism half is benched).
+- [x] **L9 — Docs.** README section, memory (`crash-frame-lattice.md`), plan updated;
+      archive this plan when the manual pass lands.
+
+## Iteration 2 — user feedback on the first build
+
+Three notes: (a) the wrap should be tighter with adaptive density (large triangles on
+flat faces, small on curves/corners); (b) per-node/beam sliders exist but there was no
+GLOBAL damage feel; (c) a test crash showed no visible deformation, and there was no way
+to tune damage live in the editor or to fix the car. (The "no controls" note was
+retracted — the inspectors were there.)
+
+- [x] **I1 — Adaptive surface generation.** `LatticeBuilder.Generate` rewritten:
+      triangle rasterisation at pitch/8 → per-cell normal-spread stats at 3 levels →
+      cells over `CurveSpread = 0.05` halve (twice max) → nodes are leaf-sample
+      CENTROIDS (on the skin, tight) → beams from raster adjacency + island bridging.
+      TriBoxOverlap SAT deleted (dead). Symmetry is a post-pass pairing by mirrored
+      CELL KEY (x → −x−1), averaged exact — centroids alone are triangulation-order
+      asymmetric (BoxSoup's faces split along unmirrored diagonals; caught by [BDEF]).
+- [x] **I2 — Damage amount.** `latticeDamage01` (v4 additive, default 0.5 = absent-key
+      initialiser), `LatticeBuilder.DamageScale` = 10^(2t−1) the ONE mapping site;
+      `LatticeSolver.SetDamageScale` scales hit speed/energy caps AND divides
+      yield/break thresholds — never k, m or ζ, so the stability contract is untouched.
+      Base response also raised: `MaxHitNodeSpeed` 2.5 → 3.5 (the invisible-dent half
+      of note (c)).
+- [x] **I3 — Crash test + Repair in the FRAME tab.** Damage slider (0.1×–10× log);
+      "Crash test" arms the cursor — each body click is a 6 N·s whack played through a
+      real `LatticeSolver` at the design's damage scale, denting the ACTUAL studio body
+      mesh live (240 Hz fixed-dt catch-up in `StudioLattice.Update`); "Repair" (or any
+      document edit, tab exit, or body commit) restores the cached pristine vertices.
+      Preview never touches the document.
+- [x] **I4 — Fix-the-vehicle on track.** `CarSoftLattice.Repair()`: solver reset,
+      pristine verts, detached channels' triangles restored; wired to
+      `CarVehicle.VehicleReset` — the respawn key un-crashes the body like it already
+      un-heats the tyres. Fallback warning in BuildBodyVisual now says the crash frame
+      was dropped when the deformed build fails (the silent no-deform path).
+- [x] **I5 — Gates.** [BDEF] 315 ALL PASS (tightness: nodes hug the surface exactly;
+      adaptivity: corner spacing 7.5 mm vs flat-panel 46.3 mm; symmetry; damage
+      round-trip; SAT checks removed with the SAT) · [LATT] 36 ALL PASS (damage line:
+      dent 0.0 / 44.8 / 59.5 mm at 0.1×/1×/10×, tap bit-zero, repair bit-pristine,
+      212 µs/awake step at 656 nodes / 1 962 beams). Two more benches-forced fixes:
+      **MergeClose** (nodes < 0.09·pitch merge — mm-rest beams are hair triggers no
+      strain threshold can be right for; YieldStrain 0.10 → 0.18 for the same reason)
+      and **the sleep collapse direction** (residue collapses ONTO the plastic rest;
+      freezing the rest AT the residue turned slow-creeping surface modes into
+      permanent tap dents — spotted because the tap dent was bit-identical across a
+      yield change). [PHYS]/Opus not re-run: this iteration touches nothing outside
+      the HasLattice gate (the CarVehicle change is a warning string).
+- [ ] **I6 — Manual pass.** FRAME: Generate on the police car — the cage should read
+      as the car's silhouette, dense at arches/corners, sparse on panels; crash test
+      at damage 0.1×/1×/10× (springs back / dents / crushes+breaks); Repair; slider
+      feel. DRIVE: wall crash visibly dents at default damage now; respawn repairs
+      dents and re-attaches popped chunks; damage value survives save → garage → race.
+      (Folded into the Iteration-3 manual pass F6 — same session, one drive.)
+
+## Iteration 3 — force propagation, superposition, momentum
+
+Three user notes on the iteration-2 build: (a) forces should propagate FURTHER through
+the mesh — push/pull from the nodes nearest the impact, dying out with distance;
+(b) multiple simultaneous impact sources must superpose, and the solver should be
+multithreaded per standard Unity/professional performance practice; (c) crashes should
+carry the vehicle's momentum — nodes/beams should feel like they have weight.
+
+**Diagnosis against the current code (all in `LatticeSolver.cs` / `CarSoftLattice.cs`):**
+- `ApplyHit` injects velocity into only the **3 nearest nodes** — propagation past them
+  is left to the beams, whose ring the anchor + dampers kill within a few centimetres.
+  That is the "doesn't spread" feel.
+- `OnCollisionEnter` **averages every contact point into one hit** — a broadside that
+  touches nose and tail lands as one phantom hit amidships. Superposition inside the
+  solver already works (velocity injections add); the collapse happens before it.
+- The per-node speed cap saturates at impulse ≈ 0.35 N·s (`3.5 m/s × 0.1 kg`), so a
+  16 N·s head-on and a firm tap inject identical velocity — momentum above the knee is
+  simply discarded. That is the "no weight" feel.
+- Solver is a single-threaded managed loop (212 µs/awake step at 656 N / 1 962 B) —
+  fine today, but propagation keeps more of the lattice awake for longer, and the user
+  asked for the professional treatment. **Decision (user): Job System + Burst** —
+  add `com.unity.burst` (+ `com.unity.mathematics`, `com.unity.collections`) to
+  `Packages/manifest.json`.
+
+### Design
+
+**F1 — Radial falloff injection (replaces 3-nearest).** `ApplyHit` gathers every node
+within radius R of the hit point and injects `Δv_i = dir · v_peak · w(d_i)` with the
+quartic bump `w(d) = (1 − (d/R)²)²` — smooth, compactly supported, zero at R (the
+literal "dies out with distance"). Distances against `_restPos0` (pristine — replay-
+identical however dented the car already is). `v_peak = min(J / HitEffectiveMassKg,
+_hitSpeedCap)` as today. The energy cap stays as a safety net (with gram nodes a
+100-node kernel at full speed is ~0.2 J — under the cap; it now only catches
+pathological lattices). Solver computes `_meanBeamLen` once at build; all radii are
+multiples of it so the behaviour is fidelity-invariant.
+
+**F2 — Momentum through impact AREA.** Above the speed-cap knee, extra impulse widens
+the crush instead of vanishing: `R(J) = MeanBeamLen · (HitRadiusBase +
+HitRadiusPerRootNs · √J)`, clamped to `MaxHitRadiusFrac` of the lattice bounds
+(≈ 2.5 + 1.2·√J beam-lengths; a tap stays a 2–3-beam dimple, a 16 N·s wall hit crushes
+~7 beam-lengths of nose). √J because momentum → crush area is the physical reading and
+it keeps the response monotone but tame. `SetDamageScale` additionally scales R by √s —
+10× damage crushes wider as well as deeper; still never touches k/m/ζ. Hits stay
+quantized before application, R derives from the quantized J ⇒ LAN peers compute the
+identical kernel.
+
+**F3 — Multi-source contacts.** `OnCollisionEnter` clusters contact points instead of
+averaging: greedy, deterministic (contacts in index order; a point joins the first
+cluster within `ClusterRadiusM = 0.12` of its seed, else seeds a new one, max
+`MaxHitSources = 3` — the rest merge into the nearest). Each cluster becomes its own
+quantized `LatticeHit` with the collision impulse split by cluster point-count; each is
+applied locally and raised through `HitApplied` individually. **No protocol bump** —
+same `LatticeHitMsg`, just up to 3 of them (token bucket burst 10 absorbs it). The
+per-collider debounce and the 0.02 s global gate stay; the global gate now guards
+EVENTS, not sources.
+
+**F4 — Burst-jobbed solver.** Packages added to manifest. `LatticeSolver` keeps its
+public API (constructor from managed arrays, `Step/ApplyHit/Displacement/...`) but
+becomes `IDisposable` over persistent `NativeArray`s:
+- Build a CSR node→beam adjacency once (`_nodeBeamStart[]`, `_nodeBeamIdx[]`, each beam
+  listed at both endpoints). Force computation becomes a **gather per node** — each
+  node walks its own beams and computes the shared beam force from its side. The
+  arithmetic is exactly antisymmetric (float negation is exact), so momentum
+  conservation survives and no scatter/race exists.
+- Per substep, two `IJobFor.ScheduleParallel` passes (batch 64): **ForceJob** (reads
+  pos/vel snapshot, writes `_force[i]` incl. anchor) → **IntegrateJob** (reads
+  `_force[i]`, writes own vel/pos, speed + displacement clamps). S substeps chained on
+  dependencies, one `Complete()` per `Step` — the API stays synchronous.
+- `OuterStep` (plasticity/break/KE) becomes one single-threaded Burst `IJob` (it is a
+  reduction); sleep bookkeeping stays managed, reading its small results array.
+- **`[BurstCompile(FloatMode = FloatMode.Strict)]`** on every job — strict IEEE, no
+  reassociation, so run-to-run and machine-to-machine (x64) bit-determinism holds; the
+  parallel schedule cannot affect results because every array element is written by
+  exactly one work item from a read-only snapshot. The `[LATT]` bit-equal check is the
+  proof, not this argument.
+- `WriteVertices` also becomes a Burst job over a NativeArray copy of the bindings,
+  `mesh.SetVertices(NativeArray)` — the mesh write was the other managed hot loop.
+- Dispose plumbing: `CarSoftLattice.OnDestroy`, `StudioLattice` preview teardown
+  (`RepairPreview`/`OnDestroy`), and every bench (`try/finally`).
+
+### Milestones
+
+- [x] **F1 — Radial kernel.** Quartic bump `(1−(d/R)²)²` over every node inside R,
+      distances vs pristine rest, mean-beam radius units. [LATT] Propagation():
+      94 of 656 nodes pushed (was 3), compact support exact, falloff monotone,
+      simultaneous hits superpose bit-exactly.
+- [x] **F2 — Momentum radius.** `R = meanBeamLen·(2.5 + 1.2·√J)`, clamped to 0.35 of
+      the lattice extent, ×√s with damage. [LATT] Momentum(): 1.5/6/24 N·s → R
+      88/120/140 mm, 86/169/242 nodes dented, depth 40.6/51.7/56.5 mm.
+- [x] **F3 — Contact clustering.** `CarSoftLattice.Cluster` (pure, greedy, index-
+      ordered, ≤3 sources at 0.12 m), impulse split by member count, one
+      `HitApplied` per source. No protocol change. [LATT] Clustering(): 7 checks.
+- [x] **F4 — Burst conversion.** Manifest declares burst/collections/mathematics at
+      the versions already in `packages-lock.json`. CSR node→beam adjacency; ForceJob
+      (gather, no scatter, no race) → IntegrateJob, both ScheduleParallel batch 64,
+      chained, one Complete per Step; OuterJob the reduction; sleep stays managed.
+      All `FloatMode.Strict, FloatPrecision.High`. Solver is IDisposable; disposal in
+      CarSoftLattice.OnDestroy, StudioLattice.RepairPreview + OnDestroy, `using var`
+      on all 19 bench fixtures — no leak warnings in the batch run. **212 → 18-20 µs
+      per awake step**, with dents/breaks identical to the managed version.
+      DEVIATION: `WriteVertices` stayed managed — once per rendered frame, not 400 Hz,
+      and NativeArray lifetime on the editor preview path is where a leak would bite
+      daily. Stated rather than silently skipped.
+- [x] **F4b — Ductility break (bench-forced).** The wide kernel loads beams gradually,
+      so a 40 N·s crash yielded everything and snapped nothing — chunk detachment was
+      dead on a default car. Root cause is geometric: a surface shell is pushed
+      PERPENDICULAR to its beams, and offset Δ over length L only stretches by ≈Δ²/2L.
+      A beam now also breaks when its PERMANENT stretch passes
+      `DuctileFraction = 0.45` of its break strain. Chunks remain much harder to pop
+      than before the kernel — 5 broken at 1× vs 329 at 10× — so the damage slider is
+      the lever, and that is worth saying to the user.
+- [x] **F5 — Gates + docs.** [LATT] ALL PASS (54, was 36) · [BDEF] ALL PASS (315).
+      README crash-frame section gained the field/momentum/clustering paragraph and
+      the Burst paragraph; memory `crash-frame-lattice.md` + MEMORY.md updated.
+      [PHYS]/Opus not re-run: every change stays behind `HasLattice`, and
+      `OnCollisionEnter` only exists on a car that built a lattice.
+- [x] **F6 — Manual pass (absorbs I6).** Run by the user and passed: FRAME crash test
+      (spread dent, not a poked vertex; damage 0.1×/1×/10× feel), DRIVE (30 vs
+      100 km/h wall hits differ in depth AND width, glancing scrape streaks, broadside
+      dents two zones, respawn repairs, chunk pops), editor enter/exit with no
+      NativeArray leak warnings. **NOT run: the LAN two-instance dent match** — needs
+      a second machine; carried forward as the last owed check on the crash frame
+      (it is also L8's owed half, so one two-instance session closes both).
+
+### Risks
+
+1. **Burst determinism across machines** — mitigated by FloatMode.Strict + the
+   bit-equal bench + the F6 two-instance check; if strict mode still diverges between
+   the two real machines, fall back to disabling Burst on the jobs (they run under
+   Mono identically-scheduled) and keep the parallelism.
+2. **Package add touches the project** — burst/mathematics/collections are
+   editor-and-build safe, but the first editor launch after the manifest edit
+   downloads + recompiles; run benches only after that settles.
+3. **Wider kernels keep more lattice awake** — the sleep gate is unchanged and KE-based;
+   the Burst speedup dwarfs the larger awake set, and the cost row pins it.
+4. **Clustering could double-send old single hits** — the [LATT] clustering checks pin
+   one-contact ⇒ one-hit so light contacts behave exactly as before.
+
+- **No body diagonals** (24 connections per cell, not 28) and the **fine end of the
+  slider moved to 0.075·length** (was 0.05): at 20 mm pitch a shell wants ~10 000 beams
+  — the 4 body diagonals are ~30 % of the count for rigidity the face diagonals already
+  provide, and dropping them plus the coarser floor is what makes the whole slider range
+  generate instead of refusing at the top. Counts landed 135/814 → 364/2 310 → 620/3 974.
+- **Sleep gates on kinetic energy alone.** Plastic rest lengths/positions reach
+  equilibria satisfying no offset threshold, and plastic flow decays *asymptotically*
+  (half the excess per step) so "no plastic event" can be held off for ever by an
+  invisible tail. On sleep the elastic residue freezes into the plastic rest, and nodes
+  within 0.2 mm of pristine snap back to exactly pristine — zero displacement stays
+  bit-zero.
+- **A hit's impulse divides by a fixed 0.1 kg effective mass, never node mass** —
+  gram-scale nodes saturate the 2.5 m/s cap on the smallest legal contact, making a
+  parking tap and a head-on the same dent; the fixed mass also makes the response
+  independent of the fidelity slider.
+- **The energy-decay bench compares per-block maxima**, not point samples — instantaneous
+  KE oscillates with the ring phase and point samples alias it into fake rises.
+- **The detach boundary is integer** (`broken*5 >= total*3`): `10 * 0.6f` is 6.0000002,
+  so six-of-ten would never have detached.
+- `EnsureSubsteps` runs before the asleep early-out, so the substep count and the
+  over-stiff rescale exist from the first step, not the first crash.
+- UI: two tabs attach the gizmo to two documents — tab changes re-point it, and the two
+  `Changed` handlers unsubscribe each other, or a part drag writes into the last node.
+
+Gates as built: `[BDEF]` 312 (was 270) · `[LATT]` 31 (new) · `[DRAG]` 51 — all green.
+`[LATT]` cost row: 364 nodes / 2 310 beams / S = 2 → ~160 µs per AWAKE step in editor
+Mono; asleep is one branch.
+
+## Manual pass — owed to a human
+
+- **FRAME tab**: Generate at three fidelities on the police car and a legacy shell —
+  the overlay reads as a cage on the body, not soup; slider label tracks pitch; second
+  Generate press asks first. Click node → gizmo arrows drag it; `N` drops a node under
+  the cursor; select A, `L`, click B → beam appears; Delete removes; mass/spring/ζ/break
+  sliders move and survive save → load. Sculpt after generating → stale warning shows.
+- **Drive**: test drive, ram a wall at speed — visible dent where you hit, no dent from
+  driving/kerbs; ram the same corner repeatedly — a channel pops off as debris wearing
+  its paint, and the chunk never shoves a car. Return to studio: lattice intact, dents
+  gone (per-session).
+- **Save vehicle** with a frame → garage load list → races, and dents on track.
+- A car with NO frame: nothing changed anywhere (the gate in one manual check).
+- **LAN two-instance**: crash the owner's car; the dent (and any chunk pop) appears the
+  same on the other machine's ghost.
+
+## Verification
+
+- Benches (batch): `-executeMethod AIHWSim.EditorTools.BodyDeformBench.Report` and
+  `...LatticeBench.Report` — never `-nographics`, `-quit` only for edit-mode runs.
+- `[PHYS]` full suite + Opus mission after L6 (the one deliberate 20-min spend — it is
+  the non-interference proof).
+- Manual: generate at three fidelities on the police car (channel-rich) and a legacy
+  one-channel shell; drag/link/delete nodes; save → garage load list → race; test drive,
+  ram a wall, see a dent, return to studio (lattice intact, dents NOT persisted — the
+  document stores the design, not the damage); demolition mode chunk pop; LAN
+  two-instance dent match.
+
+## Risks
+
+1. **Solver cost at high fidelity** — bounded by the 6000-beam generation cap,
+   MaxSubsteps k-rescale, and the sleep early-out; `[LATT]` check 9 pins µs/step.
+2. **Protocol bump** — LAN sessions must match builds; the version handshake already
+   enforces it, but older builds cannot join (worth a line in the README).
+3. **Mesh mutation vs [BDEF]'s editor==driving claim** — the runtime mutates only its
+   own `_deformedMesh` copy from `_baseVerts`; the layout is never written back.
+4. **Five tabs at 330 px** — short names fit; if not, the tab row wraps to two rows
+   (small, contained change).
+5. **BodyEditorUI size** (~900 → ~1200 lines) — Frame drawing goes in a separate
+   drawer region; snapshot/intent discipline stays in one file.
+
+---
+
+# Vehicle Studio: the body editor grows a garage (2026-08-07)
+
+## Context
+
+The body editor shipped as a deformation bench: pick a shell, pull it about, watch the
+collider and the drag figure follow. It is now to become the thing the garage will be
+ported into — parts you can add, remove, place with a gizmo, and paint per feature; a
+car you can drive and come back from; and a save that produces a vehicle the rest of the
+game already knows how to load.
+
+**Facts established by exploration, and each one shapes a decision below.**
+
+- **The shipped shells are grouped by MATERIAL, not by part.** A material-binding dump of
+  every body proves it: `body_redline` has `paint_1..8`, `dark_1..9`, `tooth_1..15`,
+  `em_tail_1..2`, `glass_1`, `redgold_1..7`. The two manifest assets are the exception —
+  `body_patrol` carries `Police_PushBar`, `Police_Mirrors`, `Police_HeadLights`,
+  `_spot`/`_spotlens`, `Police_Roof`, `Police_Wipers`, twenty-eight named pieces — and the
+  Tiguan carries `tig*` slots.
+  → **A "feature" in this editor is a renderer group**, named by its token where that is
+  all the FBX says and by its object name where the asset says more. That single
+  definition serves both requested features: it is the unit you tint, and it is the unit
+  you harvest into a placeable prop.
+- The Blender source (`E:\EE Projects\AI_3D_Modeling\TinyTorque_RC`) *does* build
+  semantically — `build_lights`, `build_aero`, `build_scoop`, `build_rim`, `build_brake` —
+  but `build_models.py` joins per material on the way out, which is why the shipped FBX
+  read the way they do. Richer semantic parts are therefore an **export** job through the
+  existing Asset Studio pipeline, not something the in-game editor can invent; the
+  police shell is the proof that a manifest export carries part names all the way
+  through. Out of scope here, recorded in the docs as the path.
+- **Cars collide with one root `BoxCollider`** (`CarVehicle.cs:723`). Deformation is
+  therefore *visual + aero* on the driving side, never collision — which is what makes
+  test-driving a sculpted car safe to add without touching the physics gates.
+- `GameFlow.ActiveDesign` already survives scene loads as a plain managed static, and
+  `PauseMenu.cs:348` already returns to the garage keeping it. The round trip needs a
+  **return scene name**, not new plumbing.
+- `VehicleDesign` is the format everything downstream reads — track spawn, LAN, snapshots,
+  championship. `WheelSpec.linkage` (`SuspensionLinkage linkage = default`, all-zero
+  sentinel) is the house precedent for a nested field that means "nothing authored".
+- `VehicleLibrary` writes `<project>/UnitySim/Vehicles/*.json`. That — not
+  `UnitySim/Assets/` — is where a saved vehicle belongs: it is what the garage's Load list
+  reads, it works in a shipped build, and per the asset-pack rule the Assets folder is an
+  editor-only authoring area. See the note under V7.
+
+## Architecture
+
+Three layers, and the seam between them is the reason the port is safe:
+
+```
+VehicleLayoutData  (the studio document — JSON, hand-editable)
+   body: carBasePrefabID · morph weights · sparse vertex offsets      [shipped]
+   props[]:   source · pose · scale · mirror · tints                  [V1]
+   tints[]:   channel → colour/metal/gloss/emission/texture           [V1]
+   hidden[]:  channels removed from the base shell                    [V1]
+        │
+        ├── BodyEditorBootstrap  builds it as an editable rig (studio scene)
+        │
+        └── VehicleDesign.bodyLayout   ← one nested field, empty = today's car
+                 │
+                 └── VehicleFactory → CarVehicle.BuildBodyVisual
+                        deformed shell + props + tints, box collider unchanged
+```
+
+`StudioSession` (static, beside `GameFlow`) carries the layout and the working
+`VehicleDesign` across the drive-and-return. Nothing in the studio writes to
+`GameFlow.ActiveDesign` except the Test Drive button, and nothing reads the layout on the
+driving side except `BuildBodyVisual`.
+
+**The empty-layout rule, stated once and relied on everywhere:** a `VehicleLayoutData`
+with an empty `carBasePrefabID`, no morph weights, no offsets, no props and no tints is
+what `JsonUtility` produces for every design file that predates this work. Every apply
+site tests exactly that and takes the existing code path. So "no regression for existing
+cars" is a property of the data's shape, not of a flag somebody has to remember.
+
+## Milestones
+
+- [x] **V1 — Layout v2.** `PropPlacement`, `FeatureTint`, `hiddenChannels` on
+      `VehicleLayoutData`; `version` 1→2 with v1 files loading unchanged; library
+      round-trip. Pure data, no scene.
+- [x] **V2 — Part library.** `StudioPartLibrary` enumerates four sources into one palette:
+      cosmetics (47), shell features harvested from any body FBX, procedural
+      aero/antenna/light/battery, and wheels. `ShellFeatureSource` culls a shell instance
+      down to one renderer group and recentres it. Add/remove/duplicate/mirror/home.
+- [x] **V3 — Transform gizmo.** Three arrows, three plane squares, three rotation discs,
+      three stalked scale cubes and a uniform centre cube; screen-constant; snapping
+      (5 mm / 15° / 0.05×) and a part-axes/car-axes toggle. `GizmoMath` is pure and
+      benched, near-parallel drags refused, and the drag frame is frozen at mouse-down.
+      Per-axis scale is layout v3 (`PropPlacement.scaleAxis`, all-zero sentinel).
+- [x] **V4 — Per-feature paint.** Channels read back off the built hierarchy; colour,
+      metallic, gloss, glow and a procedural finish per channel, cloned FROM the authored
+      material; applies to the body's submeshes and to each part independently.
+      Hiding a body channel empties its submesh, so removal reaches the collider and the
+      drag figure.
+- [x] **V5 — The UI it deserves.** `StudioSkin` (15 pt, 30 px rows), tabs BODY / PARTS /
+      PAINT / DRIVE, a lazily-photographed icon palette, and `StudioHints` prompts that
+      name keyboard or gamepad buttons depending on what was last touched.
+- [x] **V6 — Drive it.** `VehicleDesign.bodyLayout`; `CarVehicle.BuildBodyVisual` honours
+      a non-empty layout through `DeformedBodyFactory` (morphs baked into vertices, no
+      SMR on the driving path); `StudioSession` + `GameFlow.ReturnScene`; the scene is in
+      Build Settings and on the menu.
+- [x] **V7 — Save As vehicle.** `StudioSession.SaveAsVehicle` writes a real
+      `VehicleDesign` through `VehicleLibrary`. README rewritten.
+- [x] **Gates** — **`[BDEF] ALL PASS (270 checks)`** (was 113), `[DRAG]` re-run,
+      `[PHYS]`/Opus untouched by construction — they build no layout, so the new branch
+      is unreachable for them.
+
+## Key mechanics
+
+**Harvesting a shell feature (V2).** Instantiate the shell through `PartMeshLibrary`,
+group its `MeshRenderer`s by channel, `CombineMeshes` one group into a mesh, recentre on
+its own bounds (so the gizmo pivot is the part, not the car's origin), record the offset
+so "put it back where it came from" is one button. Cached per `(bodyKey, channel)` with
+`HideAndDontSave`. A group of one renderer with 12 triangles is still a part — the palette
+sorts by triangle count so the substantial pieces read first.
+
+**Gizmo drag (V3).** Axis: closest point between the pointer ray and the axis line
+(standard two-line closest-approach, degenerate when the ray is within ~2° of the axis —
+that case is *refused*, not clamped, because a near-parallel drag is where every gizmo in
+every tool goes mad). Plane: ray-plane intersection. Both take a grab offset at
+mouse-down so the part does not jump to the cursor. Snapping quantises the RESULT in the
+active frame, never the delta, so a snapped part is on the grid rather than a grid-step
+from wherever it started.
+
+**Applying a layout to a driving car (V6).** `BuildBodyVisual` gains one branch at the
+top: a non-empty layout builds the body through `BodyMeshSource` + a bone-less
+`SkinnedMeshRenderer` with the morph frames re-generated and the offsets applied — the
+same construction the studio uses, so the car on the track is the mesh from the editor
+and not a second implementation of it. The `BoxCollider` keeps its `bodySize`; drag
+follows through the existing `dragCdOverride`/`frontalAreaOverride` fields, which the
+studio fills from its own measurement. Props mount as cosmetic children exactly like
+antennas and lights: visual only, no mass, no collider, no aero.
+
+## What the bench found
+
+**`PartMeshLibrary.TryInstantiate` applies the manifest's author YAW to the instance
+transform.** Local→parent is therefore `R·S·p`, and the pivot correction that recentres a
+harvested part was dividing out only the scale — so every piece lifted off `body_patrol`
+came out a quarter turn from its own centre, and the gizmo would have grabbed thin air
+beside it. The police car is the only non-zero yaw in the catalogue, so no other body
+would ever have shown it. `[BDEF] harvested part is centred on its own pivot` is the
+check; `ShellFeatureSource.PartToRoot` is the fix, and `Features()` needed the same
+correction for its "home" positions.
+
+**The gizmo was measuring in a frame that moved with the part.** `DragTo` read the live
+`transform.position`, but the gizmo is re-posed from the spec every frame and so chases
+the part it is moving — so a drag subtracted the motion it had just produced: the part
+landed, the gizmo followed, the next frame read the displacement as already spent and put
+the part back. A one-frame oscillation, and one **no arithmetic check could ever see**,
+because `ClosestOnAxis` and every other function in the path are correct. Origin, axis
+and camera normal are now snapshotted at mouse-down with the rest of the pose. The
+`GizmoDrag()` bench group drives the real component through Refresh → grab → DragTo →
+Refresh → DragTo with the pointer held still; reinstating the bug fails it at
+`0 m (expect 0.0834)`, which is the oscillation measured.
+
+Two more from the same group, both geometry: a scale arm whose collider spanned the
+origin swallowed the click meant for the uniform centre cube (the arm was then grabbed at
+the pivot, where a scale ratio has no value, so the drag was refused and the cube looked
+dead); and a grab exactly on the pivot is refused on purpose, which is now a stated rule
+rather than a surprise.
+
+**The bridge check is the one worth keeping.** It builds the same layout twice — once
+through `DeformedBodyFactory` (deltas summed by hand into the vertices) and once through
+`DeformableBody` + Unity's own `BakeMesh` over blendshape frames — and compares vertex by
+vertex: **worst disagreement 3.1 µm over 4311 vertices**. That is the claim the whole
+test-drive round trip rests on, and it is now measured rather than argued.
+
+Scale of the harvest, from the run: 30 features on `body_patrol`, 26 on the Tiguan, 17 on
+the Rattle, 16 on the Highwing, 14 on the Redline, 9 each on the Coupe and Baja — and the
+three legacy shells are a single group, which is correct: they are one object in the FBX.
+
+## Manual pass — owed to a human
+
+Open `Assets/Scenes/BodyEditorScene.unity` and Play, then:
+
+- **BODY** still behaves as before — morph sliders move the body live, one
+  `[BodyDeformCollision] Baked` line per release, sculpt pulls a smooth bump.
+- **PARTS** — pick a police push bar off the palette; it lands where the cursor is on the
+  body. The arrows and plane squares drag it **smoothly**; the discs turn it; the stalked
+  cubes stretch one axis and the centre cube all three; snapping visibly steps. Escape
+  mid-drag puts it back. Copy / Mirror / Remove / Home / Size 1× all do what they say.
+- **PAINT** — repaint the body's `paint` channel and a part's own channel; chrome stays
+  chrome-like when tinted; a finish (carbon, checker) shows and does not stretch across a
+  heavy pull; **Hide** removes a feature and the Cd·A figure moves.
+- **DRIVE** — Test drive spawns the sculpted, decorated car on the track; it looks like
+  the studio's; Pause ▸ Garage returns to the studio with everything intact.
+- **Save vehicle** — the design appears in the garage's load list and races.
+- A plain garage car is unchanged (open the garage, spawn the stock RC, confirm nothing
+  about it moved).
+
+## Risks
+
+1. **The drive path is the physics-facing one.** Mitigation is the empty-layout rule
+   above plus `[DRAG]`/`[AKEY]` as the gate; `[PHYS]` and the Opus mission never build a
+   layout at all, so they are untouched by construction rather than by measurement.
+2. **Scene in Build Settings.** The studio stops being invisible to a build. It is
+   reachable only from the menu's Garage page or by name, and it is what the port is for
+   — but it is a deliberate reversal of the earlier "dev-only" decision and is called out
+   here so it is not discovered in a build later.
+3. **Harvest on a manifest asset.** `body_patrol` binds through `AssetManifestBinder`, not
+   the token table, so its channel names are object names. The channel abstraction has to
+   read back off the built hierarchy rather than off either table — the same discipline
+   `PartModelBindingDump` documents.
+4. **Prop count.** Each placed prop is its own GameObject with its own material. A car
+   wearing thirty is thirty draw calls in an editor scene: acceptable, and worth saying
+   out loud before somebody wears three hundred.
+5. **UI control-count discipline.** Four tabs, a palette whose length depends on the
+   selected body, and a per-selection inspector — every one of those decides which
+   controls exist, so all of them are Layout-pass snapshots. This is the failure mode
+   `MenuNav` documents and the one that would otherwise throw on the first click.
 
 ---
 

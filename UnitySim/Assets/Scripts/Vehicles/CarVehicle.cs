@@ -944,11 +944,23 @@ namespace AIHWSim.Vehicles
                     foreach (var r in deformed.GetComponentsInChildren<MeshRenderer>(true))
                         _bodyRenderers.Add(r);
                     BodyEd.DeformedBodyFactory.BuildProps(transform, bodyLayout);
+                    // The crash frame, if the design carries one. Only THIS
+                    // branch can reach it — the mesh is the car's own instance,
+                    // never shared catalogue geometry — and a design without a
+                    // lattice (every physics test, the Opus mission, every
+                    // pre-frame save) builds nothing here.
+                    if (bodyLayout.HasLattice)
+                        CarSoftLattice.Attach(this, deformed.transform, _deformedMesh,
+                                              bodyLayout);
                     return;
                 }
                 Debug.LogWarning($"[CarVehicle] '{name}' carries a body layout, but " +
                                  $"'{(def != null ? def.id : "?")}' could not be rebuilt from " +
-                                 "it — falling back to the plain shell.");
+                                 "it — falling back to the plain shell" +
+                                 (bodyLayout.HasLattice
+                                     ? ", and its CRASH FRAME is dropped with it — this car " +
+                                       "will not deform."
+                                     : "."));
             }
 
             // Authored-mesh path (Shell / LowRacer / Buggy have FBX shells): instantiate

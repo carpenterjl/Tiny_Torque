@@ -2311,6 +2311,91 @@ texture serves every colour). Materials are **cloned from the authored one**, ne
 fresh, so painting the police car's chrome red gives red chrome rather than red plastic —
 the normal map, the metallic map and the render state all survive.
 
+### The crash frame (FRAME tab)
+
+**Generate** wraps the body's current baked shape in a point-mass lattice that hugs the
+surface: every triangle is rasterised into samples (pitch/8 apart, so a large panel
+contributes everywhere, not just where it happens to hold a vertex), samples bucket into
+grid cells, and a cell whose normals spread more than ~50° **halves, twice if needed** —
+flat panels get large cells, curves and corners get small ones, which is also why the
+node cloud reads as the car's silhouette rather than a box of scaffolding. A node is the
+*centroid of its cell's surface samples* (on the skin, not a grid corner floating off
+it); beams follow sample adjacency along the surface, so force spreads the way the shell
+is actually connected, and separate mesh islands are bridged by their closest node pair.
+The grid is anchored so **x = 0 is a cell plane at every level**, which keeps a symmetric
+body's frame symmetric with no mirror bookkeeping. The **Detail slider** maps to the base
+cell pitch; its fine end is set by the runtime beam budget, not by taste, and generation
+refuses outright past 6 000 beams rather than shipping a frame the 400 Hz step cannot
+carry.
+
+Every node's **mass**, every beam's **spring, damping ratio ζ and break strain** are
+editable; nodes drag with the same gizmo parts use (wrapped in a `PropPlacement`, so the
+benched gizmo needed zero changes), `N` adds a node under the cursor, `L` links two, and
+Delete removes either. Defaults are derived, not guessed: node mass is an equal share of
+a 0.5 kg shell, and the default spring pins each node's aggregate natural frequency at
+40 Hz — comfortably under the 400 Hz driving step's ~127 Hz stability ceiling, with the
+10× spring slider still inside the runtime's substep headroom. The overlay is **two
+meshes and one sphere** (one `MeshTopology.Lines` mesh for every beam, one combined
+octahedron mesh for every node) and picking is pure ray math — no colliders, so a
+thousand handles never crowd the sculpt brush's raycast. Sculpting the body after
+generating marks the frame **stale** and says so; regenerating is a deliberate two-press,
+because it discards manual edits.
+
+**Damage is tuned by feel, in the tab.** The **Damage slider** (0.1× → 10×, log, neutral
+in the middle) is the one number the driving path scales its hit response by: above
+neutral, hits inject more speed *and* the yield and break thresholds drop by the same
+factor; below it a wall crash stays elastic and springs back out. **Crash test** arms the
+cursor — every click on the body is a wall-grade whack, played through the *same solver
+class the track builds*, denting the actual body mesh live — and **Repair** (or leaving
+the tab, or any edit) puts the pristine mesh back; crash-test dents never touch the
+document. On the road, the **respawn key repairs the car**: dents and detached chunks
+reset with the run, like tyre temperature does.
+
+**On the road, contacts dent the car.** A car whose design carries a frame gets a
+`CarSoftLattice`: the root box's collision events (wheels are raycast suspensions and
+raise none) become quantized hits, energy-capped so a crash crumples and never explodes;
+the solver — semi-implicit Euler in the car's local frame, substeps chosen from the
+stiffest node so ω·h ≤ 0.5, springs auto-softened past the 8-substep budget — spreads
+the load through the beams; strain past yield flows into permanent dents, and a beam
+breaks one-way on either an instantaneous snap or spent ductility (permanent stretch past
+its break strain). A feature channel that loses 60 % of its supporting beams **detaches
+as a debris chunk** (its submesh, at its current deformed shape, wearing its current
+paint) that collides with the world but is ignore-listed against every car's chassis box.
+Asleep — which is every frame the car is not actively crumpling — the whole system is one
+branch; dents are per-session and never written back into the design.
+
+**A hit is a field, and momentum is its width.** Every node within a radius of the
+contact takes velocity `v_peak·(1 − (d/R)²)²` — full push at the contact, smoothly
+nothing at R — so the crush spreads through the panel instead of poking the three
+vertices under the bumper and hoping the beams carry it (the anchor and dampers kill that
+ring within a few centimetres, which is what "the forces don't propagate" looked like).
+Node speed saturates for stability, so **extra impulse buys area, not speed**: R grows
+with √J in units of the mean beam length, which is what makes a 100 km/h wall feel
+different from a shove and keeps a crash looking the same at every Detail setting. One
+collision can also be several impacts — contact points **cluster** (up to three, greedy
+in index order), so a broadside dents nose and tail rather than the middle of the car
+where nothing touched. Injections are plain velocity additions, so simultaneous sources
+superpose exactly.
+
+The inner loops are **Burst jobs on the worker threads**: beam forces are gathered per
+node through a CSR adjacency built once, so nothing is ever scattered into a neighbour
+and the parallel schedule has no race to lose, and every job is `FloatMode.Strict` so the
+arithmetic a LAN peer replays is reproduced, not merely approximated. Measured on the
+`[LATT]` fixture (656 nodes, 1 962 beams): **212 µs → 18 µs per awake step**, with every
+dent and break identical to the single-threaded version.
+
+None of it touches the physics gates: no collider is added or resized, mass/CoM/inertia
+never change, no force ever reaches the car's rigidbody, and cars without a frame —
+every pre-frame design, every physics test, the Opus mission — build none of this at
+all. Over LAN each machine reports its own car's hits (`LatticeHitMsg`, protocol 17,
+owner-authoritative like OwnState, token-bucketed); peers replay the same quantized
+bytes into the same deterministic solver, so ghosts dent identically. The protocol bump
+means a pre-frame build cannot join a post-frame session — the version handshake refuses
+it up front rather than letting the dents drift. Gate:
+`AIHWSim.EditorTools.LatticeBench.Report`, grep `[LATT] RESULT` — determinism run twice
+bit-equal, energy-decay at worst-case stiffness, plasticity monotonicity, break-once,
+binding, the detach boundary, and µs per awake step.
+
 ### Driving it, and saving it
 
 **Test drive** attaches the layout to a real `VehicleDesign` and hands it to the ordinary
@@ -2341,7 +2426,9 @@ making permanent *content*.
 
 **Layouts save as small readable JSON** under `<project>/BodyLayouts/`, beside
 `Vehicles/` and `Tracks/`: the base body key, four morph weights, the wheelbase, a
-*sparse* list of the vertices actually pulled, and the parts, paint and hidden features.
+*sparse* list of the vertices actually pulled, the parts, paint and hidden features, and
+the crash frame's nodes and beams (layout v4 — rest lengths, dampers and vertex bindings
+are derived at load, never stored, for the same staleness reason morph targets are not).
 Morph weights are matched back **by name**, so adding or reordering a morph cannot apply
 a roofline weight to a nose slider; vertex offsets are refused outright if the base
 mesh's vertex count has changed, because an index into a re-exported mesh does not

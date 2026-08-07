@@ -37,6 +37,8 @@ namespace AIHWSim.BodyEd
         public const UnityEngine.KeyCode Delete = UnityEngine.KeyCode.Delete;
         public const UnityEngine.KeyCode Focus = UnityEngine.KeyCode.F;
         public const UnityEngine.KeyCode Cancel = UnityEngine.KeyCode.Escape;
+        public const UnityEngine.KeyCode AddNode = UnityEngine.KeyCode.N;
+        public const UnityEngine.KeyCode Link = UnityEngine.KeyCode.L;
 
         private static string K(UnityEngine.KeyCode c) => "[" + KeyTable.Label(c) + "]";
         private static string P(PadButton b) => "(" + PadTable.Label(b) + ")";
@@ -61,6 +63,13 @@ namespace AIHWSim.BodyEd
                           K(Delete) + " remove  ·  " + K(Cancel) + " cancel a drag"
                         : "Pick a part from the palette, then click the car to place it  ·  " +
                           "click a placed part to select it";
+                case StudioTab.Frame:
+                    return hasSelection
+                        ? K(Move) + " drag a node  ·  " + K(Link) + " link two nodes  ·  " +
+                          K(Delete) + " remove  ·  " + K(ToggleSnap) + " snap  ·  " +
+                          K(Cancel) + " cancel"
+                        : "Generate wraps the body in a crash frame  ·  click a node or " +
+                          "beam to edit it  ·  " + K(AddNode) + " adds a node under the cursor";
                 case StudioTab.Paint:
                     return "Pick a feature, then a colour and a finish  ·  " +
                            "Hide takes a feature off the car entirely";
@@ -82,6 +91,11 @@ namespace AIHWSim.BodyEd
                         ? P(PadButton.South) + " place  ·  " + P(PadButton.West) + " next tool  ·  " +
                           P(PadButton.North) + " snap  ·  " + P(PadButton.East) + " deselect"
                         : P(PadButton.South) + " choose a part  ·  " +
+                          P(PadButton.LeftShoulder) + P(PadButton.RightShoulder) + " change tab";
+                case StudioTab.Frame:
+                    return hasSelection
+                        ? P(PadButton.South) + " adjust  ·  " + P(PadButton.East) + " deselect"
+                        : P(PadButton.South) + " choose  ·  " +
                           P(PadButton.LeftShoulder) + P(PadButton.RightShoulder) + " change tab";
                 case StudioTab.Paint:
                     return P(PadButton.South) + " choose  ·  " + P(PadButton.East) + " back";

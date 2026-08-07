@@ -149,6 +149,55 @@ namespace AIHWSim.BodyEd
     }
 
     /// <summary>
+    /// One point mass of the crash frame — the soft-body lattice wrapping the
+    /// body. Position is in the VEHICLE frame and in metres, the frame
+    /// <see cref="PropPlacement.localPos"/> uses, so a node means the same place
+    /// in the studio and on the track.
+    /// </summary>
+    [System.Serializable]
+    public class LatticeNode
+    {
+        public Vector3 localPos;
+
+        /// <summary>Mass in kilograms. <b>0 = "derive the default"</b> — an equal
+        /// share of the shell mass, resolved only by
+        /// <c>LatticeBuilder.ResolveMass</c>. 0 kg is not a point mass, so 0 is
+        /// free to be the sentinel. Generation writes the resolved value
+        /// explicitly; the sentinel exists for hand-edited JSON.</summary>
+        public float mass;
+    }
+
+    /// <summary>
+    /// One spring-damper connecting two lattice nodes, by INDEX into the node
+    /// array — <c>JsonUtility</c> cannot serialise an object graph, and indices
+    /// diff legibly. Rest length is not stored: it is |pos[a] − pos[b]| at load,
+    /// so dragging a node in the editor deliberately redefines the rest shape.
+    /// </summary>
+    [System.Serializable]
+    public class LatticeBeam
+    {
+        /// <summary>Endpoint node indices. −1 (or any out-of-range value, or
+        /// a == b) marks a beam <c>LatticeBuilder.Sanitize</c> drops at load
+        /// rather than crashes on.</summary>
+        public int a = -1, b = -1;
+
+        /// <summary>Spring rate in N/m. 0 = derive the default (see
+        /// <c>LatticeBuilder.ResolveSpring</c>).</summary>
+        public float spring;
+
+        /// <summary>Damping ratio ζ — the house convention (see
+        /// <c>CarVehicle.MakeWheel</c>): the damper c = 2ζ√(k·μ) is derived, never
+        /// stored. <b>−1 = derive the default</b>; 0 is legal (undamped), so 0
+        /// cannot be the sentinel.</summary>
+        public float dampingRatio = -1f;
+
+        /// <summary>Strain |ΔL|/L₀ at which the beam snaps. Strain rather than
+        /// force because it is scale-free — the same 0.35 means the same visual
+        /// crumple on a stretched shell. −1 = derive the default.</summary>
+        public float breakStrain = -1f;
+    }
+
+    /// <summary>
     /// Everything needed to rebuild a customised vehicle, and nothing that can be
     /// derived from it.
     ///
@@ -192,8 +241,12 @@ namespace AIHWSim.BodyEd
         /// <b>3 adds per-axis prop scale</b>, which is additive in the same sense:
         /// the new key's absence is its own do-nothing sentinel, and a v3 file read
         /// by a v2 reader gives a part the mean of its three axes rather than an
-        /// error.</summary>
-        public int version = 3;
+        /// error.
+        ///
+        /// <b>4 adds the crash frame</b> — lattice nodes and beams. Absent keys =
+        /// no lattice; a v4 file in a v3 reader is a car without one. Additive
+        /// both ways again.</summary>
+        public int version = 4;
 
         /// <summary>The catalogue body this was sculpted from —
         /// <c>BodyDef.id</c>, resolved through <c>BodyCatalog.ById</c>. Empty
@@ -258,9 +311,45 @@ namespace AIHWSim.BodyEd
         /// nothing and hiding everything cost the same.</summary>
         public string[] hiddenChannels;
 
+        // ---- v4 ------------------------------------------------------------------
+
+        /// <summary>The crash frame's point masses. Null/empty on every earlier
+        /// file. Derived data — rest lengths, vertex bindings, dampers — is
+        /// recomputed at load by <c>LatticeBuilder</c>, never stored, for the
+        /// same staleness reason morph targets are not stored.</summary>
+        public LatticeNode[] latticeNodes;
+
+        /// <summary>The springs between them, by node index.</summary>
+        public LatticeBeam[] latticeBeams;
+
+        /// <summary>Grid pitch the frame was generated at, in metres. 0 = never
+        /// generated (a hand-built lattice). Context, not geometry — node
+        /// positions are the truth.</summary>
+        public float latticeSpacing;
+
+        /// <summary>The FRAME tab's fidelity slider position — UI memory only,
+        /// nothing downstream reads it. Starts at the middle per the tab's own
+        /// default.</summary>
+        public float latticeFidelity01 = 0.5f;
+
+        /// <summary>The FRAME tab's damage slider — how hard the world dents
+        /// this design. 0.5 (the initialiser, which is what an absent key
+        /// deserialises to) is the neutral 1× response;
+        /// <c>LatticeBuilder.DamageScale</c> is the one mapping site. Travels
+        /// in the design JSON, so LAN peers dent a car by its owner's
+        /// setting.</summary>
+        public float latticeDamage01 = 0.5f;
+
+        /// <summary>True when a crash frame exists. <b>THE runtime gate</b>: the
+        /// driving path builds a soft-body solver exactly when this is true, so
+        /// every design that predates the frame — including every physics-test
+        /// and mission car — is unreachable-by-construction rather than
+        /// excluded-by-flag.</summary>
+        public bool HasLattice => latticeNodes != null && latticeNodes.Length > 0;
+
         /// <summary>
         /// True when this layout asks for nothing at all — no body, no
-        /// deformation, no parts, no paint.
+        /// deformation, no parts, no paint, no crash frame.
         ///
         /// <b>This is the compatibility contract for the whole port.</b> A
         /// <c>VehicleDesign</c> written before the studio existed has no
@@ -275,7 +364,9 @@ namespace AIHWSim.BodyEd
             && (offsetIndex == null || offsetIndex.Length == 0)
             && (props == null || props.Length == 0)
             && (tints == null || tints.Length == 0)
-            && (hiddenChannels == null || hiddenChannels.Length == 0);
+            && (hiddenChannels == null || hiddenChannels.Length == 0)
+            && (latticeNodes == null || latticeNodes.Length == 0)
+            && (latticeBeams == null || latticeBeams.Length == 0);
 
         /// <summary>True when any morph weight is non-zero or any vertex was
         /// pulled — i.e. the base mesh has to be rebuilt rather than

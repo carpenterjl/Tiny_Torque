@@ -48,6 +48,7 @@ namespace AIHWSim.Net
         public const string ArcSync = "aihw.arc_sync";       // H→all unreliable-seq 15 Hz
         public const string ArcEvt = "aihw.arc_evt";         // H→all reliable
         public const string ArcFx = "aihw.arc_fx";           // H→one   reliable
+        public const string LatticeHit = "aihw.lat_hit";     // owner→H reliable; H→all relay
     }
 
     // ---- JSON control payloads ------------------------------------------------
@@ -226,6 +227,29 @@ namespace AIHWSim.Net
         public float spinTorqueSigned;   // signed yaw torque held for the spin's duration
         public Vector3 pos;              // recovery pose (KindRecover)
         public Quaternion rot = Quaternion.identity;
+    }
+
+    /// <summary>
+    /// One crash-frame contact, replayed by every peer. Protocol 17.
+    ///
+    /// Owner-authoritative like <see cref="OwnStateMsg"/>: the machine
+    /// simulating a car reports its own contacts, quantized to wire precision
+    /// BEFORE being applied locally — so the bytes shipped here are the bytes
+    /// the sender's own solver integrated, and a deterministic solver fed the
+    /// same design and the same hit sequence dents identically everywhere.
+    /// Low-rate reliable JSON, the <see cref="ArcFxMsg"/> idiom; a token bucket
+    /// at both ends keeps a scraping crash from becoming a message storm.
+    /// </summary>
+    [Serializable]
+    public class LatticeHitMsg
+    {
+        public int slot;
+        /// <summary>Per-car sequence, informational — reliable-sequenced
+        /// delivery already keeps per-sender order.</summary>
+        public int seq;
+        public Vector3 pos;        // car-local metres, pre-quantized to 1 mm
+        public Vector3 dir;        // car-local, components pre-quantized to 1/127
+        public float impulse;      // N·s, pre-quantized to 1/1024, ≤ 64
     }
 
     // ---- binary 60 Hz streams --------------------------------------------------

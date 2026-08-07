@@ -75,6 +75,7 @@ namespace AIHWSim.EditorTools
             Gizmo();
             GizmoDrag();
             DesignBridge();
+            Lattice();
 
             Debug.Log(_log.ToString().TrimEnd());
 
@@ -713,6 +714,59 @@ namespace AIHWSim.EditorTools
             Bool("a weight is deformation",
                  new VehicleLayoutData { blendShapeWeights = new[] { 0f, 12f } }.HasDeformation, "");
 
+            // ---- v4: the crash frame ----
+            var v4 = new VehicleLayoutData
+            {
+                carBasePrefabID = "body_shell",
+                latticeNodes = new[]
+                {
+                    new LatticeNode { localPos = new Vector3(0.01f, 0.02f, 0.03f), mass = 0.004f },
+                    new LatticeNode { localPos = new Vector3(-0.01f, 0.02f, 0.03f) },  // mass 0 = derive
+                },
+                latticeBeams = new[]
+                {
+                    new LatticeBeam { a = 0, b = 1, spring = 120f, dampingRatio = 0.4f,
+                                      breakStrain = 0.5f },
+                },
+                latticeSpacing = 0.044f,
+                latticeFidelity01 = 0.75f,
+                latticeDamage01 = 0.8f,
+            };
+            var v4b = JsonUtility.FromJson<VehicleLayoutData>(JsonUtility.ToJson(v4));
+            Bool("v4 nodes survive exactly",
+                 v4b?.latticeNodes is { Length: 2 }
+                 && v4b.latticeNodes[0].localPos == v4.latticeNodes[0].localPos
+                 && v4b.latticeNodes[0].mass == v4.latticeNodes[0].mass
+                 && v4b.latticeNodes[1].mass == 0f,
+                 "a reloaded frame node is in the same place, not near it — and the " +
+                 "0-mass sentinel is not invented into a value by the file");
+            Bool("v4 beams survive exactly",
+                 v4b?.latticeBeams is { Length: 1 }
+                 && v4b.latticeBeams[0].a == 0 && v4b.latticeBeams[0].b == 1
+                 && v4b.latticeBeams[0].spring == 120f
+                 && v4b.latticeBeams[0].dampingRatio == 0.4f
+                 && v4b.latticeBeams[0].breakStrain == 0.5f, "");
+            Bool("v4 spacing and fidelity survive",
+                 v4b != null && v4b.latticeSpacing == 0.044f && v4b.latticeFidelity01 == 0.75f, "");
+            Bool("a lattice alone is not empty",
+                 !new VehicleLayoutData { latticeNodes = new[] { new LatticeNode() } }.IsEmpty,
+                 "a hand-built frame with no other edits still has to take the studio path");
+            Bool("no lattice is no lattice",
+                 !new VehicleLayoutData().HasLattice
+                 && !JsonUtility.FromJson<VehicleLayoutData>("{}").HasLattice,
+                 "THE runtime gate: every pre-frame design must read false here");
+            Bool("a lattice is a lattice", v4.HasLattice, "");
+            Bool("absent fidelity reads as the middle",
+                 JsonUtility.FromJson<VehicleLayoutData>("{}").latticeFidelity01 == 0.5f,
+                 "the slider starts centred, including on old files");
+            Bool("damage survives, and absent damage reads as neutral",
+                 v4b != null && v4b.latticeDamage01 == 0.8f
+                 && JsonUtility.FromJson<VehicleLayoutData>("{}").latticeDamage01 == 0.5f,
+                 "a pre-slider frame dents exactly as it did the day it was saved");
+            Bool("absent beam sentinels are the derive values",
+                 new LatticeBeam().a == -1 && new LatticeBeam().dampingRatio == -1f
+                 && new LatticeBeam().breakStrain == -1f && new LatticeBeam().spring == 0f, "");
+
             Line("");
         }
 
@@ -1310,6 +1364,372 @@ namespace AIHWSim.EditorTools
             Bool("a cloned stock design still has none", !stock.Clone().HasBodyLayout,
                  "Clone is a JSON round trip, which is where a null field would come back " +
                  "as a default-constructed one");
+            Line("");
+        }
+
+        // ---- 15. the crash frame: generation, binding, pick math ----------------------
+
+        /// <summary>A closed box as a triangle soup — the canonical generation
+        /// input: symmetric about x = 0, closed, and simple enough that every
+        /// count below can be reasoned about by hand.</summary>
+        private static void BoxSoup(Vector3 size, out Vector3[] verts, out int[] tris)
+        {
+            Vector3 h = size * 0.5f;
+            verts = new[]
+            {
+                new Vector3(-h.x, -h.y, -h.z), new Vector3(h.x, -h.y, -h.z),
+                new Vector3(h.x, h.y, -h.z), new Vector3(-h.x, h.y, -h.z),
+                new Vector3(-h.x, -h.y, h.z), new Vector3(h.x, -h.y, h.z),
+                new Vector3(h.x, h.y, h.z), new Vector3(-h.x, h.y, h.z),
+            };
+            tris = new[]
+            {
+                0, 2, 1, 0, 3, 2,   // back
+                4, 5, 6, 4, 6, 7,   // front
+                0, 1, 5, 0, 5, 4,   // bottom
+                3, 6, 2, 3, 7, 6,   // top
+                0, 4, 7, 0, 7, 3,   // left
+                1, 2, 6, 1, 6, 5,   // right
+            };
+        }
+
+        /// <summary>Mean distance-to-nearest-other-node over the nodes a filter
+        /// selects — the adaptivity probe. 0 when the filter matches nothing.</summary>
+        private static float MeanNearestNeighbour(LatticeNode[] nodes,
+                                                  System.Func<Vector3, bool> filter)
+        {
+            float sum = 0f;
+            int count = 0;
+            for (int i = 0; i < nodes.Length; i++)
+            {
+                if (!filter(nodes[i].localPos)) continue;
+                float best = float.MaxValue;
+                for (int j = 0; j < nodes.Length; j++)
+                {
+                    if (j == i) continue;
+                    best = Mathf.Min(best, (nodes[j].localPos - nodes[i].localPos).sqrMagnitude);
+                }
+                sum += Mathf.Sqrt(best);
+                count++;
+            }
+            return count > 0 ? sum / count : 0f;
+        }
+
+        private static void Lattice()
+        {
+            BoxSoup(new Vector3(0.40f, 0.12f, 0.20f), out Vector3[] bv, out int[] bt);
+            float h = LatticeBuilder.SpacingFor(0.5f, 0.40f);
+
+            // ---- determinism: the same soup at the same pitch, twice ----
+            Bool("generation succeeds on a box",
+                 LatticeBuilder.Generate(bv, bt, h, out var n1, out var b1)
+                 && n1.Length > 0 && b1.Length > 0, "");
+            LatticeBuilder.Generate(bv, bt, h, out var n2, out var b2);
+            bool same = n1.Length == n2.Length && b1.Length == b2.Length;
+            for (int i = 0; same && i < n1.Length; i++)
+                same = n1[i].localPos == n2[i].localPos && n1[i].mass == n2[i].mass;
+            for (int i = 0; same && i < b1.Length; i++)
+                same = b1[i].a == b2[i].a && b1[i].b == b2[i].b && b1[i].spring == b2[i].spring;
+            Bool("generation is deterministic", same,
+                 "LAN peers rebuild the frame from the design JSON and replay the same " +
+                 "hits into it — a hash-order lattice would dent differently per machine");
+
+            // ---- validity ----
+            bool valid = true, nan = false;
+            var pairSet = new System.Collections.Generic.HashSet<long>();
+            foreach (LatticeBeam beam in b1)
+            {
+                if (beam.a < 0 || beam.b < 0 || beam.a >= n1.Length || beam.b >= n1.Length
+                    || beam.a == beam.b) valid = false;
+                long key = ((long)Mathf.Min(beam.a, beam.b) << 32) | (uint)Mathf.Max(beam.a, beam.b);
+                if (!pairSet.Add(key)) valid = false;
+            }
+            foreach (LatticeNode node in n1)
+                if (float.IsNaN(node.localPos.x + node.localPos.y + node.localPos.z)
+                    || float.IsNaN(node.mass)) nan = true;
+            Bool("every beam is in range, distinct, unduplicated", valid, "");
+            Bool("no NaN anywhere", !nan, "");
+            Bool("resolved mass and spring are positive",
+                 n1[0].mass > 0f && b1[0].spring > 0f && b1[0].dampingRatio >= 0f
+                 && b1[0].breakStrain > 0f,
+                 "generation writes explicit values — the file is self-contained");
+
+            // ---- rest lengths: adaptive cells run pitch/4 (fine neighbours)
+            //      up to ~2·pitch (two coarse centroids diagonally) ----
+            float loLen = float.MaxValue, hiLen = 0f;
+            foreach (LatticeBeam beam in b1)
+            {
+                float len = LatticeBuilder.RestLength(n1, beam);
+                loLen = Mathf.Min(loLen, len);
+                hiLen = Mathf.Max(hiLen, len);
+            }
+            Bool("rest lengths stay in the cell geometry",
+                 loLen > 0f && hiLen < 2f * h,
+                 "anything longer is a beam between cells whose samples never touched");
+
+            // ---- the wrap is TIGHT: every node sits on the surface ----
+            // Nodes are sample centroids, so on a box each must lie within a
+            // fraction of the pitch of the box's own skin — the old grid-corner
+            // generator floated nodes up to 1.7·pitch off it.
+            Vector3 halfBox = new Vector3(0.20f, 0.06f, 0.10f);
+            float worstOff = 0f;
+            foreach (LatticeNode node in n1)
+            {
+                Vector3 p = node.localPos;
+                float dx = halfBox.x - Mathf.Abs(p.x);
+                float dy = halfBox.y - Mathf.Abs(p.y);
+                float dz = halfBox.z - Mathf.Abs(p.z);
+                float dist = (dx >= 0f && dy >= 0f && dz >= 0f)
+                    ? Mathf.Min(dx, Mathf.Min(dy, dz))
+                    : new Vector3(Mathf.Max(-dx, 0f), Mathf.Max(-dy, 0f),
+                                  Mathf.Max(-dz, 0f)).magnitude;
+                worstOff = Mathf.Max(worstOff, dist);
+            }
+            Check("every node hugs the surface", worstOff, 0f, 0.3f * h, "m",
+                  "the wrap is the point — a node floating off the body dents nothing");
+
+            // ---- and it is ADAPTIVE: corners get finer nodes than flat faces ----
+            float cornerNN = MeanNearestNeighbour(n1, p =>
+                Mathf.Abs(Mathf.Abs(p.x) - halfBox.x) < 0.01f
+                && Mathf.Abs(Mathf.Abs(p.y) - halfBox.y) < 0.01f);
+            float faceNN = MeanNearestNeighbour(n1, p =>
+                Mathf.Abs(p.x) < halfBox.x - h && Mathf.Abs(p.z) < halfBox.z - h
+                && Mathf.Abs(Mathf.Abs(p.y) - halfBox.y) < 1e-3f);
+            Bool("corners are meshed finer than flat panels",
+                 cornerNN > 0f && faceNN > 0f && cornerNN < faceNN,
+                 $"corner spacing {cornerNN * 1000f:0.0} mm vs face {faceNN * 1000f:0.0} mm — " +
+                 "large triangles for flat faces, small ones for curves and corners");
+
+            // ---- connectivity: one component ----
+            var adj = new System.Collections.Generic.List<int>[n1.Length];
+            for (int i = 0; i < n1.Length; i++) adj[i] = new System.Collections.Generic.List<int>();
+            foreach (LatticeBeam beam in b1) { adj[beam.a].Add(beam.b); adj[beam.b].Add(beam.a); }
+            var seen = new bool[n1.Length];
+            var queue = new System.Collections.Generic.Queue<int>();
+            queue.Enqueue(0); seen[0] = true; int reached = 1;
+            while (queue.Count > 0)
+                foreach (int nb in adj[queue.Dequeue()])
+                    if (!seen[nb]) { seen[nb] = true; reached++; queue.Enqueue(nb); }
+            Check("the frame is one connected piece", reached, n1.Length, 0f, "nodes",
+                  "an island has no load path to the rest of the car and falls off on frame one");
+
+            // ---- symmetry: a box centred on x = 0 gets a mirrored lattice.
+            //      Tolerance is 0.1 mm, not bit-exact: mirrored centroids sum
+            //      the same mirrored samples in a different accumulation order. ----
+            bool symmetric = true;
+            foreach (LatticeNode node in n1)
+            {
+                Vector3 mirror = new Vector3(-node.localPos.x, node.localPos.y, node.localPos.z);
+                bool found = false;
+                foreach (LatticeNode other in n1)
+                    if ((other.localPos - mirror).sqrMagnitude < 1e-8f) { found = true; break; }
+                if (!found) { symmetric = false; break; }
+            }
+            Bool("a symmetric body gets a symmetric frame", symmetric,
+                 "x = 0 is a cell-corner plane at every subdivision level — no mirror " +
+                 "bookkeeping");
+
+            // ---- fidelity: finer pitch, more of everything; the cap holds ----
+            Line("");
+            Line("fidelity  pitch      nodes  beams");
+            int prevNodes = 0, prevBeams = 0;
+            bool monotone = true;
+            foreach (float f in new[] { 0f, 0.5f, 1f })
+            {
+                float hf = LatticeBuilder.SpacingFor(f, 0.40f);
+                LatticeBuilder.Generate(bv, bt, hf, out var nf, out var bf);
+                Line($"{f,-8:0.0}  {hf * 1000f,5:0.0} mm  {nf.Length,5}  {bf.Length,5}");
+                if (nf.Length <= prevNodes || bf.Length <= prevBeams) monotone = false;
+                prevNodes = nf.Length; prevBeams = bf.Length;
+            }
+            Bool("counts grow with fidelity", monotone, "the slider has to mean something");
+            Bool("the beam cap refuses rather than overshoots",
+                 !LatticeBuilder.Generate(bv, bt, 0.004f, out _, out var over) || over.Length <= LatticeBuilder.MaxBeams,
+                 "the runtime budget is enforced at generation, not discovered on the track");
+
+            // ---- sanitation ----
+            var dirty = new[]
+            {
+                new LatticeBeam { a = 0, b = 1 },
+                new LatticeBeam { a = 1, b = 0 },     // duplicate (reversed)
+                new LatticeBeam { a = 2, b = 2 },     // degenerate
+                new LatticeBeam { a = -1, b = 3 },    // out of range
+                new LatticeBeam { a = 0, b = 999 },   // out of range
+                null,                                  // hand-edited JSON hole
+                new LatticeBeam { a = 1, b = 2 },
+            };
+            int dropped = LatticeBuilder.Sanitize(4, ref dirty);
+            Check("sanitize drops exactly the wrong ones", dropped, 5f, 0f, "beams", "");
+            Check("and keeps the right ones", dirty.Length, 2f, 0f, "beams",
+                  "a hand-edited file is a document, not an attack");
+
+            // ---- sentinel resolution ----
+            Bool("mass 0 derives an equal share",
+                 Mathf.Abs(LatticeBuilder.ResolveMass(0f, 100)
+                           - LatticeBuilder.ShellMassKg / 100f) < 1e-7f, "");
+            Bool("a stored mass wins", LatticeBuilder.ResolveMass(0.011f, 100) == 0.011f, "");
+            Bool("zeta 0 is a value, -1 is the sentinel",
+                 LatticeBuilder.ResolveDampingRatio(0f) == 0f
+                 && LatticeBuilder.ResolveDampingRatio(-1f) == LatticeBuilder.DefaultDampingRatio,
+                 "0 is a legal undamped beam — the same reason FeatureTint uses -1");
+            float defK = LatticeBuilder.DefaultSpring(0.006f, 4f);
+            float wDefault = Mathf.Sqrt(4f * defK / 0.006f);
+            Check("the default spring pins the node frequency",
+                  wDefault / (2f * Mathf.PI), LatticeBuilder.TargetNodeHz, 0.1f, "Hz",
+                  "ω² = n_avg·k/m — the stability contract with the 400 Hz driving step");
+
+            // ---- vertex binding ----
+            var binds = LatticeBuilder.BindVertices(n1, bv, h);
+            Check("every box vertex is bound", binds.Length, bv.Length, 0f, "vertices",
+                  "the box IS the surface the lattice wrapped — nothing is out of reach");
+            bool weights = true, inReach = true;
+            foreach (LatticeBuilder.VertexBinding vb in binds)
+            {
+                float sum = vb.w0 + vb.w1 + vb.w2;
+                if (Mathf.Abs(sum - 1f) > 1e-4f) weights = false;
+                float d0 = (n1[vb.n0].localPos - bv[vb.vertex]).magnitude;
+                if (d0 > LatticeBuilder.BindReachPitches * h + 1e-4f) inReach = false;
+            }
+            Bool("binding weights sum to one", weights, "");
+            Bool("the nearest bound node is within reach", inReach, "");
+
+            // ---- channel support ----
+            int[][] support = LatticeBuilder.ChannelSupport(b1, binds, new[] { bt });
+            Bool("a channel covering the whole box is supported by beams",
+                 support.Length == 1 && support[0].Length > 0
+                 && support[0].Length <= b1.Length, "");
+
+            // ---- pick math ----
+            // Aim at the extremal corner: along an inward diagonal it is the
+            // FIRST node on the ray, so "nearest along the ray wins" is exactly
+            // what puts it under the cursor. (A node in the middle of a column
+            // is deliberately un-pickable through the one above it.)
+            int cornerIdx = 0;
+            float best = float.MinValue;
+            for (int i = 0; i < n1.Length; i++)
+            {
+                float sum = n1[i].localPos.x + n1[i].localPos.y + n1[i].localPos.z;
+                if (sum > best) { best = sum; cornerIdx = i; }
+            }
+            LatticeNode target = n1[cornerIdx];
+            var mtx = Matrix4x4.identity;
+            Vector3 inward = new Vector3(-1f, -1f, -1f).normalized;
+            var hitRay = new Ray(target.localPos - inward * 0.5f, inward);
+            Bool("a ray through a node picks it",
+                 LatticeBuilder.PickNode(hitRay, n1, mtx, 0.004f, out int picked)
+                 && picked == cornerIdx,
+                 "nearest along the ray wins, so the front node hides the back one");
+            var missRay = new Ray(new Vector3(9f, 9f, 9f), Vector3.up);
+            Bool("a ray past everything picks nothing",
+                 !LatticeBuilder.PickNode(missRay, n1, mtx, 0.004f, out _), "");
+
+            LatticeBeam beam0 = b1[0];
+            Vector3 mid = (n1[beam0.a].localPos + n1[beam0.b].localPos) * 0.5f;
+            var beamRay = new Ray(mid + new Vector3(0f, 0.5f, 0f), Vector3.down);
+            Bool("a ray through a beam's middle picks a beam",
+                 LatticeBuilder.PickBeam(beamRay, n1, b1, mtx, 0.003f, out _),
+                 "the middle of a beam is the one place no node sphere covers");
+            Bool("a beam ray past everything picks nothing",
+                 !LatticeBuilder.PickBeam(missRay, n1, b1, mtx, 0.003f, out _), "");
+
+            // ---- the damage mapping: one site, log, neutral at the middle ----
+            Bool("damage 0.5 is exactly 1x",
+                 Mathf.Abs(LatticeBuilder.DamageScale(0.5f) - 1f) < 1e-5f, "");
+            Bool("the damage slider spans 0.1x to 10x",
+                 Mathf.Abs(LatticeBuilder.DamageScale(0f) - 0.1f) < 1e-5f
+                 && Mathf.Abs(LatticeBuilder.DamageScale(1f) - 10f) < 1e-4f,
+                 "log, so half and double damage sit the same distance from centre");
+
+            // ---- a real shell, for scale ----
+            var eligible = BodyMeshSource.Eligible();
+            if (eligible.Count > 0)
+            {
+                BodyDef def = eligible[0];
+                Mesh m = BodyMeshSource.Build(def, out Vector3 scale);
+                Vector3[] mv = m.vertices;
+                float zMin = float.MaxValue, zMax = float.MinValue;
+                for (int i = 0; i < mv.Length; i++)
+                {
+                    mv[i] = Vector3.Scale(mv[i], scale);
+                    zMin = Mathf.Min(zMin, mv[i].z);
+                    zMax = Mathf.Max(zMax, mv[i].z);
+                }
+                float hs = LatticeBuilder.SpacingFor(0.5f, zMax - zMin);
+                bool ok = LatticeBuilder.Generate(mv, m.triangles, hs, out var sn, out var sb);
+                Bool("a real shell generates a frame", ok && sn.Length > 0, "");
+                if (ok)
+                {
+                    Line($"shell '{def.id}'  pitch {hs * 1000f:0.0} mm  " +
+                         $"{sn.Length} nodes  {sb.Length} beams");
+                    var shellBinds = LatticeBuilder.BindVertices(sn, mv, hs);
+                    Check("every shell vertex is bound", shellBinds.Length, mv.Length, 0f,
+                          "vertices", "the frame wraps the very surface it was generated from");
+                }
+            }
+
+            // ---- the editor component, end to end: generate → save → load ----
+            var rigGo = new GameObject("bdef_latrig") { hideFlags = HideFlags.HideAndDontSave };
+            try
+            {
+                var vehicle = rigGo.AddComponent<StudioVehicle>();
+                BodyDef def2 = eligible.Count > 0 ? eligible[0] : null;
+                if (def2 == null || !vehicle.SetBody(def2))
+                {
+                    Fail("the lattice rig would not build");
+                }
+                else
+                {
+                    vehicle.Body.Collision.Rebake(vehicle.Body);
+                    StudioLattice lat = vehicle.Lattice;
+                    Bool("the studio generates a frame", lat.Generate(vehicle.Body, 0.5f)
+                                                         && lat.HasLattice, "");
+
+                    // an edit of every kind, then the save/load round trip
+                    int added = lat.AddNode(new Vector3(0f, 0.1f, 0f));
+                    lat.AddBeam(added, 0, out _);
+                    lat.Nodes[0].mass = 0.009f;
+                    int nodesBefore = lat.Nodes.Count, beamsBefore = lat.Beams.Count;
+
+                    VehicleLayoutData doc = vehicle.Capture();
+                    var reread = JsonUtility.FromJson<VehicleLayoutData>(JsonUtility.ToJson(doc));
+                    lat.Clear();
+                    vehicle.Apply(reread);
+
+                    Check("nodes survive the studio round trip", lat.Nodes.Count, nodesBefore,
+                          0f, "", "");
+                    Check("beams survive the studio round trip", lat.Beams.Count, beamsBefore,
+                          0f, "", "");
+                    Bool("the hand edits survive too",
+                         lat.Nodes.Count > added
+                         && lat.Nodes[added].localPos == new Vector3(0f, 0.1f, 0f)
+                         && lat.Nodes[0].mass == 0.009f,
+                         "a save is the document, not the generator's output");
+
+                    // The gizmo drags a node through a PropPlacement wrapper —
+                    // the same spec type GizmoDrag() benches — and the commit
+                    // path is the wrapper's one job.
+                    PropPlacement wrap = lat.NodeDragSpec(1);
+                    Vector3 was = lat.Nodes[1].localPos;
+                    wrap.localPos = was + new Vector3(0.01f, 0.02f, -0.005f);
+                    lat.CommitDragSpec();
+                    Bool("a node drag lands in the document",
+                         lat.Nodes[1].localPos == was + new Vector3(0.01f, 0.02f, -0.005f),
+                         "the wrapper exists so the benched gizmo needs zero changes; " +
+                         "this is the half the wrapper adds");
+
+                    // RemoveNode must remap, not just delete.
+                    int last = lat.Nodes.Count - 1;
+                    Vector3 lastPos = lat.Nodes[last].localPos;
+                    lat.RemoveNode(0);
+                    bool remapOk = lat.Nodes[last - 1].localPos == lastPos;
+                    foreach (LatticeBeam beam in lat.Beams)
+                        if (beam.a < 0 || beam.b < 0 || beam.a >= lat.Nodes.Count
+                            || beam.b >= lat.Nodes.Count) remapOk = false;
+                    Bool("removing a node remaps every beam", remapOk,
+                         "an index one past the end is a crash the first time it is drawn");
+                }
+            }
+            finally { Object.DestroyImmediate(rigGo); }
             Line("");
         }
 

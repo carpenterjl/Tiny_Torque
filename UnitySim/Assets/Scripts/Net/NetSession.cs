@@ -116,7 +116,13 @@ namespace AIHWSim.Net
         // Bumped HERE and not at K2, where the fields were added: until presets
         // and progression started AUTHORING keys, nothing could put a key on the
         // wire that the int beside it did not already say.
-        public const int ProtocolVersion = 16;
+        // v17 is crash-frame dent sync: a new named message (LatticeHitMsg)
+        // that every peer replays into its own deterministic solver. The design
+        // JSON already carried the lattice; the bump exists because a v16 peer
+        // would never register the handler, so an owner would crumple on its own
+        // screen and stay pristine on everyone else's — the mixed-cosmetics
+        // failure the equality check exists for, again.
+        public const int ProtocolVersion = 17;
 
         /// <summary>Raised from 4 for 3v3 soccer. The slot goes on the wire as a
         /// byte and every MaxPlayers-sized array simply grows, so the only cost
@@ -202,6 +208,10 @@ namespace AIHWSim.Net
         public event Action<int, OwnStateMsg> OwnStateReceived;
         /// <summary>Client: the host handed us an arcade effect to apply to our own car.</summary>
         public event Action<ArcFxMsg> ArcFxReceived;
+        /// <summary>Both: a crash-frame hit to replay on that slot's car. The
+        /// scene layer routes it — and skips its own slot, which already applied
+        /// the hit at the moment of contact.</summary>
+        public event Action<LatticeHitMsg> LatticeHitReceived;
 
         private NetworkManager _nm;
         private UnityTransport _utp;
@@ -453,6 +463,7 @@ namespace AIHWSim.Net
             cm.RegisterNamedMessageHandler(NetMsg.SessionState, OnSessionState);
             cm.RegisterNamedMessageHandler(NetMsg.ArcSync, OnArcSync);
             cm.RegisterNamedMessageHandler(NetMsg.ArcEvt, OnArcEvt);
+            cm.RegisterNamedMessageHandler(NetMsg.LatticeHit, OnLatticeHit);
         }
 
         // ---- arcade sync -------------------------------------------------------
@@ -807,6 +818,55 @@ namespace AIHWSim.Net
             if (IsHost) return;
             var m = ReadJson<ArcFxMsg>(reader);
             if (m != null) ArcFxReceived?.Invoke(m);
+        }
+
+        // ---- crash-frame dents (protocol 17) --------------------------------------
+
+        /// <summary>Token bucket per car: burst 10, refill 5/s. A crash burst
+        /// keeps its first hits — the ones that shape the dent — and a grinding
+        /// wall contact cannot become a message storm. Applied at BOTH ends: the
+        /// sender throttles itself, the host throttles what it relays.</summary>
+        private readonly System.Collections.Generic.Dictionary<int, (float tokens, float at)>
+            _latBuckets = new System.Collections.Generic.Dictionary<int, (float, float)>();
+
+        private bool LatticeBucketAllow(int slot)
+        {
+            float now = Time.unscaledTime;
+            (float tokens, float at) b = _latBuckets.TryGetValue(slot, out var v)
+                ? v : (10f, now);
+            b.tokens = Mathf.Min(10f, b.tokens + (now - b.at) * 5f);
+            b.at = now;
+            if (b.tokens < 1f) { _latBuckets[slot] = b; return false; }
+            b.tokens -= 1f;
+            _latBuckets[slot] = b;
+            return true;
+        }
+
+        /// <summary>The owner of a car reports its own hit. Host broadcasts;
+        /// a client sends to the host, which relays to everyone.</summary>
+        public void SendLatticeHit(LatticeHitMsg msg)
+        {
+            if (_nm == null || !_nm.IsListening || msg == null) return;
+            if (!LatticeBucketAllow(msg.slot)) return;
+            if (IsHost) BroadcastJson(NetMsg.LatticeHit, msg);
+            else SendJson(NetMsg.LatticeHit, NetworkManager.ServerClientId, msg);
+        }
+
+        private void OnLatticeHit(ulong sender, FastBufferReader reader)
+        {
+            var m = ReadJson<LatticeHitMsg>(reader);
+            if (m == null) return;
+            if (IsHost)
+            {
+                // Owner-authoritative: the message must come from the machine
+                // that owns the slot it claims to dent.
+                NetPlayer p = Roster.Find(r => r.clientId == sender);
+                if (p == null || p.slot != m.slot) return;
+                if (!LatticeBucketAllow(m.slot)) return;
+                LatticeHitReceived?.Invoke(m);              // the host's follower dents
+                BroadcastJson(NetMsg.LatticeHit, m);        // every ghost dents
+            }
+            else LatticeHitReceived?.Invoke(m);
         }
 
         private void Update()

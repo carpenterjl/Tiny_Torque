@@ -7,8 +7,8 @@ using UnityEngine;
 
 namespace AIHWSim.BodyEd
 {
-    /// <summary>The studio's four jobs, one per tab.</summary>
-    public enum StudioTab { Body, Parts, Paint, Drive }
+    /// <summary>The studio's five jobs, one per tab.</summary>
+    public enum StudioTab { Body, Parts, Frame, Paint, Drive }
 
     /// <summary>
     /// Vehicle Studio's panel and its pointer handling.
@@ -55,6 +55,16 @@ namespace AIHWSim.BodyEd
         private bool _paintBody = true;
         private FeatureTint _edit = new FeatureTint();
 
+        // ---- crash frame ------------------------------------------------------------
+        private enum LatticeSel { None, Node, Beam }
+        private LatticeSel _latSel = LatticeSel.None;
+        private int _latIndex = -1;
+        private float _fidelity01 = 0.5f;
+        private bool _linkArmed;          // L pressed: the next node click links
+        private bool _generateArmed;      // Generate pressed once: the next press does it
+        private bool _whackArmed;         // Crash test armed: body clicks are hits
+        private StudioTab _lastTab = StudioTab.Body;
+
         // ---- Layout-pass snapshots (see the class note) -----------------------------
         private StudioTab _tabDraw;
         private BodyTool _bodyToolDraw;
@@ -67,6 +77,12 @@ namespace AIHWSim.BodyEd
         private int _channelCountDraw;
         private bool _hasSelectionDraw;
         private bool _paintBodyDraw = true;
+        private bool _hasLatticeDraw;
+        private int _latNodeCountDraw, _latBeamCountDraw;
+        private LatticeSel _latSelDraw = LatticeSel.None;
+        private int _latIndexDraw = -1;
+        private bool _latticeStaleDraw, _generateArmedDraw, _linkArmedDraw;
+        private bool _whackArmedDraw, _previewActiveDraw;
 
         // ---- deferred intents, executed from Update ---------------------------------
         private int _pendingBody = -1;
@@ -74,6 +90,9 @@ namespace AIHWSim.BodyEd
         private string _pendingAdd;
         private bool _pendingDelete, _pendingDuplicate, _pendingMirror, _pendingDrive;
         private bool _pendingClearParts;
+        private bool _pendingGenerate, _pendingClearLattice, _pendingAddNode, _pendingLatDelete;
+        private bool _pendingRepair;
+        private int _pendingLink = -1;
 
         // ---- pointer ----------------------------------------------------------------
         private bool _sculpting;
@@ -92,6 +111,7 @@ namespace AIHWSim.BodyEd
         private StudioVehicle Vehicle => bootstrap != null ? bootstrap.Vehicle : null;
         private DeformableBody Body => bootstrap != null ? bootstrap.Body : null;
         private TransformGizmo Gizmo => bootstrap != null ? bootstrap.Gizmo : null;
+        private StudioLattice Lattice => Vehicle != null ? Vehicle.Lattice : null;
 
         // ---- brush size ---------------------------------------------------------------
         //
@@ -119,12 +139,20 @@ namespace AIHWSim.BodyEd
 
         // ==================== input ====================
 
+        private void Start()
+        {
+            // A layout consumed by the bootstrap in Awake may carry a fidelity;
+            // the slider should show it rather than the default.
+            if (Lattice != null) _fidelity01 = Lattice.Fidelity01;
+        }
+
         private void Update()
         {
             if (bootstrap == null) return;
 
             StudioIcons.Pump();
             RunIntents();
+            HandleTabChange();
 
             bool over = PointerOverUI();
             Camera cam = bootstrap.Cam;
@@ -140,6 +168,7 @@ namespace AIHWSim.BodyEd
             }
 
             UpdateSelectionKeys();
+            UpdateLatticeKeys();
             UpdateGizmo(ray, over);
 
             if (bootstrap.Orbit != null)
@@ -169,10 +198,12 @@ namespace AIHWSim.BodyEd
             if (_pendingLoad != null)
             {
                 Deselect();
+                DeselectLattice();
                 bootstrap.LoadLayout(_pendingLoad);
                 _status = $"Loaded '{_pendingLoad}'.";
                 _pendingLoad = null;
                 _sculpting = false;
+                if (Lattice != null) _fidelity01 = Lattice.Fidelity01;
             }
 
             if (_pendingAdd != null && Vehicle != null)
@@ -211,11 +242,105 @@ namespace AIHWSim.BodyEd
             }
             _pendingClearParts = false;
 
+            RunLatticeIntents();
+
             if (_pendingDrive)
             {
                 _pendingDrive = false;
                 if (Vehicle != null) StudioSession.TestDrive(Vehicle.Capture());
             }
+        }
+
+        private void RunLatticeIntents()
+        {
+            StudioLattice lat = Lattice;
+            if (lat == null)
+            {
+                _pendingGenerate = _pendingClearLattice = _pendingAddNode = _pendingLatDelete = false;
+                _pendingLink = -1;
+                return;
+            }
+
+            if (_pendingGenerate)
+            {
+                _pendingGenerate = false;
+                DeselectLattice();   // every index is about to die
+                if (lat.Generate(Body, _fidelity01))
+                    _status = $"Frame: {lat.Nodes.Count} nodes, {lat.Beams.Count} beams.";
+                else
+                    _status = "Too fine for this body — that frame would blow the beam " +
+                              "budget the driving step can carry.";
+            }
+
+            if (_pendingClearLattice)
+            {
+                _pendingClearLattice = false;
+                DeselectLattice();
+                lat.Clear();
+                _status = "Frame removed.";
+            }
+
+            if (_pendingAddNode)
+            {
+                _pendingAddNode = false;
+                int idx = lat.AddNode(DropPoint());
+                SelectLatticeNode(idx);
+                _status = "Node added — link it or it carries nothing.";
+            }
+
+            if (_pendingLink >= 0)
+            {
+                int target = _pendingLink;
+                _pendingLink = -1;
+                _linkArmed = false;
+                if (_latSel == LatticeSel.Node && lat.AddBeam(_latIndex, target, out int bi))
+                {
+                    SelectLatticeBeam(bi);
+                    _status = "Linked.";
+                }
+                else _status = "Those two are already linked.";
+            }
+
+            if (_pendingLatDelete)
+            {
+                _pendingLatDelete = false;
+                if (_latSel == LatticeSel.Node) lat.RemoveNode(_latIndex);
+                else if (_latSel == LatticeSel.Beam) lat.RemoveBeam(_latIndex);
+                DeselectLattice();
+            }
+
+            if (_pendingRepair)
+            {
+                _pendingRepair = false;
+                lat.RepairPreview();
+                _status = "Good as new.";
+            }
+        }
+
+        /// <summary>
+        /// Two tabs attach the gizmo to two different documents, so a tab change
+        /// has to re-point it — a node spec left attached on the PARTS tab would
+        /// let a part-click drag a node. Link/generate arming dies too: an armed
+        /// destructive press must not survive a context change.
+        /// </summary>
+        private void HandleTabChange()
+        {
+            if (_tab == _lastTab) return;
+            _lastTab = _tab;
+            _linkArmed = false;
+            _generateArmed = false;
+            _whackArmed = false;
+            Lattice?.SetVisible(_tab == StudioTab.Frame);
+
+            TransformGizmo giz = Gizmo;
+            if (giz == null || Vehicle == null) return;
+            if (_tab == StudioTab.Parts && _selected != null)
+                giz.Attach(_selected.Spec, Vehicle.transform);
+            else if (_tab == StudioTab.Frame && _latSel == LatticeSel.Node
+                     && Lattice != null && _latIndex >= 0 && _latIndex < Lattice.Nodes.Count)
+                AttachNodeGizmo(_latIndex);
+            else
+                giz.Detach();
         }
 
         /// <summary>
@@ -281,15 +406,92 @@ namespace AIHWSim.BodyEd
                 return;
             }
 
-            if (over || SculptActive || _tab != StudioTab.Parts) return;
+            if (over || SculptActive) return;
+            if (_tab != StudioTab.Parts && _tab != StudioTab.Frame) return;
             if (!InputReader.LeftMousePressed()) return;
 
             if (giz.TryBeginDrag(ray)) return;
+
+            if (_tab == StudioTab.Frame) { PickLattice(ray); return; }
 
             PlacedProp hit = Vehicle.Pick(ray);
             if (hit != null) Select(hit);
             else Deselect();
         }
+
+        /// <summary>The FRAME tab's click: nodes beat beams (a beam's endpoints
+        /// are always under a node), and an armed link consumes the node click
+        /// instead of selecting it.</summary>
+        private void PickLattice(Ray ray)
+        {
+            StudioLattice lat = Lattice;
+            if (lat == null) return;
+
+            // An armed crash test consumes every body click as a hit — whack
+            // around the car, watch it dent, then Escape out.
+            if (_whackArmed)
+            {
+                if (Vehicle.TrySurfacePoint(ray, out Vector3 local)
+                    && lat.PreviewHit(local, Body))
+                    _status = "Whack. Escape stops the crash test.";
+                return;
+            }
+
+            if (lat.PickNode(ray, out int node))
+            {
+                if (_linkArmed && _latSel == LatticeSel.Node && node != _latIndex)
+                    _pendingLink = node;
+                else
+                    SelectLatticeNode(node);
+                return;
+            }
+            if (lat.PickBeam(ray, out int beam)) { SelectLatticeBeam(beam); return; }
+            DeselectLattice();
+        }
+
+        private void SelectLatticeNode(int index)
+        {
+            _latSel = LatticeSel.Node;
+            _latIndex = index;
+            _linkArmed = false;
+            Lattice?.SetHighlight(index, -1);
+            AttachNodeGizmo(index);
+        }
+
+        private void SelectLatticeBeam(int index)
+        {
+            _latSel = LatticeSel.Beam;
+            _latIndex = index;
+            _linkArmed = false;
+            Lattice?.SetHighlight(-1, index);
+            Gizmo?.Detach();
+        }
+
+        private void DeselectLattice()
+        {
+            _latSel = LatticeSel.None;
+            _latIndex = -1;
+            _linkArmed = false;
+            Lattice?.SetHighlight(-1, -1);
+            if (_tab == StudioTab.Frame) Gizmo?.Detach();
+        }
+
+        private void AttachNodeGizmo(int index)
+        {
+            TransformGizmo giz = Gizmo;
+            StudioLattice lat = Lattice;
+            if (giz == null || lat == null || Vehicle == null) return;
+            PropPlacement spec = lat.NodeDragSpec(index);
+            if (spec == null) return;
+            giz.Mode = GizmoMode.Move;   // a point has nothing to turn or stretch
+            // Same unsubscribe-first rule Select() documents.
+            giz.Changed -= OnNodeGizmoChanged;
+            giz.Changed += OnNodeGizmoChanged;
+            giz.Changed -= OnGizmoChanged;
+            giz.Attach(spec, Vehicle.transform);
+        }
+
+        private void OnNodeGizmoChanged() => Lattice?.CommitDragSpec();
 
         private void UpdateSelectionKeys()
         {
@@ -313,6 +515,33 @@ namespace AIHWSim.BodyEd
             if (KeyTable.Pressed(StudioHints.Delete)) _pendingDelete = true;
         }
 
+        private void UpdateLatticeKeys()
+        {
+            if (_tab != StudioTab.Frame) return;
+            TransformGizmo giz = Gizmo;
+            if (giz != null)
+            {
+                giz.Mode = GizmoMode.Move;   // held, not just set on attach
+                if (KeyTable.Pressed(StudioHints.ToggleSnap)) giz.Snapping = !giz.Snapping;
+            }
+
+            if (KeyTable.Pressed(StudioHints.AddNode)) _pendingAddNode = true;
+            if (KeyTable.Pressed(StudioHints.Link) && _latSel == LatticeSel.Node)
+            {
+                _linkArmed = !_linkArmed;
+                _status = _linkArmed ? "Link armed — click the node to connect to." : "";
+            }
+            if (KeyTable.Pressed(StudioHints.Delete) && _latSel != LatticeSel.None)
+                _pendingLatDelete = true;
+            if (KeyTable.Pressed(StudioHints.Cancel) && !(giz != null && giz.Dragging))
+            {
+                if (_whackArmed) { _whackArmed = false; _status = ""; }
+                else if (_generateArmed) { _generateArmed = false; _status = ""; }
+                else if (_linkArmed) { _linkArmed = false; _status = ""; }
+                else DeselectLattice();
+            }
+        }
+
         private void Select(PlacedProp prop)
         {
             if (_selected == prop) return;
@@ -332,8 +561,11 @@ namespace AIHWSim.BodyEd
             if (giz == null || Vehicle == null) return;
             // Unsubscribe first: Select runs on every click, and += without −=
             // would stack one callback per selection until a single drag re-posed
-            // the part a hundred times a frame.
+            // the part a hundred times a frame. The NODE handler comes off too —
+            // left subscribed, a part drag would write its motion into whatever
+            // node the frame tab last held.
             giz.Changed -= OnGizmoChanged;
+            giz.Changed -= OnNodeGizmoChanged;
             giz.Changed += OnGizmoChanged;
             giz.Attach(_selected.Spec, Vehicle.transform);
         }
@@ -393,6 +625,23 @@ namespace AIHWSim.BodyEd
             _channelIdx = _channelCountDraw > 0
                 ? Mathf.Clamp(_channelIdx, 0, _channelCountDraw - 1) : 0;
 
+            StudioLattice lat = Lattice;
+            _hasLatticeDraw = lat != null && lat.HasLattice;
+            _latNodeCountDraw = lat != null ? lat.Nodes.Count : 0;
+            _latBeamCountDraw = lat != null ? lat.Beams.Count : 0;
+            _latticeStaleDraw = lat != null && lat.Stale;
+            _generateArmedDraw = _generateArmed;
+            _linkArmedDraw = _linkArmed;
+            _whackArmedDraw = _whackArmed;
+            _previewActiveDraw = lat != null && lat.PreviewActive;
+            // A selection whose index died (delete, regenerate) is dropped HERE,
+            // so the draw pass never sees an inspector for a thing that is gone.
+            int latCount = _latSel == LatticeSel.Node ? _latNodeCountDraw : _latBeamCountDraw;
+            if (_latSel != LatticeSel.None && (_latIndex < 0 || _latIndex >= latCount))
+                DeselectLattice();
+            _latSelDraw = _latSel;
+            _latIndexDraw = _latIndex;
+
             if (_filesStale) { _files = BodyLayoutLibrary.List(); _filesStale = false; }
             _fileCountDraw = _files.Count;
         }
@@ -413,6 +662,7 @@ namespace AIHWSim.BodyEd
             {
                 case StudioTab.Body: DrawBodyTab(); break;
                 case StudioTab.Parts: DrawPartsTab(); break;
+                case StudioTab.Frame: DrawFrameTab(); break;
                 case StudioTab.Paint: DrawPaintTab(); break;
                 default: DrawDriveTab(); break;
             }
@@ -423,7 +673,7 @@ namespace AIHWSim.BodyEd
             GUILayout.EndArea();
         }
 
-        private static readonly string[] TabNames = { "BODY", "PARTS", "PAINT", "DRIVE" };
+        private static readonly string[] TabNames = { "BODY", "PARTS", "FRAME", "PAINT", "DRIVE" };
 
         private void DrawTabs()
         {
@@ -606,6 +856,165 @@ namespace AIHWSim.BodyEd
             }
             if (MenuNav.Button("Home")) SendHome(spec);
             GUILayout.EndHorizontal();
+        }
+
+        // ---- FRAME --------------------------------------------------------------------
+
+        /// <summary>Log slider position → multiplier 0.1×..10× of a default.
+        /// Log rather than linear because "half as stiff" and "twice as stiff"
+        /// should be the same distance from the middle.</summary>
+        private static float LogFactor(float t01) => Mathf.Pow(10f, 2f * t01 - 1f);
+
+        private static float LogT(float value, float reference) =>
+            Mathf.Clamp01((Mathf.Log10(Mathf.Max(value / Mathf.Max(reference, 1e-9f), 1e-4f)) + 1f) * 0.5f);
+
+        private void DrawFrameTab()
+        {
+            GUILayout.Label("Crash frame", StudioSkin.Header);
+            GUILayout.Label(_hasLatticeDraw
+                                ? $"{_latNodeCountDraw} nodes · {_latBeamCountDraw} beams"
+                                : "No frame yet — Generate wraps the body in one.",
+                            StudioSkin.Sub);
+            if (_latticeStaleDraw)
+                GUILayout.Label("Body changed since this frame was made — Generate " +
+                                "refits it (manual edits are lost).", StudioSkin.Danger);
+
+            float len = Body != null ? Body.BodyLengthM : 0.42f;
+            float spacingMm = LatticeBuilder.SpacingFor(_fidelity01, len) * 1000f;
+            MenuNav.Slider01($"Detail {spacingMm:0} mm grid", ref _fidelity01);
+
+            GUILayout.BeginHorizontal();
+            string genLabel = _generateArmedDraw ? "Really generate?"
+                            : _hasLatticeDraw ? "Regenerate" : "Generate";
+            if (MenuNav.Button(genLabel, GUILayout.Height(34f)))
+            {
+                // Two presses when a frame (and possibly hand edits) would be
+                // destroyed; one when there is nothing to lose. Armed state dies
+                // on any other action — see HandleTabChange.
+                if (_generateArmed || !_hasLatticeDraw)
+                {
+                    _pendingGenerate = true;
+                    _generateArmed = false;
+                }
+                else
+                {
+                    _generateArmed = true;
+                    _status = "This rebuilds the frame and discards manual edits — press again.";
+                }
+            }
+            if (_hasLatticeDraw && MenuNav.Button("Remove", GUILayout.Width(80f)))
+                _pendingClearLattice = true;
+            GUILayout.EndHorizontal();
+
+            TransformGizmo giz = Gizmo;
+            if (giz != null)
+            {
+                bool snap = MenuNav.Toggle(giz.Snapping, giz.Snapping ? " Snap ON" : " Snap off");
+                giz.Snapping = snap;
+            }
+
+            // Damage feel, tuned live: the slider is the SAME number the
+            // driving path scales hits by, and the crash test whacks the body
+            // through the same solver — what dents here dents on track.
+            if (_hasLatticeDraw)
+            {
+                StudioLattice lat = Lattice;
+                float dmg = lat != null ? lat.Damage01 : 0.5f;
+                if (MenuNav.Slider01(
+                        $"Damage {LatticeBuilder.DamageScale(dmg):0.0}×", ref dmg)
+                    && lat != null)
+                    lat.Damage01 = dmg;
+
+                GUILayout.BeginHorizontal();
+                if (MenuNav.Button(_whackArmedDraw ? "Whacking — click the body"
+                                                   : "Crash test", GUILayout.Height(30f)))
+                {
+                    _whackArmed = !_whackArmed;
+                    _linkArmed = false;
+                    _status = _whackArmed ? "Click the body to whack it." : "";
+                }
+                if (_previewActiveDraw && MenuNav.Button("Repair", GUILayout.Width(80f)))
+                    _pendingRepair = true;
+                GUILayout.EndHorizontal();
+            }
+
+            GUILayout.Space(6f);
+            if (_linkArmedDraw)
+                GUILayout.Label("Link armed — click the node to connect to.", StudioSkin.Danger);
+            DrawLatticeInspector();
+        }
+
+        private void DrawLatticeInspector()
+        {
+            StudioLattice lat = Lattice;
+            if (lat == null) return;
+
+            switch (_latSelDraw)
+            {
+                case LatticeSel.Node when _latIndexDraw >= 0 && _latIndexDraw < lat.Nodes.Count:
+                    DrawNodeInspector(lat, _latIndexDraw);
+                    break;
+                case LatticeSel.Beam when _latIndexDraw >= 0 && _latIndexDraw < lat.Beams.Count:
+                    DrawBeamInspector(lat, _latIndexDraw);
+                    break;
+                default:
+                    GUILayout.Label("Click a node or beam to edit it.", StudioSkin.Sub);
+                    break;
+            }
+        }
+
+        private void DrawNodeInspector(StudioLattice lat, int index)
+        {
+            LatticeNode node = lat.Nodes[index];
+            GUILayout.Label($"Node {index}", StudioSkin.Header);
+            Vector3 p = node.localPos;
+            GUILayout.Label($"x {p.x * 1000f:0} · y {p.y * 1000f:0} · z {p.z * 1000f:0} mm",
+                            StudioSkin.Sub);
+
+            // The slider spans 0.1×..10× of the derived default, and writes the
+            // RESOLVED value — the saved file is self-contained either way.
+            float def = LatticeBuilder.ResolveMass(0f, lat.Nodes.Count);
+            float mass = LatticeBuilder.ResolveMass(node.mass, lat.Nodes.Count);
+            float t = LogT(mass, def);
+            if (MenuNav.Slider01($"Mass {mass * 1000f:0.0} g", ref t))
+                node.mass = def * LogFactor(t);
+
+            GUILayout.BeginHorizontal();
+            if (MenuNav.Button(_linkArmedDraw ? "Pick target…" : "Link"))
+            {
+                _linkArmed = !_linkArmed;
+                _status = _linkArmed ? "Link armed — click the node to connect to." : "";
+            }
+            if (MenuNav.Button("Remove")) _pendingLatDelete = true;
+            GUILayout.EndHorizontal();
+        }
+
+        private void DrawBeamInspector(StudioLattice lat, int index)
+        {
+            LatticeBeam beam = lat.Beams[index];
+            GUILayout.Label($"Beam {beam.a} — {beam.b}", StudioSkin.Header);
+            float rest = LatticeBuilder.RestLength(lat.Nodes, beam);
+            GUILayout.Label($"rest {rest * 1000f:0.0} mm", StudioSkin.Sub);
+
+            float defMass = LatticeBuilder.ResolveMass(0f, lat.Nodes.Count);
+            float nAvg = lat.Nodes.Count > 0 ? 2f * lat.Beams.Count / lat.Nodes.Count : 1f;
+            float defK = LatticeBuilder.DefaultSpring(defMass, nAvg);
+
+            float k = LatticeBuilder.ResolveSpring(beam.spring, defMass, nAvg);
+            float tk = LogT(k, defK);
+            if (MenuNav.Slider01($"Spring {k:0.0} N/m", ref tk))
+                beam.spring = defK * LogFactor(tk);
+
+            float z = LatticeBuilder.ResolveDampingRatio(beam.dampingRatio);
+            if (MenuNav.Slider01($"Damping ζ {z:0.00}", ref z))
+                beam.dampingRatio = z;
+
+            float bs = LatticeBuilder.ResolveBreakStrain(beam.breakStrain);
+            float tb = Mathf.InverseLerp(0.05f, 1f, bs);
+            if (MenuNav.Slider01($"Breaks at {bs * 100f:0} % stretch", ref tb))
+                beam.breakStrain = Mathf.Lerp(0.05f, 1f, tb);
+
+            if (MenuNav.Button("Remove")) _pendingLatDelete = true;
         }
 
         /// <summary>Put a harvested shell feature back where it sat on its own
@@ -867,7 +1276,10 @@ namespace AIHWSim.BodyEd
         {
             _hintRect = PanelLayout.HintRect(720f, 30f);
             GUI.Box(_hintRect, GUIContent.none);
-            GUI.Label(_hintRect, StudioHints.For(_tabDraw, _hasSelectionDraw), StudioSkin.Hint);
+            bool hasSel = _tabDraw == StudioTab.Frame
+                ? _latSelDraw != LatticeSel.None
+                : _hasSelectionDraw;
+            GUI.Label(_hintRect, StudioHints.For(_tabDraw, hasSel), StudioSkin.Hint);
         }
 
         /// <summary>The brush footprint, projected to screen so its size is the

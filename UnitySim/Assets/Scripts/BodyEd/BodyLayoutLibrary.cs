@@ -116,8 +116,11 @@ namespace AIHWSim.BodyEd
             int props = d.props?.Length ?? 0;
             int tints = d.tints?.Length ?? 0;
             int hidden = d.hiddenChannels?.Length ?? 0;
+            int nodes = d.latticeNodes?.Length ?? 0;
+            int beams = d.latticeBeams?.Length ?? 0;
             return $"body '{d.carBasePrefabID}', v{d.version}, {morphs} morph weights, " +
-                   $"{offsets} vertex offsets, {props} parts, {tints} tints, {hidden} hidden";
+                   $"{offsets} vertex offsets, {props} parts, {tints} tints, {hidden} hidden, " +
+                   $"{nodes} frame nodes, {beams} beams";
         }
 
         public static void Delete(string fileName)

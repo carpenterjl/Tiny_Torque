@@ -15,8 +15,43 @@ namespace AIHWSim.BodyEd
         public const string TriplanarShader = "AIHWSim/TriplanarBody";
 
         private static Material _body, _stand, _wheel, _shellPaint;
+        private static Material _node, _nodeHot, _beam, _beamHot;
         private static Texture2D _checker, _ring;
         private static bool _warnedMissingShader;
+
+        /// <summary>
+        /// An unlit-looking handle material — Standard with full emission, the
+        /// <c>TransformGizmo</c> recipe — so a frame overlay reads the same
+        /// whichever way the scene light points. Emission is also what makes a
+        /// <c>MeshTopology.Lines</c> mesh render a solid colour despite its
+        /// normals meaning nothing.
+        /// </summary>
+        private static Material Glow(string name, Color c)
+        {
+            var m = new Material(Shader.Find("Standard")) { name = name, color = c };
+            m.SetFloat("_Glossiness", 0f);
+            m.SetFloat("_Metallic", 0f);
+            m.EnableKeyword("_EMISSION");
+            m.globalIlluminationFlags = MaterialGlobalIlluminationFlags.EmissiveIsBlack;
+            m.SetColor("_EmissionColor", c * 0.85f);
+            return m;
+        }
+
+        /// <summary>A crash-frame node.</summary>
+        public static Material Node() =>
+            _node != null ? _node : _node = Glow("BodyEd_Node", new Color(0.45f, 0.62f, 0.95f));
+
+        /// <summary>The selected node.</summary>
+        public static Material NodeHot() =>
+            _nodeHot != null ? _nodeHot : _nodeHot = Glow("BodyEd_NodeHot", new Color(0.99f, 0.86f, 0.35f));
+
+        /// <summary>The beam overlay's line mesh.</summary>
+        public static Material Beam() =>
+            _beam != null ? _beam : _beam = Glow("BodyEd_Beam", new Color(0.30f, 0.78f, 0.80f));
+
+        /// <summary>The selected beam's own two-vertex line.</summary>
+        public static Material BeamHot() =>
+            _beamHot != null ? _beamHot : _beamHot = Glow("BodyEd_BeamHot", new Color(0.99f, 0.86f, 0.35f));
 
         /// <summary>
         /// An anti-aliased ring, drawn at the pointer to show how wide the sculpt

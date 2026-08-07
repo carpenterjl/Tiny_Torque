@@ -488,6 +488,7 @@ namespace AIHWSim.Core
             session.GridProvider = TeleportToGrid;
             session.PlayerJoined += OnLanPlayerJoined;
             session.PlayerLeft += OnLanPlayerLeft;
+            HookLatticeNet(session);
 
             if (session.Arcade && _lapTimer != null) BuildLanArcade(authority: true);
         }
@@ -842,6 +843,7 @@ namespace AIHWSim.Core
             session.RosterChanged += OnClientRosterChanged;
             session.RaceStarted += OnClientRaceStarted;
             session.RaceEnded += OnLanRaceEnded;   // progression fires on every machine
+            HookLatticeNet(session);
 
             if (session.Arcade && timed) BuildLanArcade(authority: false);
 
@@ -956,7 +958,63 @@ namespace AIHWSim.Core
             session.RaceStarted -= OnClientRaceStarted;
             session.OwnStateReceived -= OnOwnState;
             session.RaceEnded -= OnLanRaceEnded;
+            session.LatticeHitReceived -= OnLatticeHitMsg;
             if (session.GridProvider == TeleportToGrid) session.GridProvider = null;
+        }
+
+        // ---- crash-frame dent sync (protocol 17) ----------------------------------
+
+        private int _latticeSeq;
+
+        /// <summary>
+        /// Wire our own car's crash frame to the session, and the session's
+        /// relays to everyone else's cars. Cars without a lattice have no
+        /// <c>CarSoftLattice</c>, so a mixed grid degrades per-car: the sculpted
+        /// car dents on every machine, the stock car dents nowhere.
+        /// </summary>
+        private void HookLatticeNet(Net.NetSession session)
+        {
+            session.LatticeHitReceived += OnLatticeHitMsg;
+
+            int ownSlot = session.LocalSlot;
+            var ownRig = _ownRig ?? _rigs.Find(r => r.netSlot == ownSlot);
+            var own = ownRig?.car != null
+                ? ownRig.car.GetComponent<Vehicles.CarSoftLattice>() : null;
+            if (own == null) return;
+
+            // The closure dies with the component and the scene; the session
+            // event above is the one that needs the explicit unsubscribe.
+            own.HitApplied += h => session.SendLatticeHit(new Net.LatticeHitMsg
+            {
+                slot = ownSlot,
+                seq = ++_latticeSeq,
+                pos = h.pointLocal,
+                dir = h.dirLocal,
+                impulse = h.impulse,
+            });
+        }
+
+        /// <summary>Replay a peer's hit on their car here — the follower on the
+        /// host, the ghost on a client. Our own slot is skipped: this machine
+        /// applied that hit at the moment of contact, and the host's broadcast
+        /// echo would double it.</summary>
+        private void OnLatticeHitMsg(Net.LatticeHitMsg m)
+        {
+            var session = Net.NetSession.Instance;
+            if (m == null || session == null || m.slot == session.LocalSlot) return;
+
+            Vehicles.CarVehicle car = null;
+            if (_ghosts.TryGetValue(m.slot, out var view) && view != null) car = view.car;
+            else car = _rigs.Find(r => r.netSlot == m.slot)?.car;
+            if (car == null) return;
+
+            car.GetComponent<Vehicles.CarSoftLattice>()?.ApplyRemoteHit(
+                new Vehicles.CarSoftLattice.LatticeHit
+                {
+                    pointLocal = m.pos,
+                    dirLocal = m.dir,
+                    impulse = m.impulse,
+                });
         }
 
         /// <summary>LAN progression: the RaceEnd broadcast reaches host and

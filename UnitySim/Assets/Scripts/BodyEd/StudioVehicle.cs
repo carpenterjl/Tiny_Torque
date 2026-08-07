@@ -28,6 +28,10 @@ namespace AIHWSim.BodyEd
         private readonly List<PlacedProp> _props = new List<PlacedProp>();
         public IReadOnlyList<PlacedProp> Props => _props;
 
+        /// <summary>The crash frame, parallel to the parts — same frame, same
+        /// capture/apply seam.</summary>
+        public StudioLattice Lattice { get; private set; }
+
         private Transform _propRoot;
 
         /// <summary>Raised when the set of parts changes — added, removed,
@@ -218,6 +222,7 @@ namespace AIHWSim.BodyEd
             foreach (PlacedProp p in _props)
                 if (p?.Spec != null) specs.Add(p.Spec.Clone());
             d.props = specs.Count > 0 ? specs.ToArray() : null;
+            Lattice?.CaptureInto(d);
             return d;
         }
 
@@ -233,11 +238,13 @@ namespace AIHWSim.BodyEd
         public bool Apply(VehicleLayoutData d)
         {
             if (d == null) return false;
+            EnsureRoots();   // a load may arrive before the first part ever did
 
             ClearProps();
             if (d.props != null)
                 foreach (PropPlacement spec in d.props)
                     if (spec != null) Adopt(spec.Clone());
+            Lattice?.ApplyFrom(d);
 
             bool ok = Body == null || Body.Apply(d);
             PartsChanged?.Invoke(this);
@@ -259,6 +266,11 @@ namespace AIHWSim.BodyEd
             var go = new GameObject("Parts");
             go.transform.SetParent(transform, false);
             _propRoot = go.transform;
+
+            var lat = new GameObject("Lattice");
+            lat.transform.SetParent(transform, false);
+            Lattice = lat.AddComponent<StudioLattice>();
+            Lattice.Init(this);
         }
 
         private static void Kill(Object o)
