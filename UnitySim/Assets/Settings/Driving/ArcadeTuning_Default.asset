@@ -1,0 +1,80 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!114 &11400000
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 0}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 2b1e38000baf2594093e0efc2948b297, type: 3}
+  m_Name: ArcadeTuning_Default
+  m_EditorClassIdentifier: 
+  handlingGripBonus: 1.6
+  handlingStabilityBoost: 3
+  handlingDriveScale: 0.85
+  handlingDownforce: 0.1
+  handlingAssists:
+    steer: 1
+    stability: 1
+    traction: 1
+    abs: 1
+    launch: 1
+  driftMinSpeed: 3.5
+  driftEntrySteer: 0.3
+  driftHoldSpeed: 2.2
+  driftHopImpulse: 1.1
+  driftKickSeconds: 0.28
+  driftAngleMinDeg: 11
+  driftAngleMaxDeg: 34
+  driftYawGain: 0.055
+  driftYawKick: 0.95
+  driftYawHold: 0.45
+  driftYawStraighten: 0.7
+  driftStraightenSeconds: 0.5
+  driftStraightenDoneDeg: 4
+  driftGripMult: 0.7
+  driftAssistMult: 0.2
+  driftHandbrakeMult: 0.25
+  driftCarryAccel: 4.5
+  driftCarryTopSpeed: 10
+  driftCarryFadeBand: 2.5
+  driftChargeInto: 1.5
+  driftChargeOut: 0.35
+  driftTier1Seconds: 0.9
+  driftTier2Seconds: 1.9
+  driftTier3Seconds: 3
+  driftChargeFull: 3.5
+  driftBoostSeconds: 0.8
+  driftExitImpulse: 0.55
+  boostAccel: 14
+  boostSeconds: 1.6
+  boostTopSpeed: 11
+  boostFadeBand: 1.5
+  shieldSeconds: 8
+  spinGripMult: 0.35
+  spinSeconds: 1.4
+  spinTorque: 1.2
+  spinDriveMult: 0
+  hitImpulseFwd: 0.6
+  hitImpulseUp: 0.9
+  wreckSeconds: 1.5
+  wreckImpulseUp: 3.2
+  wreckImpulseFwd: 1.4
+  wreckTorque: 3
+  invulnSeconds: 1
+  missileSpeed: 11
+  missileTurnRate: 2.2
+  missileCommitRange: 1.5
+  missileCommitTurnRate: 0.6
+  bananaRadius: 0.13
+  smokeRadius: 0.75
+  slickRadius: 0.85
+  slickGripMult: 0.45
+  blindSeconds: 2.6
+  draftRange: 3
+  draftConeDeg: 25
+  draftAccel: 4
+  draftTopSpeed: 11

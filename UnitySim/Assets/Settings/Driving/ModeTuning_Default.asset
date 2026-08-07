@@ -1,0 +1,50 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!114 &11400000
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 0}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 93ab5297f6662a446a93f3a085fb6695, type: 3}
+  m_Name: ModeTuning_Default
+  m_EditorClassIdentifier: 
+  derbyMaxHealth: 100
+  impactMinSpeed: 1.6
+  impactRefSpeed: 7
+  ramDamage: 34
+  sideDamage: 7
+  wallDamage: 9
+  ramAlignment: 0.72
+  hitCooldown: 0.35
+  spawnGrace: 2
+  healthPackHeal: 35
+  pickupRespawnSec: 12
+  mineRadius: 1.1
+  mineDamage: 45
+  mineOwnerGrace: 1.5
+  flagTouchRadius: 0.55
+  flagDropImpulse: 2.4
+  flagAutoReturnSec: 20
+  carrierDriveMult: 0.92
+  ballRadius: 0.25
+  ballMass: 0.2
+  ballDrag: 0.25
+  ballAngularDrag: 0.35
+  ballHitBoost: 1.35
+  ballGravityScale: 1
+  goalCelebrationSec: 3
+  jumpImpulse: 8.6
+  doubleJumpImpulse: 6
+  flipWindowSec: 1.25
+  flipImpulse: 3.2
+  flipTorque: 0.39
+  airTorque: 0.05
+  boostTankSec: 2.4
+  boostRefillPerSec: 0.55
+  boostAccel: 11
+  deathBeatSec: 1.6
+  arenaGravityScale: 0.8548394

@@ -1,0 +1,31 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!114 &11400000
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 0}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 095b33c0a9b604b418cf20b48d414c7e, type: 3}
+  m_Name: AssistTuning_Default
+  m_EditorClassIdentifier: 
+  steerLimitRefSpeed: 4
+  steerLimitMinSpeed: 0.5
+  counterSteerMinLongSpeed: 1
+  counterSteerGain: 0.5
+  counterSteerClamp: 0.35
+  stabilityGain: 0.08
+  stabilityTorqueClamp: 0.3
+  tractionOnset: 0.25
+  tractionBand: 0.35
+  absOnset: 0.3
+  absBand: 0.4
+  launchSlipTarget: 0.12
+  launchGain: 4
+  launchFloor: 0.3
+  launchEngageSpeed: 3
+  launchReleaseSpeed: 4
+  launchReleaseRate: 2
