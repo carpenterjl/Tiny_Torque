@@ -109,6 +109,39 @@ Blender/renders/
 # Scratch folder the JGraph bridge watches (figures exported from Tools/*.html)
 Tools/jgraph-out/
 
+# ---- Scratch scenes ----
+# Scenes that exist to try something once. None is in EditorBuildSettings, none
+# is named by a script, and none is a test fixture: the PhysicsTests, FlightTests
+# and ModeTemplates scenes stay TRACKED, because [PHYS], [AERO] and [TPL] open
+# them by path and a clone without them cannot run the suite.
+#
+# Two patterns rather than a folder, because scratch appears wherever the work
+# is. Each needs its .meta listed too — the blanket "!*.meta" above would
+# otherwise re-include it, and a .meta with no scene beside it is just a file
+# Unity deletes on the next import.
+*_Test_Scene.unity
+*_Test_Scene.unity.meta
+*_Backup.unity
+*_Backup.unity.meta
+
+# Asset Studio drafts — the in-progress edit state behind the Studio window, one
+# ScriptableObject per key, recreated by AssetStudioDrafts.Find the moment anyone
+# opens a row. Sibling of the Staging/ and SlotProbe/ rules above: the committed
+# artifacts are the manifest and the asset, and a draft is what someone was
+# thinking before they wrote one. Committing it would push a half-decided scale
+# correction onto the next person's screen.
+UnitySim/Assets/TinyTorqueAssets/AssetStudio/Drafts/
+UnitySim/Assets/TinyTorqueAssets/AssetStudio/Drafts.meta
+
+# ---- Per-user editor tool preferences ----
+# ProjectSettings/ is tracked on purpose (see the header) — ProjectVersion.txt
+# and EditorBuildSettings.asset are what make a clone build. This one file is
+# not that: it is ProBuilder's own tool state — extrude distance, backface
+# select, whether an edge loop grows iteratively. It records how somebody likes
+# to model, changes on nearly every ProBuilder session, and affects no build
+# output. ProBuilder recreates it with defaults on first use.
+UnitySim/ProjectSettings/Packages/com.unity.probuilder/Settings.json
+
 # ---- OS ----
 .DS_Store
 Thumbs.db

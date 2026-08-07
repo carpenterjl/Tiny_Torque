@@ -4117,6 +4117,52 @@ Transform:
   m_CorrespondingSourceObject: {fileID: 2905908203790484282, guid: c4a36a084b7885645b16ffbce11c9196, type: 3}
   m_PrefabInstance: {fileID: 1624904218}
   m_PrefabAsset: {fileID: 0}
+--- !u!1 &439817566
+GameObject:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  serializedVersion: 6
+  m_Component:
+  - component: {fileID: 439817568}
+  - component: {fileID: 439817569}
+  m_Layer: 0
+  m_Name: Spawn
+  m_TagString: Untagged
+  m_Icon: {fileID: 0}
+  m_NavMeshLayer: 0
+  m_StaticEditorFlags: 0
+  m_IsActive: 1
+--- !u!4 &439817568
+Transform:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 439817566}
+  serializedVersion: 2
+  m_LocalRotation: {x: -0, y: -0, z: -0, w: 1}
+  m_LocalPosition: {x: 5.857, y: 0.091, z: 4.221}
+  m_LocalScale: {x: 1, y: 1, z: 1}
+  m_ConstrainProportionsScale: 0
+  m_Children: []
+  m_Father: {fileID: 0}
+  m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
+--- !u!114 &439817569
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 439817566}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: cc8575ffc971c5f47b8dec951e48e140, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: 
+  team: 0
+  gridOrder: 0
 --- !u!4 &442553090 stripped
 Transform:
   m_CorrespondingSourceObject: {fileID: 1099723822698857843, guid: 9193589787059e6449e256d99322f6f7, type: 3}
@@ -36540,6 +36586,7 @@ GameObject:
   m_Component:
   - component: {fileID: 1551338739}
   - component: {fileID: 1551338738}
+  - component: {fileID: 1551338740}
   m_Layer: 0
   m_Name: TrackBootstrap
   m_TagString: Untagged
@@ -36561,8 +36608,9 @@ MonoBehaviour:
   m_EditorClassIdentifier: 
   physicsRateHz: 400
   controlRateHz: 100
-  logCsv: 1
+  logCsv: 0
   autoReloadControllerOnChange: 0
+  buildDefaultOval: 0
   ovalRadiusX: 12
   ovalRadiusZ: 7.5
   roadWidth: 2.5
@@ -36583,6 +36631,21 @@ Transform:
   m_Children: []
   m_Father: {fileID: 0}
   m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
+--- !u!114 &1551338740
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 1551338737}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 23671b0ba96cfae4ab0007a3f30a3e2b, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: 
+  level: {fileID: 11400000, guid: d4d25bc82e4672a4eb3c7a2752d412fb, type: 2}
+  physics: {fileID: 11400000, guid: 18c389e55561b8740a5bb3dc1d9f7957, type: 2}
+  assists: {fileID: 0}
 --- !u!1 &1571613018
 GameObject:
   m_ObjectHideFlags: 0
@@ -70299,3 +70362,4 @@ SceneRoots:
   - {fileID: 1115144624}
   - {fileID: 356185881}
   - {fileID: 1495013525}
+  - {fileID: 439817568}
