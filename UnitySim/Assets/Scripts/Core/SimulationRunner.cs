@@ -114,8 +114,14 @@ namespace AIHWSim.Core
         /// controllers a control period of _decimation/physicsRateHz = 5/400 =
         /// 12.5 ms when the true period was 5 x 2 ms = 10 ms. Every dt-dependent
         /// term in a controller (integrators, derivatives, odometry) was 25 % off.
+        ///
+        /// <paramref name="provisional"/> says which of those two passes this is.
+        /// The Awake one is reporting the component's default, which on a builder-
+        /// assigned rig is a number nobody asked for — see
+        /// <see cref="Boot.PhysicsRateAuthority"/> for why telling it apart is what
+        /// keeps the conflict warning honest in a scene with several runners.
         /// </summary>
-        private void ConfigureRates()
+        private void ConfigureRates(bool provisional)
         {
             physicsRateHz = Mathf.Max(1, physicsRateHz);
             controlRateHz = Mathf.Clamp(controlRateHz, 1, physicsRateHz);
@@ -127,12 +133,12 @@ namespace AIHWSim.Core
             // write and additionally notices when a second runner in the same
             // session asks for a different rate — the global-fixedDeltaTime
             // hazard DebugVehicleSpawner documents and hand-works-around.
-            Boot.PhysicsRateAuthority.Apply(physicsRateHz, this);
+            Boot.PhysicsRateAuthority.Apply(physicsRateHz, this, provisional);
         }
 
         private void Awake()
         {
-            ConfigureRates();
+            ConfigureRates(provisional: true);
             ApplyNoiseSeed();
             Hub = new TelemetryHub();
         }
@@ -142,7 +148,7 @@ namespace AIHWSim.Core
             // Resolve wiring here rather than in Awake: scene builders assign
             // these fields immediately AFTER AddComponent, but AddComponent already
             // ran Awake — so reading them in Awake yields nulls/defaults.
-            ConfigureRates();   // the builder's rates are only in place now
+            ConfigureRates(provisional: false);   // the builder's rates are only in place now
 
             _vehicle = vehicleBehaviour as IControlledVehicle;
             if (_vehicle == null)

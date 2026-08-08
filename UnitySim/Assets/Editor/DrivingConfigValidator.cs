@@ -353,6 +353,13 @@ namespace AIHWSim.EditorTools
         /// [PHYS] run. A diagnostic that cries wolf on every correct scene is
         /// worse than none, and this is what stops it regressing to that.
         ///
+        /// The third half is the menu's shape, and it is the one that actually
+        /// went wrong in the field: FOUR rigs, Unity running every Awake before
+        /// any Start, all four settling on the same rate. Per-object bookkeeping
+        /// alone does not survive that — the last rig's default is still the
+        /// recorded owner when the first rig's real rate arrives — so the
+        /// provisional flag is what this pins.
+        ///
         /// Also the only place the warning is exercised at all: a genuine
         /// two-runner conflict needs a scene built to have one, and the
         /// production paths all take care not to.
@@ -362,8 +369,12 @@ namespace AIHWSim.EditorTools
             float dt = Time.fixedDeltaTime;
             var a = ScriptableObject.CreateInstance<LevelSettings>();   // stand-in requesters:
             var b = ScriptableObject.CreateInstance<LevelSettings>();   // any two distinct Objects
+            var c = ScriptableObject.CreateInstance<LevelSettings>();
+            var d = ScriptableObject.CreateInstance<LevelSettings>();
             a.name = "RunnerA";
             b.name = "RunnerB";
+            c.name = "RunnerC";
+            d.name = "RunnerD";
 
             int warnings = 0;
             void OnLog(string msg, string _, LogType t)
@@ -391,6 +402,43 @@ namespace AIHWSim.EditorTools
                 PhysicsRateAuthority.Apply(500, b);
                 Eq("[RATE] warns only once per session", 1, warnings);
 
+                // MenuAttract's four bot rigs: every Awake reports the component
+                // default 500, then every Start reports the builder's 400. Nobody
+                // disagrees about anything, so nothing may be logged — and the
+                // latch above is why it matters, since one false positive here
+                // silences every real conflict for the rest of the process.
+                PhysicsRateAuthority.Reset();
+                warnings = 0;
+                var rigs = new Object[] { a, b, c, d };
+                foreach (var r in rigs) PhysicsRateAuthority.Apply(500, r, provisional: true);
+                foreach (var r in rigs) PhysicsRateAuthority.Apply(400, r);
+                Eq("[RATE] silent when four rigs settle on one rate", 0, warnings);
+                // Approximate, unlike the 1/500 assert below: Unity hands
+                // fixedDeltaTime back quantized (1/400 reads as 0.002499993), so an
+                // exact compare here is testing Unity's storage, not the authority.
+                _checks++;
+                if (Mathf.Abs(Time.fixedDeltaTime - 1f / 400) > 1e-6f)
+                    Fails.Add("[RATE] four settled rigs left fixedDeltaTime at "
+                              + $"{Time.fixedDeltaTime}, expected {1f / 400}");
+
+                // A provisional pass still writes the step — it is Awake, and the
+                // first FixedUpdate must not run on the previous scene's rate.
+                PhysicsRateAuthority.Reset();
+                warnings = 0;
+                PhysicsRateAuthority.Apply(200, a, provisional: true);
+                _checks++;
+                if (Mathf.Abs(Time.fixedDeltaTime - 1f / 200) > 1e-6f)
+                    Fails.Add("[RATE] a provisional request did not apply the step: "
+                              + $"fixedDeltaTime is {Time.fixedDeltaTime}, expected {1f / 200}");
+
+                // ...and a real conflict must still be caught after one.
+                PhysicsRateAuthority.Apply(400, a);
+                PhysicsRateAuthority.Apply(500, b);
+                Eq("[RATE] still warns after a provisional pass", 1, warnings);
+
+                PhysicsRateAuthority.Reset();
+                PhysicsRateAuthority.Apply(500, a);
+
                 _checks++;
                 if (Time.fixedDeltaTime != 1f / 500)
                     Fails.Add($"[RATE] did not apply the requested step: fixedDeltaTime is "
@@ -403,6 +451,8 @@ namespace AIHWSim.EditorTools
                 Time.fixedDeltaTime = dt;
                 Object.DestroyImmediate(a);
                 Object.DestroyImmediate(b);
+                Object.DestroyImmediate(c);
+                Object.DestroyImmediate(d);
             }
         }
 

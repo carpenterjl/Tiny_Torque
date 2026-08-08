@@ -38,6 +38,19 @@ namespace AIHWSim.Core.Boot
     /// Timestep sweeps stay silent for the same reason rather than by
     /// exception: P9 and A7 change the step repeatedly on one runner, which is
     /// one object changing its mind, not two disagreeing.
+    ///
+    /// <b>The who-asks rule is not enough on its own once a scene has SEVERAL
+    /// runners</b>, which is what shipped the first false positive: Unity runs
+    /// every <c>Awake</c> before any <c>Start</c>, so the menu's four attract rigs
+    /// register the component default 500 four times over and the LAST of them is
+    /// still the recorded owner when the FIRST one's <c>Start</c> asks for its real
+    /// 400. Different object, different rate, warning — about two runners that both
+    /// want 400 and are both right. The Awake pass is therefore marked
+    /// <c>provisional</c>: it still writes the step exactly as it always did, but it
+    /// does not claim ownership and can never raise the warning, so what gets
+    /// compared is settled rates. That mattered beyond the noise, because
+    /// <c>_warned</c> latches for the whole process — one bogus warning behind the
+    /// main menu used to buy silence for every genuine conflict after it.
     /// </summary>
     public static class PhysicsRateAuthority
     {
@@ -51,8 +64,18 @@ namespace AIHWSim.Core.Boot
         /// which is always the requested one — see the class note for why this
         /// does not arbitrate.
         /// </summary>
-        public static float Apply(int physicsRateHz, Object requester)
+        /// <param name="provisional">
+        /// This request is a component's own default, not the rate whoever built
+        /// the rig wants — the <c>Awake</c> half of <c>ConfigureRates</c>. The step
+        /// is written, but no ownership is taken and no warning can be raised: see
+        /// the class note for why an unmarked Awake pass makes the warning fire on
+        /// any scene with more than one runner.
+        /// </param>
+        public static float Apply(int physicsRateHz, Object requester,
+                                  bool provisional = false)
         {
+            if (provisional) return Time.fixedDeltaTime = 1f / physicsRateHz;
+
             string who = requester != null ? requester.name : "(unnamed)";
             int id = requester != null ? requester.GetInstanceID() : 0;
             if (_rate != 0 && _rate != physicsRateHz && id != _ownerId && !_warned)

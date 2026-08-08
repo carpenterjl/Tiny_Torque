@@ -77,6 +77,10 @@ namespace AIHWSim.Core
 
         private void Awake()
         {
+            // Two of these exist during a scene-track load, and only one may
+            // compose a session. See StandDownAsOverlay.
+            if (StandDownAsOverlay()) return;
+
             // Pressing Play directly in a hand-authored track scene: there is no
             // menu to have chosen it, so adopt it. This replaces the old TTA_Sandbox
             // special case, which forced a hardcoded roster and then early-returned
@@ -710,8 +714,55 @@ namespace AIHWSim.Core
             };
         }
 
+        /// <summary>
+        /// Frames left before the one-camera check runs; -1 once it has. Deliberately
+        /// not <c>Start</c>: on a two-scene load nothing guarantees that the authored
+        /// scene's Start does not run before the overlay's Awake has stood down, and
+        /// a diagnostic that cries wolf on a correct scene is worse than none — the
+        /// same rule <c>PhysicsRateAuthority</c> is written to. One full frame later,
+        /// both scenes are unambiguously settled.
+        /// </summary>
+        private int _sceneAuditIn = 1;
+
+        /// <summary>
+        /// Exactly one camera and one listener, said out loud when not.
+        ///
+        /// The composition this file does is invisible until you look at the screen,
+        /// and the failure mode it had was quiet in the worst way: with a second
+        /// MainCamera in the scene, <c>Camera.main</c> picked one of them and the
+        /// chase camera bound to whichever that was, so the game looked "loaded but
+        /// with the wrong view" rather than broken. <see cref="StandDownAsOverlay"/>
+        /// is the fix; this is the thing that would have named it in one line.
+        ///
+        /// Split-screen is not a false positive: its second and third cameras are
+        /// built untagged and carry no listener, on purpose, so counting only tagged
+        /// cameras and enabled listeners is exactly the right question in every
+        /// composition this file produces.
+        /// </summary>
+        private void AuditSceneSingletons()
+        {
+            int mains = 0, listeners = 0;
+            foreach (var c in FindObjectsByType<Camera>(
+                         FindObjectsInactive.Exclude, FindObjectsSortMode.None))
+                if (c.enabled && c.CompareTag("MainCamera")) mains++;
+            foreach (var l in FindObjectsByType<AudioListener>(
+                         FindObjectsInactive.Exclude, FindObjectsSortMode.None))
+                if (l.enabled) listeners++;
+
+            if (mains <= 1 && listeners <= 1) return;
+            Debug.LogWarning($"[SCENE] this session has {mains} live MainCamera camera(s) "
+                + $"and {listeners} AudioListener(s), and there must be exactly one of "
+                + "each. Two of everything is what a hand-authored track scene looks "
+                + "like when the TrackScene loaded additively on top of it did not "
+                + "stand down — check that the scene track carries a TrackBootstrap "
+                + "and that TrackScene is still named "
+                + $"'{GameFlow.TrackSceneName}'.");
+        }
+
         private void Update()
         {
+            if (_sceneAuditIn >= 0 && --_sceneAuditIn < 0) AuditSceneSingletons();
+
             // Host: 2 Hz checkpoint-progress refresh (laps broadcast on their own).
             if (SessionConfig.Mode != SessionMode.LanHost || _lapTimer == null ||
                 Net.NetSession.Instance == null || !Net.NetSession.Instance.IsHost)
@@ -1452,22 +1503,118 @@ namespace AIHWSim.Core
         }
 
         /// <summary>
+        /// Is this object one of the ones TrackScene brought in, rather than part
+        /// of the hand-authored track scene underneath it?
+        ///
+        /// Membership, not <c>gameObject.scene != mine</c>: the overlay is a fixed,
+        /// named scene, so this answers the same way no matter which of the two
+        /// bootstraps is asking. The relative form only worked from TrackScene's
+        /// copy, and read exactly backwards from the authored one — it would have
+        /// put out the author's sun and kept the overlay's.
+        /// </summary>
+        private static bool IsOverlay(GameObject go) =>
+            go.scene.name == GameFlow.TrackSceneName;
+
+        /// <summary>
+        /// Whether this is TrackScene's copy sitting on top of a track scene that
+        /// brought its own bootstrap — in which case it composes nothing, and takes
+        /// the rest of TrackScene's furniture back out of the scene on its way past.
+        ///
+        /// <b>Why there are two at all.</b> <c>GameFlow.LoadTrack</c> loads a scene
+        /// track Single and pulls TrackScene in additively on top for the
+        /// composition; but every scene track in the project also carries a
+        /// TrackBootstrap of its own, because that is what makes pressing Play in
+        /// the scene build a drivable session. Nothing used to stop the second one
+        /// building a whole second session — two cars, two SimulationRunners, two
+        /// MainCamera-tagged cameras and two AudioListeners, with <c>Camera.main</c>
+        /// arbitrating between the cameras. That is how the chase camera ended up
+        /// following a car on a camera that was not the one drawing the frame.
+        ///
+        /// <b>The overlay yields, not the track scene.</b> The authored copy is the
+        /// one a scene's author can see and configure, and the only one present when
+        /// the scene is played on its own — so deferring to it means the session you
+        /// test is the session the game builds. Both ship identical rates today; if
+        /// they ever drift, the authored one is the one that meant it.
+        ///
+        /// <b>Decided by scene membership, never by Awake order.</b> Whether a
+        /// Single-then-Additive pair in one frame runs the first scene's Awakes
+        /// before the second scene loads is a Unity implementation detail, and both
+        /// orders have to reach the same answer. The test is only "is there a
+        /// bootstrap outside TrackScene", which is true from the moment both scenes
+        /// are loaded, whoever woke first.
+        /// </summary>
+        private bool StandDownAsOverlay()
+        {
+            if (!IsOverlay(gameObject)) return false;
+
+            bool authored = false;
+            foreach (var b in FindObjectsByType<TrackBootstrap>(
+                         FindObjectsInactive.Exclude, FindObjectsSortMode.None))
+                if (b != this && !IsOverlay(b.gameObject)) { authored = true; break; }
+            if (!authored) return false;
+
+            WithdrawOverlayScenery();
+            enabled = false;
+            return true;
+        }
+
+        /// <summary>
+        /// Take TrackScene's camera and sun out of a track scene that has its own.
+        ///
+        /// Both halves are one-directional, for the reason
+        /// <see cref="DisableForeignSuns"/> gives: a track scene with no camera
+        /// (UCSD_TrackScene, Arcade_Test_Scene) or no sun of its own keeps
+        /// TrackScene's, because the alternative is a scene that renders nothing or
+        /// renders black.
+        ///
+        /// The camera is DEACTIVATED rather than disabled, so the AudioListener
+        /// riding on it goes with it — Unity permits exactly one, and the second was
+        /// half of what this bug logged. Deactivating is also what takes it out of
+        /// <c>Camera.main</c>, which is the arbitration that put the chase camera on
+        /// the wrong object.
+        ///
+        /// The sun is handled here as well as in <see cref="DisableForeignSuns"/>
+        /// because only one of the two can be relied on to run late enough: if the
+        /// authored scene's Awakes run before TrackScene is loaded, its
+        /// DisableForeignSuns pass sees no overlay light at all and the overlay's
+        /// sun would arrive afterwards unopposed. Whichever runs second does the
+        /// work; both are idempotent.
+        /// </summary>
+        private void WithdrawOverlayScenery()
+        {
+            bool authoredCamera = false;
+            foreach (var c in FindObjectsByType<Camera>(
+                         FindObjectsInactive.Exclude, FindObjectsSortMode.None))
+                if (!IsOverlay(c.gameObject)) { authoredCamera = true; break; }
+
+            if (authoredCamera)
+                foreach (var c in FindObjectsByType<Camera>(
+                             FindObjectsInactive.Exclude, FindObjectsSortMode.None))
+                    if (IsOverlay(c.gameObject)) c.gameObject.SetActive(false);
+
+            DisableForeignSuns();
+        }
+
+        /// <summary>
         /// Turn off TrackScene's own directional light when the loaded track scene
         /// supplies one. Kept one-directional on purpose: a track scene with NO sun
         /// of its own keeps TrackScene's, so a half-lit authored scene still renders
         /// rather than going black.
+        ///
+        /// Reads TrackScene by name rather than as "the scene I am not in", so it
+        /// means the same thing called from the overlay's bootstrap and from the
+        /// authored scene's — see <see cref="IsOverlay"/>.
         /// </summary>
         private void DisableForeignSuns()
         {
-            var mine = gameObject.scene;
-            bool trackSceneHasSun = false;
+            bool authoredSun = false;
             foreach (var l in FindObjectsByType<Light>(FindObjectsSortMode.None))
-                if (l.type == LightType.Directional && l.enabled && l.gameObject.scene != mine)
-                { trackSceneHasSun = true; break; }
-            if (!trackSceneHasSun) return;
+                if (l.type == LightType.Directional && l.enabled && !IsOverlay(l.gameObject))
+                { authoredSun = true; break; }
+            if (!authoredSun) return;
 
             foreach (var l in FindObjectsByType<Light>(FindObjectsSortMode.None))
-                if (l.type == LightType.Directional && l.gameObject.scene == mine)
+                if (l.type == LightType.Directional && IsOverlay(l.gameObject))
                     l.enabled = false;
         }
 
