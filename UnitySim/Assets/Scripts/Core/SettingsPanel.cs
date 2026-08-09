@@ -186,6 +186,15 @@ namespace AIHWSim.Core
             bool lg = MenuNav.Toggle(s.logTelemetry, " Log sensor/telemetry data (CSV)");
             if (lg != s.logTelemetry) { s.logTelemetry = lg; changed = true; }
 
+            // ---- remote control ----
+            // Same toggle as Options, mid-drive: an external app is most useful
+            // when you are already in a session, and quitting to the menu to
+            // enable it would end the session you wanted to attach to.
+            GUILayout.Space(4);
+            GUILayout.Label("REMOTE CONTROL", GarageSkin.Header);
+            bool ipc = MenuNav.Toggle(s.ipcEnabled, " Allow an external app to control this game");
+            if (ipc != s.ipcEnabled) { s.ipcEnabled = ipc; changed = true; }
+
             GUILayout.EndScrollView();
 
             if (!changed) return;

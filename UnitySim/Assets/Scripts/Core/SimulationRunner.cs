@@ -136,6 +136,61 @@ namespace AIHWSim.Core
             Boot.PhysicsRateAuthority.Apply(physicsRateHz, this, provisional);
         }
 
+        /// <summary>
+        /// Change the rates on a runner that is already running.
+        ///
+        /// Exists for the external control bridge, which lets an application
+        /// sweep the timestep the way the P9/A7 probes do from script. Passing 0
+        /// for either leaves that one alone, so a client can raise the physics
+        /// rate without also restating the control rate.
+        ///
+        /// This is a real re-derivation, not a field write: the decimation and
+        /// the control period come out of the two rates together, and setting
+        /// <c>physicsRateHz</c> by itself would leave a controller being stepped
+        /// on a period nothing recomputed. It reports NON-provisionally, so a
+        /// second rig disagreeing still raises [RATE] — a caller changing the
+        /// rate in a multi-rig session is exactly who that warning is for, and
+        /// the bridge applies the change to every runner for that reason.
+        /// </summary>
+        public void ReconfigureRates(int newPhysicsHz, int newControlHz)
+        {
+            if (newPhysicsHz > 0) physicsRateHz = newPhysicsHz;
+            if (newControlHz > 0) controlRateHz = newControlHz;
+            ConfigureRates(provisional: false);
+        }
+
+        /// <summary>
+        /// Swap the behaviour that supplies manual commands and setpoints.
+        ///
+        /// Deliberately NOT <see cref="Rebind"/>, which is the heavier operation
+        /// for a swapped CAR: Rebind also re-runs the sensor manifest and
+        /// <c>RegisterChannels</c>, and re-registering channels mid-session
+        /// widens CSV rows past the header <c>CsvLogger.Begin</c> already
+        /// snapshotted. Only the two input casts change here, so only they are
+        /// re-resolved.
+        ///
+        /// Used by the external control bridge to install a raw actuator driver
+        /// in place of <c>CarInput</c> and to put CarInput back on release.
+        /// </summary>
+        public void SetInputBehaviour(MonoBehaviour behaviour)
+        {
+            inputBehaviour = behaviour;
+            _manualDriver = behaviour as IManualDriver;
+            _setpointSource = behaviour as ISetpointSource;
+        }
+
+        /// <summary>
+        /// Force Manual or Autonomous from outside the mode-toggle key. Same
+        /// assist gate the toggle applies — Autonomous means C firmware is
+        /// driving, and firmware always faces the raw physics.
+        /// </summary>
+        public void SetMode(DriveMode mode)
+        {
+            if (Mode == mode) return;
+            Mode = mode;
+            SyncAssistGate();
+        }
+
         private void Awake()
         {
             ConfigureRates(provisional: true);

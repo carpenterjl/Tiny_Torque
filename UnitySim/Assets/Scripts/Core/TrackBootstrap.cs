@@ -43,6 +43,17 @@ namespace AIHWSim.Core
         private SimulationRunner _runner;
         private readonly List<PlayerRig> _rigs = new List<PlayerRig>();
 
+        /// <summary>
+        /// The rigs this bootstrap composed, read-only. Exposed for the external
+        /// control bridge, which needs to enumerate the session's vehicles and has
+        /// no other way to reach the authoritative list — MatchDirector.players is
+        /// the same List, but only in modes that build a director.
+        ///
+        /// Empty on the TrackScene copy during a scene-track load: that one stands
+        /// down and composes nothing, which is what tells the two apart.
+        /// </summary>
+        public IReadOnlyList<PlayerRig> Rigs => _rigs;
+
         // Cached materials.
         private Material _dirt, _road, _bermA, _bermB, _cone, _block, _barrier, _post, _checker;
 

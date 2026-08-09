@@ -2440,6 +2440,50 @@ It runs scene-free and covers the morph frames (including bit-identical regenera
 the falloff and weld arithmetic, sparse apply and refusal, the JSON round trip, the bake,
 and whether a deformation moves the measured drag in the right direction.
 
+## Remote control (external apps)
+
+An external Windows program can drive a car in this game and read its sensors back,
+over named pipes. It is **off by default** — turn it on with *Options → Remote
+Control* in the menu, or from the pause panel mid-race; the toggle starts and stops
+the server live, no restart. While it is on the menu shows the pipe it is serving,
+and the game keeps simulating unfocused so the controlling app can hold the window.
+
+Two pipes, because the two kinds of traffic want opposite things. `TinyTorque.Control`
+carries newline-delimited JSON — requests and their replies, every request answered
+with an `ack` or an `err` carrying a machine-readable code. `TinyTorque.Telemetry`
+carries hand-packed little-endian binary frames, which is what a 100 Hz channel
+stream and 128×128 camera captures need. This is the same split the LAN code uses
+and for the same reason.
+
+Control is a **per-vehicle takeover**: the app acquires a vehicle explicitly and only
+then may steer it, at one of two levels — `drive` (normalized pedals and steering,
+assists still apply) or `raw` (the actuator vector a firmware would write, volts per
+motor). Local input for that car is ignored while held and restored on release; other
+cars stay locally driven. A held car that stops hearing from its app for 0.5 s brakes
+itself, and a client that dies mid-corner hands control back rather than leaving the
+car pinned at its last command.
+
+Beyond driving, the surface covers the whole session: list and load tracks, spawn and
+despawn vehicles, subscribe to telemetry channels at a chosen rate, stream sensor
+camera frames, read and set tunables, assists, solver settings and game settings, and
+push a whole `VehicleDesign` — which either applies live or comes back as a structured
+refusal explaining why (a LAN car and a bot cannot be rebuilt under you).
+
+[`Docs/ipc-protocol.md`](Docs/ipc-protocol.md) is the spec: every message with its
+field table, the binary layouts, the error codes, and a checklist for anyone writing
+a client. Two traps in there are worth reading before you write one — the server pipes
+*must* be `PipeOptions.Asynchronous` or the writer parks behind the reader and nothing
+is ever answered, and a serializer that emits an object's declared type rather than
+its runtime type will silently ship messages containing nothing but their type tag.
+`Tools/ipc-test-client.ps1` is a working PowerShell client that handshakes, lists
+vehicles, acquires one, pulses the steering and prints telemetry frames.
+
+Gate: `-executeMethod AIHWSim.EditorTools.IpcProtocolValidator.Report`, grep
+`[IPC] RESULT`. It round-trips every message through JsonUtility, packs and unpacks
+every frame type, checks the protocol constants are still append-only, and drives the
+real server against an in-process pipe client for connect, busy, disconnect and
+reconnect — all without entering play mode.
+
 ## Layout
 
 ```

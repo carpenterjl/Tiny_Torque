@@ -159,6 +159,19 @@ namespace AIHWSim.Persistence
         public bool controllerResetOnReload = false;
 
         /// <summary>
+        /// Serve the named-pipe control API, so an external application can drive
+        /// vehicles and read telemetry live.
+        ///
+        /// Explicit opt-in, OFF by default — and the initializer is the whole
+        /// back-compat story, since a settings.json written before this key
+        /// existed reads as off. This one is not merely a preference: switching it
+        /// on opens a named pipe any local process can connect to and hands
+        /// whoever does full control of the simulation. Nobody gets that by
+        /// upgrading.
+        /// </summary>
+        public bool ipcEnabled = false;
+
+        /// <summary>
         /// Keyboard and gamepad bindings. Nested rather than flattened into
         /// twenty more fields here because it is one coherent thing the player
         /// resets as a unit — and JsonUtility serializes a nested [Serializable]
@@ -193,6 +206,10 @@ namespace AIHWSim.Persistence
 #if !UNITY_EDITOR
             Screen.fullScreen = s.fullscreen;
 #endif
+            // Start or stop the external control bridge to match the toggle. Here
+            // rather than only at boot so flipping it in Options takes effect at
+            // once — a switch that needs a restart to open a pipe reads as broken.
+            Ipc.IpcRuntime.EnsureState();
         }
 
         [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.AfterSceneLoad)]

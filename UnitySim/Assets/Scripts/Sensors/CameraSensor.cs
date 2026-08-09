@@ -50,6 +50,21 @@ namespace AIHWSim.Sensors
         /// <summary>Preview texture for the HUD (updated on each capture).</summary>
         public Texture2D Preview => _tex;
 
+        /// <summary>
+        /// Captures completed so far. A consumer that wants each frame ONCE — the
+        /// IPC camera stream does — watches this rather than the pixel buffer:
+        /// the buffer is reused in place, so it is not possible to tell a fresh
+        /// frame from last one's leftovers by looking at it, and a stationary car
+        /// pointed at a wall produces identical pixels for a genuinely new frame.
+        /// </summary>
+        public int FrameIndex { get; private set; }
+
+        /// <summary>Sim time of the most recent capture, so a streamed frame can
+        /// be timestamped with when it was TAKEN rather than when it was sent.
+        /// The camera runs at its own rate (default 10 Hz), well below the frame
+        /// rate that polls it, and the difference is visible.</summary>
+        public float LastCaptureTime { get; private set; }
+
         public override void Bind(CarVehicle vehicle, Transform vehicleRoot)
         {
             EnsureCamera(vehicleRoot);
@@ -115,6 +130,9 @@ namespace AIHWSim.Sensors
                     _gray[dst + x] = (byte)((c.r + c.g + c.b) / 3);
                 }
             }
+
+            LastCaptureTime = simTime;
+            FrameIndex++;
         }
 
         private void OnDestroy()

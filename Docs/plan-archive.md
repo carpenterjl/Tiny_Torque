@@ -8,11 +8,260 @@ describe is documented in [README.md](../README.md).
 Active work lives in the session plan file, not here; a plan moves into this archive
 once its milestones are done.
 
-Covering the project bootstrap through the crash frame (48 plans).
-Last updated 2026-08-07. (The RC-airplane F0–F9 and slipstream/phugoid G-series plans
+Covering the project bootstrap through the IPC control bridge (49 plans).
+Last updated 2026-08-08. (The RC-airplane F0–F9 and slipstream/phugoid G-series plans
 completed between Track Studio and the HUD pass but their session files were
 overwritten before archiving; their results live in README's RC-airplane section and
 the [AERO]/[ABENCH] gates.)
+
+---
+
+# IPC bridge: Unity side of the WPF vehicle-control app (2026-08-08)
+
+## Context
+
+A separate C# WPF application (not yet written -- Unity side only for now) will give users
+a GUI + scripting engine that controls vehicles live and reads sensor/physics feedback.
+Transport is Windows named pipes. Decisions settled with the user:
+
+- **Authority**: per-vehicle takeover -- the app explicitly acquires/releases a vehicle;
+  while held, local input for that vehicle is ignored, others stay locally driven.
+- **Wire format**: newline-delimited JSON for commands on one pipe; fixed-layout framed
+  binary for high-rate telemetry on a second pipe. (This is already the documented house
+  rule in `NetMessages.cs`: "low-rate control messages are JsonUtility payloads, the
+  high-rate streams are hand-packed binary".)
+- **Telemetry**: subscription streams -- the app subscribes to named channels per vehicle
+  at a requested rate; unsubscribed data costs nothing.
+- **Camera**: sensor-camera frames (grayscale <=128x128, `CameraSensor.Pixels`) stream
+  from day one. No rendered-view feed.
+- **Scope**: full lifecycle -- list/load tracks, start/end sessions, spawn/despawn
+  vehicles, plus settings/physics/tuning control.
+- **Rebuilds**: full `VehicleDesign` pushes go through `CarRebuilder.RebuildInPlace`;
+  refusals (LAN, bot, arcade/match, native controller) return as structured errors.
+- **Availability**: a new option in the settings menu, **default off**. Toggling it
+  starts/stops the pipe server live.
+- Both processes must keep running unfocused. `Application.runInBackground` is currently
+  set only in `MenuBootstrap.Awake` (ProjectSettings has `runInBackground: 0`) -- the IPC
+  service must assert it itself.
+
+Since the WPF side comes later, a written protocol spec is a first-class deliverable.
+
+## Existing seams to reuse (do not reinvent)
+
+| Need | Existing seam |
+|---|---|
+| Command injection | `IDriverInputSource` (`Core/PlayerInputSource.cs`) assigned to `CarInput.source` (public field, `??=` default so an assigned source survives). Precedent incl. dead-man: `Net/NetworkInputSource.cs` -- latched values, 0.5 s staleness -> `Brake()==1`. |
+| Raw actuator control | `IManualDriver` + `ISetpointSource` as `SimulationRunner.inputBehaviour` (float[8]: motor volts per `MotorPart.ActuatorIndex`, `[6]` steer, `[7]` brake; handbrake via `CarVehicle.SetHandbrake`). |
+| Telemetry values | `TelemetryHub` (`runner.Hub`) -- `FrameCommitted` event, `Channels[i].Latest`; plus direct accessors on `CarVehicle` (tyre temp/press, suspension, battery, slip). |
+| Camera pixels | `Sensors/CameraSensor.cs` -- `byte[] Pixels`, `Width/Height`, own rate (`frameRateHz`, default 10). |
+| Threading pattern | House rule (LanDiscovery / ControllerBuildService): worker thread owns I/O, touches **zero Unity API**, `ConcurrentQueue<T>` drained bounded from a MonoBehaviour `Update()`. |
+| Persistent service | `NetSession.Create()` idiom: idempotent static Create -> `DontDestroyOnLoad` GO, `Instance` set in Awake / cleared in OnDestroy. |
+| Live tuning | `ITunable`/`TunableParam` (12 params on `CarVehicle`), `AssistApplier.ApplyLive`, `PhysicsTuning.Apply`, `SessionConfig` statics (live within a frame via `HandlingFloor`), `TuningBus.Raise` for the 3 override-asset subscribers. |
+| Rebuild | `Core/Boot/CarRebuilder.CanRebuild/RebuildInPlace` (+ `runner.Rebind`). |
+| Spawn alongside | `Core/DebugVehicleRig.BuildCar` + `Core/Boot/CarRunnerRig.ConfigureCarRunner` (the DebugVehicleSpawner path). |
+| Track load | `GameFlow.LoadTrack()` + `SessionConfig` setup, mirroring `MenuUI.StartSinglePlayer` (~line 1407). |
+| Settings | `Persistence/GameSettings.cs` + `SettingsStore.Current/Save/Apply` (JSON at `AppPaths.BaseDir/Saves/settings.json`). |
+| Protocol versioning | `NetSession.ProtocolVersion` exact-match check + append-only constants with changelog comment. |
+
+Constraints found: `JsonUtility` only (no Newtonsoft/System.Text.Json in manifest); no
+`.asmdef`s (new folder just joins Assembly-CSharp); `csc.rsp` has `-unsafe`;
+apiCompatibilityLevel = .NET Standard 2.1 so `System.IO.Pipes` is available;
+`LiveCarTuner`'s apply body is `#if UNITY_EDITOR` -- the IPC path needs its own
+live-apply, not that component. `TrackBootstrap._rigs` is private -- needs an accessor.
+`SimulationRunner.ConfigureRates` is private -- control-rate changes need a new public
+method. Log prefix convention: bracketed tag -- ours is `[IPC]`.
+
+## New code -- `Assets/Scripts/Ipc/`, namespace `AIHWSim.Ipc`
+
+One class per file, split per house style (`*Service` = no Unity API, `*Runtime` = MonoBehaviour).
+
+1. **`IpcProtocol.cs`** -- the wire contract, APPEND-ONLY with changelog comment.
+   - `const int ProtocolVersion = 1`; pipe names `"TinyTorque.Control"` / `"TinyTorque.Telemetry"`.
+   - JSON envelope: `{ "t": "<msgType>", "id": <reqId>, ... }` one per line (UTF-8, `\n`).
+     Every request gets a reply `{ "t": "ack"|"err", "id": ..., ... }`; errors carry
+     machine-readable `code` + human `message` (rebuild refusals pass `CanRebuild`'s
+     `why` through here).
+   - `[Serializable]` DTO classes for every message (JsonUtility idiom: public fields).
+   - Binary frame layout (little-endian): `magic u16, frameType u8 (1=telemetry,
+     2=camera), vehicleId u16, seq u32, payloadLen u32, payload`. Telemetry payload:
+     `simTime f32` + Nxf32 in the channel order the subscribe-ack listed. Camera payload:
+     `simTime f32, sensorIndex u8, width u16, height u16, format u8 (0=gray8), pixels`.
+     Raw pixels, no compression (128x128 = 16 KB; trivial on a local pipe).
+
+2. **`IpcService.cs`** -- pure .NET, zero Unity API (enforced by header comment, like
+   `ControllerBuildService`). Owns both `NamedPipeServerStream`s (message-agnostic byte
+   plumbing):
+   - Accept loop per pipe on a background thread (`IsBackground = true`, named). Single
+     client; a second connection attempt is accepted, sent a busy error, closed.
+   - Control reader thread: reads lines -> `ConcurrentQueue<string> Inbound`. Control
+     writer thread: `BlockingCollection<string> OutboundControl` -> pipe (reliable, no drop).
+   - Telemetry writer thread: bounded `BlockingCollection<byte[]> OutboundFrames`
+     (drop-oldest on overflow, dropped-count logged on drain side) -> pipe.
+   - Disconnect detection on read/write faults -> `volatile` state flag + event queue
+     entry; then re-listen for reconnect. `Stop()` closes pipes to unblock readers
+     (LanDiscovery's `Close()` + `catch { if (_stop) return; }` shape).
+   - Byte-buffer pooling for telemetry frames to keep GC flat at 100 Hz.
+
+3. **`IpcRuntime.cs`** -- MonoBehaviour singleton, `NetSession.Create()` idiom.
+   - `IpcRuntime.EnsureState()`: reads `SettingsStore.Current.ipcEnabled`, creates or
+     tears down the service + GO. Called from boot (`[RuntimeInitializeOnLoadMethod
+     (AfterSceneLoad)]`) and from `SettingsStore.Apply()` so the menu toggle is live.
+     Early-return in `Application.isBatchMode` (house rule -- keeps `[DSC]`/`[PHYS]`
+     worlds clean).
+   - While enabled: `Application.runInBackground = true` (assert every enable, not once).
+   - `Update()`: bounded drain of `Inbound` (parse JSON on the **main** thread --
+     house rule keeps all Unity-adjacent work here; parsing ~100 msg/frame is cheap),
+     dispatch to handlers, watch connection state. On disconnect: release every
+     takeover, clear all subscriptions, keep listening.
+   - Handshake: client sends `hello {version, app}`; reply `welcome {version,
+     unityVersion, sceneKind, sessionActive}` or `err version_mismatch` + disconnect.
+     Exact-equality version check.
+
+4. **`IpcVehicleRegistry.cs`** -- stable small-int ids <-> `PlayerRig`.
+   - Populated on session start / spawn / despawn, cleared on scene change. Snapshot DTO
+     for `list_vehicles`: id, name, isBot, control (Human/BotAI/Firmware), designName,
+     netSlot, hasCamera, motor names (= actuator layout), sensor manifest, tunables list
+     (from `ITunable.GetTunables()`: name/min/max/current).
+
+5. **`IpcDriverSource.cs`** -- `IDriverInputSource` clone of `NetworkInputSource`'s
+   shape: latched throttle/steer/brake/handbrake/buttons set from a `drive` message,
+   dead-man (configurable, default 0.5 s) -> full brake; on `release` or disconnect the
+   previous `CarInput.source` is restored (captured at acquire).
+
+6. **`IpcActuatorDriver.cs`** -- MonoBehaviour implementing `IManualDriver` +
+   `ISetpointSource` for raw mode (`actuate` message: float[8] volts/steer/brake +
+   setpoints). Installed by swapping `runner.inputBehaviour` + `runner.Rebind()`;
+   removed the same way on release. Acquire message picks the level: `drive` (normalized,
+   assists apply) or `raw` (direct actuator vector, what the scripting engine wants for
+   firmware-like control).
+
+7. **`IpcTelemetryStreamer.cs`** -- subscriptions and packing (main thread).
+   - `subscribe {vehicleId, channels[], rateHz}` -> ack lists the resolved channel order
+     (this order defines the binary layout for that stream). Channels resolve against
+     `TelemetryHub.Channels` names plus a small set of direct-accessor pseudo-channels
+     (`veh/pos_y`, `veh/tyre_temp_i`, etc. already exist on the hub via
+     PhysicsDebugTelemetry when bound; expose what the hub has -- don't invent names).
+   - Hook `runner.Hub.FrameCommitted`; decimate to the requested rate; pack `Latest` of
+     each subscribed channel into a pooled frame; enqueue. Never blocks the sim.
+   - `subscribe_camera {vehicleId, sensorName}` -> each new capture streams once. Add
+     `public int FrameIndex` (incremented in `CaptureIfDue`) to `CameraSensor.cs` so the
+     streamer detects new frames without copying every tick.
+
+8. **`IpcCommandHandlers.cs`** (partials by area if it grows) -- main-thread appliers:
+   - **Enumerate**: `list_vehicles`, `list_tracks` (`SceneTrackCatalog` + tile-map
+     catalog the menu uses), `list_presets` (`VehiclePresets.All` + `VehicleLibrary`
+     saves), `get_session` (mode, track, match state, sim time).
+   - **Control**: `acquire {vehicleId, level}` / `release` / `drive` / `actuate` /
+     `reset_vehicle` / `teleport` (`ResetVehicleTo` / `RestoreState`) / `set_mode`
+     (Manual/Autonomous on the runner).
+   - **Tuning**: `get_tunables` / `set_tunable` (ITunable, clamped to Min/Max);
+     `set_assists` (+ `AssistApplier.ApplyLive`); `set_session_config` (SessionConfig
+     statics); `set_mode_tuning`/`set_arcade_tuning` (mutate override asset fields +
+     `TuningBus.Raise(asset)` -- required, these assets have no OnValidate at runtime).
+   - **Physics**: `set_solver` (PhysicsSettings fields -> `PhysicsTuning.Apply`);
+     `set_rates {physicsHz, controlHz}` -> new **public
+     `SimulationRunner.ReconfigureRates(int physHz, int ctrlHz)`** wrapping the private
+     `ConfigureRates` math (re-derives `_decimation`/`controlDt`, calls
+     `PhysicsRateAuthority.Apply` non-provisionally). Applied to every runner in the
+     session so `[RATE]` stays quiet.
+   - **Game settings**: `get_settings` / `set_settings` (whitelisted GameSettings fields
+     -> `SettingsStore.Save()` + `Apply()`).
+   - **Design**: `push_design {vehicleId, designJson}` -> live-safe diff applied directly
+     (the same field set `LiveCarTuner.ApplyPerStep` names: steerRate, servoStallNm,
+     ackermannPct, brake torques/proportioning, antiRoll, stickyPhantomNm, dragCd,
+     frontalAreaM2, bodyColor -- reimplemented here because LiveCarTuner is editor-only);
+     anything else -> `CarRebuilder.CanRebuild` -> `RebuildInPlace` or `err
+     rebuild_refused {why}`.
+   - **Lifecycle**: `load_track {trackId, levelOptions}` (set `SessionConfig` +
+     `GameFlow` statics the way `MenuUI.StartSinglePlayer` does, then `LoadTrack()`);
+     `end_session` (`GameFlow.LoadMenu()`); `restart_run` (`runner.RestartRun()`);
+     `spawn_vehicle {design|preset, pose}` via the DebugVehicleRig path + registry
+     add; `despawn_vehicle`. Refuse lifecycle ops in LAN sessions
+     (`NetSession.Instance != null`) with `err lan_session`.
+   - Every mutating handler logs `[IPC] <verb> ...` so a session transcript exists.
+
+## Edits to existing files
+
+- `Persistence/GameSettings.cs` -- add `public bool ipcEnabled = false;` (version bump
+  per that file's migration pattern). `SettingsStore.Apply()` calls
+  `IpcRuntime.EnsureState()`.
+- `Menu/MenuUI.cs` `DrawOptions()` and `Core/SettingsPanel.cs` -- the "Remote control
+  API" toggle (both surfaces, matching how other toggles appear in each).
+- `Core/TrackBootstrap.cs` -- `public IReadOnlyList<PlayerRig> Rigs => _rigs;` and a
+  notify to `IpcVehicleRegistry` after rigs build / spawn / despawn.
+- `Core/SimulationRunner.cs` -- public `ReconfigureRates(int, int)` as above.
+- `Sensors/CameraSensor.cs` -- `public int FrameIndex` counter.
+- `Core/Boot/CarRebuilder.cs` -- no change expected; refusal strings pass through as-is.
+
+## Deliverables beyond code
+
+- **`Docs/ipc-protocol.md`** -- the spec the WPF app will be written against: pipe names,
+  handshake, every JSON message with field tables, binary frame layouts, error codes,
+  dead-man semantics, reconnect rules. Kept in lockstep with `IpcProtocol.cs` (the
+  validator cross-checks message-type constants against the doc's inventory).
+- **`Tools/ipc-test-client.ps1`** -- PowerShell smoke client (`NamedPipeClientStream` via
+  .NET): connects, handshakes, lists vehicles, acquires, sends a steer pulse, subscribes
+  to `veh/speed`, prints frames. This is how the Unity side gets exercised before the
+  WPF app exists.
+- **`Assets/Editor/IpcProtocolValidator.cs`** -- `[IPC]` batch gate in the `[DSC]` style:
+  round-trips every DTO through JsonUtility, packs/unpacks every binary frame type,
+  checks append-only constants, drives `IpcService` against an in-process
+  `NamedPipeClientStream` (pure .NET, no play mode) for connect/busy/disconnect/reconnect.
+
+## Milestones
+
+- [x] **M1 Plumbing**: settings flag + toggle in both Options and the pause Settings
+  panel, `IpcService` threads/queues, `IpcRuntime` lifecycle, handshake + version,
+  runInBackground.
+- [x] **M2 Read side**: registry + `list_*`/`get_*`, telemetry subscriptions, binary
+  stream, camera frames (`CameraSensor.FrameIndex`/`LastCaptureTime` added).
+- [x] **M3 Control**: acquire/release at both levels, drive/actuate, dead-man,
+  disconnect restore, reset/teleport/set_mode.
+- [x] **M4 Tuning & settings**: tunables, assists, session config, mode/arcade tuning +
+  `TuningBus.Raise`, solver, rates, game settings.
+- [x] **M5 Lifecycle & design**: load/end/restart, spawn/despawn, push_design + rebuild
+  refusals.
+- [x] **M6 Spec & smoke**: `Docs/ipc-protocol.md`, `Tools/ipc-test-client.ps1`,
+  `Assets/Editor/IpcProtocolValidator.cs`.
+
+### Deviations from the plan as approved
+
+- **`TrackBootstrap` was not instrumented.** Instead `IpcRuntime` hooks
+  `SceneManager.sceneLoaded` and the registry compares rig counts each frame, so
+  spawns, despawns and LAN join/leave are all picked up without any call site
+  knowing the bridge exists. `TrackBootstrap` gained only the `Rigs` accessor.
+- **`SimulationRunner.SetInputBehaviour` was added** alongside `ReconfigureRates`.
+  The plan said raw takeover would swap `inputBehaviour` and call `Rebind()`, but
+  `Rebind` also re-runs `RegisterChannels`, which widens CSV rows past the header
+  `CsvLogger.Begin` already snapshotted. `SetInputBehaviour` re-resolves only the two
+  input casts. `SetMode` was added too -- `Mode` had a private setter.
+- **Spawned vehicles are not added to `TrackBootstrap`'s rig list.** A `MatchDirector`
+  aliases that same List, so appending mid-race would hand it a rig with no
+  `MatchRacer`. They live in the registry instead: drivable and streamable, not scored.
+- **`set_solver` writes the engine statics directly** rather than mutating a
+  `PhysicsSettings` asset, which is a shipped file that must not be edited on disk.
+
+## Outcome
+
+Both gates green -- `[IPC] RESULT ALL PASS (468 checks)` and `[DSC] RESULT ALL PASS
+(150 checks)` -- and the bridge verified end to end against the real WPF client:
+vehicle driven live from the external app with sensor telemetry streaming back in
+real time.
+
+The `[IPC]` gate earned its keep on the first real run: it caught that both server
+pipes were being created without `PipeOptions.Asynchronous`. A synchronous pipe
+handle serialises every operation on itself, so the writer thread's `Write` parked
+behind the reader thread's blocking `Read` -- the server could never answer a
+request -- and the telemetry accept thread's `WaitForConnection` could not be
+cancelled by `Dispose`, wedging process shutdown. Both fixed; the requirement is
+now stated in `IpcService.cs` and in the client checklist in the protocol doc.
+
+The one bug the gate could not see lived in the client: its `System.Text.Json` send
+path typed every message as the base envelope, and that serializer emits the
+*declared* type, so every message reached the game carrying nothing but `t` and
+`id`. It surfaced as a version mismatch only because `version` is the one field the
+game validates -- JsonUtility read the absent key as 0. Fixed client-side by
+serializing `msg.GetType()`.
 
 ---
 

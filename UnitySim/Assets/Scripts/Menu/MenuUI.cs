@@ -2141,6 +2141,19 @@ namespace AIHWSim.Menu
             if (lg != s.logTelemetry) { s.logTelemetry = lg; changed = true; }
             GUILayout.Label("Off by default; writes to TelemetryLogs/ on Save.", GarageSkin.StatLabel);
 
+            // Remote control — the named-pipe bridge for an external control app.
+            // Off by default and deliberately spelled out: this is not a
+            // preference, it opens a pipe that hands any local process the
+            // vehicles and the physics settings.
+            GUILayout.Space(6);
+            GUILayout.Label("REMOTE CONTROL", GarageSkin.Header);
+            bool ipc = MenuNav.Toggle(s.ipcEnabled, " Allow an external app to control this game");
+            if (ipc != s.ipcEnabled) { s.ipcEnabled = ipc; changed = true; }
+            GUILayout.Label(s.ipcEnabled
+                ? $"Serving \\\\.\\pipe\\{Ipc.IpcProtocol.ControlPipeName} — one app at a time."
+                : "Off. When on, a local app can drive vehicles and change physics settings.",
+                GarageSkin.StatLabel);
+
             // Extras.
             GUILayout.Space(6);
             GUILayout.Label("EXTRAS", GarageSkin.Header);
