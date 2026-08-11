@@ -24,6 +24,9 @@ namespace AIHWSim.Core
         /// <summary>Per-player rigs (set by TrackBootstrap) — enables session snapshots.</summary>
         public List<PlayerRig> rigs;
         public MonoBehaviour tunableBehaviour; // optional; may implement ITunable
+        /// <summary>Solo free-roam prop placer (set by TrackBootstrap; null
+        /// elsewhere) — gates the PLACE PROPS page.</summary>
+        public Props.PropPlacer propPlacer;
 
         private IEnumerable<SimulationRunner> AllRunners
         {
@@ -66,6 +69,9 @@ namespace AIHWSim.Core
         private bool _isTutorialDraw;
 
         private bool _showBuild, _showBuildDraw;
+        // PLACE PROPS page (solo free roam only). _hasPlacerDraw is the
+        // row-exists snapshot, same reason as _hasBuildDraw.
+        private bool _showProps, _showPropsDraw, _hasPlacerDraw;
         // Whether the "Build controller…" row exists at all. Snapshotted like the
         // rest: it is derived from live scene state, and a row appearing between a
         // Layout pass and its Repaint is the one IMGUI error this UI never risks.
@@ -102,11 +108,12 @@ namespace AIHWSim.Core
             if (_paused && MenuNav.ConsumeBack())
             {
                 if (_pending != PendingExit.None) _pending = PendingExit.None;
-                else if (_showTune || _showSettings || _showBuild)
+                else if (_showTune || _showSettings || _showBuild || _showProps)
                 {
                     _showTune = false;
                     _showSettings = false;
                     _showBuild = false;
+                    _showProps = false;
                     SettingsPanel.Reset();
                 }
                 else SetPaused(false);
@@ -142,6 +149,8 @@ namespace AIHWSim.Core
                 _showSettingsDraw = _showSettings;
                 _showBuildDraw = _showBuild;
                 _hasBuildDraw = HasControllerRunner;
+                _showPropsDraw = _showProps;
+                _hasPlacerDraw = propPlacer != null;
                 _isTutorialDraw = _tutorial != null;
                 _pendingDraw = _pending;
             }
@@ -220,11 +229,17 @@ namespace AIHWSim.Core
                 MenuNav.Button(_showBuildDraw ? "Hide controller build" : "Build controller…",
                                GUILayout.Height(30)))
                 _showBuild = !_showBuild;
+            // Free-roam prop placement. Offered only where a placer was
+            // composed (solo Free Roam) — same honesty as the build row.
+            if (_hasPlacerDraw &&
+                MenuNav.Button(_showPropsDraw ? "Hide props" : "Place props…", GUILayout.Height(30)))
+                _showProps = !_showProps;
             if (MenuNav.Button("Quit", GUILayout.Height(30))) RequestExit(PendingExit.Quit);
 
             if (_showTuneDraw && _tunable != null) DrawTuning();
             if (_showSettingsDraw) DrawSettings();
             if (_showBuildDraw) UI.ControllerBuildPanel.Draw(logHeight: 180f);
+            if (_showPropsDraw && _hasPlacerDraw) DrawProps();
 
             if (!string.IsNullOrEmpty(_status))
             {
@@ -348,6 +363,38 @@ namespace AIHWSim.Core
             GUILayout.Label(Persistence.SettingsStore.Current.logTelemetry
                 ? "Logging starts when you resume."
                 : "Logging is off (starts next session if enabled).", GarageSkin.StatLabel);
+        }
+
+        /// <summary>
+        /// The PLACE PROPS page: pick something, the menu closes, and a ghost
+        /// rides ahead of the car until Interact stamps it down. The row set is
+        /// fixed (catalog table + two statics), so no Layout snapshot beyond
+        /// the page toggle is needed.
+        /// </summary>
+        private void DrawProps()
+        {
+            GUILayout.Space(8);
+            GUILayout.Label("Place a prop (it saves with this map):");
+            for (int i = 0; i < Props.SpeakerCatalog.Entries.Length; i++)
+            {
+                if (MenuNav.Button($"Speaker — {Props.SpeakerCatalog.Entries[i].label}",
+                                   GUILayout.Height(26)))
+                    ArmPlacer("speaker", i);
+            }
+            if (MenuNav.Button("World microphone", GUILayout.Height(26)))
+                ArmPlacer("mic", 0);
+            if (MenuNav.Button("RF beacon", GUILayout.Height(26)))
+                ArmPlacer("rf_beacon", 0);
+            GUILayout.Label($"Drive to position; press {KeyBindings.Current.Key(DriveAction.Interact)} "
+                + "to place. Hold it near a placed prop to remove it.", GarageSkin.StatLabel);
+        }
+
+        private void ArmPlacer(string kind, int preset)
+        {
+            if (propPlacer == null) return;
+            propPlacer.Arm(kind, preset);
+            _showProps = false;
+            SetPaused(false);
         }
 
         private void DrawTuning()

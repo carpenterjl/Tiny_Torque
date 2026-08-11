@@ -8,11 +8,270 @@ describe is documented in [README.md](../README.md).
 Active work lives in the session plan file, not here; a plan moves into this archive
 once its milestones are done.
 
-Covering the project bootstrap through the tutorial system (50 plans).
-Last updated 2026-08-10. (The RC-airplane F0–F9 and slipstream/phugoid G-series plans
+Covering the project bootstrap through the sensors & world props feature (51 plans).
+Last updated 2026-08-11. (The RC-airplane F0–F9 and slipstream/phugoid G-series plans
 completed between Track Studio and the HUD pass but their session files were
 overwritten before archiving; their results live in README's RC-airplane section and
 the [AERO]/[ABENCH] gates.)
+
+---
+
+# Sensors & world props: color/mag/bump/RF sensors, LED, speaker/mic/beacon props, world telemetry (2026-08-11)
+
+## Context
+
+The simulator's sensor suite (ToF, encoder, IMU, camera, suspension, battery) covers
+navigation but nothing environmental or communicative. This adds: a **color detector**
+(with line-follow reflectance), **magnetometer**, **bump sensor**, **RF antenna**
+(receive + emit) as garage sensors; a **firmware-controlled LED** actuator; and three
+**world props** — speaker, world microphone, RF beacon — placeable in scenes, in Track
+Studio, and live during free play. Sound and RF are **simulated fields** (deterministic
+registries, no real DSP); world-prop readings flow through a new **world telemetry hub**
+exported over IPC so external apps can triangulate.
+
+**User decisions settled via Q&A:**
+- Sound model: **simulated propagation + tone signature** (`toneHz`) so mics can tell
+  WHO they hear. Audible playback is a separate ordinary-AudioSource concern.
+- Microphones are **world props only** (not vehicle sensors).
+- Speaker/beacon placeable via **all three** surfaces: scene-authored components,
+  Track Studio catalog rows, and **live placement in free play**.
+- Live-placed props persist to a **per-scene prop layout JSON** in the save dir.
+- World-prop data reaches user code via a **world hub over IPC** (additive extension;
+  native firmware controllers stay vehicle-only).
+- Vehicle RF is a **new SensorType.Rf** — existing cosmetic `AntennaSpec` untouched.
+- Extras confirmed: line/floor reflectance mode, bump/contact sensor,
+  magnetometer/compass, firmware-controlled indicator LED.
+
+## Architecture (settled)
+
+### D1 — Signal fields: static registries, insertion-order determinism
+`SoundField` and `RfField` are static classes (TutorialSignals idiom) in
+`Assets/Scripts/Sensors/Signals/`. Emitters register `OnEnable` / unregister
+`OnDisable`; iteration = insertion order (`List<T>`), stable for a given track+design.
+Read-only at query time. Falloff: sound `L = loudness / max(1,(d/1m)^2)`; RF
+`rssi = txPowerDbm − 20·log10(max(d,0.05))`, floor −100 dBm. **No occlusion** —
+triangulation is the use case, occlusion shadows break the math and add [PHYS] surface.
+
+Emitter interfaces (props and RF sensors implement these):
+```csharp
+public interface ISoundEmitter { bool SoundActive; Vector3 SoundPosition;
+    float Loudness; float ToneHz; int SoundEmitterId { get; set; } }
+public interface IRfEmitter { bool RfActive; Vector3 RfPosition;
+    float TxPowerDbm; int BeaconId; }
+```
+Query API: `SoundField.LevelAt(pos)`, `SoundField.StrongestAt(pos, k, SoundReading[])`,
+`RfField.StrongestAt(pos, forward, k, RfReading[])` — sort by strength desc, tie-break
+id asc, no allocation. Empty slots: `id=-1, rssi=-100/level=0, bearing/tone=0`.
+
+### D2 — Fixed strongest-K channel shape, K = 3
+Telemetry channels and the ABI manifest are fixed at registration; K=3 because
+trilateration needs exactly 3 references. RF sensor: 10 floats
+`{count, s0/id, s0/rssi, s0/bearing, ×3}`. World mic: 10 floats
+`{level, s0/id, s0/level, s0/tone, ×3}`.
+
+### D3 — New vehicle sensors (all follow the TofSensor template)
+- **ColorSensor** (`Color=8`, 4 fields `r,g,b,reflect`): raycast; color chain =
+  `ISurfaceColorProvider` on hit → MeshCollider + readable `Texture2D`
+  `GetPixelBilinear(hit.textureCoord)` → `sharedMaterial.color` → black. Documented
+  limit: box-collider floors read the tint (textureCoord is MeshCollider-only); line
+  courses use MeshCollider strips or providers. `reflect` = Rec.709 luminance of the
+  noisy rgb. Aimed down = line follower.
+- **MagSensor** (`Mag=10`, 1 field `heading_deg`): `atan2(fwd.x, fwd.z)` +
+  `declinationDeg`, NoiseModel drift applied before wrap to [0,360).
+- **BumpSensor** (`Bump=11`, 2 fields `contact,force_n`) + **VehicleContactBus** on the
+  vehicle root (OnCollisionEnter ring, latched per control tick — coexists with
+  VehicleAudio/lattice callbacks on the same GO). Contact when a latched hit is within
+  `bumpRadius` of the mount and `coneAngle` of forward; `force_n = maxImpulse/physicsDt`.
+- **RfSensor** (`Rf=9`, 10 fields per D2): queries `RfField.StrongestAt`; threshold
+  `minRssiDbm=-90`; **also implements IRfEmitter** (spec `rfEmit/rfId/rfPowerDbm`) so a
+  car antenna is a trackable ping source; skips its own emission via ReferenceEquals.
+- **VehicleSoundEmitter** on every built car: `Loudness = k·Σ|motor current|`,
+  `ToneHz = |motorOmega|/2π` — cars are audible to world mics. Silent at rest.
+
+### D4 — LED actuator (`Led=12`)
+`CtrlOutputs.actuator[8]` cannot grow. `LedPart : SensorComponent` claims **two
+consecutive free actuator slots** after motors (MotorPart pattern): slot A = RGB24
+packed as integer-valued float, slot B = blink Hz (0=solid). No free slots →
+`actuator_index=-1`, display-only + warning. Readback fields `r,g,b,lit`. Visual:
+`PartVisualFactory.BuildLedViz` emissive dome on the **default layer** (NOT VizLayer 2,
+which CameraSensor culls — the LED must be camera-visible). Driven per control tick via
+MaterialPropertyBlock from the same delayed command array motors get
+(`SimulationRunner.ControlStep` → `sensorRig.ApplyActuators(applied, simTime)`); blink
+phase from deterministic simTime.
+
+### D5 — ABI v6, append-only
+`controller_api.h`: `CTRL_ABI_VERSION 6`, append `SENSOR_COLOR=8, SENSOR_RF=9,
+SENSOR_MAG=10, SENSOR_BUMP=11, SENSOR_LED=12` + layout-comment rows; zero struct
+change, v5 DLLs keep working. Mirror enum in `ControllerInterop.cs`.
+`UserScripts/lib/tt_controller.h`: wrappers `tt_color_r/g/b`, `tt_reflectance`,
+`tt_heading`, `tt_bump`, `tt_bump_force`, `tt_rf_count/id/rssi/bearing`,
+`tt_rf_find(car,in,name,beacon_id)`, `tt_led(car,out,name,r,g,b,blink_hz)` (no-op when
+unslotted). `tt_sensor_value` is already type-generic.
+
+### D6 — World telemetry hub
+`WorldTelemetry` static (owns a `TelemetryHub` + `IWorldSensor` registry) +
+`WorldSensorHost` MonoBehaviour created by TrackBootstrap: FixedUpdate accumulated to
+50 Hz, own `worldTime`, `Reset()` in Awake. Channels `world/<kind>/<name>/<field>`,
+registered at prop registration (scene build → before first Commit).
+```csharp
+public interface IWorldSensor { string WorldSensorName; string WorldSensorKind;
+    IReadOnlyList<string> WorldFieldNames;
+    void SampleWorld(float dt, float[] dest, int offset); Vector3 WorldPosition; }
+```
+Mic implements it (kind "mic", D2 fields); speaker (kind "speaker",
+`enabled,loudness,tone_hz`); beacon (kind "beacon", `enabled,id,tx_dbm`).
+
+### D7 — IPC additive extension, NO version bump
+ProtocolVersion is exact-equality-checked; the protocol is append-only precisely so
+additions don't bump it. Append to `IpcProtocol.cs`: `MsgListWorldSensors`,
+`MsgSubscribeWorld`, `MsgUnsubscribeWorld`, `MsgWorldSensors`, `ErrNoWorldHub`, and
+`public const ushort WorldStreamId = 0xFFFF` — world frames reuse `FrameTelemetry`
+with the sentinel vehicleId, payload byte-identical to vehicle telemetry. DTOs in
+`IpcMessages.cs`: `WorldSensorDto {name, kind, channels[], px,py,pz}`,
+`WorldSensorsReply`, `SubscribeWorldMsg {channels[], rateHz}`. One world `Sub` in
+`IpcTelemetryStreamer` (vehicle=null, hooked on the world hub's FrameCommitted); three
+handler cases in `IpcCommandHandlers`. `Docs/ipc-protocol.md`: new World-sensors
+section + the sensor-kind list gains Color/Rf/Mag/Bump/Led (wire kind is
+`Type.ToString()`, auto-appears). `[IPC]` validator extended in the same commit.
+
+### D8 — Props: three sealed components, no base class
+`Assets/Scripts/Props/` (namespace `AIHWSim.Props`), one class per file:
+`SpeakerProp`, `WorldMicProp`, `RfBeaconProp`, plus statics `PropRig` (skins via
+TrackBuilder primitives + solid collider, `PropId(pos,kind)` = 5 cm-quantized position
+hash — the BillboardPoster zero-sync identity trick), `PropInteraction` (2 s-cached car
+list, `NearestCar(pos,r)`, `ClaimInteract` so one press reaches exactly one prop),
+`SpeakerCatalog`, `SpeakerConfig` (`[Serializable]`: mode Loop/Timer/Trigger/Interact,
+clipKey, loudness, timerPeriodSec/OnSec, triggerRadius, startOn), `PropLayoutStore`,
+`PropPlacer`, `PropNetLink`. Each prop: `[AddComponentMenu("Tiny Torque/Props/…")]
+[DisallowMultipleComponent] sealed`, gizmo draws the tested radius, builds its own skin
+in Awake if no `skin` child (so an empty GO + component authors fine), plus
+`static Create(parent,pos,yaw,…)` and `static Attach(go,…)` (skips existing skin).
+**Polled distance, no trigger colliders** (Flag.cs reasons: multi-collider cars,
+sleeping rigidbodies). Beacon identity field is `beaconId` (matches `IRfEmitter`).
+Speaker sound: curated `SpeakerCatalog` — three NEW loop-clean sine keys in
+`ProceduralAudio` (`tone_a` 440 Hz / `tone_b` 880 / `tone_c` 1760, each entry carries
+its `toneHz`) plus HornMusical/HornSiren/WarnBeep entries. Audible source: prop-owned
+looping AudioSource through `SfxPlayer.Configure(src, spatial:true)` (mandatory rolloff;
+pool can't loop), volume = sfxVolume·loudness01; **SoundField loudness is unscaled by
+user volume** — the simulation is physical, the mixer is not. Timer mode =
+`Time.time % period` (SignalCycle idiom, no phase offset).
+
+### D9 — Interact input: `DriveAction.Interact = 14`
+Key F, pad DpadUp. Read via `InputReader.InteractPressed()` statics only — NOT added to
+`IDriverInputSource`, NOT on the LAN InputState wire (precedent: ModeToggle/Pause;
+LAN interaction becomes a prop message instead). Non-consuming edge idiom. Reuse-UseItem
+rejected: props exist in all modes, UseItem is live in arcade/derby.
+
+### D10 — Live placement + per-scene persistence
+`PropLayoutStore`: `<AppPaths.BaseDir>/Props/<trackKey>.json`, trackKey =
+`"scene_"+ActiveSceneTrack` / `"track_"+Sanitize(design.name)` / `"oval"`. JsonUtility
+`PropLayout{version=1, List<PropPlacement>}`, one flat union row (kind, x/y/z, yawDeg,
+speaker fields, beacon fields), additive-only migration. TrackBootstrap (after
+`ArenaNav.SetTrack`): create `WorldProps` root, load layout, spawn props; build
+`PropPlacer` iff FreeRoam && solo && !splitscreen. PauseMenu gains a "PLACE PROPS" page
+(visible only when a placer exists): pick preset → `Arm()` → unpause → ghost 2 m ahead
+of car (transparent skin, yaw snapped 15°) → Interact places (saves immediately),
+hold-Interact 0.6 s removes a live-placed prop (scene/catalog props not removable).
+
+### D11 — Track Studio rows
+`ItemBehavior` append `Speaker=6, Microphone=7, RfBeacon=8`. Four `ItemDef` rows at end
+of `Items[]`: `prop_speaker_loop`, `prop_speaker_button`, `prop_mic`, `prop_rf_beacon` —
+category Misc, new theme header `"Electronics"`, build = `PropRig.BuildXSkin`.
+`TrackFactory` behavior switch: three cases calling `X.Attach(go, …)` (interactive
+builds only, as the switch already is). No PlacedItem schema change — Studio rows use
+catalog defaults; rich config is a scene/live affordance.
+
+### D12 — LAN
+Existence: scene/catalog props deterministically recreated everywhere — zero net code.
+Toggle state: `NetMsg.PropEvt = "aihw.prop_evt"` (client request → host applies +
+reliable rebroadcast) + `NetMsg.PropState = "aihw.prop_state"` (host, 1 Hz, idempotent
+list of props off their default — heals drops and late joins, ArcSync-style).
+`PropNetLink` built by TrackBootstrap on LAN; props route toggles through a static hook
+it installs (null → apply locally). Timer/loop phase: local clock, no sync (SignalCycle's
+accepted behavior). **Live placement disabled in LAN sessions** (placer not built):
+placements persist per-machine, so syncing needs an ownership/persistence story a
+solo-experimentation feature doesn't justify.
+
+## Milestones
+
+- [x] **M1 Signal fields**: new `Sensors/Signals/` — `SignalEmitters.cs` (both
+  interfaces), `SoundField.cs`, `RfField.cs`; `Sensors/VehicleSoundEmitter.cs`;
+  attach in `VehicleFactory`.
+- [x] **M2 Vehicle sensors**: new `ColorSensor.cs`, `ISurfaceColorProvider.cs`,
+  `MagSensor.cs`, `BumpSensor.cs`, `VehicleContactBus.cs`, `RfSensor.cs`.
+  `SensorSpec` gains `rfEmit, rfId, rfPowerDbm, declinationDeg, bumpRadius`
+  (defaults = old behavior). `VehicleFactory.CreateSensor` cases + NoiseModel arms;
+  `PartVisualFactory` viz builders; garage touchpoints (`GarageUI` palette rows +
+  key→kind + inspector blocks, `GarageBootstrap.ColorFor`, `MassProperties.SensorMass`,
+  `SymmetryUtil.MirrorInto`, `PartGhost.ForSensor`).
+- [x] **M3 LED**: `Sensors/LedPart.cs`; `SensorRig` two-slot allocation after motors +
+  `ApplyActuators`; SimulationRunner one-line hook; `BuildLedViz` (default layer).
+- [x] **M4 ABI v6**: `controller_api.h` (+Release mirror), `ControllerInterop.cs`
+  enum, `tt_controller.h` wrappers (+mirror).
+- [x] **M5 World hub**: `Telemetry/WorldTelemetry.cs` (+`IWorldSensor`),
+  `Telemetry/WorldSensorHost.cs`; TrackBootstrap creates the host.
+- [x] **M6 IPC extension**: IpcProtocol/IpcMessages/IpcTelemetryStreamer/
+  IpcCommandHandlers per D7; `Docs/ipc-protocol.md`; extend `IpcProtocolValidator`.
+- [x] **M7 Props**: new `Props/` files per D8; ProceduralAudio tone keys;
+  `SceneTrackSetup` "Add prop/…" menu items.
+- [x] **M8 Interact input**: KeyBindings (enum, fields, Key/SetKey/Pad/SetPad/Label,
+  PadActions, both ApplyLayout branches), InputReader trio, SettingsPanel row.
+- [x] **M9 Track Studio**: TrackCatalog behaviors + 4 ItemDefs; TrackFactory cases.
+- [x] **M10 Live placement**: `PropLayoutStore.cs`, `PropPlacer.cs`; TrackBootstrap
+  load/spawn + placer; PauseMenu "PLACE PROPS" page.
+- [x] **M11 LAN**: NetMessages PropEvt/PropState + DTOs; NetSession handlers/events;
+  `PropNetLink.cs`.
+- [x] **M12 Gates + verification**: new `[SENS]` `SensorContractValidator.cs`
+  (FieldNames==DataCount, exact-slice writes, zero-noise bit-equality, StrongestAt
+  order/tie-break/sentinels); new `[PRP]` `PropValidator.cs` (catalog ids build clean,
+  ItemBehavior ordinals 0–5 frozen, SpeakerCatalog keys resolve + loop-clean, layout
+  JSON round-trip, filename==classname, Interact==14, Attach idempotence); extend
+  `[IPC]`; run `[PHYS]`, `[TUT]`, `[DSC]`, design-dump.
+
+## Status
+
+Code complete, all gates run 2026-08-10/11:
+`[SENS] RESULT ALL PASS (55 checks)` (new), `[PRP] RESULT ALL PASS (56 checks)`
+(new), `[IPC] RESULT ALL PASS (498 checks)` (extended), `[TUT] ALL PASS (262)`,
+`[DSC] ALL PASS (150)`, `[PHYS]` static probe exit 0 with unchanged values.
+Docs updated: `Docs/ipc-protocol.md` world-sensors section + error code,
+README "Environmental sensors and the LED (ABI v6)" + "World props" sections.
+
+### Deviations from the plan as approved
+
+- **LED actuator slots cap at 5, not 7** — actuator slots 6/7 are RESERVED
+  (`CTRL_STEER_ACTUATOR`/`CTRL_BRAKE_ACTUATOR`); the free pool for LED pairs is
+  `[motorCount..5]`. Caught during ABI work; the header now states it.
+- **`PropRig` has its own edit-safe piece helper** instead of TrackBuilder:
+  the `[PRP]` gate runs catalog builds at EDIT time, where TrackBuilder's
+  `Object.Destroy` on unwanted colliders is an error (DestroyImmediate needed).
+- **WorldTelemetry's registry persists across hub resets** — Awake order
+  between scene-authored props and the host is undefined, so `Reset()` rebuilds
+  channels for already-registered sensors rather than wiping them; the host no
+  longer resets SoundField/RfField at all (OnDisable self-cleaning suffices).
+- **`[PRP]` loop-clean assertion is tone_* only** — the siren is a sweep with
+  no sample-level seam; the horns predate the feature and seam via LoopFade.
+- **Design-dump re-bless not needed as a commit step**: no baseline file is
+  committed — the dump is a manual before/after diff tool; new SensorSpec
+  fields are inert-by-default and add no engine-handed state.
+
+## Reconciliations (single source of truth)
+- Tone identity is **`toneHz` (float)** everywhere; SpeakerCatalog entries carry it.
+- Beacon identity is **`beaconId` (int)** everywhere (no "rfChannel").
+- The mic prop implements **`IWorldSensor`** and reads via `SoundField.StrongestAt` —
+  no separate receiver-registration API.
+- `GarageUI.cs` edits land in M2 only.
+
+## Risks
+- **[PHYS]/determinism**: zero-noise defaults inert by construction; registries are
+  physics-free; bump (PhysX impulses) excluded from bit-identity assertions.
+- **Design dump drift**: new SensorSpec fields move the byte-diff baseline — re-bless
+  once, in its own commit containing only the field addition.
+- **ABI**: additive only; sharp edge = LED two-slot claim on 5–6-motor designs →
+  display-only fallback + warning.
+- **Readable-texture assumption** (color chain step 2): verify in M2; fall through to
+  tint, never crash.
+- **[TPL]** has one pre-existing failure (Template_SimPhysics); must not gain a second.
 
 ---
 

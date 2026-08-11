@@ -169,6 +169,13 @@ namespace AIHWSim.Core
                 (SessionConfig.Mode == SessionMode.LanHost || SessionConfig.Mode == SessionMode.LanClient))
                 SessionConfig.SetSinglePlayer();
 
+            // World sensor host: ticks the scene-level telemetry hub the world
+            // props (speakers, mics, RF beacons) publish through. Before the
+            // LAN branches on purpose — scene-authored props exist there too.
+            new GameObject("WorldSensorHost").AddComponent<Telemetry.WorldSensorHost>();
+            // Prop toggle sync (button speakers / beacons). No-op off LAN.
+            Props.PropNetLink.BuildIfLan();
+
             if (SessionConfig.Mode == SessionMode.LanClient) { BuildLanClientScene(); return; }
             if (SessionConfig.Mode == SessionMode.LanHost) { BuildLanHostScene(); return; }
 
@@ -197,6 +204,10 @@ namespace AIHWSim.Core
             _humanRig = _rigs.Find(r => !r.slot.isBot) ?? _rigs[0];
             _runner = _humanRig.runner;
 
+            // Live-placed world props (speakers/mics/beacons) saved for this
+            // map, and — solo Free Roam only — the placer that adds more.
+            BuildWorldProps();
+
             if (_splitScreen)
             {
                 if (_lapTimer != null) _lapTimer.showDefaultHud = false;
@@ -211,6 +222,7 @@ namespace AIHWSim.Core
             foreach (var r in _rigs) pause.runners.Add(r.runner);
             pause.tunableBehaviour = _splitScreen ? null : _humanRig.car; // Tune is solo-only
             pause.rigs = _rigs;
+            pause.propPlacer = PropPlacer; // null outside solo Free Roam
 
             HookLapRecords();
             ConsumePendingSnapshot();
@@ -249,6 +261,30 @@ namespace AIHWSim.Core
                 aaudio.director = _arcade;
                 aaudio.localRig = _humanRig;
             }
+        }
+
+        /// <summary>The solo free-play prop placer, if one was composed —
+        /// handed to the pause menu for its PLACE PROPS page.</summary>
+        public Props.PropPlacer PropPlacer { get; private set; }
+
+        /// <summary>
+        /// Reload this map's live-placed prop layout and, in a solo Free Roam,
+        /// compose the placer. After the rigs: the placer follows the human
+        /// car. Scene-authored and Studio-built props of the same kinds
+        /// coexist under their own roots — position-hash ids keep everything
+        /// distinct because the positions are.
+        /// </summary>
+        private void BuildWorldProps()
+        {
+            string key = Props.PropLayoutStore.TrackKey();
+            var layout = Props.PropLayoutStore.Load(key);
+            var root = new GameObject("WorldProps").transform;
+            var live = Props.PropLayoutStore.Spawn(layout, root);
+
+            bool placeable = SessionConfig.Match == MatchMode.FreeRoam
+                             && Net.NetSession.Instance == null && !_splitScreen;
+            if (placeable && _humanRig != null && _humanRig.car != null)
+                PropPlacer = Props.PropPlacer.Build(root, _humanRig.car, layout, live, key);
         }
 
         /// <summary>How long the on-screen composition warning stays up. Long enough

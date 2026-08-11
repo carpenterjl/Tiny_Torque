@@ -20,6 +20,11 @@ namespace AIHWSim.Core
         Horn = 11,
         Jump = 12,
         Boost = 13,
+        /// <summary>Toggle/operate a nearby world prop (speakers, RF beacons).
+        /// Read via InputReader statics only — deliberately NOT part of
+        /// IDriverInputSource or the LAN input wire (a client's interact
+        /// becomes a prop message instead).</summary>
+        Interact = 14,
     }
 
     /// <summary>Named starting points. Custom is what any hand-edited binding becomes.</summary>
@@ -67,6 +72,8 @@ namespace AIHWSim.Core
         // so these take the two free keys nearest WASD and stay rebindable.
         public int jump = (int)KeyCode.E;
         public int boost = (int)KeyCode.Q;
+        // World-prop interaction: F is the classic "use" key and free here.
+        public int interact = (int)KeyCode.F;
 
         // ---- gamepad (digital actions only; see PadTable) ----
         public int padBrake = (int)PadButton.East;
@@ -81,6 +88,8 @@ namespace AIHWSim.Core
         // shoulders — which is also where a driving game usually puts them.
         public int padJump = (int)PadButton.LeftShoulder;
         public int padBoost = (int)PadButton.RightShoulder;
+        // D-pad up: unclaimed while driving (MenuNav owns the pad only in menus).
+        public int padInteract = (int)PadButton.DpadUp;
 
         /// <summary>The live bindings. Lives inside <see cref="Persistence.GameSettings"/>
         /// so it is saved, loaded and reset by the machinery that already exists
@@ -115,6 +124,7 @@ namespace AIHWSim.Core
                 case DriveAction.Horn: return (KeyCode)horn;
                 case DriveAction.Jump: return (KeyCode)jump;
                 case DriveAction.Boost: return (KeyCode)boost;
+                case DriveAction.Interact: return (KeyCode)interact;
                 default: return KeyCode.None;
             }
         }
@@ -170,6 +180,7 @@ namespace AIHWSim.Core
                     case DriveAction.Horn: horn = v; break;
                     case DriveAction.Jump: jump = v; break;
                     case DriveAction.Boost: boost = v; break;
+                    case DriveAction.Interact: interact = v; break;
                     default: return;
                 }
             }
@@ -189,6 +200,7 @@ namespace AIHWSim.Core
                 case DriveAction.Horn: return (PadButton)padHorn;
                 case DriveAction.Jump: return (PadButton)padJump;
                 case DriveAction.Boost: return (PadButton)padBoost;
+                case DriveAction.Interact: return (PadButton)padInteract;
                 default: return PadButton.None;
             }
         }
@@ -200,6 +212,7 @@ namespace AIHWSim.Core
             DriveAction.Brake, DriveAction.Handbrake, DriveAction.Respawn,
             DriveAction.UseItem, DriveAction.LookBack, DriveAction.ModeToggle,
             DriveAction.Horn, DriveAction.Jump, DriveAction.Boost,
+            DriveAction.Interact,
         };
 
         public void SetPad(DriveAction a, PadButton b)
@@ -216,6 +229,7 @@ namespace AIHWSim.Core
                 case DriveAction.Horn: padHorn = v; break;
                 case DriveAction.Jump: padJump = v; break;
                 case DriveAction.Boost: padBoost = v; break;
+                case DriveAction.Interact: padInteract = v; break;
                 default: return;
             }
             layout = (int)KeyLayout.Custom;
@@ -237,6 +251,7 @@ namespace AIHWSim.Core
                 case DriveAction.ModeToggle: return "Manual / auto";
                 case DriveAction.Pause: return "Pause";
                 case DriveAction.Horn: return "Horn";
+                case DriveAction.Interact: return "Interact";
                 default: return a.ToString();
             }
         }
@@ -265,6 +280,7 @@ namespace AIHWSim.Core
                 lookBack = (int)KeyCode.Keypad1;
                 modeToggle = (int)KeyCode.End;
                 horn = (int)KeyCode.Keypad2;
+                interact = (int)KeyCode.Keypad3;
             }
             else
             {
@@ -280,6 +296,7 @@ namespace AIHWSim.Core
                 lookBack = (int)KeyCode.C;
                 modeToggle = (int)KeyCode.M;
                 horn = (int)KeyCode.H;
+                interact = (int)KeyCode.F;
             }
             // Pause is not part of a layout: Escape is the pause key on every
             // layout, and PausePressed accepts it unconditionally anyway.
@@ -292,6 +309,7 @@ namespace AIHWSim.Core
             padLookBack = (int)PadButton.RightStickPress;
             padModeToggle = (int)PadButton.Select;
             padHorn = (int)PadButton.LeftStickPress;
+            padInteract = (int)PadButton.DpadUp;
 
             layout = (int)l;
         }

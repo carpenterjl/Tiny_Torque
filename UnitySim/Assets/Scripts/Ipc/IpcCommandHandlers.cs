@@ -52,6 +52,9 @@ namespace AIHWSim.Ipc
                 case IpcProtocol.MsgUnsubscribe: Unsubscribe(Parse<VehicleRefMsg>(line)); return true;
                 case IpcProtocol.MsgSubscribeCamera: SubscribeCamera(Parse<SubscribeCameraMsg>(line)); return true;
                 case IpcProtocol.MsgUnsubscribeCamera: UnsubscribeCamera(Parse<VehicleRefMsg>(line)); return true;
+                case IpcProtocol.MsgListWorldSensors: ListWorldSensors(env.id); return true;
+                case IpcProtocol.MsgSubscribeWorld: SubscribeWorld(Parse<SubscribeWorldMsg>(line)); return true;
+                case IpcProtocol.MsgUnsubscribeWorld: UnsubscribeWorld(env.id); return true;
 
                 // ---- tuning, physics, settings ----
                 case IpcProtocol.MsgSetTunable: SetTunable(Parse<SetTunableMsg>(line)); return true;
@@ -371,6 +374,65 @@ namespace AIHWSim.Ipc
         {
             bool had = _streamer.UnsubscribeCamera(m.vehicleId);
             Ack(m.id, had ? null : $"vehicle {m.vehicleId} had no camera subscription");
+        }
+
+        // ---- world sensors (2026-08 additive) --------------------------------
+
+        private void ListWorldSensors(int id)
+        {
+            if (Telemetry.WorldTelemetry.Hub == null)
+            {
+                Err(id, IpcProtocol.ErrNoWorldHub, "no world hub — no track is loaded");
+                return;
+            }
+
+            var sensors = Telemetry.WorldTelemetry.Sensors;
+            var dtos = new WorldSensorDto[sensors.Count];
+            for (int i = 0; i < sensors.Count; i++)
+            {
+                var s = sensors[i];
+                var chans = Telemetry.WorldTelemetry.ChannelsOf(i);
+                var names = new string[chans.Count];
+                for (int c = 0; c < chans.Count; c++) names[c] = chans[c];
+                var p = s.WorldPosition;
+                dtos[i] = new WorldSensorDto
+                {
+                    name = s.WorldSensorName, kind = s.WorldSensorKind,
+                    channels = names, px = p.x, py = p.y, pz = p.z,
+                };
+            }
+            Reply(new WorldSensorsReply
+            {
+                t = IpcProtocol.MsgWorldSensors, id = id, sensors = dtos,
+            });
+        }
+
+        private void SubscribeWorld(SubscribeWorldMsg m)
+        {
+            if (Telemetry.WorldTelemetry.Hub == null)
+            {
+                Err(m.id, IpcProtocol.ErrNoWorldHub, "no world hub — no track is loaded");
+                return;
+            }
+
+            var names = _streamer.SubscribeWorld(m.channels, m.rateHz, out string error);
+            if (names == null) { Err(m.id, IpcProtocol.ErrUnknownChannel, error); return; }
+
+            float rate = m.rateHz <= 0f ? Telemetry.WorldTelemetry.WorldRateHz
+                                        : Mathf.Min(m.rateHz, Telemetry.WorldTelemetry.WorldRateHz);
+            // The binary layout contract, same as a vehicle subscribe — the
+            // sentinel id tells the client which frames decode against it.
+            Reply(new SubscribedReply
+            {
+                t = IpcProtocol.MsgSubscribed, id = m.id,
+                vehicleId = IpcProtocol.WorldStreamId, channels = names, rateHz = rate,
+            });
+        }
+
+        private void UnsubscribeWorld(int id)
+        {
+            bool had = _streamer.UnsubscribeWorld();
+            Ack(id, had ? null : "there was no world subscription");
         }
 
         // ══════════════════════════ tuning ═══════════════════════════════════

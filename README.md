@@ -1020,6 +1020,86 @@ as either electrical constants (Kt, R, gear, Vmax…) or datasheet figures (stal
 torque, no-load speed/current). See `Docs/interface-spec.md` and the reference
 controllers `Controllers/car_sensors/car_sensors.c` and `targets/sim/car_main.c`.
 
+### Environmental sensors and the LED (ABI v6)
+
+Five garage parts added alongside the world props below — v6 appends sensor
+types 8–12 and changes no struct, so a v5 controller DLL loads and drives
+unchanged:
+
+- **Color detector** (`SENSOR_COLOR`) — raycasts along its aim and reports
+  `[r, g, b, reflect]` (0..1 each; black when nothing is in range). `reflect`
+  is Rec.709 luminance: aim the sensor at the floor and it IS the classic
+  line-follower signal (`tt_reflectance`). Colour comes from an
+  `ISurfaceColorProvider` on the hit object when one exists, else the texel
+  under a MeshCollider hit, else the material tint — a box-collider floor
+  reads the tint, so line courses want MeshCollider strips or a provider.
+- **Magnetometer** (`SENSOR_MAG`) — absolute heading `[heading_deg]`, 0..360,
+  0 = world +Z, with declination and NoiseModel drift (`tt_heading`).
+- **Bump switch** (`SENSOR_BUMP`) — `[contact_01, force_N]` when the car
+  touches something near the mount and inside its cone, fed by a per-vehicle
+  contact bus off the existing collision callbacks — no extra colliders
+  (`tt_bump`, `tt_bump_force`).
+- **RF antenna** (`SENSOR_RF`) — hears the RF field's pings and reports the
+  strongest THREE as `[count, id/rssi_dbm/bearing_deg ×3]` (trilateration
+  needs exactly three references; empty slot id −1, floor −100 dBm). Free-space
+  path loss, no occlusion — the field is idealized so the triangulation math
+  stays solvable. The antenna can also EMIT (a toggle in its inspector), making
+  a car a trackable ping source (`tt_rf_count/id/rssi/bearing`, `tt_rf_find`).
+- **LED** (`SENSOR_LED`) — an *actuator* part: firmware sets colour and blink
+  via TWO consecutive actuator slots claimed after the motors (RGB24-packed
+  float + blink Hz; slots 6/7 stay steer/brake, and with no free pair the LED
+  is display-only). `tt_led(car, out, "led", r, g, b, blink_hz)`. The dome is
+  on the default layer, so the sensor camera sees it — firmware can signal
+  car-to-car through vision. Readback channels `sens/<name>/{r,g,b,lit}`
+  follow the post-blink-gate state.
+
+The `[SENS]` gate (`Tools ▸ AIHWSim ▸ Validate Sensors`) holds every
+self-contained sensor to the base contract — field counts, exact-slice writes,
+zero-noise bit-identity — plus strongest-K ordering and sentinel checks on the
+signal fields.
+
+## World props: speakers, microphones, RF beacons
+
+Three placeable props make Free Roam a sensor playground. Sound and RF are
+**simulated fields** — static registries with deterministic inverse-square /
+free-space falloff, no DSP and no occlusion — so what a sensor reads is exactly
+reproducible; what you HEAR from a speaker is a separate ordinary AudioSource
+(SfxPlayer roll-off, SFX volume), and the user's volume settings never touch
+the simulated readings.
+
+- **Speaker** — plays a curated tone table (three loop-clean sines plus the
+  fanfare/siren/warn-beep) in one of four modes: loop, global-clock timer
+  (every timer speaker on a map fires together, SignalCycle-style), proximity
+  trigger (polled distance — cars are five colliders and rigidbodies sleep),
+  or Interact-key toggle. Each entry carries an honest dominant `tone_hz`,
+  which is what a microphone reports as the source's signature. Cars are
+  emitters too: motor current → loudness, shaft speed → tone, so a mic array
+  can hear a car drive past.
+- **World microphone** — reads the sound field at its position: total level
+  plus the strongest three sources as `(id, level, tone)` triples. Place three
+  and triangulate.
+- **RF beacon** — an authored-id ping source; toggle it in game with Interact.
+
+Placement, three ways: **author the component in any scene** (Track Studio ▸
+Add prop, or AddComponent — the primitive skin builds itself at play), **Track
+Studio tile-map rows** (MISC tab, "Electronics" header), or **live in a solo
+Free Roam** — pause ▸ *Place props…*, pick one, drive, and the ghost rides two
+metres ahead until Interact (`F` / D-pad up, rebindable) stamps it down. Live
+placements save to `Props/<map-key>.json` in the save dir and come back next
+time that map loads; hold Interact beside one to remove it.
+
+Readings flow through a **world telemetry hub** (channels
+`world/<kind>/<name>/<field>`, 50 Hz) and out over IPC: `list_world_sensors`
+(which includes each prop's true position — the triangulation answer key),
+`subscribe_world`, and telemetry frames under the sentinel vehicleId `0xFFFF`
+with a payload byte-identical to vehicle telemetry. Additive, no protocol
+version bump. On LAN, props exist identically on every machine (position-hash
+ids, zero sync), toggles are host-relayed reliable events healed by a 1 Hz
+off-default state list, and live placement is solo-only (the layout is a
+per-machine file). The `[PRP]` gate (`Tools ▸ AIHWSim ▸ Validate Props`)
+covers the catalog rows, the append-only enums, loop-clean clips, the layout
+JSON round-trip, and Attach idempotence.
+
 ## 3D part models
 
 Part visuals are stylized low-poly **Blender meshes** (bodies, tires, battery

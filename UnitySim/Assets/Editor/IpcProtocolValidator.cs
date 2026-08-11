@@ -92,6 +92,7 @@ namespace AIHWSim.EditorTools
             "get_session", "get_tunables", "get_settings",
             "acquire", "release", "drive", "actuate", "reset_vehicle", "teleport", "set_mode",
             "subscribe", "unsubscribe", "subscribe_camera", "unsubscribe_camera",
+            "list_world_sensors", "subscribe_world", "unsubscribe_world",
             "set_tunable", "set_assists", "set_session_config", "set_mode_tuning",
             "set_arcade_tuning", "set_solver", "set_rates", "set_settings",
             "push_design", "load_track", "end_session", "restart_run",
@@ -102,6 +103,7 @@ namespace AIHWSim.EditorTools
         {
             "welcome", "ack", "err", "vehicles", "tracks", "presets", "channels",
             "session", "tunables", "settings", "subscribed", "event",
+            "world_sensors",
         };
 
         private static void CheckConstants()
@@ -113,6 +115,9 @@ namespace AIHWSim.EditorTools
             Eq("telemetry frame type", (byte)1, IpcProtocol.FrameTelemetry);
             Eq("camera frame type", (byte)2, IpcProtocol.FrameCamera);
             Eq("gray8 format tag", (byte)0, IpcProtocol.CamFormatGray8);
+            // The world stream rides FrameTelemetry under a sentinel vehicleId
+            // that must stay outside the valid vehicle-id range.
+            Eq("world stream sentinel", (ushort)0xFFFF, IpcProtocol.WorldStreamId);
             Eq("takeover level drive", "drive", IpcProtocol.LevelDrive);
             Eq("takeover level raw", "raw", IpcProtocol.LevelRaw);
 
@@ -194,6 +199,25 @@ namespace AIHWSim.EditorTools
                 channels = new[] { "veh/speed", "veh/yaw_rate" }, rateHz = 50f,
             });
             RoundTrip(new SubscribeCameraMsg { t = "subscribe_camera", id = 13, vehicleId = 3, sensor = "cam0" });
+            RoundTrip(new SubscribeWorldMsg
+            {
+                t = "subscribe_world", id = 31,
+                channels = new[] { "world/mic/mic_a/level", "world/mic/mic_a/s0/id" },
+                rateHz = 25f,
+            });
+            RoundTrip(new WorldSensorsReply
+            {
+                t = "world_sensors", id = 32,
+                sensors = new[]
+                {
+                    new WorldSensorDto
+                    {
+                        name = "mic_a", kind = "mic",
+                        channels = new[] { "world/mic/mic_a/level" },
+                        px = 1.5f, py = 0f, pz = -2.25f,
+                    },
+                },
+            });
             RoundTrip(new SetTunableMsg { t = "set_tunable", id = 14, vehicleId = 3, name = "Grip (side)", value = 1.5f });
             RoundTrip(new SetAssistsMsg
             {
@@ -467,6 +491,13 @@ namespace AIHWSim.EditorTools
 
             True("Docs/ipc-protocol.md states the protocol version",
                  doc.Contains($"v{IpcProtocol.ProtocolVersion}"));
+
+            // World-sensor additions (2026-08): the sentinel and the new sensor
+            // kinds must be written down where the client author will look.
+            True("Docs/ipc-protocol.md documents the world stream sentinel 0xFFFF",
+                 doc.Contains("0xFFFF"));
+            foreach (string kind in new[] { "Color", "Rf", "Mag", "Bump", "Led" })
+                True($"Docs/ipc-protocol.md lists sensor kind '{kind}'", doc.Contains(kind));
         }
 
         // ---- pipe lifecycle --------------------------------------------------

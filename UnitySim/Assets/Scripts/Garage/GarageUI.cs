@@ -102,6 +102,11 @@ namespace AIHWSim.Garage
                 ("tof", "ToF", "Time-of-flight ranger — distance along its aim, up to 4 m."),
                 ("encoder", "Encoder", "Wheel encoder — tick count + angular velocity, CPR tunable."),
                 ("suspension", "Susp sensor", "Reads one wheel's spring force, compression and strut angle."),
+                ("color", "Color", "Surface colour + reflectance along its aim — point it down to follow lines."),
+                ("mag", "Compass", "Magnetometer — absolute heading in degrees, drift tunable."),
+                ("bump", "Bump", "Contact switch — fires when the car touches something near its mount."),
+                ("rf", "RF antenna", "Hears beacon pings (RSSI + bearing, strongest 3); can also emit."),
+                ("led", "LED", "Firmware-driven indicator — set colour/blink from your controller."),
             }),
             ("AERO", new[]
             {
@@ -689,9 +694,17 @@ namespace AIHWSim.Garage
                 _placingKind = PartType.Sensor;
                 SensorType kind = key == "camera" ? SensorType.Camera
                                 : key == "encoder" ? SensorType.Encoder
-                                : key == "suspension" ? SensorType.Suspension : SensorType.Tof;
+                                : key == "suspension" ? SensorType.Suspension
+                                : key == "color" ? SensorType.Color
+                                : key == "mag" ? SensorType.Mag
+                                : key == "bump" ? SensorType.Bump
+                                : key == "rf" ? SensorType.Rf
+                                : key == "led" ? SensorType.Led : SensorType.Tof;
                 _pendingSensor = new SensorSpec { kind = kind, name = UniqueName(kind.ToString().ToLower()) };
                 if (kind == SensorType.Encoder || kind == SensorType.Suspension) _pendingSensor.wheelIndex = 0;
+                // Per-kind spec defaults where the shared field's ToF default is wrong.
+                if (kind == SensorType.Color) _pendingSensor.range = 0.3f;
+                if (kind == SensorType.Bump) _pendingSensor.coneAngle = 120f;
                 _ghost = PartGhost.ForSensor(kind, 0f);
                 if (_mirrorMode) _ghostTwin = PartGhost.ForSensor(kind, 0f);
             }
@@ -1660,12 +1673,30 @@ namespace AIHWSim.Garage
                 case SensorType.Suspension:
                     spec.wheelIndex = IntSlider("Wheel", spec.wheelIndex, 0, Mathf.Max(0, D.wheels.Count - 1));
                     break;
+                case SensorType.Color:
+                    spec.range = Slider("Range m", spec.range, 0.05f, 1f);
+                    break;
+                case SensorType.Mag:
+                    spec.declinationDeg = Slider("Declination°", spec.declinationDeg, -30f, 30f);
+                    break;
+                case SensorType.Bump:
+                    spec.bumpRadius = Slider("Radius m", spec.bumpRadius, 0.02f, 0.2f);
+                    spec.coneAngle = Slider("Cone°", spec.coneAngle, 30f, 180f);
+                    break;
+                case SensorType.Rf:
+                    spec.rfEmit = GUILayout.Toggle(spec.rfEmit != 0, " Emit ping") ? 1 : 0;
+                    if (spec.rfEmit != 0)
+                    {
+                        spec.rfId = IntSlider("Beacon id", spec.rfId, 0, 15);
+                        spec.rfPowerDbm = Slider("Tx dBm", spec.rfPowerDbm, -20f, 20f);
+                    }
+                    break;
             }
 
             if (D.useCompositeMass)
                 spec.massKg = Slider("Mass g (0=auto)", spec.massKg * 1000f, 0f, 100f) / 1000f;
 
-            if (spec.kind != SensorType.Camera)
+            if (spec.kind != SensorType.Camera && spec.kind != SensorType.Led)
             {
                 GUILayout.Label("Realism");
                 spec.noiseStd = Slider("Noise σ", spec.noiseStd, 0f, 0.5f);

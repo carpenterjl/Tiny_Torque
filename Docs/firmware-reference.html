@@ -1,0 +1,1097 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Tiny Torque Controller Firmware Reference — ABI v6</title>
+<style>
+  :root {
+    --paper:   #f7f8f6;
+    --surface: #ffffff;
+    --ink:     #21251f;
+    --muted:   #5d645c;
+    --faint:   #8b928a;
+    --rule:    #d8dcd6;
+    --code-bg: #eef1ec;
+    --in:      #0f766e;   /* data INTO firmware — sensors   */
+    --in-soft: #e2efed;
+    --out:     #b0592b;   /* data OUT of firmware — actuators */
+    --out-soft:#f6e9e0;
+    --warn:    #8a6d1f;
+    --warn-soft:#f3ecd7;
+    --mono: "Cascadia Code", "Cascadia Mono", ui-monospace, Consolas, "SF Mono", Menlo, monospace;
+    --body: "Segoe UI", system-ui, -apple-system, sans-serif;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --paper:   #171a16;
+      --surface: #1e221d;
+      --ink:     #e5e8e2;
+      --muted:   #a2aa9f;
+      --faint:   #788075;
+      --rule:    #343a32;
+      --code-bg: #23271f;
+      --in:      #43bfb0;
+      --in-soft: #1d3330;
+      --out:     #e08a55;
+      --out-soft:#3a2a1e;
+      --warn:    #d3b04e;
+      --warn-soft:#33301e;
+    }
+  }
+  :root[data-theme="light"] {
+    --paper:   #f7f8f6; --surface: #ffffff; --ink: #21251f; --muted: #5d645c;
+    --faint:   #8b928a; --rule: #d8dcd6; --code-bg: #eef1ec;
+    --in: #0f766e; --in-soft: #e2efed; --out: #b0592b; --out-soft: #f6e9e0;
+    --warn: #8a6d1f; --warn-soft: #f3ecd7;
+  }
+  :root[data-theme="dark"] {
+    --paper:   #171a16; --surface: #1e221d; --ink: #e5e8e2; --muted: #a2aa9f;
+    --faint:   #788075; --rule: #343a32; --code-bg: #23271f;
+    --in: #43bfb0; --in-soft: #1d3330; --out: #e08a55; --out-soft: #3a2a1e;
+    --warn: #d3b04e; --warn-soft: #33301e;
+  }
+
+  * { box-sizing: border-box; }
+  html { scroll-behavior: smooth; }
+  @media (prefers-reduced-motion: reduce) { html { scroll-behavior: auto; } }
+  body {
+    margin: 0; background: var(--paper); color: var(--ink);
+    font-family: var(--body); font-size: 15.5px; line-height: 1.62;
+  }
+
+  .wrap { display: grid; grid-template-columns: 1fr; max-width: 1240px; margin: 0 auto; }
+  @media (min-width: 1100px) { .wrap { grid-template-columns: 248px minmax(0,1fr); gap: 40px; } }
+
+  /* ── rail ── */
+  nav.rail { display: none; }
+  @media (min-width: 1100px) {
+    nav.rail {
+      display: block; position: sticky; top: 0; align-self: start;
+      height: 100vh; overflow-y: auto; padding: 40px 0 40px 28px;
+      font-family: var(--mono); font-size: 12px;
+    }
+  }
+  nav.rail .rail-title { color: var(--faint); letter-spacing: .12em; text-transform: uppercase; font-size: 10.5px; margin-bottom: 14px; }
+  nav.rail a { display: block; color: var(--muted); text-decoration: none; padding: 4px 0 4px 12px; border-left: 2px solid var(--rule); }
+  nav.rail a:hover, nav.rail a:focus-visible { color: var(--ink); border-left-color: var(--in); outline: none; }
+  nav.rail a .n { color: var(--faint); margin-right: 7px; }
+
+  main { min-width: 0; padding: 0 20px 96px; }
+  @media (min-width: 1100px) { main { padding: 0 40px 120px 0; } }
+  .measure { max-width: 880px; }
+
+  /* ── masthead ── */
+  header.mast { padding: 52px 0 30px; border-bottom: 2px solid var(--ink); margin-bottom: 8px; }
+  .mast .doc-id { font-family: var(--mono); font-size: 11.5px; color: var(--muted); letter-spacing: .1em; display: flex; gap: 18px; flex-wrap: wrap; margin-bottom: 18px; }
+  .mast h1 { font-family: var(--mono); font-weight: 700; font-size: clamp(26px, 4.2vw, 40px); line-height: 1.14; margin: 0 0 14px; letter-spacing: -0.015em; text-wrap: balance; }
+  .mast .sub { color: var(--muted); max-width: 62ch; margin: 0; }
+  .badges { display: flex; gap: 10px; margin-top: 22px; flex-wrap: wrap; }
+  .badge { font-family: var(--mono); font-size: 11.5px; padding: 4px 11px; border: 1px solid var(--rule); background: var(--surface); border-radius: 3px; color: var(--muted); }
+  .badge b { color: var(--ink); font-weight: 600; }
+
+  /* legend for the in/out convention */
+  .legend { display: flex; gap: 22px; flex-wrap: wrap; font-family: var(--mono); font-size: 12px; color: var(--muted); padding: 14px 0 6px; }
+  .legend .k { display: inline-flex; align-items: center; gap: 8px; }
+  .swatch { width: 22px; height: 11px; border-radius: 2px; display: inline-block; }
+
+  /* ── sections ── */
+  section { padding-top: 44px; }
+  h2 { font-family: var(--mono); font-size: 21px; font-weight: 700; letter-spacing: -0.01em; margin: 0 0 4px; padding-top: 10px; border-top: 1px solid var(--rule); }
+  h2 .sec-n { color: var(--faint); font-weight: 400; margin-right: 12px; }
+  h3 { font-family: var(--mono); font-size: 15px; font-weight: 700; margin: 34px 0 8px; }
+  h3 .sec-n { color: var(--faint); font-weight: 400; margin-right: 10px; }
+  p { max-width: 68ch; }
+  .lede { color: var(--muted); max-width: 68ch; margin-top: 2px; }
+  a { color: var(--in); }
+  code { font-family: var(--mono); font-size: .87em; background: var(--code-bg); padding: 1px 5px; border-radius: 3px; }
+  strong { font-weight: 600; }
+
+  /* code blocks */
+  pre { background: var(--code-bg); border: 1px solid var(--rule); border-radius: 5px; padding: 15px 17px; overflow-x: auto; font-family: var(--mono); font-size: 12.8px; line-height: 1.58; margin: 14px 0; }
+  pre code { background: none; padding: 0; font-size: inherit; }
+  .cm { color: var(--faint); }
+  .io-in  { color: var(--in);  font-weight: 600; }
+  .io-out { color: var(--out); font-weight: 600; }
+
+  /* tables */
+  .tbl-scroll { overflow-x: auto; margin: 14px 0; }
+  table { border-collapse: collapse; width: 100%; font-size: 13.5px; }
+  th { font-family: var(--mono); font-size: 10.5px; text-transform: uppercase; letter-spacing: .09em; color: var(--muted); text-align: left; font-weight: 600; padding: 7px 14px 7px 0; border-bottom: 1.5px solid var(--ink); white-space: nowrap; }
+  td { padding: 7px 14px 7px 0; border-bottom: 1px solid var(--rule); vertical-align: top; }
+  td.sig, td.mono { font-family: var(--mono); font-size: 12.3px; white-space: nowrap; }
+  td .ret { color: var(--muted); }
+  tr:last-child td { border-bottom: 1px solid var(--rule); }
+  table.num td.mono { font-variant-numeric: tabular-nums; }
+
+  /* chips */
+  .chip { font-family: var(--mono); font-size: 10.5px; font-weight: 600; letter-spacing: .06em; padding: 2px 8px; border-radius: 3px; white-space: nowrap; }
+  .chip.in  { background: var(--in-soft);  color: var(--in); }
+  .chip.out { background: var(--out-soft); color: var(--out); }
+  .chip.opt { background: var(--code-bg); color: var(--muted); }
+
+  /* callouts */
+  .note { border-left: 3px solid var(--in); background: var(--surface); padding: 12px 18px; margin: 18px 0; max-width: 74ch; border-radius: 0 5px 5px 0; }
+  .note.warn { border-left-color: var(--warn); }
+  .note .nt { font-family: var(--mono); font-size: 10.5px; letter-spacing: .09em; text-transform: uppercase; color: var(--muted); display: block; margin-bottom: 3px; }
+  .note p { margin: 4px 0; }
+
+  /* sensor register cards */
+  .sensor-card { background: var(--surface); border: 1px solid var(--rule); border-radius: 6px; margin: 26px 0; overflow: hidden; }
+  .sensor-card .sc-head { display: flex; align-items: baseline; gap: 14px; flex-wrap: wrap; padding: 13px 20px; border-bottom: 1px solid var(--rule); }
+  .sensor-card .sc-head .tag { font-family: var(--mono); font-weight: 700; font-size: 14.5px; }
+  .sensor-card .sc-head .tag .id { color: var(--faint); font-weight: 400; }
+  .sensor-card .sc-head .what { color: var(--muted); font-size: 13.5px; }
+  .sensor-card .sc-body { padding: 6px 20px 18px; }
+  .sensor-card .sc-body p { font-size: 14px; }
+  .kv { display: grid; grid-template-columns: 118px 1fr; gap: 3px 16px; font-size: 13.5px; margin: 12px 0; }
+  .kv .k { font-family: var(--mono); font-size: 10.5px; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); padding-top: 2px; }
+  .kv .v { min-width: 0; }
+  .kv .v code { white-space: nowrap; }
+  .sample { font-family: var(--mono); font-size: 12.5px; background: var(--code-bg); border: 1px dashed var(--rule); border-radius: 4px; padding: 9px 13px; margin: 10px 0 2px; overflow-x: auto; }
+  .sample .lbl { color: var(--faint); }
+  .sample .val { font-variant-numeric: tabular-nums; }
+
+  /* figures */
+  figure { margin: 24px 0; }
+  figure svg { max-width: 100%; height: auto; display: block; }
+  figcaption { font-size: 13px; color: var(--muted); margin-top: 10px; max-width: 72ch; }
+  figcaption .fig-n { font-family: var(--mono); color: var(--faint); margin-right: 8px; }
+  .fig-frame { background: var(--surface); border: 1px solid var(--rule); border-radius: 6px; padding: 20px; overflow-x: auto; }
+
+  footer { margin-top: 70px; padding-top: 18px; border-top: 1px solid var(--rule); font-family: var(--mono); font-size: 11.5px; color: var(--faint); display: flex; gap: 24px; flex-wrap: wrap; }
+</style>
+
+<div class="wrap">
+<nav class="rail" aria-label="Sections">
+  <div class="rail-title">TT-CTRL-6</div>
+  <a href="#overview"><span class="n">§1</span>System overview</a>
+  <a href="#lifecycle"><span class="n">§2</span>Lifecycle exports</a>
+  <a href="#structs"><span class="n">§3</span>Wire structures</a>
+  <a href="#sensors"><span class="n">§4</span>Sensor catalog</a>
+  <a href="#actuators"><span class="n">§5</span>Actuators &amp; LED</a>
+  <a href="#helpers"><span class="n">§6</span>Helper library</a>
+  <a href="#cookbook"><span class="n">§7</span>Cookbook</a>
+  <a href="#history"><span class="n">§8</span>ABI history</a>
+</nav>
+
+<main>
+<div class="measure">
+
+<header class="mast">
+  <div class="doc-id"><span>DOC&nbsp;TT-CTRL-6</span><span>REV&nbsp;2026-08</span><span>controller_api.h&nbsp;·&nbsp;tt_controller.h</span></div>
+  <h1>Tiny Torque<br>Controller Firmware Reference</h1>
+  <p class="sub">The complete contract between the simulator host and a controller DLL:
+  every callable function, every sensor, its data layout, extraction code, and worked
+  firmware examples. Written for the engineer sitting down to make a car drive itself.</p>
+  <div class="badges">
+    <span class="badge">ABI <b>v6</b></span>
+    <span class="badge">control loop <b>100&nbsp;Hz</b></span>
+    <span class="badge">sensor types <b>12</b></span>
+    <span class="badge">plain C · <b>no allocation across the boundary</b></span>
+  </div>
+  <div class="legend">
+    <span class="k"><span class="swatch" style="background:var(--in)"></span>data <b>into</b> firmware — sensors, CtrlInputs</span>
+    <span class="k"><span class="swatch" style="background:var(--out)"></span>data <b>out of</b> firmware — actuators, CtrlOutputs</span>
+  </div>
+</header>
+
+<!-- ══════════════════════════ §1 ══════════════════════════ -->
+<section id="overview">
+  <h2><span class="sec-n">§1</span>System overview</h2>
+  <p class="lede">Your firmware is a native DLL. The simulator loads it, describes the car
+  to it once, then calls it 100 times a second with fresh sensor data and applies
+  whatever actuator commands it writes back.</p>
+
+  <p>Two headers define everything:</p>
+  <div class="tbl-scroll"><table>
+    <tr><th>Header</th><th>Role</th><th>You edit it?</th></tr>
+    <tr><td class="mono">controller_api.h</td><td>The raw ABI — structs, sensor type tags, the exports your DLL must (and may) provide. Fixed plain-C layout, stable across compilers, marshalled to C# blittable structs on the host side.</td><td>Never</td></tr>
+    <tr><td class="mono">tt_controller.h</td><td>Header-only helper library on top of the ABI: manifest parsing, named sensor reads, drive/steer/brake helpers, a PID, a frame-buffering camera ring. Every function is <code>static inline</code> — include it and go.</td><td>Rarely (shared by every <code>UserScripts/</code> folder)</td></tr>
+  </table></div>
+
+  <figure>
+    <div class="fig-frame">
+    <svg viewBox="0 0 760 260" role="img" aria-label="The host simulator and the controller DLL exchange CtrlInputs and CtrlOutputs across the ABI boundary every control tick" style="min-width:620px">
+      <defs>
+        <marker id="arr-in" markerWidth="9" markerHeight="8" refX="8" refY="4" orient="auto">
+          <polygon points="0,0 9,4 0,8" fill="var(--in)"/>
+        </marker>
+        <marker id="arr-out" markerWidth="9" markerHeight="8" refX="8" refY="4" orient="auto">
+          <polygon points="0,0 9,4 0,8" fill="var(--out)"/>
+        </marker>
+      </defs>
+      <!-- host box -->
+      <rect x="20" y="30" width="250" height="200" rx="6" fill="none" stroke="currentColor" stroke-width="1.4"/>
+      <text x="145" y="56" text-anchor="middle" font-family="var(--mono)" font-size="13" font-weight="700" fill="currentColor">UNITY HOST</text>
+      <text x="145" y="74" text-anchor="middle" font-family="var(--mono)" font-size="10.5" fill="var(--muted)">physics 500 Hz · control 100 Hz</text>
+      <rect x="42" y="92" width="206" height="30" rx="4" fill="var(--in-soft)" stroke="var(--in)" stroke-width="1"/>
+      <text x="145" y="111" text-anchor="middle" font-family="var(--mono)" font-size="11" fill="var(--in)">SensorRig → sensor_data[]</text>
+      <rect x="42" y="132" width="206" height="30" rx="4" fill="var(--in-soft)" stroke="var(--in)" stroke-width="1"/>
+      <text x="145" y="151" text-anchor="middle" font-family="var(--mono)" font-size="11" fill="var(--in)">CameraSensor → cam_pixels</text>
+      <rect x="42" y="172" width="206" height="30" rx="4" fill="var(--out-soft)" stroke="var(--out)" stroke-width="1"/>
+      <text x="145" y="191" text-anchor="middle" font-family="var(--mono)" font-size="11" fill="var(--out)">motors · servo · brake · LED</text>
+
+      <!-- DLL box -->
+      <rect x="490" y="30" width="250" height="200" rx="6" fill="none" stroke="currentColor" stroke-width="1.4"/>
+      <text x="615" y="56" text-anchor="middle" font-family="var(--mono)" font-size="13" font-weight="700" fill="currentColor">CONTROLLER DLL</text>
+      <text x="615" y="74" text-anchor="middle" font-family="var(--mono)" font-size="10.5" fill="var(--muted)">your firmware</text>
+      <rect x="512" y="92" width="206" height="30" rx="4" fill="none" stroke="currentColor" stroke-width="1" stroke-dasharray="3 3"/>
+      <text x="615" y="111" text-anchor="middle" font-family="var(--mono)" font-size="11" fill="currentColor">ctrl_step(in, out)</text>
+      <rect x="512" y="132" width="206" height="70" rx="4" fill="none" stroke="currentColor" stroke-width="1" stroke-dasharray="3 3"/>
+      <text x="615" y="156" text-anchor="middle" font-family="var(--mono)" font-size="11" fill="var(--muted)">state · PID · perception</text>
+      <text x="615" y="174" text-anchor="middle" font-family="var(--mono)" font-size="11" fill="var(--muted)">(static, no malloc)</text>
+
+      <!-- arrows -->
+      <line x1="270" y1="108" x2="486" y2="108" stroke="var(--in)" stroke-width="1.6" marker-end="url(#arr-in)"/>
+      <text x="378" y="99" text-anchor="middle" font-family="var(--mono)" font-size="10.5" fill="var(--in)">CtrlInputs* (per tick)</text>
+      <line x1="486" y1="187" x2="274" y2="187" stroke="var(--out)" stroke-width="1.6" marker-end="url(#arr-out)"/>
+      <text x="378" y="178" text-anchor="middle" font-family="var(--mono)" font-size="10.5" fill="var(--out)">CtrlOutputs* (per tick)</text>
+      <line x1="270" y1="145" x2="486" y2="145" stroke="var(--in)" stroke-width="1.2" stroke-dasharray="4 3" marker-end="url(#arr-in)"/>
+      <text x="378" y="137" text-anchor="middle" font-family="var(--mono)" font-size="10.5" fill="var(--muted)">manifest, once (ctrl_configure)</text>
+    </svg>
+    </div>
+    <figcaption><span class="fig-n">FIG 1</span>One control tick. The host fills
+    <code>CtrlInputs</code> from the car's sensors, calls <code>ctrl_step</code>, and applies
+    the <code>CtrlOutputs.actuator[]</code> your code wrote. Pointers in
+    <code>CtrlInputs</code> are valid only for the duration of the call.</figcaption>
+  </figure>
+
+  <h3><span class="sec-n">1.1</span>What you can build with it</h3>
+  <p>Everything below is demonstrated with real code in <a href="#cookbook">§7</a>:</p>
+  <div class="tbl-scroll"><table>
+    <tr><th>Capability</th><th>Sensors used</th><th>Actuators used</th></tr>
+    <tr><td>Cruise control / speed hold</td><td class="mono">ENCODER (wheel_vel)</td><td class="mono">motor volts</td></tr>
+    <tr><td>Wall following, obstacle stop</td><td class="mono">TOF</td><td class="mono">motor, steer, brake</td></tr>
+    <tr><td>Line following</td><td class="mono">COLOR (reflect) or CAMERA</td><td class="mono">motor, steer</td></tr>
+    <tr><td>Heading hold / dead-reckoned turns</td><td class="mono">MAG, IMU</td><td class="mono">steer</td></tr>
+    <tr><td>Beacon homing &amp; triangulation</td><td class="mono">RF</td><td class="mono">motor, steer</td></tr>
+    <tr><td>Collision detect &amp; recovery</td><td class="mono">BUMP</td><td class="mono">motor (reverse), brake</td></tr>
+    <tr><td>Vision (blob, brightness, frame diff)</td><td class="mono">CAMERA</td><td class="mono">any</td></tr>
+    <tr><td>Status signalling, car-to-car optics</td><td class="mono">— (LED is visible to other cars' cameras)</td><td class="mono">LED</td></tr>
+    <tr><td>Health monitoring</td><td class="mono">MOTOR, BATTERY, SUSPENSION</td><td class="mono">debug[] graphs</td></tr>
+  </table></div>
+
+  <div class="note">
+    <span class="nt">Design rule the whole ABI follows</span>
+    <p>"Missing" never looks like a plausible reading. A ToF with no hit reports
+    <code>range_max</code>, not 0. An empty RF slot reports id&nbsp;−1 at −100&nbsp;dBm. Helper
+    functions take a <code>fallback</code> argument and return it for any absent sensor.
+    Firmware that reads garbage and drives into a wall is the failure mode this is built against.</p>
+  </div>
+</section>
+
+<!-- ══════════════════════════ §2 ══════════════════════════ -->
+<section id="lifecycle">
+  <h2><span class="sec-n">§2</span>Lifecycle exports</h2>
+  <p class="lede">Six exports. Four are required; two are optional and change nothing if absent.</p>
+
+  <div class="tbl-scroll"><table>
+    <tr><th>Export</th><th>Signature</th><th>Req.</th><th>When called / contract</th></tr>
+    <tr>
+      <td class="sig">ctrl_init</td>
+      <td class="sig"><span class="ret">int</span> ctrl_init(float control_rate_hz)</td>
+      <td><span class="chip in">REQ</span></td>
+      <td>Once, after the car is built. <code>control_rate_hz</code> is the tick rate (typ. 100). Return 0 for success. Initialize all static state here — the DLL is torn down and rebuilt on every Build&nbsp;&amp;&nbsp;Reload.</td>
+    </tr>
+    <tr>
+      <td class="sig">ctrl_step</td>
+      <td class="sig"><span class="ret">void</span> ctrl_step(const CtrlInputs* in, CtrlOutputs* out)</td>
+      <td><span class="chip in">REQ</span></td>
+      <td>Every control tick. Read <code>in</code>, write <code>out</code>. All pointers inside <code>in</code> (sensor_data, cam_pixels) are dead the instant you return — copy anything you keep.</td>
+    </tr>
+    <tr>
+      <td class="sig">ctrl_shutdown</td>
+      <td class="sig"><span class="ret">void</span> ctrl_shutdown(void)</td>
+      <td><span class="chip in">REQ</span></td>
+      <td>Once, before unload. Close logs, nothing else to free (you never malloc'd).</td>
+    </tr>
+    <tr>
+      <td class="sig">ctrl_get_debug_names</td>
+      <td class="sig"><span class="ret">const char*</span> ctrl_get_debug_names(void)</td>
+      <td><span class="chip in">REQ</span></td>
+      <td>Comma-separated labels for <code>CtrlOutputs.debug[16]</code>. The host auto-graphs each named channel live — your oscilloscope.</td>
+    </tr>
+    <tr>
+      <td class="sig">ctrl_configure</td>
+      <td class="sig"><span class="ret">void</span> ctrl_configure(const SensorInfo* sensors, int count)</td>
+      <td><span class="chip opt">OPT v2</span></td>
+      <td>Exactly once, right after <code>ctrl_init</code>: the car's sensor manifest. Pointer valid only during the call — copy it (that's what <code>tt_car_configure</code> is for). Without this export you get v1 behaviour: gyro/accel/wheel_vel only.</td>
+    </tr>
+    <tr>
+      <td class="sig">ctrl_get_vehicle</td>
+      <td class="sig"><span class="ret">int</span> ctrl_get_vehicle(void)</td>
+      <td><span class="chip opt">OPT v5</span></td>
+      <td>Called <em>before</em> the car exists (and before ctrl_init) — must answer from a constant. Return a <code>CTRL_VEHICLE_*</code> id to name the car this firmware wants, or <code>CTRL_VEHICLE_MENU</code>&nbsp;(0) to accept the menu's pick. Unknown/locked ids are reported on the console and the menu pick stands.</td>
+    </tr>
+  </table></div>
+
+  <figure>
+    <div class="fig-frame">
+    <svg viewBox="0 0 760 130" role="img" aria-label="Lifecycle order: ctrl_get_vehicle before the car is built, then ctrl_init, ctrl_configure, the 100 Hz ctrl_step loop, and ctrl_shutdown" style="min-width:660px">
+      <defs>
+        <marker id="arr2" markerWidth="9" markerHeight="8" refX="8" refY="4" orient="auto">
+          <polygon points="0,0 9,4 0,8" fill="currentColor"/>
+        </marker>
+      </defs>
+      <g font-family="var(--mono)" font-size="11">
+        <rect x="10"  y="40" width="128" height="34" rx="4" fill="none" stroke="var(--muted)" stroke-width="1.2" stroke-dasharray="4 3"/>
+        <text x="74"  y="61" text-anchor="middle" fill="var(--muted)">ctrl_get_vehicle</text>
+        <text x="74"  y="92" text-anchor="middle" font-size="9.5" fill="var(--faint)">optional · pre-build</text>
+
+        <rect x="168" y="40" width="96" height="34" rx="4" fill="none" stroke="currentColor" stroke-width="1.3"/>
+        <text x="216" y="61" text-anchor="middle" fill="currentColor">build car</text>
+
+        <rect x="294" y="40" width="96" height="34" rx="4" fill="none" stroke="currentColor" stroke-width="1.3"/>
+        <text x="342" y="61" text-anchor="middle" fill="currentColor">ctrl_init</text>
+
+        <rect x="420" y="40" width="112" height="34" rx="4" fill="none" stroke="var(--muted)" stroke-width="1.2" stroke-dasharray="4 3"/>
+        <text x="476" y="61" text-anchor="middle" fill="var(--muted)">ctrl_configure</text>
+        <text x="476" y="92" text-anchor="middle" font-size="9.5" fill="var(--faint)">optional · once</text>
+
+        <rect x="562" y="40" width="96" height="34" rx="4" fill="var(--in-soft)" stroke="var(--in)" stroke-width="1.4"/>
+        <text x="610" y="61" text-anchor="middle" fill="var(--in)" font-weight="700">ctrl_step</text>
+        <path d="M 610 40 C 590 12, 630 12, 612 37" fill="none" stroke="var(--in)" stroke-width="1.3" marker-end="url(#arr2)"/>
+        <text x="610" y="12" text-anchor="middle" font-size="9.5" fill="var(--in)">100 Hz</text>
+
+        <rect x="688" y="40" width="62" height="34" rx="4" fill="none" stroke="currentColor" stroke-width="1.3"/>
+        <text x="719" y="56" text-anchor="middle" fill="currentColor">ctrl_</text>
+        <text x="719" y="68" text-anchor="middle" fill="currentColor">shutdown</text>
+
+        <line x1="138" y1="57" x2="164" y2="57" stroke="currentColor" stroke-width="1.2" marker-end="url(#arr2)"/>
+        <line x1="264" y1="57" x2="290" y2="57" stroke="currentColor" stroke-width="1.2" marker-end="url(#arr2)"/>
+        <line x1="390" y1="57" x2="416" y2="57" stroke="currentColor" stroke-width="1.2" marker-end="url(#arr2)"/>
+        <line x1="532" y1="57" x2="558" y2="57" stroke="currentColor" stroke-width="1.2" marker-end="url(#arr2)"/>
+        <line x1="658" y1="57" x2="684" y2="57" stroke="currentColor" stroke-width="1.2" marker-end="url(#arr2)"/>
+      </g>
+    </svg>
+    </div>
+    <figcaption><span class="fig-n">FIG 2</span>Lifecycle order. <code>ctrl_get_vehicle</code>
+    runs before any car exists; <code>ctrl_configure</code> runs exactly once after
+    <code>ctrl_init</code>; a Build&nbsp;&amp;&nbsp;Reload swaps the code driving the car, never the car.</figcaption>
+  </figure>
+
+  <h3><span class="sec-n">2.1</span>Minimal complete controller</h3>
+<pre><code><span class="cm">/* my_controller.c — the smallest firmware that drives. */</span>
+#include "tt_controller.h"
+
+static TtCar g_car;
+
+CTRL_EXPORT int ctrl_init(float hz) { TT_UNUSED(hz); return 0; }
+
+CTRL_EXPORT void ctrl_configure(const SensorInfo* s, int n) {
+    tt_car_configure(&amp;g_car, s, n);   <span class="cm">/* copy the manifest — the pointer dies */</span>
+}
+
+CTRL_EXPORT void ctrl_step(const CtrlInputs* in, CtrlOutputs* out) {
+    <span class="io-out">tt_drive</span>(&amp;g_car, out, 0.4f);       <span class="cm">/* 40 % of each motor's max volts */</span>
+    <span class="io-out">tt_steer</span>(out, 0.0f);              <span class="cm">/* straight ahead */</span>
+    out-&gt;debug[0] = <span class="io-in">tt_speed</span>(in);      <span class="cm">/* graphed live in the sim */</span>
+}
+
+CTRL_EXPORT void ctrl_shutdown(void) {}
+CTRL_EXPORT const char* ctrl_get_debug_names(void) { return "speed_mps"; }</code></pre>
+
+  <h3><span class="sec-n">2.2</span>Vehicle selection ids (ctrl_get_vehicle)</h3>
+  <div class="tbl-scroll"><table>
+    <tr><th>Constant</th><th>Id</th><th>Car</th></tr>
+    <tr><td class="sig">CTRL_VEHICLE_MENU</td><td class="mono">0</td><td>No override — whatever the menu picked (also the behaviour when the export is absent)</td></tr>
+    <tr><td class="sig">CTRL_VEHICLE_STOCK</td><td class="mono">1</td><td>"Stock Default", the plain 1/10 chassis</td></tr>
+    <tr><td class="sig">CTRL_VEHICLE_REAL_TWIN</td><td class="mono">2</td><td>Real Twin 1/10 — every realism feature on</td></tr>
+    <tr><td class="sig">CTRL_VEHICLE_TT_COUPE&nbsp;…&nbsp;TT_AUTOPIA</td><td class="mono">3–9</td><td>The built-in picker cars (Coupe, Baja, Patrol, Rattletrap, Redline, Highwing, Autopia)</td></tr>
+    <tr><td class="sig">CTRL_VEHICLE_OPUS_VECTOR</td><td class="mono">10</td><td>The F1TENTH-class research platform</td></tr>
+  </table></div>
+  <p>Garage designs you saved yourself have no id and never will — pick those in the menu.</p>
+</section>
+
+<!-- ══════════════════════════ §3 ══════════════════════════ -->
+<section id="structs">
+  <h2><span class="sec-n">§3</span>Wire structures</h2>
+
+  <h3><span class="sec-n">3.1</span>CtrlInputs — host → firmware, every tick</h3>
+  <div class="tbl-scroll"><table>
+    <tr><th>Field</th><th>Type</th><th>Meaning</th></tr>
+    <tr><td class="sig">time_s</td><td class="mono">float</td><td>Seconds since sim start (deterministic sim time, not wall clock)</td></tr>
+    <tr><td class="sig">dt_s</td><td class="mono">float</td><td>Control period for this tick (s) — 0.01 at 100 Hz</td></tr>
+    <tr><td class="sig">gyro[3]</td><td class="mono">float[3]</td><td>Body angular rate x,y,z (rad/s) — mirror of the IMU sensor</td></tr>
+    <tr><td class="sig">accel[3]</td><td class="mono">float[3]</td><td>Body specific force x,y,z (m/s²) — at rest reads ≈ +9.81 on the up axis</td></tr>
+    <tr><td class="sig">wheel_vel[4]</td><td class="mono">float[4]</td><td>Measured wheel angular velocity (rad/s), signed</td></tr>
+    <tr><td class="sig">setpoint[4]</td><td class="mono">float[4]</td><td>The <em>operator's</em> commands: slot 0 = requested speed (m/s), slot 1 = requested steer (−1..+1). Autonomous firmware ignores these; assisted firmware decides how to deliver them.</td></tr>
+    <tr><td class="sig">sensor_data</td><td class="mono">const float*</td><td>Flat array of every configured sensor's values, laid out per the manifest (§3.3)</td></tr>
+    <tr><td class="sig">sensor_count</td><td class="mono">int</td><td>Entries in the manifest</td></tr>
+    <tr><td class="sig">sensor_data_len</td><td class="mono">int</td><td>Total floats in sensor_data</td></tr>
+    <tr><td class="sig">cam_pixels</td><td class="mono">const unsigned char*</td><td>Grayscale frame or NULL. Row-major, 1 byte/pixel, <strong>row 0 is the TOP</strong> (ABI v4). Pixel (x,y) = <code>cam_pixels[y*cam_width + x]</code></td></tr>
+    <tr><td class="sig">cam_width / cam_height</td><td class="mono">int</td><td>Frame size (0 if no camera). Clamped 8..128 per axis; default build is 64×48</td></tr>
+  </table></div>
+
+  <h3><span class="sec-n">3.2</span>CtrlOutputs — firmware → host, every tick</h3>
+  <div class="tbl-scroll"><table>
+    <tr><th>Field</th><th>Type</th><th>Meaning</th></tr>
+    <tr><td class="sig">actuator[8]</td><td class="mono">float[8]</td><td>Motor volts at each motor's manifest slot · steer at [6] (−1..+1) · brake at [7] (0..1) · LED pairs after the motors (§5)</td></tr>
+    <tr><td class="sig">debug[16]</td><td class="mono">float[16]</td><td>Free channels, auto-graphed under the names from <code>ctrl_get_debug_names</code></td></tr>
+  </table></div>
+
+  <figure>
+    <div class="fig-frame">
+    <svg viewBox="0 0 760 118" role="img" aria-label="actuator array slot map: slots 0 to 5 hold motor voltages and LED pairs, slot 6 is reserved for steering, slot 7 for brake" style="min-width:620px">
+      <g font-family="var(--mono)">
+        <text x="10" y="18" font-size="11" fill="var(--muted)">CtrlOutputs.actuator[8]</text>
+        <!-- slots -->
+        <g font-size="12" text-anchor="middle">
+          <rect x="10"  y="30" width="86" height="40" fill="var(--out-soft)" stroke="var(--out)" stroke-width="1.2"/>
+          <rect x="96"  y="30" width="86" height="40" fill="var(--out-soft)" stroke="var(--out)" stroke-width="1.2"/>
+          <rect x="182" y="30" width="86" height="40" fill="var(--out-soft)" stroke="var(--out)" stroke-width="1.2"/>
+          <rect x="268" y="30" width="86" height="40" fill="var(--out-soft)" stroke="var(--out)" stroke-width="1.2"/>
+          <rect x="354" y="30" width="86" height="40" fill="none" stroke="var(--out)" stroke-width="1.2" stroke-dasharray="4 3"/>
+          <rect x="440" y="30" width="86" height="40" fill="none" stroke="var(--out)" stroke-width="1.2" stroke-dasharray="4 3"/>
+          <rect x="526" y="30" width="86" height="40" fill="none" stroke="currentColor" stroke-width="1.6"/>
+          <rect x="612" y="30" width="86" height="40" fill="none" stroke="currentColor" stroke-width="1.6"/>
+          <text x="53"  y="49" fill="var(--out)">motor 0</text><text x="53"  y="63" fill="var(--out)" font-size="10">volts</text>
+          <text x="139" y="49" fill="var(--out)">motor 1</text><text x="139" y="63" fill="var(--out)" font-size="10">volts</text>
+          <text x="225" y="49" fill="var(--out)">LED A</text><text x="225" y="63" fill="var(--out)" font-size="10">RGB24</text>
+          <text x="311" y="49" fill="var(--out)">LED B</text><text x="311" y="63" fill="var(--out)" font-size="10">blink Hz</text>
+          <text x="397" y="49" fill="var(--muted)">free</text>
+          <text x="483" y="49" fill="var(--muted)">free</text>
+          <text x="569" y="49" fill="currentColor" font-weight="700">steer</text><text x="569" y="63" font-size="10" fill="var(--muted)">−1..+1</text>
+          <text x="655" y="49" fill="currentColor" font-weight="700">brake</text><text x="655" y="63" font-size="10" fill="var(--muted)">0..1</text>
+        </g>
+        <g font-size="10.5" fill="var(--faint)" text-anchor="middle">
+          <text x="53" y="86">[0]</text><text x="139" y="86">[1]</text><text x="225" y="86">[2]</text><text x="311" y="86">[3]</text>
+          <text x="397" y="86">[4]</text><text x="483" y="86">[5]</text><text x="569" y="86">[6]</text><text x="655" y="86">[7]</text>
+        </g>
+        <text x="569" y="106" text-anchor="middle" font-size="10" fill="var(--muted)">CTRL_STEER_ACTUATOR — reserved</text>
+        <text x="655" y="106" text-anchor="middle" font-size="10" fill="var(--muted)" visibility="hidden">.</text>
+      </g>
+    </svg>
+    </div>
+    <figcaption><span class="fig-n">FIG 3</span>Slot map for a two-motor car with one LED.
+    Motors claim their manifest-declared slots from index 0; each LED then claims the next
+    two consecutive free slots. Slots 6 and 7 (<code>CTRL_STEER_ACTUATOR</code>,
+    <code>CTRL_BRAKE_ACTUATOR</code>) are reserved and never allocated to parts — a car with
+    5+ motors leaves no LED pair, and that LED reports <code>actuator_index&nbsp;=&nbsp;−1</code>
+    (display-only).</figcaption>
+  </figure>
+
+  <h3><span class="sec-n">3.3</span>SensorInfo — the manifest</h3>
+  <p>One entry per configured sensor, in the same order its data appears in
+  <code>sensor_data</code>. This is the whole point of <code>ctrl_configure</code>: cars are
+  assembled from parts, so motor count, voltage limits, and sensor loadout are per-car facts
+  your firmware is <em>told</em>, never facts it can assume.</p>
+  <div class="tbl-scroll"><table>
+    <tr><th>Field</th><th>Type</th><th>Meaning</th></tr>
+    <tr><td class="sig">name[32]</td><td class="mono">char[32]</td><td>User-chosen sensor name (NUL-terminated) — as typed in the garage</td></tr>
+    <tr><td class="sig">type</td><td class="mono">int</td><td><code>SENSOR_*</code> tag (§4)</td></tr>
+    <tr><td class="sig">data_offset</td><td class="mono">int</td><td>Start index into <code>sensor_data</code></td></tr>
+    <tr><td class="sig">data_count</td><td class="mono">int</td><td>Floats this sensor contributes</td></tr>
+    <tr><td class="sig">range_min / range_max</td><td class="mono">float</td><td>Configured output range. For motors: ±maxVoltage. For a ToF: range_max is also the no-hit value.</td></tr>
+    <tr><td class="sig">actuator_index</td><td class="mono">int</td><td>For MOTOR: the <code>actuator[]</code> slot it reads. For LED: the first of its two slots. −1 for pure sensors (and unslotted LEDs).</td></tr>
+  </table></div>
+
+  <figure>
+    <div class="fig-frame">
+    <svg viewBox="0 0 760 168" role="img" aria-label="Manifest entries map named sensors onto contiguous slices of the flat sensor_data array" style="min-width:640px">
+      <defs>
+        <marker id="arr3" markerWidth="8" markerHeight="7" refX="7" refY="3.5" orient="auto">
+          <polygon points="0,0 8,3.5 0,7" fill="var(--in)"/>
+        </marker>
+      </defs>
+      <g font-family="var(--mono)" font-size="11">
+        <text x="10" y="18" fill="var(--muted)">manifest (SensorInfo[])</text>
+        <g text-anchor="middle" font-size="10.5">
+          <rect x="10"  y="28" width="150" height="26" fill="none" stroke="currentColor" stroke-width="1.1"/>
+          <text x="85"  y="45" fill="currentColor">"front" TOF  off 0 n 1</text>
+          <rect x="170" y="28" width="150" height="26" fill="none" stroke="currentColor" stroke-width="1.1"/>
+          <text x="245" y="45" fill="currentColor">"m_l" MOTOR  off 1 n 3</text>
+          <rect x="330" y="28" width="150" height="26" fill="none" stroke="currentColor" stroke-width="1.1"/>
+          <text x="405" y="45" fill="currentColor">"floor" COLOR off 4 n 4</text>
+          <rect x="490" y="28" width="150" height="26" fill="none" stroke="currentColor" stroke-width="1.1"/>
+          <text x="565" y="45" fill="currentColor">"ant" RF  off 8 n 10</text>
+        </g>
+        <text x="10" y="106" fill="var(--muted)">sensor_data (flat float[18])</text>
+        <!-- data strip -->
+        <g>
+          <rect x="10"  y="116" width="40"  height="30" fill="var(--in-soft)" stroke="var(--in)" stroke-width="1"/>
+          <rect x="50"  y="116" width="120" height="30" fill="var(--in-soft)" stroke="var(--in)" stroke-width="1"/>
+          <rect x="170" y="116" width="160" height="30" fill="var(--in-soft)" stroke="var(--in)" stroke-width="1"/>
+          <rect x="330" y="116" width="400" height="30" fill="var(--in-soft)" stroke="var(--in)" stroke-width="1"/>
+          <g text-anchor="middle" font-size="10.5" fill="var(--in)">
+            <text x="30"  y="135">[0]</text>
+            <text x="110" y="135">[1..3]</text>
+            <text x="250" y="135">[4..7]</text>
+            <text x="530" y="135">[8..17]</text>
+          </g>
+        </g>
+        <!-- arrows -->
+        <line x1="85"  y1="54" x2="32"  y2="112" stroke="var(--in)" stroke-width="1.1" marker-end="url(#arr3)"/>
+        <line x1="245" y1="54" x2="112" y2="112" stroke="var(--in)" stroke-width="1.1" marker-end="url(#arr3)"/>
+        <line x1="405" y1="54" x2="252" y2="112" stroke="var(--in)" stroke-width="1.1" marker-end="url(#arr3)"/>
+        <line x1="565" y1="54" x2="528" y2="112" stroke="var(--in)" stroke-width="1.1" marker-end="url(#arr3)"/>
+        <text x="10" y="164" font-size="10" fill="var(--faint)">value at [data_offset + slot] · read with tt_sensor_value(car, in, index, slot, fallback)</text>
+      </g>
+    </svg>
+    </div>
+    <figcaption><span class="fig-n">FIG 4</span>The manifest describes contiguous slices of
+    one flat array. Never hard-code offsets — the same firmware must survive being loaded
+    into a differently-assembled car.</figcaption>
+  </figure>
+</section>
+
+<!-- ══════════════════════════ §4 ══════════════════════════ -->
+<section id="sensors">
+  <h2><span class="sec-n">§4</span>Sensor catalog</h2>
+  <p class="lede">All twelve <code>SENSOR_*</code> types. Every sensor is initialized the
+  same way — bolt it onto the car in the <strong>garage</strong> (or receive it in a built-in
+  design), give it a name, and it appears in the manifest handed to
+  <code>ctrl_configure</code>. Firmware never initializes hardware; it discovers it.</p>
+  <p>Each card below gives the data slice layout, the extraction code, and a real-shaped
+  sample. All samples assume <code>tt_car_configure</code> ran in <code>ctrl_configure</code>
+  and <code>car</code>/<code>in</code> are in scope.</p>
+
+  <!-- TOF -->
+  <div class="sensor-card" id="s-tof">
+    <div class="sc-head"><span class="tag">SENSOR_TOF <span class="id">= 1</span></span><span class="chip in">IN · 1 float</span><span class="what">directional time-of-flight range finder</span></div>
+    <div class="sc-body">
+      <div class="kv">
+        <span class="k">layout</span><span class="v"><code>[distance_m]</code></span>
+        <span class="k">no target</span><span class="v">reports its configured <code>range_max</code> — "far away" and "broken" must not look the same</span>
+        <span class="k">init</span><span class="v">garage: aim direction, range (default 4 m, VL53L1X-class), cone rays/angle, noise model</span>
+      </div>
+<pre><code>float d = <span class="io-in">tt_tof</span>(&amp;g_car, in, "front", 99.0f);   <span class="cm">/* metres; 99 = no such sensor */</span></code></pre>
+      <div class="sample"><span class="lbl">sample · wall 1.4 m ahead → </span><span class="val">[1.437]</span><span class="lbl"> · open road → </span><span class="val">[4.000]</span><span class="lbl"> (= range_max)</span></div>
+    </div>
+  </div>
+
+  <!-- ENCODER -->
+  <div class="sensor-card" id="s-encoder">
+    <div class="sc-head"><span class="tag">SENSOR_ENCODER <span class="id">= 2</span></span><span class="chip in">IN · 2 floats</span><span class="what">wheel encoder</span></div>
+    <div class="sc-body">
+      <div class="kv">
+        <span class="k">layout</span><span class="v"><code>[ang_vel_rad_s, ticks]</code> — ticks is a wrapped counter; diff it, don't trust its absolute value</span>
+        <span class="k">init</span><span class="v">garage: attach to a wheel. Note <code>in-&gt;wheel_vel[4]</code> already carries all four wheels without needing an encoder part.</span>
+      </div>
+<pre><code>int   e     = tt_sensor_of_type(&amp;g_car, SENSOR_ENCODER);
+float omega = <span class="io-in">tt_sensor_value</span>(&amp;g_car, in, e, 0, 0.0f);     <span class="cm">/* rad/s */</span>
+float v_mps = omega * TT_WHEEL_RADIUS_M;                     <span class="cm">/* ground speed */</span></code></pre>
+      <div class="sample"><span class="lbl">sample · cruising ≈ 1.8 m/s → </span><span class="val">[51.43, 18274]</span></div>
+    </div>
+  </div>
+
+  <!-- MOTOR -->
+  <div class="sensor-card" id="s-motor">
+    <div class="sc-head"><span class="tag">SENSOR_MOTOR <span class="id">= 3</span></span><span class="chip in">IN · 3 floats</span><span class="chip out">CLAIMS 1 SLOT</span><span class="what">motor electrical feedback</span></div>
+    <div class="sc-body">
+      <div class="kv">
+        <span class="k">layout</span><span class="v"><code>[voltage_V, current_A, torque_Nm]</code> — the applied (clamped) voltage, winding current, shaft torque</span>
+        <span class="k">actuator</span><span class="v"><code>actuator_index</code> is the slot your firmware writes volts into; <code>range_max</code> = that motor's +maxVoltage (stock 2S pack: 7.4 V)</span>
+        <span class="k">caution</span><span class="v"><strong>0 V is a brake, not neutral</strong> — the motor model shorts the winding at zero volts. To coast, the car must freewheel (no motor on that wheel) or you accept drag braking.</span>
+      </div>
+<pre><code>int   m    = tt_sensor_index(&amp;g_car, "m_left");
+float amps = <span class="io-in">tt_sensor_value</span>(&amp;g_car, in, m, 1, 0.0f);
+<span class="cm">/* write side: */</span>
+<span class="io-out">tt_drive_volts</span>(&amp;g_car, out, 6.0f);   <span class="cm">/* all motors, clamped per-motor */</span></code></pre>
+      <div class="sample"><span class="lbl">sample · accelerating at 7.2 V → </span><span class="val">[7.20, 3.85, 0.41]</span><span class="lbl"> · stalled against a wall → </span><span class="val">[7.20, 11.62, 0.87]</span></div>
+    </div>
+  </div>
+
+  <!-- IMU -->
+  <div class="sensor-card" id="s-imu">
+    <div class="sc-head"><span class="tag">SENSOR_IMU <span class="id">= 4</span></span><span class="chip in">IN · 6 floats</span><span class="what">strap-down inertial unit</span></div>
+    <div class="sc-body">
+      <div class="kv">
+        <span class="k">layout</span><span class="v"><code>[gx, gy, gz, ax, ay, az]</code> — body angular rate (rad/s) + specific force (m/s²). Mirrored into <code>in-&gt;gyro[]</code> / <code>in-&gt;accel[]</code>, which exist even without the part.</span>
+        <span class="k">meaning</span><span class="v">Specific force, not coordinate acceleration: at rest the up axis reads ≈ +9.81. Yaw rate is the rotation about the body's up axis.</span>
+      </div>
+<pre><code>float yaw_rate = in-&gt;gyro[1];                <span class="cm">/* rad/s about up (y-up body) */</span>
+float a_fwd    = in-&gt;accel[2];               <span class="cm">/* longitudinal specific force */</span></code></pre>
+      <div class="sample"><span class="lbl">sample · steady left corner → </span><span class="val">[0.011, 1.243, −0.018,&nbsp;&nbsp;3.07, 9.79, 0.42]</span></div>
+    </div>
+  </div>
+
+  <!-- CAMERA -->
+  <div class="sensor-card" id="s-camera">
+    <div class="sc-head"><span class="tag">SENSOR_CAMERA <span class="id">= 5</span></span><span class="chip in">IN · frame</span><span class="what">grayscale camera</span></div>
+    <div class="sc-body">
+      <div class="kv">
+        <span class="k">layout</span><span class="v">no floats in <code>sensor_data</code> — the frame arrives via <code>cam_pixels</code> / <code>cam_width</code> / <code>cam_height</code></span>
+        <span class="k">format</span><span class="v">1 byte/pixel, 0 black .. 255 white, row-major, <strong>row 0 = top</strong> (ABI v4). Clamped 8..128 per axis; default 64×48.</span>
+        <span class="k">rate</span><span class="v">captures at its own rate (typ. 10 Hz) — <code>ctrl_step</code> at 100 Hz sees the same buffer ~10 ticks in a row. There is no frame counter in the ABI; use <code>tt_cam_update</code> (§6.6), which detects change by comparing bytes.</span>
+      </div>
+<pre><code>int p    = <span class="io-in">tt_cam_pixel</span>(in, 32, 40);            <span class="cm">/* col 32, row 40 from TOP */</span>
+float bal = <span class="io-in">tt_cam_balance</span>(in, 12);            <span class="cm">/* −1 left brighter .. +1 right */</span></code></pre>
+      <figure style="margin:14px 0 4px">
+        <div class="fig-frame" style="padding:14px">
+        <svg viewBox="0 0 420 150" role="img" aria-label="Camera frame coordinates: row zero is the top of the image where the sky is; the road ahead occupies the high-y bottom rows" style="min-width:360px">
+          <g font-family="var(--mono)" font-size="10.5">
+            <rect x="60" y="16" width="180" height="120" fill="none" stroke="currentColor" stroke-width="1.3"/>
+            <rect x="60" y="16" width="180" height="46" fill="var(--code-bg)"/>
+            <rect x="60" y="98" width="180" height="38" fill="var(--in-soft)"/>
+            <text x="150" y="44" text-anchor="middle" fill="var(--muted)">sky · small y</text>
+            <text x="150" y="120" text-anchor="middle" fill="var(--in)">road ahead · large y</text>
+            <text x="150" y="12" text-anchor="middle" fill="currentColor">y = 0 (TOP)</text>
+            <text x="150" y="148" text-anchor="middle" fill="var(--muted)">y = cam_height − 1</text>
+            <text x="52" y="80" text-anchor="end" fill="var(--muted)">y ↓</text>
+            <text x="262" y="30" fill="var(--muted)">px(x,y) =</text>
+            <text x="262" y="46" fill="var(--muted)">cam_pixels[</text>
+            <text x="274" y="62" fill="var(--muted)">y*cam_width</text>
+            <text x="274" y="78" fill="var(--muted)">+ x]</text>
+          </g>
+        </svg>
+        </div>
+        <figcaption><span class="fig-n">FIG 5</span>Screen-style coordinates: y counts down
+        from the top edge, so <code>tt_cam_balance</code> reads the <em>bottom</em> rows to
+        look at the road just ahead rather than the horizon.</figcaption>
+      </figure>
+      <div class="sample"><span class="lbl">sample · 64×48 frame, bottom-row slice over a pale line on dark asphalt → </span><span class="val">[38, 41, 39, 202, 214, 208, 45, 40, …]</span></div>
+    </div>
+  </div>
+
+  <!-- SUSPENSION -->
+  <div class="sensor-card" id="s-susp">
+    <div class="sc-head"><span class="tag">SENSOR_SUSPENSION <span class="id">= 6</span></span><span class="chip in">IN · 3 floats</span><span class="what">per-wheel strut telemetry</span></div>
+    <div class="sc-body">
+      <div class="kv">
+        <span class="k">layout</span><span class="v"><code>[spring_force_N, compression_01, angle_deg]</code> — load on the strut, normalized travel (0 topped-out .. 1 bottomed), strut tilt</span>
+        <span class="k">use</span><span class="v">load transfer detection (traction control), airborne detection (force → 0), rough-surface flags</span>
+      </div>
+<pre><code>int   s     = tt_sensor_index(&amp;g_car, "strut_fl");
+float comp  = <span class="io-in">tt_sensor_value</span>(&amp;g_car, in, s, 1, 0.5f);
+int airborne = comp &lt; 0.03f;</code></pre>
+      <div class="sample"><span class="lbl">sample · front-left under braking → </span><span class="val">[41.7, 0.63, 2.1]</span><span class="lbl"> · airborne → </span><span class="val">[0.0, 0.01, −0.4]</span></div>
+    </div>
+  </div>
+
+  <!-- BATTERY -->
+  <div class="sensor-card" id="s-batt">
+    <div class="sc-head"><span class="tag">SENSOR_BATTERY <span class="id">= 7</span></span><span class="chip in">IN · 3 floats</span><span class="what">pack monitor</span></div>
+    <div class="sc-body">
+      <div class="kv">
+        <span class="k">layout</span><span class="v"><code>[terminal_V, total_current_A, soc_01]</code> — soc is fixed at 1.0 for now</span>
+        <span class="k">meaning</span><span class="v">Terminal voltage sags under load (pack resistance) — watch it to detect brown-out territory before the motors do.</span>
+      </div>
+<pre><code>int   b    = tt_sensor_of_type(&amp;g_car, SENSOR_BATTERY);
+float volt = <span class="io-in">tt_sensor_value</span>(&amp;g_car, in, b, 0, 7.4f);
+float amps = <span class="io-in">tt_sensor_value</span>(&amp;g_car, in, b, 1, 0.0f);</code></pre>
+      <div class="sample"><span class="lbl">sample · both motors pulling hard → </span><span class="val">[7.02, 9.31, 1.00]</span><span class="lbl"> · idle → </span><span class="val">[7.39, 0.04, 1.00]</span></div>
+    </div>
+  </div>
+
+  <!-- COLOR -->
+  <div class="sensor-card" id="s-color">
+    <div class="sc-head"><span class="tag">SENSOR_COLOR <span class="id">= 8</span></span><span class="chip in">IN · 4 floats</span><span class="what">surface colour detector · v6</span></div>
+    <div class="sc-body">
+      <div class="kv">
+        <span class="k">layout</span><span class="v"><code>[r, g, b, reflect]</code> all 0..1 — black (all zero) when nothing is inside range</span>
+        <span class="k">reflect</span><span class="v">Rec.709 luminance of the (noisy) rgb: <code>0.2126r + 0.7152g + 0.0722b</code>. Aim the sensor down and this is <strong>the</strong> line-follower signal — bright over paint, dark over asphalt.</span>
+        <span class="k">init</span><span class="v">garage: aim + range (default 0.3 m — it's a close-proximity detector, not a camera)</span>
+      </div>
+<pre><code>float refl = <span class="io-in">tt_reflectance</span>(&amp;g_car, in, "floor", 0.0f);  <span class="cm">/* line follower */</span>
+float red  = <span class="io-in">tt_color_r</span>(&amp;g_car, in, "floor", 0.0f);       <span class="cm">/* also _g, _b */</span></code></pre>
+      <div class="sample"><span class="lbl">sample · white line → </span><span class="val">[0.91, 0.90, 0.89, 0.90]</span><span class="lbl"> · red zone marker → </span><span class="val">[0.84, 0.10, 0.08, 0.26]</span><span class="lbl"> · nothing in range → </span><span class="val">[0.00, 0.00, 0.00, 0.00]</span></div>
+    </div>
+  </div>
+
+  <!-- RF -->
+  <div class="sensor-card" id="s-rf">
+    <div class="sc-head"><span class="tag">SENSOR_RF <span class="id">= 9</span></span><span class="chip in">IN · 10 floats</span><span class="what">RF antenna — strongest-3 beacon pings · v6</span></div>
+    <div class="sc-body">
+      <div class="kv">
+        <span class="k">layout</span><span class="v"><code>[count, id0, rssi0_dbm, brg0_deg, id1, rssi1, brg1, id2, rssi2, brg2]</code></span>
+        <span class="k">slots</span><span class="v">strongest three pings, ordered by RSSI descending. Empty slot: <code>id=−1, rssi=−100, brg=0</code>. Three slots because trilateration needs exactly three references.</span>
+        <span class="k">bearing</span><span class="v">signed yaw from the antenna's aim, degrees, + = right — steer toward a beacon by steering its bearing to zero</span>
+        <span class="k">falloff</span><span class="v">free-space: <code>rssi = tx_dbm − 20·log10(d)</code>, floored at −100 dBm; receive threshold −90 dBm. No occlusion, deliberately — triangulation stays solvable on a cluttered track.</span>
+        <span class="k">emit</span><span class="v">the same part can transmit (garage: emit on, beacon id, tx power) — a car antenna is itself a trackable ping source for other cars. It never hears its own emission.</span>
+      </div>
+<pre><code>int n = <span class="io-in">tt_rf_count</span>(&amp;g_car, in, "ant");            <span class="cm">/* 0..3 heard this tick */</span>
+int s = <span class="io-in">tt_rf_find</span>(&amp;g_car, in, "ant", 4);          <span class="cm">/* which slot is beacon 4? */</span>
+if (s &gt;= 0) {
+    float rssi = <span class="io-in">tt_rf_rssi</span>(&amp;g_car, in, "ant", s, -100.0f);
+    float brg  = <span class="io-in">tt_rf_bearing</span>(&amp;g_car, in, "ant", s, 0.0f);
+    float dist = powf(10.0f, (tx_dbm - rssi) / 20.0f);   <span class="cm">/* invert the falloff */</span>
+}</code></pre>
+      <figure style="margin:14px 0 4px">
+        <div class="fig-frame" style="padding:14px">
+        <svg viewBox="0 0 460 190" role="img" aria-label="RSSI falls with the log of distance: 0 dBm at 1 metre, minus 20 at 10 metres, crossing the minus 90 receive threshold far beyond track scale" style="min-width:380px">
+          <g font-family="var(--mono)" font-size="10">
+            <!-- axes -->
+            <line x1="52" y1="14" x2="52" y2="150" stroke="currentColor" stroke-width="1.2"/>
+            <line x1="52" y1="150" x2="430" y2="150" stroke="currentColor" stroke-width="1.2"/>
+            <!-- y grid/labels: rssi 10 (top y=14) to -40 (y=150 == -40? scale: 50dB over 136px => 2.72px/dB) -->
+            <g fill="var(--faint)">
+              <line x1="52" y1="41" x2="430" y2="41" stroke="var(--rule)" stroke-width="1"/>
+              <line x1="52" y1="68" x2="430" y2="68" stroke="var(--rule)" stroke-width="1"/>
+              <line x1="52" y1="95" x2="430" y2="95" stroke="var(--rule)" stroke-width="1"/>
+              <line x1="52" y1="122" x2="430" y2="122" stroke="var(--rule)" stroke-width="1"/>
+              <text x="46" y="18" text-anchor="end">+10</text>
+              <text x="46" y="45" text-anchor="end">0</text>
+              <text x="46" y="72" text-anchor="end">−10</text>
+              <text x="46" y="99" text-anchor="end">−20</text>
+              <text x="46" y="126" text-anchor="end">−30</text>
+              <text x="46" y="153" text-anchor="end">−40</text>
+            </g>
+            <!-- x labels (log scale 0.3m..30m): x = 52 + 189*log10(d/0.3); 0.3->52, 1->150.8, 3->241, 10->339.8, 30->430 -->
+            <g fill="var(--faint)" text-anchor="middle">
+              <text x="52" y="166">0.3</text><text x="151" y="166">1</text><text x="241" y="166">3</text><text x="340" y="166">10</text><text x="430" y="166">30</text>
+            </g>
+            <text x="241" y="184" text-anchor="middle" fill="var(--muted)">distance (m, log scale)</text>
+            <text x="16" y="84" fill="var(--muted)" transform="rotate(-90 16 84)" text-anchor="middle">rssi (dBm) @ tx 0 dBm</text>
+            <!-- curve: rssi = -20log10(d). points d=0.3:+10.46→y≈13.7 clamp; use d=0.32(+9.9,y=17.2)... straight line on log axis! y = 41 + 2.72*20*log10(d) -->
+            <line x1="57" y1="15" x2="430" y2="95.7" stroke="var(--in)" stroke-width="2"/>
+            <circle cx="151" cy="41" r="3.5" fill="var(--in)"/>
+            <text x="158" y="36" fill="var(--in)">0 dBm @ 1 m (= tx power)</text>
+            <circle cx="340" cy="95.4" r="3.5" fill="var(--in)"/>
+            <text x="346" y="90" fill="var(--in)">−20 @ 10 m</text>
+            <text x="60" y="146" fill="var(--faint)">floor −100 · threshold −90 (≈ 31 km at 0 dBm — every track-scale beacon is heard)</text>
+          </g>
+        </svg>
+        </div>
+        <figcaption><span class="fig-n">FIG 6</span>Free-space falloff is a straight line
+        against log-distance: −20 dB per decade. Distance recovery is exact —
+        <code>d&nbsp;=&nbsp;10^((tx−rssi)/20)</code> — which is what makes RF trilateration a
+        solvable classroom problem here.</figcaption>
+      </figure>
+      <div class="sample"><span class="lbl">sample · two beacons in range → </span><span class="val">[2,&nbsp;&nbsp;4, −18.3, 12.5,&nbsp;&nbsp;7, −26.1, −87.0,&nbsp;&nbsp;−1, −100.0, 0.0]</span></div>
+    </div>
+  </div>
+
+  <!-- MAG -->
+  <div class="sensor-card" id="s-mag">
+    <div class="sc-head"><span class="tag">SENSOR_MAG <span class="id">= 10</span></span><span class="chip in">IN · 1 float</span><span class="what">magnetometer / compass · v6</span></div>
+    <div class="sc-body">
+      <div class="kv">
+        <span class="k">layout</span><span class="v"><code>[heading_deg]</code> — 0..360, 0 = world +Z, clockwise (a compass rose, not a math angle)</span>
+        <span class="k">init</span><span class="v">garage: declination offset; noise model drift accumulates and wraps correctly across the 0/360 seam</span>
+        <span class="k">vs. gyro</span><span class="v">the gyro gives you <em>rate</em> (drifts when integrated); the mag gives you <em>absolute</em> heading (noisy). Complementary-filter the pair.</span>
+      </div>
+<pre><code>float hdg = <span class="io-in">tt_heading</span>(&amp;g_car, in, "compass", 0.0f);
+<span class="cm">/* shortest signed error to a target heading: */</span>
+float err = fmodf(target - hdg + 540.0f, 360.0f) - 180.0f;</code></pre>
+      <div class="sample"><span class="lbl">sample · facing roughly south-east → </span><span class="val">[137.4]</span></div>
+    </div>
+  </div>
+
+  <!-- BUMP -->
+  <div class="sensor-card" id="s-bump">
+    <div class="sc-head"><span class="tag">SENSOR_BUMP <span class="id">= 11</span></span><span class="chip in">IN · 2 floats</span><span class="what">contact switch · v6</span></div>
+    <div class="sc-body">
+      <div class="kv">
+        <span class="k">layout</span><span class="v"><code>[contact_01, force_N]</code> — 1 while pressed this tick; peak contact force, 0 when untouched</span>
+        <span class="k">init</span><span class="v">garage: mount point + activation radius (default 6 cm) + acceptance cone. Fires only for contacts near the mount and within the cone of its aim — a front bumper switch ignores a rear-end tap.</span>
+      </div>
+<pre><code>if (<span class="io-in">tt_bump</span>(&amp;g_car, in, "bumper")) {
+    float f = <span class="io-in">tt_bump_force</span>(&amp;g_car, in, "bumper");   <span class="cm">/* how hard? */</span>
+    g_state = REVERSING;
+}</code></pre>
+      <div class="sample"><span class="lbl">sample · wall tap at ~1 m/s → </span><span class="val">[1, 212.5]</span><span class="lbl"> · idle → </span><span class="val">[0, 0.0]</span></div>
+    </div>
+  </div>
+
+  <!-- LED -->
+  <div class="sensor-card" id="s-led">
+    <div class="sc-head"><span class="tag">SENSOR_LED <span class="id">= 12</span></span><span class="chip out">OUT · 2 slots</span><span class="chip in">READBACK · 4 floats</span><span class="what">firmware-driven indicator LED · v6</span></div>
+    <div class="sc-body">
+      <div class="kv">
+        <span class="k">command</span><span class="v"><code>actuator[i] = RGB24</code> packed <code>(r&lt;&lt;16)|(g&lt;&lt;8)|b</code> as an integer-valued float (exact — floats represent integers ≤ 2²⁴); <code>actuator[i+1] = blink Hz</code> (0 = solid). <code>i = actuator_index</code>, the first of two consecutive slots claimed after the motors.</span>
+        <span class="k">readback</span><span class="v"><code>[r, g, b, lit]</code> all 0..1, post-blink-gate — telemetry shows exactly what the world sees</span>
+        <span class="k">visibility</span><span class="v">the dome renders on the default layer, so <strong>other cars' cameras see it</strong> — firmware can signal through vision</span>
+        <span class="k">no slots</span><span class="v">5+ motors leave no free pair → <code>actuator_index = −1</code>, LED is display-only and <code>tt_led</code> is a safe no-op</span>
+      </div>
+<pre><code><span class="io-out">tt_led</span>(&amp;g_car, out, "status", 255, 40, 0, 2.0f);  <span class="cm">/* orange, 2 Hz blink */</span>
+<span class="io-out">tt_led</span>(&amp;g_car, out, "status", 0, 255, 0, 0.0f);   <span class="cm">/* solid green */</span></code></pre>
+      <div class="sample"><span class="lbl">readback · orange @ 2 Hz, blink-phase ON → </span><span class="val">[1.00, 0.16, 0.00, 1]</span><span class="lbl"> · phase OFF → </span><span class="val">[0.00, 0.00, 0.00, 0]</span></div>
+    </div>
+  </div>
+
+  <div class="note warn">
+    <span class="nt">Noise is configurable, not free</span>
+    <p>Every sensor takes a per-part noise model in the garage (Gaussian noise, drift,
+    quantization). Defaults are zero-noise and bit-deterministic — the same run replays
+    identically. Turn realism on when your controller is ready to be lied to.</p>
+  </div>
+</section>
+
+<!-- ══════════════════════════ §5 ══════════════════════════ -->
+<section id="actuators">
+  <h2><span class="sec-n">§5</span>Actuator reference</h2>
+  <p class="lede">Everything the firmware can <em>do</em> comes out through
+  <code>actuator[8]</code> and <code>debug[16]</code>.</p>
+  <div class="tbl-scroll"><table>
+    <tr><th>Channel</th><th>Slot</th><th>Units / range</th><th>Semantics</th></tr>
+    <tr><td class="sig">motor voltage</td><td class="mono">per manifest (0..5)</td><td class="mono">± maxVoltage (V)</td><td>Signed; sign chooses direction. Host clamps to the motor's advertised limit. 0 V shorts the winding — that's drag braking, not coasting. A wheel with no motor free-rolls.</td></tr>
+    <tr><td class="sig">steering</td><td class="mono">[6] CTRL_STEER_ACTUATOR</td><td class="mono">−1 .. +1</td><td>Front-wheel servo angle; + = right</td></tr>
+    <tr><td class="sig">brake</td><td class="mono">[7] CTRL_BRAKE_ACTUATOR</td><td class="mono">0 .. 1</td><td>Friction brake, independent of motor voltage — you can brake and drive at once, and the car will not thank you for it</td></tr>
+    <tr><td class="sig">LED colour</td><td class="mono">actuator_index</td><td class="mono">RGB24 as float</td><td><code>(r&lt;&lt;16)|(g&lt;&lt;8)|b</code>, integer-valued</td></tr>
+    <tr><td class="sig">LED blink</td><td class="mono">actuator_index + 1</td><td class="mono">Hz, 0 = solid</td><td>50 % duty, phased from deterministic sim time</td></tr>
+    <tr><td class="sig">debug graphs</td><td class="mono">debug[0..15]</td><td class="mono">any float</td><td>Auto-graphed live under the names from <code>ctrl_get_debug_names()</code> — free instrumentation, use it constantly</td></tr>
+  </table></div>
+  <div class="note">
+    <span class="nt">Command latency</span>
+    <p>Actuator commands can ride a configurable transport delay (realism feature) — the same
+    delayed array feeds motors and LEDs alike, so what you commanded this tick may reach the
+    car a few ticks later, exactly like a real radio link.</p>
+  </div>
+</section>
+
+<!-- ══════════════════════════ §6 ══════════════════════════ -->
+<section id="helpers">
+  <h2><span class="sec-n">§6</span>Helper library — tt_controller.h</h2>
+  <p class="lede">Header-only, every function <code>static inline</code>, no linking, no
+  allocation. All of it is a readable wrapper over fields already in
+  CtrlInputs/CtrlOutputs — ignoring it entirely is equally valid.</p>
+
+  <h3><span class="sec-n">6.1</span>Small math</h3>
+  <div class="tbl-scroll"><table>
+    <tr><th>Function</th><th>Returns</th><th>Notes</th></tr>
+    <tr><td class="sig">tt_clamp(float v, float lo, float hi)</td><td class="mono">float</td><td>v clamped to [lo, hi]</td></tr>
+    <tr><td class="sig">tt_clamp1(float v)</td><td class="mono">float</td><td>clamp to [−1, +1]</td></tr>
+    <tr><td class="sig">tt_lerp(float a, float b, float t)</td><td class="mono">float</td><td>blend a→b; t is clamped to [0,1]</td></tr>
+    <tr><td class="sig">tt_deadzone(float v, float width)</td><td class="mono">float</td><td>0 inside ±width, else v — for noisy sticks and jittery error terms</td></tr>
+  </table></div>
+
+  <h3><span class="sec-n">6.2</span>PID controller</h3>
+  <p>A textbook PID with the two beginner traps pre-fixed: the integrator is clamped (no
+  windup while stuck against a wall), and the derivative is taken on the
+  <em>measurement</em>, not the error (no spike on a setpoint step).</p>
+  <div class="tbl-scroll"><table>
+    <tr><th>Function</th><th>Returns</th><th>Notes</th></tr>
+    <tr><td class="sig">tt_pid_init(TtPid* p, float kp, float ki, float kd)</td><td class="mono">void</td><td>zeroes state; integrator clamp defaults to ±1</td></tr>
+    <tr><td class="sig">tt_pid_limits(TtPid* p, float lo, float hi)</td><td class="mono">void</td><td>integrator clamp in <em>output</em> units (volts if the PID drives volts)</td></tr>
+    <tr><td class="sig">tt_pid_reset(TtPid* p)</td><td class="mono">void</td><td>clears integral and derivative history</td></tr>
+    <tr><td class="sig">tt_pid_update(TtPid* p, float target, float measured, float dt)</td><td class="mono">float</td><td>one step; pass <code>in-&gt;dt_s</code> as dt</td></tr>
+  </table></div>
+
+  <h3><span class="sec-n">6.3</span>Car context &amp; sensor reads</h3>
+  <div class="tbl-scroll"><table>
+    <tr><th>Function</th><th>Returns</th><th>Notes</th></tr>
+    <tr><td class="sig">tt_car_configure(TtCar* car, const SensorInfo* s, int n)</td><td class="mono">void</td><td>call from <code>ctrl_configure</code>; copies the manifest, indexes the motors. Safe with NULL / count 0.</td></tr>
+    <tr><td class="sig">tt_sensor_index(const TtCar*, const char* name)</td><td class="mono">int</td><td>manifest index of a named sensor, or −1</td></tr>
+    <tr><td class="sig">tt_sensor_of_type(const TtCar*, int type)</td><td class="mono">int</td><td>first sensor of a <code>SENSOR_*</code> type, or −1</td></tr>
+    <tr><td class="sig">tt_sensor_value(car, in, int index, int slot, float fallback)</td><td class="mono">float</td><td>one float from a sensor's slice — the universal, type-generic read. Every missing-data path returns <code>fallback</code>.</td></tr>
+    <tr><td class="sig">tt_speed(const CtrlInputs* in)</td><td class="mono">float</td><td>ground speed m/s, 4-wheel average × <code>TT_WHEEL_RADIUS_M</code> (0.35). Signed.</td></tr>
+    <tr><td class="sig">tt_tof(car, in, name, fallback)</td><td class="mono">float</td><td>metres from a named ToF; range_max on no hit</td></tr>
+    <tr><td class="sig">tt_color_r / _g / _b(car, in, name, fallback)</td><td class="mono">float</td><td>colour channels 0..1</td></tr>
+    <tr><td class="sig">tt_reflectance(car, in, name, fallback)</td><td class="mono">float</td><td>Rec.709 luminance 0..1 — the line-follow signal</td></tr>
+    <tr><td class="sig">tt_heading(car, in, name, fallback)</td><td class="mono">float</td><td>compass degrees 0..360</td></tr>
+    <tr><td class="sig">tt_bump(car, in, name)</td><td class="mono">int</td><td>1 while pressed, else 0</td></tr>
+    <tr><td class="sig">tt_bump_force(car, in, name)</td><td class="mono">float</td><td>peak contact force this tick (N)</td></tr>
+    <tr><td class="sig">tt_rf_count(car, in, name)</td><td class="mono">int</td><td>pings heard, 0..3</td></tr>
+    <tr><td class="sig">tt_rf_id(car, in, name, int slot)</td><td class="mono">int</td><td>beacon id in slot 0..2 (strongest first), −1 empty</td></tr>
+    <tr><td class="sig">tt_rf_rssi(car, in, name, slot, fallback)</td><td class="mono">float</td><td>dBm for that slot</td></tr>
+    <tr><td class="sig">tt_rf_bearing(car, in, name, slot, fallback)</td><td class="mono">float</td><td>signed degrees off the antenna's aim, + = right</td></tr>
+    <tr><td class="sig">tt_rf_find(car, in, name, int beacon_id)</td><td class="mono">int</td><td>which slot carries a given beacon, −1 unheard. Slots reshuffle with distance — always look up, never cache.</td></tr>
+  </table></div>
+
+  <h3><span class="sec-n">6.4</span>Outputs</h3>
+  <div class="tbl-scroll"><table>
+    <tr><th>Function</th><th>Returns</th><th>Notes</th></tr>
+    <tr><td class="sig">tt_drive_volts(car, out, float volts)</td><td class="mono">float</td><td>same voltage to every drive motor, clamped per-motor; returns what was actually applied (graph it)</td></tr>
+    <tr><td class="sig">tt_drive(car, out, float effort)</td><td class="mono">float</td><td>same, as a −1..+1 fraction of each motor's max</td></tr>
+    <tr><td class="sig">tt_steer(out, float steer)</td><td class="mono">void</td><td>servo −1 (left) .. +1 (right), clamped</td></tr>
+    <tr><td class="sig">tt_brake(out, float brake)</td><td class="mono">void</td><td>friction brake 0..1, clamped</td></tr>
+    <tr><td class="sig">tt_led(car, out, name, int r, int g, int b, float blink_hz)</td><td class="mono">void</td><td>r/g/b 0..255; packs colour + blink into the LED's two slots; no-op if the LED is unslotted</td></tr>
+  </table></div>
+
+  <h3><span class="sec-n">6.5</span>Camera — live frame</h3>
+  <div class="tbl-scroll"><table>
+    <tr><th>Function</th><th>Returns</th><th>Notes</th></tr>
+    <tr><td class="sig">tt_cam_pixel(in, int x, int y)</td><td class="mono">int</td><td>one pixel 0..255; 0 off-frame or no camera. Row 0 = top.</td></tr>
+    <tr><td class="sig">tt_cam_brightness(in, x0, y0, x1, y1)</td><td class="mono">float</td><td>mean 0..255 of a rect, clipped to frame; <strong>−1</strong> when there's no camera or the rect misses — distinguishable from "very dark"</td></tr>
+    <tr><td class="sig">tt_cam_balance(in, int rows)</td><td class="mono">float</td><td>−1..+1 left/right brightness balance over the bottom <code>rows</code> rows. Steer toward + to chase brightness; negate for a dark line on pale ground.</td></tr>
+  </table></div>
+
+  <h3><span class="sec-n">6.6</span>Camera — kept frames (TtCamera ring)</h3>
+  <p>The live buffer dies when <code>ctrl_step</code> returns, and the camera captures at
+  ~10 Hz against a 100 Hz loop with no frame counter in the ABI. <code>TtCamera</code> is
+  the fix: a static ring of the last <code>TT_CAM_FRAMES</code> (default 4) <em>distinct</em>
+  frames as plain <code>px[y][x]</code> arrays — 16 KB per frame, ~64 KB static, no malloc
+  anywhere (a freed buffer is a leak-per-Build&amp;Reload waiting to be forgotten).</p>
+  <div class="tbl-scroll"><table>
+    <tr><th>Function</th><th>Returns</th><th>Notes</th></tr>
+    <tr><td class="sig">tt_cam_init(TtCamera* c)</td><td class="mono">void</td><td>zero the ring; call from <code>ctrl_init</code></td></tr>
+    <tr><td class="sig">tt_cam_update(TtCamera* c, const CtrlInputs* in)</td><td class="mono">int</td><td><strong>1 only when a genuinely new frame was stored</strong> (byte-compared) — put your image processing behind this test and it runs 10×/s instead of 100. Sets <code>c-&gt;oversize</code> if a frame exceeds 128×128.</td></tr>
+    <tr><td class="sig">tt_cam_newest(const TtCamera* c)</td><td class="mono">const TtFrame*</td><td>newest kept frame, NULL before the first</td></tr>
+    <tr><td class="sig">tt_cam_frame(const TtCamera* c, int age)</td><td class="mono">const TtFrame*</td><td>frame by age (0 newest, 1 previous…), NULL when not held — the shape of every frame-diff</td></tr>
+    <tr><td class="sig">tt_cam_held(const TtCamera* c)</td><td class="mono">int</td><td>frames currently held, 0..TT_CAM_FRAMES</td></tr>
+    <tr><td class="sig">tt_frame_px(const TtFrame* f, int x, int y)</td><td class="mono">int</td><td>bounds-checked pixel of a kept frame (against the real image, not the padded block)</td></tr>
+    <tr><td class="sig">tt_frame_mean(const TtFrame* f, x0, y0, x1, y1)</td><td class="mono">float</td><td>mean of a rect of a kept frame; −1 for NULL/miss</td></tr>
+    <tr><td class="sig">tt_cam_age(const TtCamera* c, const CtrlInputs* in)</td><td class="mono">float</td><td>seconds since the newest frame was captured (swings 0..0.1 s at 10 Hz — an image-steering controller is steering the recent past, same as a real camera)</td></tr>
+  </table></div>
+  <div class="note">
+    <span class="nt">Honest edge</span>
+    <p>Two identical captures are indistinguishable from one: park facing a blank wall and
+    the sequence number stops advancing. To know the camera is alive, watch
+    <code>in-&gt;time_s</code>, not the ring.</p>
+  </div>
+</section>
+
+<!-- ══════════════════════════ §7 ══════════════════════════ -->
+<section id="cookbook">
+  <h2><span class="sec-n">§7</span>Cookbook — worked firmware</h2>
+  <p class="lede">Three complete controllers, each demonstrating a sensor family end-to-end.
+  All compile against the two headers alone.</p>
+
+  <h3><span class="sec-n">7.1</span>Line follower — COLOR reflectance + PID</h3>
+<pre><code>#include "tt_controller.h"
+
+static TtCar g_car;
+static TtPid g_steer_pid;
+
+CTRL_EXPORT int ctrl_init(float hz) {
+    TT_UNUSED(hz);
+    tt_pid_init(&amp;g_steer_pid, 3.0f, 0.2f, 0.08f);
+    return 0;
+}
+CTRL_EXPORT void ctrl_configure(const SensorInfo* s, int n) {
+    tt_car_configure(&amp;g_car, s, n);
+}
+
+<span class="cm">/* Two colour sensors aimed at the floor, one each side of the line
+ * ("refl_l", "refl_r"). On the line both read bright; drifting right makes
+ * the LEFT sensor go dark first. Steer to equalize them. */</span>
+CTRL_EXPORT void ctrl_step(const CtrlInputs* in, CtrlOutputs* out) {
+    float l = <span class="io-in">tt_reflectance</span>(&amp;g_car, in, "refl_l", 0.5f);
+    float r = <span class="io-in">tt_reflectance</span>(&amp;g_car, in, "refl_r", 0.5f);
+
+    float err   = r - l;                       <span class="cm">/* + = line is to the right  */</span>
+    float steer = tt_pid_update(&amp;g_steer_pid, 0.0f, -err, in-&gt;dt_s);
+
+    <span class="cm">/* Slow down for sharp error — speed from confidence. */</span>
+    float effort = tt_lerp(0.55f, 0.20f, fabsf(err) * 2.0f);
+
+    <span class="io-out">tt_steer</span>(out, steer);
+    <span class="io-out">tt_drive</span>(&amp;g_car, out, effort);
+    <span class="io-out">tt_led</span>(&amp;g_car, out, "status",
+           fabsf(err) &gt; 0.3f ? 255 : 0, fabsf(err) &gt; 0.3f ? 0 : 255, 0, 0.0f);
+
+    out-&gt;debug[0] = err;
+    out-&gt;debug[1] = steer;
+    out-&gt;debug[2] = <span class="io-in">tt_speed</span>(in);
+}
+
+CTRL_EXPORT void ctrl_shutdown(void) {}
+CTRL_EXPORT const char* ctrl_get_debug_names(void) { return "line_err,steer,speed"; }</code></pre>
+
+  <h3><span class="sec-n">7.2</span>Beacon homing with bump recovery — RF + BUMP + TOF</h3>
+<pre><code>#include "tt_controller.h"
+
+static TtCar g_car;
+enum { SEEK, REVERSE, ARRIVED };
+static int   g_state = SEEK;
+static float g_state_t;
+
+#define TARGET_BEACON 4
+#define TX_DBM        0.0f     <span class="cm">/* the beacon's tx power — you placed it   */</span>
+
+CTRL_EXPORT int  ctrl_init(float hz) { TT_UNUSED(hz); return 0; }
+CTRL_EXPORT void ctrl_configure(const SensorInfo* s, int n) { tt_car_configure(&amp;g_car, s, n); }
+
+CTRL_EXPORT void ctrl_step(const CtrlInputs* in, CtrlOutputs* out) {
+    int slot = <span class="io-in">tt_rf_find</span>(&amp;g_car, in, "ant", TARGET_BEACON);
+    float rssi = <span class="io-in">tt_rf_rssi</span>(&amp;g_car, in, "ant", slot, -100.0f);
+    float dist = powf(10.0f, (TX_DBM - rssi) / 20.0f);      <span class="cm">/* metres */</span>
+
+    if (<span class="io-in">tt_bump</span>(&amp;g_car, in, "bumper") &amp;&amp; g_state == SEEK) {
+        g_state = REVERSE; g_state_t = in-&gt;time_s;          <span class="cm">/* hit something */</span>
+    }
+
+    switch (g_state) {
+    case SEEK: {
+        if (slot &lt; 0) {                                     <span class="cm">/* unheard: spin  */</span>
+            <span class="io-out">tt_steer</span>(out, 1.0f);  <span class="io-out">tt_drive</span>(&amp;g_car, out, 0.18f);
+            break;
+        }
+        float brg = <span class="io-in">tt_rf_bearing</span>(&amp;g_car, in, "ant", slot, 0.0f);
+        <span class="io-out">tt_steer</span>(out, tt_clamp1(brg / 35.0f));          <span class="cm">/* steer brg → 0  */</span>
+        <span class="io-out">tt_drive</span>(&amp;g_car, out, dist &gt; 2.0f ? 0.5f : 0.22f);
+        if (dist &lt; 0.6f) g_state = ARRIVED;
+        break;
+    }
+    case REVERSE:                                           <span class="cm">/* back out 0.8 s */</span>
+        <span class="io-out">tt_drive</span>(&amp;g_car, out, -0.3f);
+        <span class="io-out">tt_steer</span>(out, -0.6f);
+        if (in-&gt;time_s - g_state_t &gt; 0.8f) g_state = SEEK;
+        break;
+    case ARRIVED:
+        <span class="io-out">tt_drive</span>(&amp;g_car, out, 0.0f);  <span class="io-out">tt_brake</span>(out, 1.0f);
+        <span class="io-out">tt_led</span>(&amp;g_car, out, "status", 0, 255, 0, 1.0f);  <span class="cm">/* green blink */</span>
+        break;
+    }
+
+    out-&gt;debug[0] = dist;
+    out-&gt;debug[1] = (float)g_state;
+}
+
+CTRL_EXPORT void ctrl_shutdown(void) {}
+CTRL_EXPORT const char* ctrl_get_debug_names(void) { return "beacon_dist,state"; }</code></pre>
+
+  <h3><span class="sec-n">7.3</span>Camera line follow with frame buffering — CAMERA + MAG</h3>
+<pre><code>#include "tt_controller.h"
+
+static TtCar    g_car;
+static TtCamera g_cam;                 <span class="cm">/* ~64 KB static ring, no malloc */</span>
+static float    g_balance;             <span class="cm">/* held between camera frames    */</span>
+
+CTRL_EXPORT int ctrl_init(float hz) {
+    TT_UNUSED(hz);
+    tt_cam_init(&amp;g_cam);
+    return 0;
+}
+CTRL_EXPORT void ctrl_configure(const SensorInfo* s, int n) { tt_car_configure(&amp;g_car, s, n); }
+
+CTRL_EXPORT void ctrl_step(const CtrlInputs* in, CtrlOutputs* out) {
+    <span class="cm">/* Heavy image work only on ticks where a NEW frame arrived (~10 Hz). */</span>
+    if (<span class="io-in">tt_cam_update</span>(&amp;g_cam, in)) {
+        g_balance = <span class="io-in">tt_cam_balance</span>(in, 12);     <span class="cm">/* bottom 12 rows = road  */</span>
+
+        const TtFrame* now  = tt_cam_newest(&amp;g_cam);
+        const TtFrame* prev = tt_cam_frame(&amp;g_cam, 1);
+        if (prev) {                              <span class="cm">/* motion check by diff   */</span>
+            float d = <span class="io-in">tt_frame_mean</span>(now, 0, 40, 63, 47)
+                    - <span class="io-in">tt_frame_mean</span>(prev, 0, 40, 63, 47);
+            out-&gt;debug[2] = d;                   <span class="cm">/* scene change per frame */</span>
+        }
+    }
+
+    <span class="cm">/* Steering runs every tick from the held perception result. */</span>
+    <span class="io-out">tt_steer</span>(out, tt_clamp1(g_balance * 3.0f)); <span class="cm">/* chase the bright side */</span>
+    <span class="io-out">tt_drive</span>(&amp;g_car, out, 0.35f);
+
+    out-&gt;debug[0] = g_balance;
+    out-&gt;debug[1] = <span class="io-in">tt_cam_age</span>(&amp;g_cam, in);      <span class="cm">/* 0..0.1 s: honest lag  */</span>
+}
+
+CTRL_EXPORT void ctrl_shutdown(void) {}
+CTRL_EXPORT const char* ctrl_get_debug_names(void) { return "balance,cam_age,frame_diff"; }</code></pre>
+
+  <div class="note">
+    <span class="nt">Building &amp; running</span>
+    <p>Drop the <code>.c</code> file in a <code>UserScripts/</code> folder next to
+    <code>lib/tt_controller.h</code>, build it as a DLL exporting the §2 symbols, and load it
+    from the game's Simulate Controller screen. Build&nbsp;&amp;&nbsp;Reload swaps your code
+    while the car keeps existing — iterate live.</p>
+  </div>
+</section>
+
+<!-- ══════════════════════════ §8 ══════════════════════════ -->
+<section id="history">
+  <h2><span class="sec-n">§8</span>ABI version history</h2>
+  <p class="lede">The ABI is append-only: every version keeps every earlier offset, so an
+  old DLL loads and runs on a new host.</p>
+  <div class="tbl-scroll"><table>
+    <tr><th>Ver</th><th>Layout change</th><th>What it added</th></tr>
+    <tr><td class="mono">v1</td><td>—</td><td>Core loop: gyro, accel, wheel_vel, setpoints in; actuator[8], debug[16] out</td></tr>
+    <tr><td class="mono">v2</td><td class="mono">appends fields</td><td>Generic manifest-described sensor block (<code>sensor_data</code>) + optional <code>ctrl_configure</code>. v1 DLLs never read the new fields and still run.</td></tr>
+    <tr><td class="mono">v3</td><td>none</td><td>Actuator conventions pinned: motor slots per manifest, steer [6], brake [7]</td></tr>
+    <tr><td class="mono">v4</td><td>none</td><td>Convention fix: <code>cam_pixels</code> is declared TOP-DOWN (previously bottom-up by accident of Unity texture space). Bump exists purely so v3-era assumptions have something to notice.</td></tr>
+    <tr><td class="mono">v5</td><td>none</td><td>Optional <code>ctrl_get_vehicle()</code> — firmware names its car</td></tr>
+    <tr><td class="mono">v6</td><td class="mono">appends enum tags</td><td>Sensor types 8–12 (COLOR, RF, MAG, BUMP, LED) + the LED two-slot actuator convention. A v5 DLL only ever sees the new tags if the car carries them.</td></tr>
+  </table></div>
+
+  <footer>
+    <span>TT-CTRL-6 · rev 2026-08</span>
+    <span>source of truth: Controllers/hal/controller_api.h</span>
+    <span>helpers: UserScripts/lib/tt_controller.h</span>
+  </footer>
+</section>
+
+</div>
+</main>
+</div>

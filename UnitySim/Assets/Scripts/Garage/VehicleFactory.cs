@@ -232,6 +232,10 @@ namespace AIHWSim.Garage
 
             var rig = root.AddComponent<SensorRig>();
 
+            // Every car is audible to world microphones: motor current → loudness,
+            // shaft speed → tone. Silent at rest, so old designs are unaffected.
+            root.AddComponent<VehicleSoundEmitter>();
+
             root.SetActive(true); // CarVehicle.Awake builds everything now
 
             var built = new Built
@@ -339,6 +343,48 @@ namespace AIHWSim.Garage
                     PartVisualFactory.BuildSuspensionViz(go.transform);
                     break;
                 }
+                case SensorType.Color:
+                {
+                    var c = go.AddComponent<ColorSensor>();
+                    c.maxRange = spec.range > 0f ? spec.range : 0.3f;
+                    sc = c;
+                    PartVisualFactory.BuildColorViz(go.transform);
+                    break;
+                }
+                case SensorType.Mag:
+                {
+                    var m = go.AddComponent<MagSensor>();
+                    m.declinationDeg = spec.declinationDeg;
+                    sc = m;
+                    PartVisualFactory.BuildMagViz(go.transform);
+                    break;
+                }
+                case SensorType.Bump:
+                {
+                    var b = go.AddComponent<BumpSensor>();
+                    b.activationRadius = spec.bumpRadius > 0f ? spec.bumpRadius : 0.06f;
+                    b.coneAngleDeg = spec.coneAngle > 0f ? spec.coneAngle : 120f;
+                    sc = b;
+                    PartVisualFactory.BuildBumpViz(go.transform);
+                    break;
+                }
+                case SensorType.Rf:
+                {
+                    var r = go.AddComponent<RfSensor>();
+                    r.emitEnabled = spec.rfEmit != 0;
+                    r.emitId = spec.rfId;
+                    r.emitPowerDbm = spec.rfPowerDbm;
+                    sc = r;
+                    PartVisualFactory.BuildRfViz(go.transform);
+                    break;
+                }
+                case SensorType.Led:
+                {
+                    var l = go.AddComponent<LedPart>();
+                    sc = l;
+                    PartVisualFactory.BuildLedViz(go.transform);
+                    break;
+                }
                 default: // Tof (motors are wheel parts, not sensors)
                 {
                     var t = go.AddComponent<TofSensor>();
@@ -362,6 +408,10 @@ namespace AIHWSim.Garage
                 TofSensor t => t.noise,
                 WheelEncoderSensor e => e.noise,
                 SuspensionSensor su => su.noise,
+                ColorSensor co => co.noise,
+                MagSensor ma => ma.noise,
+                BumpSensor bu => bu.noise,
+                RfSensor rf => rf.noise,
                 _ => null,
             };
             if (nm != null)

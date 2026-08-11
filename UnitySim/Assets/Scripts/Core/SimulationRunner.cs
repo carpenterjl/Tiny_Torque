@@ -602,11 +602,14 @@ namespace AIHWSim.Core
                 Array.Copy(_actuators, _cmdRing[_cmdRingHead], 8);
                 int tail = (_cmdRingHead + 1) % _cmdRing.Length; // oldest entry
                 _vehicle.SetCommands(_cmdRing[tail]);
+                // LEDs decode from the same delayed array the motors get.
+                sensorRig?.ApplyActuators(_cmdRing[tail], _simTime);
                 _cmdRingHead = tail;
             }
             else
             {
                 _vehicle.SetCommands(_actuators);
+                sensorRig?.ApplyActuators(_actuators, _simTime);
             }
 
             // 4. Telemetry.

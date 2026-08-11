@@ -319,7 +319,9 @@ namespace AIHWSim.Ipc
     public class SensorInfoDto
     {
         public string name;
-        /// <summary>Tof, Encoder, Motor, Camera, Suspension, Battery.</summary>
+        /// <summary>Tof, Encoder, Motor, Camera, Suspension, Battery, Color,
+        /// Rf, Mag, Bump, Led. The wire value is the C# SensorType enum name
+        /// verbatim, so an appended sensor type appears here automatically.</summary>
         public string kind;
         /// <summary>Channel names this sensor publishes, already fully qualified
         /// (<c>sens/&lt;name&gt;/&lt;field&gt;</c>) so they can be handed straight
@@ -453,5 +455,39 @@ namespace AIHWSim.Ipc
         public string kind;
         public int vehicleId;
         public string note;
+    }
+
+    // ---- world sensors (2026-08 additive) ----------------------------------
+
+    [Serializable]
+    public class WorldSensorDto
+    {
+        public string name;
+        /// <summary>"mic", "speaker" or "beacon".</summary>
+        public string kind;
+        /// <summary>Fully qualified world channel names
+        /// (<c>world/&lt;kind&gt;/&lt;name&gt;/&lt;field&gt;</c>), ready to hand
+        /// back in a <c>subscribe_world</c>.</summary>
+        public string[] channels;
+        /// <summary>World position — the ground truth a triangulation exercise
+        /// checks itself against.</summary>
+        public float px, py, pz;
+    }
+
+    [Serializable]
+    public class WorldSensorsReply : IpcEnvelope
+    {
+        public WorldSensorDto[] sensors;
+    }
+
+    [Serializable]
+    public class SubscribeWorldMsg : IpcEnvelope
+    {
+        /// <summary>World channel names. Empty or null = every world channel,
+        /// in registration order.</summary>
+        public string[] channels;
+        /// <summary>Requested frames per second; clamped to the world rate
+        /// (50 Hz). 0 takes the world rate.</summary>
+        public float rateHz;
     }
 }

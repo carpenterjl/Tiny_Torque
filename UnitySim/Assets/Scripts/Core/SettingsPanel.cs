@@ -225,7 +225,8 @@ namespace AIHWSim.Core
             DriveAction.SteerLeft, DriveAction.SteerRight,
             DriveAction.Brake, DriveAction.Handbrake,
             DriveAction.Respawn, DriveAction.UseItem, DriveAction.LookBack,
-            DriveAction.Horn, DriveAction.ModeToggle, DriveAction.Pause,
+            DriveAction.Horn, DriveAction.Interact, DriveAction.ModeToggle,
+            DriveAction.Pause,
         };
 
         private static bool DrawKeys()

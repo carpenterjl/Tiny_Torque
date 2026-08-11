@@ -134,6 +134,7 @@ namespace AIHWSim.Core
         public static bool HornKeyHeld() => KeyTable.Held(B.Key(DriveAction.Horn));
         public static bool JumpKeyPressed() => KeyTable.Pressed(B.Key(DriveAction.Jump));
         public static bool BoostKeyHeld() => KeyTable.Held(B.Key(DriveAction.Boost));
+        public static bool InteractKeyPressed() => KeyTable.Pressed(B.Key(DriveAction.Interact));
 
 #if ENABLE_INPUT_SYSTEM
         // ---- pad-only reads, for one specific pad (split-screen) ----
@@ -145,6 +146,7 @@ namespace AIHWSim.Core
         public static bool HornPadHeld(Gamepad gp) => PadTable.Held(gp, B.Pad(DriveAction.Horn));
         public static bool JumpPadPressed(Gamepad gp) => PadTable.Pressed(gp, B.Pad(DriveAction.Jump));
         public static bool BoostPadHeld(Gamepad gp) => PadTable.Held(gp, B.Pad(DriveAction.Boost));
+        public static bool InteractPadPressed(Gamepad gp) => PadTable.Pressed(gp, B.Pad(DriveAction.Interact));
 #endif
 
         // Foot brake in [0, 1].
@@ -160,6 +162,12 @@ namespace AIHWSim.Core
         /// <summary>Arcade: fire the held power-up.</summary>
         public static bool UseItemPressed() =>
             UseItemKeyPressed() || PadTable.PressedAny(B.Pad(DriveAction.UseItem));
+
+        /// <summary>World props: toggle/operate the prop the car is alongside.
+        /// Non-consuming like every edge check here — PropInteraction is what
+        /// keeps one press from reaching two props.</summary>
+        public static bool InteractPressed() =>
+            InteractKeyPressed() || PadTable.PressedAny(B.Pad(DriveAction.Interact));
 
         /// <summary>Held: look behind. Held rather than toggled so you cannot
         /// leave the camera facing backwards.</summary>

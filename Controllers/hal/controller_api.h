@@ -37,7 +37,10 @@ extern "C" {
 #define CTRL_EXPORT __attribute__((visibility("default")))
 #endif
 
-#define CTRL_ABI_VERSION 5
+/* v6 changes no layout: it appends sensor types 8-12 (colour, RF, compass,
+ * bump, LED) and the LED two-slot actuator convention. A v5 DLL loads and
+ * drives unchanged; it only ever sees the new tags if the car carries them. */
+#define CTRL_ABI_VERSION 6
 
 /*
  * Sensor type tags. A vehicle in the sim is assembled from these parts; the
@@ -50,7 +53,12 @@ enum {
     SENSOR_IMU        = 4,  /* strap-down IMU (also mirrored in gyro/accel) */
     SENSOR_CAMERA     = 5,  /* grayscale camera (pixels via cam_pixels)  */
     SENSOR_SUSPENSION = 6,  /* per-wheel strut: spring force, compression, tilt */
-    SENSOR_BATTERY    = 7   /* pack: terminal voltage, total current, SoC (2026-07 append) */
+    SENSOR_BATTERY    = 7,  /* pack: terminal voltage, total current, SoC (2026-07 append) */
+    SENSOR_COLOR      = 8,  /* surface colour ahead of the aim (v6 append)      */
+    SENSOR_RF         = 9,  /* RF antenna: strongest-3 beacon pings (v6 append) */
+    SENSOR_MAG        = 10, /* magnetometer / compass heading (v6 append)       */
+    SENSOR_BUMP       = 11, /* contact switch at the mount point (v6 append)    */
+    SENSOR_LED        = 12  /* actuator part: firmware-driven LED (v6 append)   */
 };
 
 /*
@@ -93,6 +101,23 @@ enum {
  *   SENSOR_CAMERA  -> (no floats; frame arrives via cam_pixels/cam_width/height)
  *   SENSOR_SUSPENSION -> [spring_force_N, compression_01, angle_deg]
  *   SENSOR_BATTERY -> [terminal_V, total_current_A, soc_01]  (soc fixed 1.0 for now)
+ *   SENSOR_COLOR   -> [r, g, b, reflect]  all 0..1; black when nothing in range;
+ *                     reflect is Rec.709 luminance (aim it down = line follower)
+ *   SENSOR_RF      -> [count, id0, rssi0_dbm, bearing0_deg,
+ *                             id1, rssi1_dbm, bearing1_deg,
+ *                             id2, rssi2_dbm, bearing2_deg]   (10 floats)
+ *                     strongest three pings; empty slot: id=-1, rssi=-100, brg=0;
+ *                     bearing is signed yaw from the antenna's aim (+ = right)
+ *   SENSOR_MAG     -> [heading_deg]  0..360, 0 = world +Z, clockwise
+ *   SENSOR_BUMP    -> [contact_01, force_N]
+ *   SENSOR_LED     -> actuator part; readback [r, g, b, lit] (post blink gate).
+ *                     actuator_index is the FIRST of TWO consecutive slots:
+ *                       actuator[i]   = RGB24 packed ((r<<16)|(g<<8)|b) as an
+ *                                       integer-valued float (exact: <= 2^24)
+ *                       actuator[i+1] = blink rate in Hz (0 = solid)
+ *                     LEDs are slotted after the motors, never into 6/7 (the
+ *                     reserved steer/brake slots). actuator_index -1 = no free
+ *                     slot pair, display-only.
  */
 typedef struct SensorInfo {
     char  name[32];        /* user-chosen sensor name (NUL-terminated)      */

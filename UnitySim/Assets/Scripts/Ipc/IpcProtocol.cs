@@ -29,6 +29,10 @@ namespace AIHWSim.Ipc
     ///   v1 — initial: handshake, enumeration, per-vehicle takeover, telemetry
     ///        and sensor-camera subscriptions, tuning/physics/settings control,
     ///        session lifecycle, design push with rebuild refusals.
+    ///   v1 (2026-08 additive) — world sensors: enumeration + a world telemetry
+    ///        stream on FrameTelemetry frames under the <see cref="WorldStreamId"/>
+    ///        sentinel vehicleId. No version bump: append-only, no existing
+    ///        field changed meaning.
     ///
     /// The human-readable spec the external app is written against lives in
     /// <c>Docs/ipc-protocol.md</c> and is kept in lockstep with this file by
@@ -78,6 +82,9 @@ namespace AIHWSim.Ipc
         public const string MsgUnsubscribe = "unsubscribe";
         public const string MsgSubscribeCamera = "subscribe_camera";
         public const string MsgUnsubscribeCamera = "unsubscribe_camera";
+        public const string MsgListWorldSensors = "list_world_sensors";
+        public const string MsgSubscribeWorld = "subscribe_world";
+        public const string MsgUnsubscribeWorld = "unsubscribe_world";
 
         public const string MsgSetTunable = "set_tunable";
         public const string MsgSetAssists = "set_assists";
@@ -108,6 +115,7 @@ namespace AIHWSim.Ipc
         public const string MsgTunables = "tunables";
         public const string MsgSettings = "settings";
         public const string MsgSubscribed = "subscribed";
+        public const string MsgWorldSensors = "world_sensors";
         /// <summary>Unsolicited. <c>id</c> is 0 — nobody asked. Carries a
         /// <c>kind</c> from the Evt* constants below.</summary>
         public const string MsgEvent = "event";
@@ -138,6 +146,7 @@ namespace AIHWSim.Ipc
         public const string ErrUnknownChannel = "unknown_channel";
         public const string ErrNotSupported = "not_supported";
         public const string ErrInternal = "internal";
+        public const string ErrNoWorldHub = "no_world_hub";
 
         // ---- takeover levels -------------------------------------------------
 
@@ -161,6 +170,13 @@ namespace AIHWSim.Ipc
 
         public const byte FrameTelemetry = 1;
         public const byte FrameCamera = 2;
+
+        /// <summary>Sentinel vehicleId on <see cref="FrameTelemetry"/> frames
+        /// carrying the WORLD sensor stream (speakers/mics/beacons). Payload is
+        /// byte-identical to vehicle telemetry: f32 simTime then one f32 per
+        /// subscribed channel in acked order. Outside the valid vehicle-id
+        /// range on purpose — real ids are small positive integers.</summary>
+        public const ushort WorldStreamId = 0xFFFF;
 
         /// <summary>magic u16, type u8, vehicleId u16, seq u32, payloadLen u32.</summary>
         public const int FrameHeaderBytes = 13;

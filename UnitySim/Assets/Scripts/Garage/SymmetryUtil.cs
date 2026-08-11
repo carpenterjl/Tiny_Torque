@@ -115,6 +115,11 @@ namespace AIHWSim.Garage
             dst.camHeight = src.camHeight;
             dst.camFov = src.camFov;
             dst.camRateHz = src.camRateHz;
+            dst.rfEmit = src.rfEmit;
+            dst.rfId = src.rfId;
+            dst.rfPowerDbm = src.rfPowerDbm;
+            dst.declinationDeg = src.declinationDeg;
+            dst.bumpRadius = src.bumpRadius;
             dst.massKg = src.massKg;
             dst.noiseStd = src.noiseStd;
             dst.noiseQuant = src.noiseQuant;

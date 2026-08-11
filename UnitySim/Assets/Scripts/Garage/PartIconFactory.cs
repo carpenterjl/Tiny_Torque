@@ -37,6 +37,19 @@ namespace AIHWSim.Garage
                 "tof"           => p => PartVisualFactory.BuildTofViz(p),
                 "encoder"       => p => PartVisualFactory.BuildEncoderViz(p),
                 "suspension"    => p => PartVisualFactory.BuildSuspensionViz(p),
+                "color"         => p => PartVisualFactory.BuildColorViz(p),
+                "mag"           => p => PartVisualFactory.BuildMagViz(p),
+                "bump"          => p => PartVisualFactory.BuildBumpViz(p),
+                "rf"            => p => PartVisualFactory.BuildRfViz(p),
+                // The LED's dome deliberately lives on the DEFAULT layer (the
+                // sensor camera must see it); the icon camera culls to the viz
+                // layer, so re-layer the snapshot copy or the dome is missing.
+                "led"           => p =>
+                {
+                    PartVisualFactory.BuildLedViz(p);
+                    foreach (var r in p.GetComponentsInChildren<Renderer>())
+                        r.gameObject.layer = PartVisualFactory.VizLayer;
+                },
                 "battery"       => p => PartVisualFactory.BuildBatteryViz(p),
                 "antenna"       => p => PartVisualFactory.BuildAntennaViz(p, 15f, 1f),
                 "light"         => p => PartVisualFactory.BuildLightViz(p, 0, 1f),

@@ -76,6 +76,12 @@ namespace AIHWSim.Audio
         public const string HornTruck = "horn_truck";
         public const string HornMusical = "horn_musical";
         public const string HornClown = "horn_clown";
+        // Speaker-prop test tones — pure sines with loop-clean lengths (an
+        // exact whole number of cycles), because the simulated sound field
+        // reports each speaker's dominant tone and these ARE that tone.
+        public const string ToneA = "tone_a";   // 440 Hz
+        public const string ToneB = "tone_b";   // 880 Hz
+        public const string ToneC = "tone_c";   // 1760 Hz
 
         /// <summary>VehicleDesign.hornStyle → clip key. Unknown values fall
         /// back to the normal horn, so an old peer's design never goes silent.</summary>
@@ -129,8 +135,24 @@ namespace AIHWSim.Audio
             HornTruck => BuildHornTruck(),
             HornMusical => BuildHornMusical(),
             HornClown => BuildHornClown(),
+            ToneA => BuildTone("tone_a", 440f),
+            ToneB => BuildTone("tone_b", 880f),
+            ToneC => BuildTone("tone_c", 1760f),
             _ => null,
         };
+
+        /// <summary>A loop-clean pure sine: the length is rounded to a whole
+        /// number of cycles so first and last samples meet — a tone with a
+        /// click in it clicks once per loop.</summary>
+        private static AudioClip BuildTone(string name, float hz)
+        {
+            int cycles = Mathf.Max(1, Mathf.RoundToInt(0.5f * hz));
+            int n = Mathf.Max(1, Mathf.RoundToInt(cycles * Rate / hz));
+            var data = new float[n];
+            for (int i = 0; i < n; i++)
+                data[i] = 0.5f * Mathf.Sin(2f * Mathf.PI * hz * i / Rate);
+            return Make(name, data);
+        }
 
         // ================= synthesis primitives =================
 

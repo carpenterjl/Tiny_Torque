@@ -36,6 +36,11 @@ namespace AIHWSim.Garage
         public const float SmallAeroMass = 0.008f;
         public const float AntennaMass = 0.008f;         // SMA + rubber whip
         public const float LightMass = 0.012f;           // light bar / pod cluster
+        public const float ColorSensorMass = 0.003f;
+        public const float MagSensorMass = 0.002f;
+        public const float BumpSensorMass = 0.004f;      // switch + whisker
+        public const float RfSensorMass = 0.006f;        // module + whip
+        public const float LedMass = 0.002f;
 
         public static float SensorMass(SensorSpec s)
         {
@@ -45,6 +50,11 @@ namespace AIHWSim.Garage
                 Bridge.SensorType.Camera => CameraMass,
                 Bridge.SensorType.Encoder => EncoderMass,
                 Bridge.SensorType.Suspension => SuspSensorMass,
+                Bridge.SensorType.Color => ColorSensorMass,
+                Bridge.SensorType.Mag => MagSensorMass,
+                Bridge.SensorType.Bump => BumpSensorMass,
+                Bridge.SensorType.Rf => RfSensorMass,
+                Bridge.SensorType.Led => LedMass,
                 _ => TofMass,
             };
         }

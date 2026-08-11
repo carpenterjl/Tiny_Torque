@@ -464,6 +464,8 @@ namespace AIHWSim.Net
             cm.RegisterNamedMessageHandler(NetMsg.ArcSync, OnArcSync);
             cm.RegisterNamedMessageHandler(NetMsg.ArcEvt, OnArcEvt);
             cm.RegisterNamedMessageHandler(NetMsg.LatticeHit, OnLatticeHit);
+            cm.RegisterNamedMessageHandler(NetMsg.PropEvt, OnPropEvt);
+            cm.RegisterNamedMessageHandler(NetMsg.PropState, OnPropState);
         }
 
         // ---- arcade sync -------------------------------------------------------
@@ -526,6 +528,49 @@ namespace AIHWSim.Net
             s.held = a.held;
             s.charges = a.charges;
             s.effects = a.effects;
+        }
+
+        // ---- world props ---------------------------------------------------
+
+        /// <summary>A prop toggle to act on. On the host: both client requests
+        /// AND its own rebroadcasts loop through here via PropNetLink; on a
+        /// client: the host's broadcasts.</summary>
+        public event Action<PropEvtMsg> PropEventReceived;
+        /// <summary>The host's 1 Hz off-default prop list (clients only).</summary>
+        public event Action<PropStateMsg> PropStateReceived;
+
+        /// <summary>Host: apply-and-mirror one prop toggle to everyone.</summary>
+        public void HostBroadcastPropEvent(PropEvtMsg m)
+        {
+            if (!IsHost || _nm == null || !_nm.IsListening) return;
+            BroadcastJson(NetMsg.PropEvt, m);
+        }
+
+        /// <summary>Client: ask the host to toggle a prop.</summary>
+        public void SendPropRequestToHost(PropEvtMsg m)
+        {
+            if (IsHost || _nm == null || !_nm.IsListening) return;
+            SendJson(NetMsg.PropEvt, NetworkManager.ServerClientId, m);
+        }
+
+        /// <summary>Host: the 1 Hz idempotent healer.</summary>
+        public void HostBroadcastPropState(PropStateMsg m)
+        {
+            if (!IsHost || _nm == null || !_nm.IsListening) return;
+            BroadcastJson(NetMsg.PropState, m);
+        }
+
+        private void OnPropEvt(ulong sender, FastBufferReader reader)
+        {
+            // Host receives client requests; clients receive host broadcasts.
+            // Either way the link layer decides what to do with it.
+            PropEventReceived?.Invoke(ReadJson<PropEvtMsg>(reader));
+        }
+
+        private void OnPropState(ulong sender, FastBufferReader reader)
+        {
+            if (IsHost) return;
+            PropStateReceived?.Invoke(ReadJson<PropStateMsg>(reader));
         }
 
         /// <summary>Host: mirror one arcade event to everyone.</summary>

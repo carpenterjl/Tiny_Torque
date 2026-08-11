@@ -44,6 +44,18 @@ namespace AIHWSim.Garage
         public float camFov = 60f;
         public float camRateHz = 10f;
 
+        // RF antenna (kind Rf): receive is always on; emit makes it a ping
+        // source other antennas can track. Defaults = old JSON behaviour.
+        public int rfEmit = 0;                    // 0 = receive-only
+        public int rfId = 0;                      // beacon identity when emitting
+        public float rfPowerDbm = 0f;             // transmit power at 1 m
+
+        // Magnetometer (kind Mag)
+        public float declinationDeg = 0f;
+
+        // Bump switch (kind Bump); the acceptance cone reuses coneAngle.
+        public float bumpRadius = 0.06f;
+
         public SensorSpec Clone()
         {
             return (SensorSpec)MemberwiseClone();

@@ -52,6 +52,10 @@ namespace AIHWSim.Ipc
         private readonly Dictionary<int, Sub> _subs = new Dictionary<int, Sub>();
         private readonly Dictionary<int, CamSub> _camSubs = new Dictionary<int, CamSub>();
 
+        // The single world-stream subscription (vehicle null; frames go out
+        // under IpcProtocol.WorldStreamId). One per client, like a vehicle sub.
+        private Sub _worldSub;
+
         public IpcTelemetryStreamer(IpcRuntime owner) => _owner = owner;
 
         // ---- channel subscriptions -------------------------------------------
@@ -133,6 +137,76 @@ namespace AIHWSim.Ipc
             return true;
         }
 
+        // ---- world stream (2026-08 additive) ---------------------------------
+
+        /// <summary>
+        /// Subscribe (or replace) the world sensor stream: same resolution rules
+        /// as a vehicle subscribe, against the world hub, framed under
+        /// <see cref="IpcProtocol.WorldStreamId"/>. Payload layout is identical
+        /// to vehicle telemetry, so the ack's channel order is the decode key.
+        /// </summary>
+        public string[] SubscribeWorld(string[] requested, float rateHz, out string error)
+        {
+            error = null;
+            var hub = WorldTelemetry.Hub;
+            if (hub == null)
+            {
+                error = "no world hub — no track is loaded";
+                return null;
+            }
+
+            var chans = new List<TelemetryHub.Channel>();
+            var names = new List<string>();
+            if (requested == null || requested.Length == 0)
+            {
+                foreach (var c in hub.Channels) { chans.Add(c); names.Add(c.Name); }
+            }
+            else
+            {
+                foreach (var n in requested)
+                {
+                    if (string.IsNullOrEmpty(n)) continue;
+                    if (!hub.TryGetChannel(n, out var c)) continue;
+                    chans.Add(c);
+                    names.Add(n);
+                }
+            }
+
+            if (chans.Count == 0)
+            {
+                error = "none of the requested channels exist on the world hub; "
+                        + "call list_world_sensors to see what it publishes";
+                return null;
+            }
+
+            UnsubscribeWorld();
+
+            float rate = rateHz <= 0f ? WorldTelemetry.WorldRateHz
+                                      : Mathf.Min(rateHz, WorldTelemetry.WorldRateHz);
+            var sub = new Sub
+            {
+                vehicle = null,     // world stream — WorldStreamId on the wire
+                hub = hub,
+                channels = chans.ToArray(),
+                names = names.ToArray(),
+                rateHz = rate,
+                minInterval = rate > 0f ? (1f / rate) * 0.999f : 0f,
+            };
+            sub.handler = _ => PackAndSend(sub);
+            hub.FrameCommitted += sub.handler;
+            _worldSub = sub;
+            return sub.names;
+        }
+
+        public bool UnsubscribeWorld()
+        {
+            if (_worldSub == null) return false;
+            if (_worldSub.hub != null && _worldSub.handler != null)
+                _worldSub.hub.FrameCommitted -= _worldSub.handler;
+            _worldSub = null;
+            return true;
+        }
+
         private void PackAndSend(Sub sub)
         {
             var service = _owner.Service;
@@ -146,8 +220,10 @@ namespace AIHWSim.Ipc
             int payload = 4 + 4 * n;
             var buf = service.RentFrame(IpcProtocol.FrameHeaderBytes + payload);
 
+            ushort frameId = sub.vehicle != null ? (ushort)sub.vehicle.id
+                                                 : IpcProtocol.WorldStreamId;
             int o = IpcProtocol.WriteHeader(buf, IpcProtocol.FrameTelemetry,
-                                            (ushort)sub.vehicle.id, sub.seq++, (uint)payload);
+                                            frameId, sub.seq++, (uint)payload);
             o += IpcProtocol.WriteF32(buf, o, now);
             for (int i = 0; i < n; i++)
                 o += IpcProtocol.WriteF32(buf, o, sub.channels[i].Latest);
@@ -242,6 +318,7 @@ namespace AIHWSim.Ipc
             }
             _subs.Clear();
             _camSubs.Clear();
+            UnsubscribeWorld();
         }
 
         public bool IsSubscribed(int vehicleId) => _subs.ContainsKey(vehicleId);

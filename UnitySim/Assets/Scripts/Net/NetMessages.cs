@@ -49,6 +49,8 @@ namespace AIHWSim.Net
         public const string ArcEvt = "aihw.arc_evt";         // H→all reliable
         public const string ArcFx = "aihw.arc_fx";           // H→one   reliable
         public const string LatticeHit = "aihw.lat_hit";     // owner→H reliable; H→all relay
+        public const string PropEvt = "aihw.prop_evt";       // C→H request; H→all reliable
+        public const string PropState = "aihw.prop_state";   // H→all reliable 1 Hz (heals drops + late joins)
     }
 
     // ---- JSON control payloads ------------------------------------------------
@@ -204,6 +206,31 @@ namespace AIHWSim.Net
         public int objId;
         public Vector3 pos;
         public Quaternion rot = Quaternion.identity;
+    }
+
+    /// <summary>
+    /// One world-prop toggle (a button speaker, an RF beacon). Props are
+    /// identified by their position-hash id — scene and Studio props are built
+    /// identically on every machine, so the id needs no exchange. A toggle is
+    /// an EVENT (a missed one is a missing bang); the 1 Hz
+    /// <see cref="PropStateMsg"/> is the idempotent healer behind it.
+    /// </summary>
+    [Serializable]
+    public class PropEvtMsg
+    {
+        public int propId;
+        public bool on;
+    }
+
+    /// <summary>Every prop currently OFF its authored default, 1 Hz from the
+    /// host. Parallel arrays (JsonUtility has no dictionaries). Empty lists
+    /// mean "everything at default", which is why applying it idempotently
+    /// also has to RESET props that are absent from it.</summary>
+    [Serializable]
+    public class PropStateMsg
+    {
+        public int[] ids = System.Array.Empty<int>();
+        public bool[] on = System.Array.Empty<bool>();
     }
 
     /// <summary>

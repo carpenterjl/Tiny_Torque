@@ -723,6 +723,91 @@ namespace AIHWSim.Vehicles
                     new Vector3(0.004f, 0.0025f, 0.004f));
         }
 
+        // ==================== COLOR SENSOR ====================
+
+        /// <summary>Colour detector: PCB slab + a single lens dot facing +Z.</summary>
+        public static void BuildColorViz(Transform parent)
+        {
+            Piece(PrimitiveType.Cube, parent, Pcb,
+                Vector3.zero, Vector3.zero, new Vector3(0.016f, 0.005f, 0.012f));
+            Piece(PrimitiveType.Cylinder, parent, Lens,
+                new Vector3(0f, 0f, 0.006f), new Vector3(90f, 0f, 0f),
+                new Vector3(0.006f, 0.0025f, 0.006f));
+        }
+
+        // ==================== MAGNETOMETER ====================
+
+        /// <summary>Magnetometer: tiny chip on a PCB with a north-mark stud.</summary>
+        public static void BuildMagViz(Transform parent)
+        {
+            Piece(PrimitiveType.Cube, parent, Pcb,
+                Vector3.zero, Vector3.zero, new Vector3(0.014f, 0.004f, 0.014f));
+            Piece(PrimitiveType.Cube, parent, Housing,
+                new Vector3(0f, 0.004f, 0f), Vector3.zero, new Vector3(0.006f, 0.003f, 0.006f));
+            Piece(PrimitiveType.Cube, parent, Emitter,
+                new Vector3(0f, 0.004f, 0.005f), Vector3.zero, new Vector3(0.002f, 0.002f, 0.002f));
+        }
+
+        // ==================== BUMP SENSOR ====================
+
+        /// <summary>Bump switch: housing + a whisker lever poking along +Z.</summary>
+        public static void BuildBumpViz(Transform parent)
+        {
+            Piece(PrimitiveType.Cube, parent, Housing,
+                Vector3.zero, Vector3.zero, new Vector3(0.012f, 0.008f, 0.008f));
+            Piece(PrimitiveType.Cylinder, parent, Stud,
+                new Vector3(0f, 0f, 0.012f), new Vector3(90f, 0f, 0f),
+                new Vector3(0.0015f, 0.010f, 0.0015f));
+            Piece(PrimitiveType.Cube, parent, Emitter,
+                new Vector3(0f, 0f, 0.023f), Vector3.zero, new Vector3(0.004f, 0.004f, 0.002f));
+        }
+
+        // ==================== RF ANTENNA SENSOR ====================
+
+        /// <summary>RF module: PCB + a whip antenna stood on local +Y.</summary>
+        public static void BuildRfViz(Transform parent)
+        {
+            Piece(PrimitiveType.Cube, parent, Pcb,
+                Vector3.zero, Vector3.zero, new Vector3(0.014f, 0.004f, 0.014f));
+            Piece(PrimitiveType.Cylinder, parent, Can,
+                new Vector3(0f, 0.005f, 0f), Vector3.zero, new Vector3(0.004f, 0.003f, 0.004f));
+            Piece(PrimitiveType.Cylinder, parent, Stud,
+                new Vector3(0f, 0.026f, 0f), Vector3.zero, new Vector3(0.0012f, 0.018f, 0.0012f));
+            Piece(PrimitiveType.Sphere, parent, Emitter,
+                new Vector3(0f, 0.045f, 0f), Vector3.zero, new Vector3(0.004f, 0.004f, 0.004f));
+        }
+
+        // ==================== LED ====================
+
+        private static Material _ledDome;
+
+        /// <summary>
+        /// Firmware LED: base ring on the viz layer, but the DOME sits on the
+        /// default layer — the sensor camera culls <see cref="VizLayer"/>, and
+        /// an indicator the camera can't see is pointless. LedPart drives the
+        /// dome's colour/emission via MaterialPropertyBlock, so the material
+        /// (emission keyword pre-enabled) is shared safely.
+        /// </summary>
+        public static Renderer BuildLedViz(Transform parent)
+        {
+            Piece(PrimitiveType.Cylinder, parent, Housing,
+                Vector3.zero, Vector3.zero, new Vector3(0.008f, 0.0015f, 0.008f));
+
+            if (_ledDome == null)
+            {
+                _ledDome = new Material(Shader.Find("Standard")) { color = Color.black };
+                _ledDome.SetFloat("_Glossiness", 0.85f);
+                _ledDome.SetFloat("_Metallic", 0f);
+                _ledDome.EnableKeyword("_EMISSION");
+                _ledDome.SetColor("_EmissionColor", Color.black);
+            }
+
+            var dome = Piece(PrimitiveType.Sphere, parent, _ledDome,
+                new Vector3(0f, 0.003f, 0f), Vector3.zero, new Vector3(0.006f, 0.005f, 0.006f));
+            dome.gameObject.layer = 0; // default layer: visible to CameraSensor
+            return dome.GetComponent<Renderer>();
+        }
+
         // ==================== ENCODER ====================
 
         /// <summary>Encoder: a small slotted disc on a stub, facing +Z.</summary>

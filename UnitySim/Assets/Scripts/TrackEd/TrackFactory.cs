@@ -378,6 +378,26 @@ namespace AIHWSim.TrackEd
                         }
                         break;
                     }
+                    case ItemBehavior.Speaker:
+                    {
+                        // Studio rows carry catalog defaults; rich per-speaker
+                        // config is a scene-authoring / live-placement affordance.
+                        var cfg = new Props.SpeakerConfig();
+                        if (def.id == "prop_speaker_button")
+                            cfg.mode = Props.SpeakerMode.Interact;
+                        Props.SpeakerProp.Attach(go, cfg);
+                        break;
+                    }
+                    case ItemBehavior.Microphone:
+                    {
+                        Props.WorldMicProp.Attach(go);
+                        break;
+                    }
+                    case ItemBehavior.RfBeacon:
+                    {
+                        Props.RfBeaconProp.Attach(go, power: 0f, id: 0, startOn: true);
+                        break;
+                    }
                     case ItemBehavior.Light:
                     {
                         var lightGo = new GameObject("Lamp");

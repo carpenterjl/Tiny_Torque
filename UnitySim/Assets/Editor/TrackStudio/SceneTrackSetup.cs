@@ -271,6 +271,50 @@ namespace AIHWSim.TrackTools
             MarkSceneDirty();
         }
 
+        // -------------------------------------------------------------------
+        // world props (speakers / mics / RF beacons — AIHWSim.Props)
+        // -------------------------------------------------------------------
+
+        [MenuItem(TrackStudio.Menu + "Add prop/Speaker", priority = TrackStudio.PrioRenumber + 10)]
+        public static void AddSpeakerProp() => AddProp<Props.SpeakerProp>("Speaker");
+
+        [MenuItem(TrackStudio.Menu + "Add prop/World microphone", priority = TrackStudio.PrioRenumber + 11)]
+        public static void AddMicProp() => AddProp<Props.WorldMicProp>("WorldMic");
+
+        [MenuItem(TrackStudio.Menu + "Add prop/RF beacon", priority = TrackStudio.PrioRenumber + 12)]
+        public static void AddBeaconProp() => AddProp<Props.RfBeaconProp>("RfBeacon");
+
+        /// <summary>
+        /// Props are not TrackMarkers (no descriptor list collects them — the
+        /// world sensor host discovers them by registration at play), so they
+        /// get their own small creation path beside <see cref="AddMarker{T}"/>.
+        /// The primitive skin builds itself at Awake, so in the editor the
+        /// object is just the component + gizmo until Play.
+        /// </summary>
+        private static void AddProp<T>(string name) where T : MonoBehaviour
+        {
+            var go = new GameObject(name);
+            Undo.RegisterCreatedObjectUndo(go, "Add world prop");
+            var added = Undo.AddComponent<T>(go);
+            if (added == null)
+            {
+                TrackStudio.Error($"could not add {typeof(T).Name} — no MonoScript " +
+                    "asset. Every MonoBehaviour authored into a saved scene needs " +
+                    "its own file, named after the class.");
+                Undo.DestroyObjectImmediate(go);
+                return;
+            }
+
+            // Parent under the descriptor when there is one (keeps the scene
+            // tidy); a plain scene works too — props self-register at play.
+            var d = Object.FindFirstObjectByType<SceneTrackDescriptor>();
+            if (d != null) go.transform.SetParent(d.transform, false);
+            go.transform.SetPositionAndRotation(PlacementPoint(out var rot), rot);
+
+            Selection.activeGameObject = go;
+            MarkSceneDirty();
+        }
+
         private static Vector3 PlacementPoint(out Quaternion rot)
         {
             rot = Quaternion.identity;

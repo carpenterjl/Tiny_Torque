@@ -16,6 +16,11 @@ namespace AIHWSim.Bridge
         Camera     = 5,
         Suspension = 6,
         Battery    = 7,
+        Color      = 8,   // v6: surface colour [r,g,b,reflect] 0..1
+        Rf         = 9,   // v6: [count, id/rssi/bearing ×3 slots]
+        Mag        = 10,  // v6: [heading_deg] 0..360
+        Bump       = 11,  // v6: [contact_01, force_n]
+        Led        = 12,  // v6: actuator part; readback [r,g,b,lit]
     }
 
     // One manifest entry per configured sensor. char name[32] is an inline

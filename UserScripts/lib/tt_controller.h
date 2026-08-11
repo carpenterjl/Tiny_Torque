@@ -210,6 +210,103 @@ static inline float tt_tof(const TtCar* car, const CtrlInputs* in,
     return tt_sensor_value(car, in, i, 0, fallback);
 }
 
+/* ── colour detector (SENSOR_COLOR, v6) ──────────────────────────────────── */
+
+/* One colour channel from a named colour sensor: slot 0=r, 1=g, 2=b (0..1). */
+static inline float tt_color_r(const TtCar* car, const CtrlInputs* in,
+                               const char* name, float fallback) {
+    int i = tt_sensor_index(car, name);
+    if (i < 0 || car->sensors[i].type != SENSOR_COLOR) return fallback;
+    return tt_sensor_value(car, in, i, 0, fallback);
+}
+static inline float tt_color_g(const TtCar* car, const CtrlInputs* in,
+                               const char* name, float fallback) {
+    int i = tt_sensor_index(car, name);
+    if (i < 0 || car->sensors[i].type != SENSOR_COLOR) return fallback;
+    return tt_sensor_value(car, in, i, 1, fallback);
+}
+static inline float tt_color_b(const TtCar* car, const CtrlInputs* in,
+                               const char* name, float fallback) {
+    int i = tt_sensor_index(car, name);
+    if (i < 0 || car->sensors[i].type != SENSOR_COLOR) return fallback;
+    return tt_sensor_value(car, in, i, 2, fallback);
+}
+
+/* Reflectance (Rec.709 luminance, 0..1) — THE line-follower signal when the
+ * sensor is aimed at the floor: bright over paint, dark over asphalt. */
+static inline float tt_reflectance(const TtCar* car, const CtrlInputs* in,
+                                   const char* name, float fallback) {
+    int i = tt_sensor_index(car, name);
+    if (i < 0 || car->sensors[i].type != SENSOR_COLOR) return fallback;
+    return tt_sensor_value(car, in, i, 3, fallback);
+}
+
+/* ── magnetometer (SENSOR_MAG, v6) ───────────────────────────────────────── */
+
+/* Absolute heading in degrees, 0..360 (0 = world +Z, clockwise). */
+static inline float tt_heading(const TtCar* car, const CtrlInputs* in,
+                               const char* name, float fallback) {
+    int i = tt_sensor_index(car, name);
+    if (i < 0 || car->sensors[i].type != SENSOR_MAG) return fallback;
+    return tt_sensor_value(car, in, i, 0, fallback);
+}
+
+/* ── bump switch (SENSOR_BUMP, v6) ───────────────────────────────────────── */
+
+/* 1 while the switch is pressed this tick, else 0. */
+static inline int tt_bump(const TtCar* car, const CtrlInputs* in, const char* name) {
+    int i = tt_sensor_index(car, name);
+    if (i < 0 || car->sensors[i].type != SENSOR_BUMP) return 0;
+    return tt_sensor_value(car, in, i, 0, 0.0f) > 0.5f ? 1 : 0;
+}
+
+/* Peak contact force this tick (N), 0 when untouched. */
+static inline float tt_bump_force(const TtCar* car, const CtrlInputs* in,
+                                  const char* name) {
+    int i = tt_sensor_index(car, name);
+    if (i < 0 || car->sensors[i].type != SENSOR_BUMP) return 0.0f;
+    return tt_sensor_value(car, in, i, 1, 0.0f);
+}
+
+/* ── RF antenna (SENSOR_RF, v6) ──────────────────────────────────────────── */
+
+/* Number of beacon pings heard this tick (0..3). */
+static inline int tt_rf_count(const TtCar* car, const CtrlInputs* in,
+                              const char* name) {
+    int i = tt_sensor_index(car, name);
+    if (i < 0 || car->sensors[i].type != SENSOR_RF) return 0;
+    return (int)tt_sensor_value(car, in, i, 0, 0.0f);
+}
+
+/* Per-slot reads (slot 0..2, strongest first). Empty slot: id -1. */
+static inline int tt_rf_id(const TtCar* car, const CtrlInputs* in,
+                           const char* name, int slot) {
+    int i = tt_sensor_index(car, name);
+    if (i < 0 || car->sensors[i].type != SENSOR_RF || slot < 0 || slot > 2) return -1;
+    return (int)tt_sensor_value(car, in, i, 1 + slot * 3, -1.0f);
+}
+static inline float tt_rf_rssi(const TtCar* car, const CtrlInputs* in,
+                               const char* name, int slot, float fallback) {
+    int i = tt_sensor_index(car, name);
+    if (i < 0 || car->sensors[i].type != SENSOR_RF || slot < 0 || slot > 2) return fallback;
+    return tt_sensor_value(car, in, i, 2 + slot * 3, fallback);
+}
+static inline float tt_rf_bearing(const TtCar* car, const CtrlInputs* in,
+                                  const char* name, int slot, float fallback) {
+    int i = tt_sensor_index(car, name);
+    if (i < 0 || car->sensors[i].type != SENSOR_RF || slot < 0 || slot > 2) return fallback;
+    return tt_sensor_value(car, in, i, 3 + slot * 3, fallback);
+}
+
+/* Which slot (0..2) carries a specific beacon id this tick, or -1 if unheard.
+ * The slot a beacon lands in changes with distance — always look it up. */
+static inline int tt_rf_find(const TtCar* car, const CtrlInputs* in,
+                             const char* name, int beacon_id) {
+    for (int s = 0; s < 3; s++)
+        if (tt_rf_id(car, in, name, s) == beacon_id) return s;
+    return -1;
+}
+
 /* Measured ground speed in m/s, averaged over the four wheels. Signed: negative
  * means the wheels are turning backwards. */
 static inline float tt_speed(const CtrlInputs* in) {
@@ -265,6 +362,25 @@ static inline void tt_steer(CtrlOutputs* out, float steer) {
  * brake and drive at once, and the car will not thank you for it. */
 static inline void tt_brake(CtrlOutputs* out, float brake) {
     out->actuator[CTRL_BRAKE_ACTUATOR] = tt_clamp(brake, 0.0f, 1.0f);
+}
+
+/*
+ * Set a named LED (SENSOR_LED, v6): r/g/b are 0..255, blink_hz 0 = solid.
+ * Packs the colour into the LED's first actuator slot and the blink rate into
+ * its second. No-op when there is no such LED or it got no actuator slots
+ * (actuator_index -1: the manifest ran out — 5+ motors).
+ */
+static inline void tt_led(const TtCar* car, CtrlOutputs* out, const char* name,
+                          int r, int g, int b, float blink_hz) {
+    int i = tt_sensor_index(car, name);
+    if (i < 0 || car->sensors[i].type != SENSOR_LED) return;
+    int slot = car->sensors[i].actuator_index;
+    if (slot < 0 || slot + 1 >= 8) return;
+    if (r < 0) r = 0; if (r > 255) r = 255;
+    if (g < 0) g = 0; if (g > 255) g = 255;
+    if (b < 0) b = 0; if (b > 255) b = 255;
+    out->actuator[slot] = (float)((r << 16) | (g << 8) | b);
+    out->actuator[slot + 1] = blink_hz < 0.0f ? 0.0f : blink_hz;
 }
 
 /* ─────────────────────────────── camera ─────────────────────────────────── */

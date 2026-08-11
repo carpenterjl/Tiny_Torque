@@ -83,6 +83,11 @@ namespace AIHWSim.Garage
                 case SensorType.Camera:     PartVisualFactory.BuildCameraViz(g.Root.transform); break;
                 case SensorType.Encoder:    PartVisualFactory.BuildEncoderViz(g.Root.transform); break;
                 case SensorType.Suspension: PartVisualFactory.BuildSuspensionViz(g.Root.transform); break;
+                case SensorType.Color:      PartVisualFactory.BuildColorViz(g.Root.transform); break;
+                case SensorType.Mag:        PartVisualFactory.BuildMagViz(g.Root.transform); break;
+                case SensorType.Bump:       PartVisualFactory.BuildBumpViz(g.Root.transform); break;
+                case SensorType.Rf:         PartVisualFactory.BuildRfViz(g.Root.transform); break;
+                case SensorType.Led:        PartVisualFactory.BuildLedViz(g.Root.transform); break;
                 default:                    PartVisualFactory.BuildTofViz(g.Root.transform); break;
             }
             g.Finish();

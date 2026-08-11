@@ -221,6 +221,11 @@ namespace AIHWSim.Garage
                 case SensorType.Camera: return new Color(0.95f, 0.85f, 0.2f);
                 case SensorType.Tof: return new Color(0.2f, 0.8f, 1f);
                 case SensorType.Encoder: return new Color(0.6f, 0.9f, 0.4f);
+                case SensorType.Color: return new Color(1f, 0.4f, 0.9f);
+                case SensorType.Mag: return new Color(1f, 0.55f, 0.15f);
+                case SensorType.Bump: return new Color(0.95f, 0.25f, 0.25f);
+                case SensorType.Rf: return new Color(0.35f, 1f, 0.5f);
+                case SensorType.Led: return new Color(1f, 1f, 0.6f);
                 default: return Color.white;
             }
         }

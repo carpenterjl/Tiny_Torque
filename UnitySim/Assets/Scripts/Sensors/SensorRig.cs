@@ -20,6 +20,7 @@ namespace AIHWSim.Sensors
         private readonly List<SensorComponent> _sensors = new List<SensorComponent>();
         private readonly List<CameraSensor> _cameras = new List<CameraSensor>();
         private readonly List<MotorPart> _motors = new List<MotorPart>();
+        private readonly List<LedPart> _leds = new List<LedPart>();
 
         private SensorInfo[] _manifest = System.Array.Empty<SensorInfo>();
         private float[] _flat = System.Array.Empty<float>();
@@ -59,15 +60,18 @@ namespace AIHWSim.Sensors
             _manifest = new SensorInfo[_sensors.Count];
             _channelNames = new string[_sensors.Count][];
             _motors.Clear();
+            _leds.Clear();
 
             int offset = 0;
             int motorOrdinal = 0;
+            var ledManifestIdx = new List<int>();
             for (int i = 0; i < _sensors.Count; i++)
             {
                 var s = _sensors[i];
                 s.Bind(vehicle, vehicleRoot);
                 s.ResetSampling();
                 if (s is CameraSensor cam) _cameras.Add(cam);
+                if (s is LedPart led) { _leds.Add(led); ledManifestIdx.Add(i); }
 
                 var info = new SensorInfo
                 {
@@ -105,8 +109,31 @@ namespace AIHWSim.Sensors
 
             _flat = new float[offset];
 
-            // Hand the driven motors to the vehicle before the first physics step.
+            // LEDs claim actuator slots AFTER the motors (only then is the
+            // motor count final): two consecutive slots each — RGB24 pack +
+            // blink Hz. Slots 6/7 are reserved (CTRL_STEER/BRAKE_ACTUATOR), so
+            // the free pool is [motorCount..5]; no free pair → display-only.
+            int nextSlot = motorOrdinal;
+            for (int l = 0; l < _leds.Count; l++)
+            {
+                if (nextSlot + 1 < 6)
+                {
+                    _leds[l].ActuatorIndex = nextSlot;
+                    _manifest[ledManifestIdx[l]].actuator_index = nextSlot;
+                    nextSlot += 2;
+                }
+                else
+                {
+                    _leds[l].ActuatorIndex = -1;
+                    Debug.LogWarning($"[SENS] no free actuator slot pair for LED " +
+                        $"'{_leds[l].sensorName}' ({motorOrdinal} motors) — display-only.");
+                }
+            }
+
+            // Hand the driven motors to the vehicle before the first physics step,
+            // and to the world-facing sound emitter (motor whine for world mics).
             if (vehicle != null) vehicle.BindMotors(_motors);
+            GetComponent<VehicleSoundEmitter>()?.BindMotors(_motors);
         }
 
         /// <summary>Register this rig's telemetry channels with the hub.</summary>
@@ -129,6 +156,17 @@ namespace AIHWSim.Sensors
             }
             for (int c = 0; c < _cameras.Count; c++)
                 _cameras[c].CaptureIfDue(simTime);
+        }
+
+        /// <summary>
+        /// Forward the (possibly transport-delayed) actuator command array to
+        /// every LED part — the same array the motors are driven from, so LEDs
+        /// honour actuation delay identically. Called once per control tick.
+        /// </summary>
+        public void ApplyActuators(float[] actuators, float simTime)
+        {
+            for (int i = 0; i < _leds.Count; i++)
+                _leds[i].ApplyActuators(actuators, simTime);
         }
 
         /// <summary>Publish the most recent sampled values to telemetry.</summary>

@@ -203,6 +203,34 @@ Channel names come from the telemetry hub — the same set the CSV logger writes
 | `subscribe_camera` | `vehicleId`, `sensor` (empty = the primary camera) |
 | `unsubscribe_camera` | `vehicleId` |
 
+### World sensors (2026-08 additive)
+
+World props — placeable speakers, microphones and RF beacons — publish through
+a scene-level hub, not any vehicle's. Their channels are named
+`world/<kind>/<name>/<field>` and stream on the same telemetry pipe under the
+sentinel vehicleId `0xFFFF` (`WorldStreamId`): the frames are byte-identical to
+vehicle telemetry, so one decoder with one branch on the id handles both.
+
+| Type | Body |
+|---|---|
+| `list_world_sensors` | *(none)* — replies `world_sensors` |
+| `subscribe_world` | `channels[]` (empty = all), `rateHz` (clamped to 50, 0 = 50) |
+| `unsubscribe_world` | *(none)* |
+
+**`world_sensors`** — `sensors[]` of `name`, `kind` (`mic` / `speaker` /
+`beacon`), `channels[]`, and `px`,`py`,`pz` — the prop's world position, which
+is the ground truth a triangulation exercise checks itself against.
+
+Microphone fields: `level` (total), then three strongest-source slots
+`s0/id`,`s0/level`,`s0/tone` … `s2/*` (empty slot: id −1). Speaker fields:
+`enabled`, `loudness`, `tone_hz`. Beacon fields: `enabled`, `id`, `tx_dbm`.
+The ack is a normal `subscribed` reply with `vehicleId = 65535`; its channel
+order is the frame layout. `no_world_hub` is returned when no track is loaded.
+
+Sensor `kind` strings on `list_vehicles` now also include `Color`, `Rf`,
+`Mag`, `Bump` and `Led` — the enum names of the environmental sensors added
+alongside the world props (append-only, like everything here).
+
 ### Binary frame format
 
 Little-endian throughout. 13-byte header:
@@ -341,6 +369,7 @@ Branch on `code`; the `message` is for humans and is not stable.
 | `unknown_channel` | None of the requested channels exist. |
 | `not_supported` | The vehicle or scene cannot do this. |
 | `internal` | A handler threw. The connection survives; check the game log. |
+| `no_world_hub` | World-sensor call with no track loaded. |
 
 ---
 

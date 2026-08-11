@@ -61,7 +61,8 @@ namespace AIHWSim.TrackEd
     /// <summary>Runtime behaviour attached by TrackFactory. APPEND-ONLY: the
     /// ordinal is not persisted, but the id string that selects a def is, and an
     /// old build loading a new track skips unknown ids quietly.</summary>
-    public enum ItemBehavior { None, Finish, Checkpoint, Light, Spawn, ItemBox }
+    public enum ItemBehavior { None, Finish, Checkpoint, Light, Spawn, ItemBox,
+                               Speaker, Microphone, RfBeacon }
     public enum SnapMode { TileCenter, TileEdge }
 
     /// <summary>
@@ -1452,6 +1453,32 @@ namespace AIHWSim.TrackEd
                     null,
                     f => LCyl("Planter", f, CyConcrete, new Vector3(0f, 0.043f, 0f), Vector3.zero,
                               new Vector3(0.136f, 0.043f, 0.136f))) },
+
+            // --- electronics (world props: sensor-facing, see AIHWSim.Props) ---
+            // The skin builders live in PropRig so scene authoring, this
+            // catalog and live placement all share one look; TrackFactory
+            // attaches the live components (behavior != None also keeps these
+            // out of static batching).
+
+            new ItemDef { id = "prop_speaker_loop", label = "Speaker (loop)",
+                category = ItemCategory.Misc, theme = Electronics,
+                behavior = ItemBehavior.Speaker,
+                build = p => Props.PropRig.BuildSpeakerSkin(p) },
+
+            new ItemDef { id = "prop_speaker_button", label = "Speaker (button)",
+                category = ItemCategory.Misc, theme = Electronics,
+                behavior = ItemBehavior.Speaker,
+                build = p => Props.PropRig.BuildSpeakerSkin(p) },
+
+            new ItemDef { id = "prop_mic", label = "World microphone",
+                category = ItemCategory.Misc, theme = Electronics,
+                behavior = ItemBehavior.Microphone,
+                build = p => Props.PropRig.BuildMicSkin(p) },
+
+            new ItemDef { id = "prop_rf_beacon", label = "RF beacon",
+                category = ItemCategory.Misc, theme = Electronics,
+                behavior = ItemBehavior.RfBeacon,
+                build = p => Props.PropRig.BuildBeaconSkin(p) },
         };
 
         // ---- theme names (palette group headers; also ItemDef.theme values) ----
@@ -1465,11 +1492,14 @@ namespace AIHWSim.TrackEd
         public const string EnchantedKingdom = "Enchanted Kingdom";
         public const string HauntedHollow    = "Haunted Hollow";
         public const string TorqueFalls      = "Torque Falls";
+        // Sensor-facing world props (speakers, mics, RF beacons).
+        public const string Electronics      = "Electronics";
 
         /// <summary>Theme headers in palette order.</summary>
         public static readonly string[] Themes =
             { ToyWorkshop, NeonGrid, BeachBoardwalk, VolcanoFoundry,
-              Downtown, ToyRoom, EnchantedKingdom, HauntedHollow, TorqueFalls };
+              Downtown, ToyRoom, EnchantedKingdom, HauntedHollow, TorqueFalls,
+              Electronics };
 
         /// <summary>
         /// The material token table a theme's props are bound with. Public only
