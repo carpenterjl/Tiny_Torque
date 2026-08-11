@@ -46,6 +46,20 @@ namespace AIHWSim.Ipc
         internal IpcTelemetryStreamer Streamer => _streamer;
         internal IpcService Service => _service;
 
+        /// <summary>
+        /// Is an external app connected AND past the handshake?
+        ///
+        /// The one piece of bridge state anything outside this folder is allowed
+        /// to ask about, which is why it is a static that answers false when the
+        /// bridge is switched off rather than an exposed <see cref="Service"/>.
+        /// Handshake included on purpose: a socket that has connected but not
+        /// said hello is not yet an app that can drive anything, and the tutorial
+        /// step waiting on this is waiting for the real thing.
+        /// </summary>
+        public static bool ControlConnected =>
+            _instance != null && _instance._service != null
+            && _instance._service.ControlConnected && _instance._handshaken;
+
         // ---- lifecycle -------------------------------------------------------
 
         /// <summary>

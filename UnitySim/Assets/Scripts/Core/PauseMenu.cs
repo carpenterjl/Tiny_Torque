@@ -55,6 +55,16 @@ namespace AIHWSim.Core
         private bool _showTuneDraw, _showSettingsDraw, _pausedDraw;
         private PendingExit _pendingDraw;
 
+        /// <summary>The tutorial running in this scene, or null. Found once in
+        /// Start the way <see cref="_race"/> is.</summary>
+        private Tutorial.TutorialDirector _tutorial;
+
+        /// <summary>Layout-snapshotted "there is a tutorial to skip". Snapshotted
+        /// for the same reason <see cref="_hasBuildDraw"/> is: it decides whether
+        /// a ROW EXISTS, and a row appearing between a Layout pass and its
+        /// Repaint is the one IMGUI error this UI never risks.</summary>
+        private bool _isTutorialDraw;
+
         private bool _showBuild, _showBuildDraw;
         // Whether the "Build controller…" row exists at all. Snapshotted like the
         // rest: it is derived from live scene state, and a row appearing between a
@@ -76,6 +86,7 @@ namespace AIHWSim.Core
         {
             _tunable = tunableBehaviour as ITunable;
             _race = FindFirstObjectByType<RaceDirector>();
+            _tutorial = FindFirstObjectByType<Tutorial.TutorialDirector>();
         }
 
         private void Update()
@@ -131,6 +142,7 @@ namespace AIHWSim.Core
                 _showSettingsDraw = _showSettings;
                 _showBuildDraw = _showBuild;
                 _hasBuildDraw = HasControllerRunner;
+                _isTutorialDraw = _tutorial != null;
                 _pendingDraw = _pending;
             }
             if (!_pausedDraw) return;
@@ -172,6 +184,11 @@ namespace AIHWSim.Core
             _bodyScroll = GUILayout.BeginScrollView(_bodyScroll);
 
             if (MenuNav.Button("Resume (Esc)", GUILayout.Height(30))) SetPaused(false);
+            // Second, right under Resume: a player who opened this menu to get
+            // out of a lesson should not have to read past six other buttons to
+            // find the way out.
+            if (_isTutorialDraw &&
+                MenuNav.Button("Skip this tutorial", GUILayout.Height(30))) SkipTutorial();
             bool inRace = _race != null && _race.isActiveAndEnabled;
             if (inRace)
             {
@@ -288,6 +305,32 @@ namespace AIHWSim.Core
         {
             Time.timeScale = 1f; // never leave the next scene frozen
             GameFlow.LoadMenu();
+        }
+
+        /// <summary>
+        /// Bail out of the lesson. No scrap and no ✓ — a tutorial somebody quit
+        /// is not one they completed, and the hub's marks have to stay honest
+        /// (they are also what the finish-them-all crate counts). It DOES advance
+        /// a "play all" run rather than ending it: skipping one lesson is not
+        /// asking to leave the whole sequence.
+        ///
+        /// Deliberately not routed through <see cref="RequestExit"/>: that path
+        /// exists to protect unsaved TELEMETRY, and a tutorial does not log any.
+        /// </summary>
+        private void SkipTutorial()
+        {
+            Tutorials.SkipCurrent();
+            Time.timeScale = 1f;
+            if (Tutorials.Active && Tutorials.LaunchCurrent()
+                && Application.CanStreamedLevelBeLoaded(GameFlow.TrackSceneName))
+            {
+                GameFlow.LoadTrack();
+                return;
+            }
+            // Nothing (or nothing loadable) queued behind it: back to the list,
+            // which is also where an overlay lesson has to be picked up from.
+            Tutorials.PendingOpenHub = true;
+            if (Application.CanStreamedLevelBeLoaded(GameFlow.MenuSceneName)) GameFlow.LoadMenu();
         }
 
         private void OpenTrackBuilder()

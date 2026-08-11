@@ -2613,6 +2613,65 @@ Without JGraph the pages plot everything themselves — none of this is required
    Leaving a drive via the pause menu's **Garage** or **Quit** first prompts you
    to save or discard the unsaved log.
 
+## Tutorials
+
+**Tutorial** is the first entry on the main menu, and on a profile that has never
+finished a race it says *← start here*. Twelve lessons under five headings:
+getting started and arcade mode; the simulation set (controllers, sensors,
+firmware, the external control app); one per match mode; the garage; and playing
+over LAN. **Play all in sequence** runs the lot.
+
+The simulation entry asks three questions first — sensors, own firmware, external
+app — and builds a queue from the answers. Everyone starts at *Simulation &
+controllers* because the other three assume it; the rest is only what you asked
+for. Answers are per-visit, not saved: a player coming back a month later gets
+asked again rather than silently handed their past self's answers.
+
+Ten of the twelve are their own Unity scenes under `Assets/Scenes/Tutorials/`, and
+they run as ordinary scene tracks — `MatchMode.FreeRoam`, which is the one mode
+that composes no director of its own, leaving the scene's `TutorialDirector` as
+the only one alive. The other two teach *screens* rather than places, so they draw
+callouts over the real garage and the real Multiplayer pages instead: the garage
+lesson advances when you actually load a preset, paint it and save it, and the LAN
+one completes when you actually host a lobby (no second machine needed).
+
+**A step is text plus a condition.** An objective card sits in the corner with the
+step, the explanation and *Step 3/9*; a banner flashes when one lands. Conditions
+cover driving through a volume, holding a control, reaching a speed, a timer, a
+Continue button, a named signal raised by game code, reaching a named screen,
+hosting a lobby, an IPC client connecting, and a telemetry channel going live.
+Control names in the text are placeholders — `{throttle}`, `{brake}` — expanded at
+draw time, so they name the key you rebound it to, or the pad button if a pad is
+what you last touched.
+
+**Steps are authored as scene objects**, children of the scene's `Tutorial` root,
+ordered by sibling index, each optionally pointing at a `TutorialTrigger` volume.
+That is on purpose: these scenes are meant to be rebuilt into real maps, and
+authored this way, reordering a lesson is dragging a child and moving an objective
+is dragging a collider — neither needs a code edit. The two overlay lessons have
+no scene to author in, so their steps are a C# list in `TutorialScripts`.
+
+**Nothing is compulsory.** Every lesson is replayable, and the pause menu carries
+**Skip this tutorial** right under Resume. Skipping pays nothing and does not tick
+the lesson off — the ✓ marks are also what the finish-them-all crate counts — but
+it does advance a sequence rather than dumping you out of it. Progress lives in
+`progress.json`, so quitting mid-lesson and coming back later offers *Continue
+previous tutorial* at the step you left. First completion pays scrap; finishing
+all twelve pays a Gold Vault.
+
+Generate the starter scenes with **Tools ▸ AIHWSim ▸ Tutorials ▸ Create Missing
+Tutorial Scenes**. It is create-if-missing and there is deliberately no
+regenerate: these are content, not demonstrations, and the mode templates already
+occupy the other side of that bargain.
+
+Gate: `-executeMethod AIHWSim.EditorTools.TutorialValidator.Report`, grep
+`[TUT] RESULT`. It checks that every catalogue row leads somewhere real — scene on
+disk *and* enabled in Build Settings, one director whose id matches the row, at
+least one step, and every step able to complete (a TriggerVolume step with no
+volume, or a Signal step with no token, is a lesson that stops there). It also
+round-trips a v2 profile and a mid-sequence v3 one, because a dropped queue is a
+"play all" that quietly forgets everything after the lesson it is on.
+
 ## Driving the car (Track scene)
 
 Create the track with **Tools ▸ AIHWSim ▸ Create Track Scene**, then Play. It

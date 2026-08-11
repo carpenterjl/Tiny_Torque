@@ -235,8 +235,13 @@ namespace AIHWSim.EditorTools
         /// and get appended as a second entry — with an all-zero GUID, because the
         /// path resolved to nothing. A zero-GUID row is a dangling reference that
         /// fails the player build, and it sat in the settings unnoticed.
+        ///
+        /// <c>internal</c> rather than private so the tutorial scene builder can
+        /// register through the same guarded path. It is the only safe way to
+        /// touch <c>EditorBuildSettings.scenes</c> in this project, and a second
+        /// copy of it in another file is how the zero-GUID bug comes back.
         /// </summary>
-        private static void AddSceneToBuild(string path)
+        internal static void AddSceneToBuild(string path)
         {
             path = Normalize(path);
             var scenes = new System.Collections.Generic.List<EditorBuildSettingsScene>(

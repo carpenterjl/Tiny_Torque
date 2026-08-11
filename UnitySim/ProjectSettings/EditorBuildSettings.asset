@@ -26,5 +26,35 @@ EditorBuildSettings:
   - enabled: 1
     path: Assets/TinyTorqueAssets/Scenes/UCSD_TrackScene.unity
     guid: 755263dabc9101549987f6592a08b089
+  - enabled: 1
+    path: Assets/Scenes/Tutorials/Tut_SinglePlayer.unity
+    guid: 1045c0fdade0978438a40954ff6296cb
+  - enabled: 1
+    path: Assets/Scenes/Tutorials/Tut_Arcade.unity
+    guid: 12f1e4d926472b84aa0ed0372d60b253
+  - enabled: 1
+    path: Assets/Scenes/Tutorials/Tut_SimControllers.unity
+    guid: de65a40e115c74446bdda718b4fc3f02
+  - enabled: 1
+    path: Assets/Scenes/Tutorials/Tut_SimIpc.unity
+    guid: e0c9b4f6cb4e39b438a20b6c36554518
+  - enabled: 1
+    path: Assets/Scenes/Tutorials/Tut_SimFirmware.unity
+    guid: 2a96d66bad2618046bb873b2d9b1690e
+  - enabled: 1
+    path: Assets/Scenes/Tutorials/Tut_SimSensors.unity
+    guid: a106ae9192f97d549ad8ac4b28c968a9
+  - enabled: 1
+    path: Assets/Scenes/Tutorials/Tut_ModeRace.unity
+    guid: fa22bb58251f08c409753309ba014ba5
+  - enabled: 1
+    path: Assets/Scenes/Tutorials/Tut_ModeDerby.unity
+    guid: c518ed29e42fe754283a1c39bc1cf9be
+  - enabled: 1
+    path: Assets/Scenes/Tutorials/Tut_ModeCtf.unity
+    guid: 1fbe58a5ebc02194fa82d0e5d8274819
+  - enabled: 1
+    path: Assets/Scenes/Tutorials/Tut_ModeSoccer.unity
+    guid: 4c6fe7146c9a55348a1a8f38de152003
   m_configObjects: {}
   m_UseUCBPForAssetBundles: 0

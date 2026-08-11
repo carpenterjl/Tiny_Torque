@@ -151,6 +151,8 @@ namespace AIHWSim.Garage
         private void Update()
         {
             if (bootstrap == null) return;
+            Tutorial.TutorialOverlay.Tick();
+            Tutorial.TutorialSignals.NotifyScreen("garage");
             bool overUI = PointerOverUI();
             if (bootstrap.Orbit != null)
             {
@@ -1085,6 +1087,10 @@ namespace AIHWSim.Garage
             if (_drag != DragState.Idle) DrawDragHint();
             DrawHoverTooltip();
             UI.MenuNav.EndFrame();
+            // After EndFrame: the tutorial panel claims a nav frame of its own for
+            // its Continue button, and claiming before this screen would take the
+            // pad off the garage the lesson is walking the player through.
+            Tutorial.TutorialOverlay.Draw();
             UI.UIScale.End();
         }
 
@@ -1330,9 +1336,11 @@ namespace AIHWSim.Garage
 
             GUILayout.Space(4);
             GUILayout.Label("Colour");
+            var wasColor = D.bodyColor;
             D.bodyColor.r = Slider("R", D.bodyColor.r, 0f, 1f);
             D.bodyColor.g = Slider("G", D.bodyColor.g, 0f, 1f);
             D.bodyColor.b = Slider("B", D.bodyColor.b, 0f, 1f);
+            if (D.bodyColor != wasColor) Tutorial.TutorialSignals.Raise("garage:painted");
 
             // Horn: pure audio flavour, cycled like the tyre/antenna styles.
             GUILayout.Space(4);
@@ -2065,6 +2073,7 @@ namespace AIHWSim.Garage
             _nameField = D.name;
             string path = VehicleLibrary.Save(D);
             _status = "Saved: " + System.IO.Path.GetFileName(path);
+            Tutorial.TutorialSignals.Raise("garage:saved");
         }
 
         private void DoLoad(string name)
@@ -2078,6 +2087,9 @@ namespace AIHWSim.Garage
             bootstrap.SetDesign(d);
             bootstrap.ClearHistory();
             _status = "Loaded: " + name;
+            // Says what happened; whether a tutorial is listening is not this
+            // screen's problem. See TutorialSignals.
+            Tutorial.TutorialSignals.Raise("garage:preset_loaded");
         }
 
         private void DoNew()

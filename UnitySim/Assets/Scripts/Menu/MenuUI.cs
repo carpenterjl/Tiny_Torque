@@ -4,6 +4,7 @@ using AIHWSim.Garage;
 using AIHWSim.Net;
 using AIHWSim.Persistence;
 using AIHWSim.TrackEd;
+using AIHWSim.Tutorial;
 using AIHWSim.UI;
 using UnityEngine;
 
@@ -25,6 +26,7 @@ namespace AIHWSim.Menu
             Root, SinglePlayer, Multiplayer, Championship, Options, Resume,
             LanHost, LanJoin, Showroom, Crates, Shop, Cheats,
             SpRace, SpFreeRoam, SpDerby, SpCtf, SpSoccer, SpController,
+            Tutorial, TutorialSim,
         }
 
         private Page _page = Page.Root;
@@ -141,6 +143,15 @@ namespace AIHWSim.Menu
             {
                 _status = NetSession.LastDisconnectReason;
                 NetSession.LastDisconnectReason = "";
+            }
+
+            // Coming back from a tutorial's results screen: land on the list,
+            // not the root. Consumed here so it only ever redirects the one trip
+            // that set it.
+            if (Tutorials.PendingOpenHub)
+            {
+                Tutorials.PendingOpenHub = false;
+                _page = _pageDraw = Page.Tutorial;
             }
 
             // Restore last-used picks.
@@ -317,6 +328,7 @@ namespace AIHWSim.Menu
             if (_page == Page.Showroom) _showroom?.Tick();
             if (_page == Page.Crates) _crates?.Tick();
             _cheatShake = Mathf.Max(0f, _cheatShake - Time.unscaledDeltaTime * 1.6f);
+            TutorialOverlay.Tick();
         }
 
         /// <summary>One step out of the current page (pad B / ← Back).</summary>
@@ -350,6 +362,12 @@ namespace AIHWSim.Menu
                 case Page.Cheats:
                     GoTo(Page.Options);
                     break;
+                case Page.Tutorial:
+                    GoTo(Page.Root);
+                    break;
+                case Page.TutorialSim:
+                    GoTo(Page.Tutorial);
+                    break;
                 // The setup screens are one level below the Single Player list.
                 // Without these they would hit `default` and jump two levels.
                 case Page.SpRace:
@@ -374,6 +392,11 @@ namespace AIHWSim.Menu
             {
                 _pageDraw = _page;
                 _attractDraw = _attractHidden;
+                _nudgeDraw = Tutorials.ShouldNudge;
+                _tutContinueDraw = Tutorials.Active;
+                // One report per frame rather than two — a Repaint pass would
+                // say the same thing again for no one's benefit.
+                TutorialSignals.NotifyScreen("menu:" + _pageDraw);
             }
 
             // Idle attract: the live loop plays full-screen with just a small
@@ -445,6 +468,8 @@ namespace AIHWSim.Menu
             switch (_pageDraw)
             {
                 case Page.Root: DrawRoot(); break;
+                case Page.Tutorial: DrawTutorial(); break;
+                case Page.TutorialSim: DrawTutorialSim(); break;
                 case Page.SinglePlayer: DrawSinglePlayer(); break;
                 case Page.SpRace: DrawSpRace(); break;
                 case Page.SpFreeRoam: DrawSpFreeRoam(); break;
@@ -466,12 +491,25 @@ namespace AIHWSim.Menu
             if (!string.IsNullOrEmpty(_status)) GUILayout.Label(_status, GarageSkin.StatLabel);
             GUILayout.EndArea();
             MenuNav.EndFrame();
+            // After EndFrame: the overlay claims a nav frame of its own for its
+            // Continue button, and claiming before this menu would take the pad
+            // off the very screen the lesson is walking the player through.
+            TutorialOverlay.Draw();
             UIScale.End();
         }
 
         // Layout-snapshotted twin of _attractHidden (same rule as _pageDraw:
         // whether the panel exists must not change between Layout and Repaint).
         private bool _attractDraw;
+
+        /// <summary>
+        /// Layout-snapshotted "this profile has never played anything". It adds a
+        /// LABEL row under the Tutorial button, and a layout entry appearing
+        /// between a Layout pass and its Repaint is the mismatch IMGUI throws on
+        /// — the same reason <see cref="_attractDraw"/> exists. It can flip
+        /// mid-pass because finishing a tutorial writes progress.json.
+        /// </summary>
+        private bool _nudgeDraw;
 
         /// <summary>
         /// Unclamped panel height per page; the caller clamps to the window. A
@@ -496,6 +534,10 @@ namespace AIHWSim.Menu
             Page.Multiplayer => 560f,
             Page.SpDerby or Page.SpCtf or Page.SpSoccer => 610f,
             Page.SpFreeRoam => 560f,
+            // Twelve tutorials under five category headers, plus the play-all
+            // row and Back. It scrolls, so this only decides how much shows.
+            Page.Tutorial => 660f,
+            Page.TutorialSim => 480f,
             _ => 430f,
         };
 
@@ -687,6 +729,17 @@ namespace AIHWSim.Menu
 
         private void DrawRoot()
         {
+            // Top of the list, and the only row that ever advertises itself. A
+            // brand-new profile gets the nudge; everyone else gets a plain
+            // button, and a run in progress says so the way a championship does.
+            if (MenuButton(Tutorials.Active
+                    ? $"Tutorial — {TutorialCatalog.LabelOf(Tutorials.CurrentId)} (in progress)"
+                    : _nudgeDraw ? "Tutorial  ←  start here" : "Tutorial"))
+                GoTo(Page.Tutorial);
+            if (_nudgeDraw && !Tutorials.Active)
+                GUILayout.Label("   New here? It pays scrap, and you can skip any of it.",
+                                GarageSkin.StatLabel);
+
             if (MenuButton("Single Player")) GoTo(Page.SinglePlayer, RefreshLists);
             if (MenuButton("Multiplayer")) GoTo(Page.Multiplayer, RefreshLists);
             if (MenuButton(Championship.Active ? "Championship (in progress)" : "Championship"))
@@ -1484,6 +1537,186 @@ namespace AIHWSim.Menu
             s.spArcadeTyreThermal = _spArcadeTyreThermal;
             SettingsStore.Save();
 
+            LoadIfBuilt(GameFlow.TrackSceneName, GameFlow.LoadTrack);
+        }
+
+        // ---- tutorial --------------------------------------------------------
+
+        // The simulation intake answers. Plain fields rather than settings: they
+        // describe one trip through the sim tutorials, and a player who comes
+        // back a month later should be asked again rather than silently handed
+        // the answers their past self gave.
+        private bool _tutIpc, _tutFirmware, _tutSensors = true;
+
+        /// <summary>
+        /// The hub. Continue-or-choose is a BRANCH here rather than a page of its
+        /// own, matching <see cref="DrawChampionship"/>: the two states answer
+        /// the same question ("what are we doing about tutorials"), and splitting
+        /// them would need a third GoBack case that means the same as this one.
+        /// </summary>
+        private void DrawTutorial()
+        {
+            GUILayout.Label("TUTORIAL", GarageSkin.Header);
+            GUILayout.Space(4);
+
+            if (_tutContinueDraw) DrawTutorialContinue();
+            else DrawTutorialList();
+
+            GUILayout.Space(8);
+            if (MenuButton("← Back")) GoTo(Page.Root);
+        }
+
+        /// <summary>
+        /// Something is half-finished. Offer it back before offering the list —
+        /// a player who quit inside the sensors lesson wants to be asked about
+        /// the sensors lesson, not shown twelve rows again.
+        /// </summary>
+        private void DrawTutorialContinue()
+        {
+            string id = Tutorials.CurrentId;
+            GUILayout.Label(TutorialCatalog.LabelOf(id), GarageSkin.Title);
+            GUILayout.Label(
+                Tutorials.StepIndex > 0
+                    ? $"You stopped at step {Tutorials.StepIndex + 1}."
+                    : "Not started yet.",
+                GarageSkin.StatLabel);
+            if (Tutorials.SequenceMode)
+                GUILayout.Label($"{Tutorials.State.queue.Count} more queued after it.",
+                                GarageSkin.StatLabel);
+
+            GUILayout.Space(8);
+            if (MenuButton("Continue previous tutorial ▶")) RunTutorial(id);
+            if (MenuButton("Select a new tutorial"))
+            {
+                // Also stops an overlay lesson mid-flight. Those have no pause
+                // menu to skip out of — this row is their only exit, so it has
+                // to close the panel as well as the progress.
+                TutorialOverlay.Stop();
+                Tutorials.Abandon();
+                _status = "";
+            }
+        }
+
+        /// <summary>The list, grouped by category, with a ✓ on the ones already
+        /// done and the play-all row at the bottom.</summary>
+        private void DrawTutorialList()
+        {
+            _tutScroll = GUILayout.BeginScrollView(_tutScroll);
+
+            var last = (TutorialCatalog.Category)(-1);
+            foreach (var row in TutorialCatalog.All)
+            {
+                if (row.category != last)
+                {
+                    last = row.category;
+                    GUILayout.Space(6);
+                    GUILayout.Label(TutorialCatalog.CategoryLabel(last), GarageSkin.Header);
+                }
+
+                // The simulation set is entered through the intake questions
+                // rather than one row per lesson: which of them a player wants
+                // depends on answers they have not been asked for yet.
+                if (row.id == "sim_controllers")
+                {
+                    if (MenuButton(Mark("Simulation & controllers ▶", row.id)))
+                        GoTo(Page.TutorialSim);
+                    GUILayout.Label("   " + row.blurb, GarageSkin.StatLabel);
+                    continue;
+                }
+                if (row.category == TutorialCatalog.Category.Simulation) continue;
+
+                if (MenuButton(Mark(row.label, row.id))) RunTutorial(row.id);
+                GUILayout.Label("   " + row.blurb, GarageSkin.StatLabel);
+            }
+
+            GUILayout.Space(10);
+            int done = Tutorials.DoneCount, all = TutorialCatalog.All.Length;
+            GUILayout.Label($"Completed {done} of {all}.", GarageSkin.StatLabel);
+            if (MenuButton("Play all in sequence ▶"))
+            {
+                Tutorials.BeginAll();
+                RunCurrentTutorial();
+            }
+            GUILayout.EndScrollView();
+        }
+
+        private Vector2 _tutScroll;
+
+        /// <summary>Layout-snapshotted twin of <c>Tutorials.Active</c>: it
+        /// decides WHICH page body draws, and abandoning a run flips it from
+        /// inside a button handler — i.e. mid-pass.</summary>
+        private bool _tutContinueDraw;
+
+        private static string Mark(string label, string id) =>
+            Tutorials.IsDone(id) ? "✓  " + label : label;
+
+        /// <summary>The three questions, then a queue built from the answers.</summary>
+        private void DrawTutorialSim()
+        {
+            GUILayout.Label("SIMULATION", GarageSkin.Header);
+            GUILayout.Label("This is the side of the game that is a test bench: a real\n" +
+                            "vehicle model, real sensors, and something driving it that\n" +
+                            "is not a person. Pick what you want covered.",
+                            GarageSkin.StatLabel);
+            GUILayout.Space(8);
+
+            _tutSensors = MenuNav.Toggle(_tutSensors,
+                " Show me the sensors and what their data looks like");
+            _tutFirmware = MenuNav.Toggle(_tutFirmware,
+                " I want to write my own firmware for the car");
+            _tutIpc = MenuNav.Toggle(_tutIpc,
+                " I'll be driving the car from the external control app");
+
+            GUILayout.Space(6);
+            GUILayout.Label("The basics come first either way. Nothing here is\n" +
+                            "permanent — every lesson is replayable and skippable.",
+                            GarageSkin.StatLabel);
+
+            GUILayout.Space(8);
+            if (MenuButton("Start ▶"))
+            {
+                var queue = TutorialCatalog.SimQueue(_tutIpc, _tutFirmware, _tutSensors);
+                Tutorials.Begin(queue, queue.Count > 1);
+                RunCurrentTutorial();
+            }
+            GUILayout.Space(8);
+            if (MenuButton("← Back")) GoTo(Page.Tutorial);
+        }
+
+        /// <summary>Begin one tutorial on its own and go.</summary>
+        private void RunTutorial(string id)
+        {
+            if (!Tutorials.Active || Tutorials.CurrentId != id) Tutorials.Begin(id);
+            RunCurrentTutorial();
+        }
+
+        /// <summary>
+        /// Enter whatever tutorial is current. Driving lessons load their map;
+        /// overlay lessons stay in the menu and start drawing callouts over the
+        /// screen they are about — which is why this is the one launcher both
+        /// kinds go through.
+        /// </summary>
+        private void RunCurrentTutorial()
+        {
+            string id = Tutorials.CurrentId;
+            if (string.IsNullOrEmpty(id)) return;
+
+            if (TutorialCatalog.IsOverlay(id))
+            {
+                TutorialOverlay.Begin(id);
+                var page = TutorialOverlay.EntryPage(id);
+                if (page == TutorialOverlayEntry.Multiplayer) GoTo(Page.Multiplayer, RefreshLists);
+                else if (page == TutorialOverlayEntry.Garage)
+                    LoadIfBuilt(GameFlow.GarageSceneName, GameFlow.LoadGarage);
+                else GoTo(Page.Root);
+                return;
+            }
+
+            if (!Tutorials.Launch(id))
+            {
+                _status = $"That tutorial has no map in this build ({id}).";
+                return;
+            }
             LoadIfBuilt(GameFlow.TrackSceneName, GameFlow.LoadTrack);
         }
 

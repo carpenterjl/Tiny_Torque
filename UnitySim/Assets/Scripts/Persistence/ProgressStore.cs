@@ -81,6 +81,30 @@ namespace AIHWSim.Persistence
     }
 
     /// <summary>
+    /// The tutorial a player is part-way through: which one, how far in, and —
+    /// when they picked "play all in sequence" — what is still queued behind it.
+    ///
+    /// It lives in the profile for the same reason a championship does: the
+    /// sequence is longer than one sitting, and a player who quits half way
+    /// through the sensors tutorial should be offered it back rather than the
+    /// list they already chose from.
+    ///
+    /// The queue is the whole sequencing mechanism. Because it is on disk, the
+    /// results screen's "Next tutorial" and the menu's "Continue" read the same
+    /// answer, and a tutorial that ends by loading a different SCENE (the garage
+    /// walkthrough) does not have to carry anything across the load itself.
+    /// </summary>
+    [Serializable]
+    public sealed class TutorialState
+    {
+        public bool active;
+        public string id = "";                              // catalog id being run
+        public int stepIndex;                               // next step to run — the resume point
+        public bool sequenceMode;                           // came from "play all"
+        public List<string> queue = new List<string>();     // ids still ahead of this one
+    }
+
+    /// <summary>
     /// The ONE local progression profile — deliberately global rather than
     /// keyed by player name: split-screen is a couch, and the couch shares the
     /// toy box. LAN races feed the same pool (win on any screen, unlock here).
@@ -89,10 +113,12 @@ namespace AIHWSim.Persistence
     public sealed class PlayerProgress
     {
         // 1 = the original mystery-unlock profile; 2 = crates, scrap and
-        // championships. A v1 file loads as v2 with the new fields at their
-        // defaults, which is exactly right: you keep everything you unlocked,
-        // you start with no scrap and no crates.
-        public int version = 2;
+        // championships; 3 = tutorials. A v1 file loads as v2 with the new
+        // fields at their defaults, which is exactly right: you keep everything
+        // you unlocked, you start with no scrap and no crates. A v2 file loads
+        // as v3 having completed no tutorials — which is also right, since it
+        // predates them existing.
+        public int version = 3;
         public List<string> unlocked = new List<string>();
         public List<string> redeemedCodes = new List<string>();
         public int xp;
@@ -107,6 +133,10 @@ namespace AIHWSim.Persistence
         public ChampionshipState championship = new ChampionshipState();
         public int shopDay = -1;                             // day index the offers were rolled for
         public List<string> shopOffers = new List<string>();
+
+        public List<string> tutorialsDone = new List<string>();   // catalog ids, first completion
+        public TutorialState tutorial = new TutorialState();
+        public bool tutorialAllPaid;                              // the finish-them-all crate
     }
 
     /// <summary>What finishing a race paid out (the results overlay reads this).</summary>
@@ -155,7 +185,10 @@ namespace AIHWSim.Persistence
             p.pity ??= new List<PityEntry>();
             p.shopOffers ??= new List<string>();
             p.championship ??= new ChampionshipState();
-            if (p.version < 2) p.version = 2;
+            p.tutorialsDone ??= new List<string>();
+            p.tutorial ??= new TutorialState();
+            p.tutorial.queue ??= new List<string>();
+            if (p.version < 3) p.version = 3;
         }
 
         public static void Save() => SaveSystem.SaveJson(FileName, Current);
@@ -353,6 +386,26 @@ namespace AIHWSim.Persistence
                 result.crates.Add("haunt");
                 GrantCrate("haunt");
             }
+            LastAward = result;
+            Save();
+        }
+
+        /// <summary>
+        /// Every tutorial has been completed: the Gold Vault, once. Adds to the
+        /// pending award so the tutorial's own results screen reveals it through
+        /// the same widget a race win uses.
+        ///
+        /// The once-ness is the caller's (<c>Tutorials.CompleteCurrent</c> guards
+        /// on <c>tutorialAllPaid</c>) for the same reason
+        /// <see cref="OnChampionshipWon"/> leaves it to <c>ChampionshipState.paid</c>:
+        /// the flag that says "already paid" belongs beside the progress it
+        /// describes, so one save writes both.
+        /// </summary>
+        public static void OnTutorialsComplete()
+        {
+            var result = LastAward ?? new AwardResult();
+            result.crates.Add("vault");
+            GrantCrate("vault");
             LastAward = result;
             Save();
         }

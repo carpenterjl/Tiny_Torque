@@ -8,11 +8,314 @@ describe is documented in [README.md](../README.md).
 Active work lives in the session plan file, not here; a plan moves into this archive
 once its milestones are done.
 
-Covering the project bootstrap through the IPC control bridge (49 plans).
-Last updated 2026-08-08. (The RC-airplane F0–F9 and slipstream/phugoid G-series plans
+Covering the project bootstrap through the tutorial system (50 plans).
+Last updated 2026-08-10. (The RC-airplane F0–F9 and slipstream/phugoid G-series plans
 completed between Track Studio and the HUD pass but their session files were
 overwritten before archiving; their results live in README's RC-airplane section and
 the [AERO]/[ABENCH] gates.)
+
+---
+
+# Tutorial system: menu, scenes, step engine, progress (2026-08-10)
+
+## Context
+
+The game has grown a lot of surface (simulation controllers, IPC bridge, firmware,
+sensors, arcade mode, four match modes, vehicle customization, LAN) and teaches none of
+it in-game — the only help is the UserScripts guide link and the controls list in
+settings. This adds a Tutorial system: a main-menu entry, per-topic tutorial scenes the
+user will hand-edit into custom maps, a state-driven step/objective engine, skip/replay/
+resume semantics, and completion rewards.
+
+**User decisions settled via Q&A:**
+- Simulation intake questions (IPC app? own firmware? sensors?) → **separate scenes per
+  topic**, answers build the queue.
+- Presentation: **persistent corner objective panel + big centred banner** on step
+  start/complete.
+- Online/LAN tutorial: **guided menu walkthrough** (overlay callouts over the real
+  Multiplayer screens; completes on hosting a lobby, no peer needed).
+- Game modes: **one scene per mode** (race, derby, CTF, soccer).
+- Vehicle customization: **overlay inside the real garage** (load preset → paint → save).
+- Scene end: **results overlay** with "Next tutorial ▶" / "Tutorial menu".
+- Rewards: **scrap per first completion, crate for finishing all, first-launch nudge**
+  on the main menu.
+
+## Architecture (settled)
+
+### D1 — TutorialDirector: scene-authored `MatchDirector` subclass on the FreeRoam seam
+
+Tutorial driving scenes are ordinary scene tracks launched exactly like Free Roam
+launches TTA_Sandbox: `SessionConfig.SetSinglePlayer()` → `ApplyMatchRules(
+MatchMode.FreeRoam)` → `GameFlow.ActiveSceneTrack = "Tut_X"` → `LoadIfBuilt(
+GameFlow.TrackSceneName, GameFlow.LoadTrack)`. The scene loads Single, TrackScene comes
+in Additive with the composing `TrackBootstrap` (GameFlow.cs:103-116) — car spawn,
+pause menu, HUD, physics, respawn all free.
+
+`TutorialDirector` is a MonoBehaviour **authored in each tutorial scene** (on a
+`Tutorial` root), subclassing `MatchDirector` with `countdownSeconds = 0`:
+- **FreeRoam composes no competing director** (TrackBootstrap.cs:291-298, verified) —
+  the scene-authored one is the only `MatchDirector` alive. No TrackBootstrap edit, no
+  new MatchMode.
+- `countdownSeconds = 0` → `OnGridReleased()` immediately (MatchDirector.cs:102-107,
+  verified). Populate `players` from the composing `TrackBootstrap.Rigs` in `Start`.
+- Inherits exactly what the spec needs: `DrawBig` (banners), `OnMatchTick` (condition
+  polling), `EnterResults`/`OnResultsEntered` (single non-OnGUI door for banking
+  scrap — Layout/Repaint can't pay twice), the results panel + `AwardReveal.Draw()`
+  (crate reveal), `DrawResultButtons` ("Next tutorial ▶"/"Tutorial menu").
+- Pressing Play directly in a tutorial scene works via the existing directPlay adoption
+  path (TrackBootstrap.cs:110-157) — essential for the hand-edit loop.
+
+Trade-off accepted: mode tutorials don't run the real mode director simultaneously (two
+MatchDirectors would both draw results). They teach with authored props + trigger
+volumes; the completion overlay offers "Try a real match".
+
+**Overlay tutorials** (customize, online) never load a driving scene: a static
+`TutorialOverlay` renderer drawn from the host UI's existing `OnGUI` (MenuUI, garage),
+sharing the step model and condition engine. Static state survives the menu→Garage
+scene load like GameFlow's statics do.
+
+### D2 — Step authoring: scene objects for driving scenes, code-as-data for overlays
+
+- Driving scenes: `TutorialStep` MonoBehaviour per step, children of the `Tutorial`
+  root, **ordered by sibling index**, optionally referencing a `TutorialTrigger` volume
+  (Checkpoint.cs idiom: RequireComponent(Collider), Reset() forces isTrigger,
+  OnTriggerEnter → GetComponentInParent<CarVehicle>()). Rationale: the user's workflow
+  is hand-editing scenes — reordering steps = reordering children, moving an objective
+  = dragging a collider; a map edit never needs a code edit. Follows the marker→builder
+  precedent (TrackSpawnMarker etc.).
+- Overlay tutorials: C# step lists in `TutorialScripts.cs` (SceneTrackCatalog
+  code-as-data idiom) — no scene to author in.
+- Both produce `TutorialStepData` (title, body, condition kind + params, banner text);
+  one `TutorialStepEngine` consumes it in both hosts.
+
+### D3 — Condition types (`enum TutorialCondition`), polled per frame
+
+| Kind | Check |
+|---|---|
+| `TriggerVolume` | latched flag from `TutorialTrigger.OnTriggerEnter` (player car only) |
+| `InputHeld` | human rig's `CarInput` axis ≥ threshold, accumulated hold time |
+| `KeyPressed` | KeyCode/PadButton token via InputReader/KeyTable |
+| `SpeedReached` | `rig.car` speed ≥ param (m/s) |
+| `Timer` | elapsed step time on the tutorial clock (D9) |
+| `Continue` | "Continue" `MenuNav.Button` in the objective panel |
+| `Signal` | latched token via `TutorialSignals.Raise("garage:paint")` — the universal hook; one Raise call per gameplay/UI call site |
+| `ScreenReached` | host reports current screen (`TutorialSignals.NotifyScreen("menu:LanHost")` from MenuUI's Layout snapshot) |
+| `LobbyHosted` | `NetSession.Instance != null && IsHost` |
+| `IpcConnected` | poll the IPC bridge's client-connected state |
+| `TelemetryObserved` | poll TelemetryHub for a channel being live |
+
+All cheap polls or latched flags; checked in `OnMatchTick` (director) or an Update hook
+(overlay).
+
+### D4 — Progress schema: `PlayerProgress` v3 + `Tutorials` facade
+
+In `Persistence/ProgressStore.cs` (additive-only Migrate, per the file's rule):
+
+```csharp
+[Serializable] public sealed class TutorialState {   // ChampionshipState idiom
+    public bool active; public string id = ""; public int stepIndex;
+    public bool sequenceMode; public List<string> queue = new List<string>();
+}
+// PlayerProgress: version = 3, plus:
+public List<string> tutorialsDone = new List<string>();
+public TutorialState tutorial = new TutorialState();
+public bool tutorialAllPaid;
+```
+`Migrate`: null-coalesce both, `if (p.version < 3) p.version = 3;`.
+
+New `Core/Tutorials.cs` facade mirroring `Championship` (Core/Championship.cs):
+`State/Active/CurrentId/IsDone(id)/Begin(ids, sequence)/SaveStep(i)/CompleteCurrent()/
+SkipCurrent()/Abandon()/HasNext/LoadNext()`. `CompleteCurrent()` adds to
+`tutorialsDone`, pays scrap **first completion only**, advances the queue or
+deactivates, runs the all-complete check (→ crate + `tutorialAllPaid`, the
+`ChampionshipState.paid` idiom), `Progression.Save()`. The queue living in
+progress.json is what makes resume-across-restarts and cross-scene sequencing free.
+Only UI-layer code consults it (the Progression gating rule, ProgressStore.cs:121-128).
+
+First-launch nudge condition: `tutorialsDone.Count == 0 && racesFinished == 0 &&
+!tutorial.active`.
+
+### D5 — Menu flow (MenuUI.cs)
+
+- `Page` enum: **append** `Tutorial, TutorialSim` (:23-28, append-only). Continue-vs-new
+  prompt is a branch inside `DrawTutorial()` (`Tutorials.Active ? DrawTutorialContinue()
+  : DrawTutorialList()`) — the `DrawChampionship` shape (:1495-1505); no third page.
+- `DrawRoot()` (:688): Tutorial button as the **first** row; label
+  `Tutorials.Active ? "Tutorial (in progress)" : "Tutorial"` (:692 precedent). Nudge:
+  when the fresh-profile condition holds, append `"  ← start here"` + one StatLabel
+  line under it. Label-only changes are Layout-safe; row count never varies.
+- Dispatch switch (:445-463), `GoBack()` cases (`Tutorial → Root`,
+  `TutorialSim → Tutorial`) (:322-367), `PanelHeight` entries (:482-500 — a missing
+  page silently clips at 430).
+- `DrawTutorialSim()`: three `MenuNav.Toggle` intake questions + "Start ▶" → queue =
+  `sim_controllers` always, then `sim_ipc`/`sim_firmware`/`sim_sensors` per answer.
+- `StartTutorial(ids)`: `Tutorials.Begin(...)`; driving tutorial → set SessionConfig
+  (SetSinglePlayer, TargetLaps 0, Arcade false, CountdownSeconds 0,
+  ApplyMatchRules(FreeRoam)), `GameFlow.ActiveDesign`, one human PlayerSlot,
+  `ActiveSceneTrack`, `LoadIfBuilt(...)`; overlay tutorial → `TutorialOverlay.Begin`
+  + `GoTo(Page.Multiplayer)` or garage load.
+- Results screen's "Tutorial menu" button sets `Tutorials.PendingOpenHub`, consumed in
+  `MenuUI.Start`.
+
+### D6 — Catalog, scenes, generator, validator
+
+`Assets/Scripts/Tutorial/TutorialCatalog.cs` — static code table (NOT rows in
+SceneTrackCatalog, which feeds race/roam pickers):
+`Row { id, label, category, scene /*null = overlay*/, blurb, scrapReward }`.
+
+| id | scene (`Assets/Scenes/Tutorials/`) |
+|---|---|
+| `sim_controllers` | Tut_SimControllers.unity |
+| `sim_ipc` | Tut_SimIpc.unity (IpcConnected steps; open Docs/ipc-protocol.md via `new Uri(path).AbsoluteUri` — MenuUI.cs:1325-1334 pattern) |
+| `sim_firmware` | Tut_SimFirmware.unity (UserScripts + build button) |
+| `sim_sensors` | Tut_SimSensors.unity (TelemetryObserved steps) |
+| `arcade` | Tut_Arcade.unity |
+| `single_player` | Tut_SinglePlayer.unity |
+| `mode_race`/`mode_derby`/`mode_ctf`/`mode_soccer` | Tut_ModeRace/Derby/Ctf/Soccer.unity |
+| `customize` | *(overlay — garage)* |
+| `online` | *(overlay — Multiplayer/LanHost)* |
+
+Editor tooling (`Assets/Editor/Tutorials/`):
+- `TutorialSceneBuilder.cs` — **create-if-missing is the rule**: existing scene files
+  are skipped with `[TUT] skipped existing: <path>`; there is deliberately no
+  "regenerate" item (avoids the ModeTemplateBuilder overwrite-hand-edits trap by
+  construction). Scene skeleton mirrors `ModeTemplateBuilder.Common()` (:491-535 —
+  Environment/Floor/Sun/Sky/KillPlane, SceneTrackDescriptor, TrackBootstrap
+  {buildDefaultOval=false}, spawn marker, colour-keyed shared material ASSETS,
+  .lighting asset) as its own private helper, plus a `Tutorial` root with
+  TutorialDirector and 3–4 starter TutorialSteps + one TutorialTrigger box as a worked
+  example. Registers scenes via `SceneBuilderMenu.AddSceneToBuild` + `Normalize`
+  (:239-263 — the safe path around the duplicate-row/zero-GUID build-breaker; make
+  `internal` if private).
+- `TutorialValidator.cs` — `[TUT]` batch gate, ModeTemplateValidator shape: every
+  catalog scene exists on disk AND in Build Settings; exactly one TutorialDirector
+  root; ≥1 step; non-empty step text; TriggerVolume steps reference a TutorialTrigger
+  with isTrigger; SceneTrackDescriptor + spawn marker + buildDefaultOval==false;
+  unique ids; overlay rows have a script in TutorialScripts.
+
+### D7 — Rewards through the single door
+
+Scrap (per-row, ~100–150) paid in `Tutorials.CompleteCurrent()`, called only from
+`TutorialDirector.OnResultsEntered()` (driving) or the overlay engine's Update-side
+completion tick — never from OnGUI. Results panel: title "TUTORIAL COMPLETE", rows =
+step recap + "+N scrap (first time)" / "already completed"; buttons "Next tutorial ▶"
+(`HasNext` → `LoadNext()` + `ScreenFade.To(GameFlow.LoadTrack)`) and "Tutorial menu".
+All-complete crate granted inside `CompleteCurrent()`'s all-done check, announced via
+the panel's existing `AwardReveal.Draw()`.
+
+### D8 — Skip = abandon without credit, advance the queue
+
+Pause-menu "Skip tutorial": no scrap, not added to `tutorialsDone` (hub ✓ markers stay
+honest); sequence mode → load next queued tutorial, standalone → menu +
+`tutorial.active = false`. PauseMenu wiring: conditional row per the `_hasBuildDraw`
+precedent (PauseMenu.cs:202-205) — `_isTutorialDraw` snapshotted on Layout (:58-62,
+:133 pattern; mandatory or IMGUI throws on control-count mismatch). Handler:
+`Time.timeScale = 1f;` then `SkipCurrent()` + `LoadNext()`/`GameFlow.LoadMenu()`.
+
+### D9 — Presentation + resume
+
+- Corner objective panel in `DrawLiveBanner()` override (and TutorialOverlay for
+  menu/garage): top-left GUI.Box — step title, body, "Step 3/9", Continue button when
+  the condition asks. The Continue button's presence flips with the step, so snapshot
+  the current step index on Layout via `OnLayoutSnapshot()` (MatchDirector.cs:220).
+- Big banners on step start/complete: DrawBig-style ~48pt, timed against a **tutorial
+  clock accumulated from `Time.deltaTime` in Update** — freezes at timeScale 0 so pause
+  holds banners (the ArcadeFeedback/ArcadeDirector.Clock property, ArcadeFeedback.cs:
+  16-18); alpha-fade last third (:164-177 idiom); styles cached once (:26-31 idiom).
+- Key-label placeholders: `TutorialText.Expand()` replaces `{throttle}`/`{brake}`/… via
+  KeyTable.Label/PadTable.Label, keyboard-vs-pad by `CursorAutoHide.PadIsLastInput`
+  (StudioHints pattern).
+- Resume: `SaveStep(i)` on every completion; `TutorialDirector.OnMatchStart` reads the
+  saved stepIndex when `State.id` matches and fast-forwards (marks earlier steps
+  complete without running conditions). Hub continue prompt = the
+  `DrawChampionshipInProgress` shape (:1537-1559).
+
+## Milestones
+
+- [x] **M1 Foundation**: `TutorialState` + PlayerProgress v3 + Migrate (edit
+  `Persistence/ProgressStore.cs`); new `Core/Tutorials.cs` facade; new
+  `Scripts/Tutorial/TutorialCatalog.cs`.
+- [x] **M2 Runtime core**: new under `Scripts/Tutorial/` — `TutorialStepData.cs`
+  (+condition enum), `TutorialStep.cs`, `TutorialTrigger.cs`, `TutorialSignals.cs`,
+  `TutorialStepEngine.cs`, `TutorialText.cs`, `TutorialDirector.cs`. Manual check:
+  scratch scene, press Play (directPlay path), run steps end-to-end.
+- [x] **M3 Menu**: edit `Menu/MenuUI.cs` — Page values, dispatch, GoBack, PanelHeight,
+  root button + nudge, DrawTutorial (continue/list + ✓ markers + "Play all in
+  sequence ▶"), DrawTutorialSim intake, StartTutorial, PendingOpenHub.
+- [x] **M4 Scenes**: new `Assets/Editor/Tutorials/TutorialSceneBuilder.cs`
+  (create-if-missing) + generate the 10 Tut_* scenes + Build Settings registration;
+  new `TutorialValidator.cs` (`[TUT]` gate); author starter step content per scene
+  (generator never touches these files again).
+- [x] **M5 Skip + resume**: edit `Core/PauseMenu.cs` (Layout-snapshotted "Skip
+  tutorial" row); SkipCurrent/LoadNext chaining; stepIndex fast-forward resume.
+- [x] **M6 Overlay tutorials**: new `Scripts/Tutorial/TutorialOverlay.cs` +
+  `TutorialScripts.cs` (customize, online); edit MenuUI.cs (Draw hook +
+  NotifyScreen in Layout snapshot; online banks on LobbyHosted before any scene
+  change); edit garage/BodyEd UI (Draw hook + `TutorialSignals.Raise` at
+  preset-loaded/painted/saved call sites).
+- [x] **M7 Rewards polish**: scrap amounts, first-time guard, all-complete crate via
+  AwardReveal, repeat-completion copy.
+- [x] **M8 Verification** — batch gates done; play-mode checks owed (below).
+
+## Status
+
+Code complete, all twelve tutorials in place, README documented.
+`[TUT] RESULT ALL PASS (262 checks over 12 tutorials)` and `[DSC] RESULT ALL PASS
+(150 checks)`. Generator verified idempotent: a second run logs 10 × `skipped
+existing` and leaves every scene byte-identical.
+
+**Pre-existing failure, not from this work:** `[TPL] RESULT 1 FAILED of 169` —
+`Template_SimPhysics`'s LevelSettings asset says FreeRoam while
+`ModeTemplateBuilder.BuildSimPhysics` writes Race. Both the asset and the
+validator are unmodified since `2707c44`; the drift is committed. Either
+regenerate the templates or change the validator's `_ => Race` default — worth a
+decision, since a free-drive sandbox arguably IS FreeRoam and the builder is the
+side that is wrong.
+
+### Deviations from the plan as approved
+
+- **Per-scene LevelSettings live under `Settings/Driving/Scenes/<Scene>/`**, not a
+  `Tutorials/` folder of their own. `SceneSettingsOwnership` clones a scene's
+  rules into exactly that path on first save and repoints the descriptor, so
+  anywhere else just produces orphans — which the first run duly did, and which
+  were deleted.
+- **`TutorialProbes`** was added (not in the plan): the three cross-system
+  conditions (LAN host, IPC connected, telemetry live) are null-tolerant reads of
+  other subsystems, kept out of the engine so it stays a state machine over data.
+  `IpcRuntime.ControlConnected` was added as the one public fact about the bridge.
+- **Lesson text is authored in `TutorialSceneContent`** (editor-side), read once
+  when a scene is created. The plan left content as "author per scene"; writing it
+  as data meant the shipped scenes carry real lessons rather than placeholders,
+  while the create-if-missing rule still protects hand edits afterwards.
+- **The nav-frame guard** turned out to be load-bearing: the objective panel's
+  Continue button claims `MenuNav` only while `Time.timeScale > 0`, because
+  whichever OnGUI runs first in a frame owns the pad, and registering a control
+  without owning the frame lands it in the pause menu's census.
+
+## Owed: play-mode checks
+
+## Verification
+
+Batch gates (Unity at `E:\Unity Hub\Editor\6000.1.15f1\Editor\Unity.exe`, never
+`-nographics`, poll for result — PowerShell doesn't wait):
+- `[TUT] RESULT ALL PASS` — new validator.
+- `[TPL]` still green (proves the tutorial generator shares no mutable state with mode
+  templates); progress-parsing gate extended: a v2 progress fragment loads as v3 with
+  empty tutorial state; a v3 fragment round-trips `tutorial.queue`.
+
+Play-mode manual checks:
+1. Fresh profile: root nudge shows; Tutorial first; pad nav reaches everything.
+2. Sim intake {IPC only} → queue controllers→ipc; results "Next tutorial ▶" lands in
+   Tut_SimIpc.
+3. Quit mid-tutorial, restart game → "Continue previous tutorial" at the right step.
+4. Pause holds the banner; "Skip tutorial" only in tutorial sessions; skip pays
+   nothing; sequence skip advances, standalone returns to menu.
+5. Replay a done tutorial → "already completed", scrap unchanged.
+6. Final tutorial completion → crate in AwardReveal; second all-complete pays nothing.
+7. Garage overlay: load preset → paint → save each advance; pays once.
+8. LAN overlay: callouts track screens; hosting completes and banks pre-scene-change.
+9. Press Play directly in a Tut_* scene → directPlay adoption works (hand-edit loop).
+10. Generator run twice → all `[TUT] skipped existing`, `git status` clean.
 
 ---
 
