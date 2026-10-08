@@ -44,9 +44,9 @@ static float g_motor_vmax[MAX_MOTORS];
 static int   g_motor_count = 0;
 
 /* Tunables. */
-static const float WHEEL_RADIUS_M = 0.35f; /* matches CarVehicle.wheelRadius */
+static const float WHEEL_RADIUS_M = 0.033f; /* 66 mm stock tyre (CarVehicle.wheelRadius) */
 static const float KP_VOLT        = 6.0f;  /* volts per (m/s) speed error    */
-static const float BRAKE_DIST_M   = 6.0f;  /* start braking inside this range */
+static const float BRAKE_DIST_M   = 1.0f;  /* start braking inside this range (ToF reads 4 m max) */
 static const float CAM_STEER_GAIN = 0.6f;
 
 static int g_ready = 0;

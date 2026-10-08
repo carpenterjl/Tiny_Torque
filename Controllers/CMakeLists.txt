@@ -66,6 +66,30 @@ add_controller(opus_controller targets/sim/opus_main.c opuslib)
 # Standalone (only needs controller_api.h) so it doubles as a v2 reference.
 add_controller(car_sensors_controller car_sensors/car_sensors.c)
 
+# ───────────────────────────────── Tests ─────────────────────────────────────
+#
+# Host-side checks, no Unity needed:
+#   cmake -S . -B build && cmake --build build
+#   ctest --test-dir build --output-on-failure        (add -C Release for VS)
+# The test executables are not copied anywhere; only the DLLs above are.
+enable_testing()
+
+# Opus mission against a simplified plant, with tolerance asserts.
+add_executable(test_mission opus_mission/test_mission.c)
+target_link_libraries(test_mission PRIVATE opuslib)
+add_test(NAME opus_mission_bench COMMAND test_mission)
+
+# The UserScripts helper header (PID clamps, wheel radius, manifest fallback).
+add_executable(test_tt_controller tests/test_tt_controller.c)
+target_include_directories(test_tt_controller PRIVATE
+    hal "${CMAKE_SOURCE_DIR}/../UserScripts/lib")
+add_test(NAME tt_controller_unit COMMAND test_tt_controller)
+
+if(NOT MSVC)
+    target_link_libraries(test_mission PRIVATE m)
+    target_link_libraries(test_tt_controller PRIVATE m)
+endif()
+
 # ─────────────────────── User controllers (UserScripts/) ──────────────────────
 #
 # Everything above is the game's own firmware. Everything below belongs to

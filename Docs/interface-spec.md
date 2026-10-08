@@ -74,7 +74,9 @@ Each `SensorInfo` names a sensor, tags its type, and points at the slice
 
 Type tags are append-only (an old controller iterating the manifest simply
 ignores unknown tags), so appending `SUSPENSION`/`BATTERY` did not change the
-ABI version — it remains **v3**.
+ABI layout — it stayed at **v3** then. The header is now at **v6**: v4–v6
+added conventions, an optional export and sensor tags 8–12, none of which moved
+a field (see the version notes at the top of `controller_api.h`).
 
 Sensor readings are also published to telemetry as `sens/<name>/<field>` and
 logged to CSV in both Manual and Autonomous modes. See

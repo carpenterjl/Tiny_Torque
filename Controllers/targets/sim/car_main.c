@@ -46,7 +46,7 @@ CTRL_EXPORT int ctrl_init(float control_rate_hz) {
     (void)control_rate_hz;
 
     CarConfig cfg;
-    cfg.wheel_radius_m = 0.35f; /* matches Unity CarVehicle.wheelRadius */
+    cfg.wheel_radius_m = 0.033f; /* 66 mm stock tyre (CarVehicle.wheelRadius); not in the manifest yet */
     cfg.kp = 0.40f;
     cfg.ki = 1.00f;
     cfg.kd = 0.00f;

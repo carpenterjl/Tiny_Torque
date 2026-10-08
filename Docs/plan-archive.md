@@ -8865,7 +8865,7 @@ EXPORT void ctrl_shutdown(void);
 EXPORT const char* ctrl_get_debug_names(void); // comma-separated labels for graphs
 ```
 
-Firmware logic (PID, filters) lives in `common/` and includes only `hal.h` — never Unity- or sim-specific headers. The `targets/sim/` layer adapts HAL calls to the CtrlInputs/CtrlOutputs structs; a future `targets/arduino/` layer adapts them to real peripherals. This is what makes "write once, run in sim or on hardware" real.
+*(2026-10-07: as built, nothing includes `hal.h`; the targets feed `CtrlInputs` straight into each portable core. Kept below as the original intent.)* Firmware logic (PID, filters) lives in `common/` and includes only `hal.h` — never Unity- or sim-specific headers. The `targets/sim/` layer adapts HAL calls to the CtrlInputs/CtrlOutputs structs; a future `targets/arduino/` layer adapts them to real peripherals. This is what makes "write once, run in sim or on hardware" real.
 
 ## Unity-side design
 

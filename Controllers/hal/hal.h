@@ -7,9 +7,11 @@
  *   targets/sim      -> backed by CtrlInputs/CtrlOutputs from the Unity host
  *   targets/arduino  -> backed by real ADC/PWM/encoders (added later)
  *
- * The sim bootstrap wires controllers directly for simplicity, but keeping
- * this seam documented is what makes "write once, run in sim or on hardware"
- * a real property rather than an aspiration.
+ * STATUS: aspirational. No controller includes this header or calls these
+ * functions today; every sim target wires CtrlInputs/CtrlOutputs straight into
+ * its portable core (see targets/sim/opus_main.c). The replacement is the
+ * push-style tt_hal.h described in SIM_TO_REAL_PLAN.md (FW-02) — until it
+ * lands, treat this file as a sketch, not a contract.
  */
 #ifndef HAL_H
 #define HAL_H

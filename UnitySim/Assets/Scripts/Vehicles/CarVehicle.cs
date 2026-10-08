@@ -384,6 +384,11 @@ namespace AIHWSim.Vehicles
 
         private readonly float[] _vibPhase = new float[8];
         private NoiseModel[] _wheelVelNoise;
+        // Quantized wheel_vel: a virtual encoder per wheel. The angle keeps the
+        // sub-count remainder between samples, so a crawling wheel reads its
+        // true average speed instead of rounding to 0 every tick.
+        private readonly double[] _wheelVelAngle = new double[4];
+        private readonly long[] _wheelVelCount = new long[4];
 
         /// <summary>Runtime state for one built wheel.</summary>
         private sealed class Wheel
@@ -2477,8 +2482,13 @@ namespace AIHWSim.Vehicles
                 float v = WheelOmega(i);
                 if (wheelVelQuantCpr > 0 && dt > 1e-6f)
                 {
-                    float tick = Mathf.PI * 2f / wheelVelQuantCpr;   // rad per count
-                    v = Mathf.Round(v * dt / tick) * tick / dt;      // counts/period → rad/s
+                    // Counts elapsed this period × rad per count / period — what
+                    // firmware gets from differencing a real encoder counter.
+                    double tick = System.Math.PI * 2.0 / wheelVelQuantCpr;   // rad per count
+                    _wheelVelAngle[i] += (double)v * dt;
+                    long count = (long)System.Math.Floor(_wheelVelAngle[i] / tick);
+                    v = (float)((count - _wheelVelCount[i]) * tick / dt);
+                    _wheelVelCount[i] = count;
                 }
                 if (wheelVelNoiseStd > 0f)
                 {

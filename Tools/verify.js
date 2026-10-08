@@ -130,19 +130,19 @@ ok('combine undoes split', near(rejoined.resistance, 0.030, 1e-12) && near(rejoi
 
 console.log('\n=== 5. Plant constants vs mission_cfg.h =======================');
 // mission_cfg.h: VE_KT 0.0025130, VE_GEAR 11.2, VE_WHEEL_R 0.033, VE_ETA 0.85,
-//   VE_BEMF_V_PER_MS = 0.8529, VE_FORCE_PER_AMP = 0.7250, VE_MASS_EFF 2.708 (m 2.1315)
-// The header's own worked example uses J = 2.5e-6 per simulated motor:
-//   m_rot = 2 * 2.5e-6 * 11.2^2 / 0.033^2 = 0.576 kg
+//   VE_BEMF_V_PER_MS = 0.8529, VE_FORCE_PER_AMP = 0.7250, VE_MASS_EFF 2.873 (m 2.1315)
+// J is the Opus preset's per-motor rotorInertia, 3.22e-6 (half the real 6.44e-6):
+//   m_rot = 2 * 3.22e-6 * 11.2^2 / 0.033^2 = 0.742 kg
 const p = M.plant({
     kt: 0.0025130, gearRatio: 11.2, wheelRadius: 0.033, resistance: 0.060,
-    efficiency: 0.85, motorCount: 2, rotorInertia: 2.5e-6, mass: 2.1315,
+    efficiency: 0.85, motorCount: 2, rotorInertia: split.rotorInertia, mass: 2.1315,
     maxVoltage: 7.4, maxCurrent: 30
 });
 console.log('    bemf=' + p.bemfVPerMs.toFixed(4) + ' V/(m/s)  forcePerAmp=' + p.forcePerAmp.toFixed(4) +
     ' N/A  massEff=' + p.massEff.toFixed(4) + ' kg  tauMech=' + p.tauMech.toFixed(3) + ' s');
 ok('VE_BEMF_V_PER_MS = 0.8529', near(p.bemfVPerMs, 0.8529, 5e-4), p.bemfVPerMs.toFixed(4));
 ok('VE_FORCE_PER_AMP = 0.7250', near(p.forcePerAmp, 0.7250, 5e-4), p.forcePerAmp.toFixed(4));
-ok('VE_MASS_EFF = 2.708', near(p.massEff, 2.708, 5e-3), p.massEff.toFixed(4));
+ok('VE_MASS_EFF = 2.873', near(p.massEff, 2.873, 5e-3), p.massEff.toFixed(4));
 
 // Inverse model: at 4.5 m/s cruise the feed-forward should dominate.
 const inv = M.voltageForForce(p, 4.5, 2.9);   // 2.9 N ≈ i22 coast drag
@@ -175,7 +175,7 @@ console.log('\n=== 7. Closed-loop sim sanity =================================')
 // measured drag polynomial (VE_DRAG_C0/C1/C2).
 const refPlant = {
     kt: 0.0025130, gearRatio: 11.2, wheelRadius: 0.033, resistance: 0.060,
-    efficiency: 0.85, motorCount: 2, rotorInertia: 2.5e-6, mass: 2.1315,
+    efficiency: 0.85, motorCount: 2, rotorInertia: 3.22e-6, mass: 2.1315,
     maxVoltage: 7.4, maxCurrent: 30,
     dragC0: 0.90, dragC1: 0.38, dragC2: 0.015, tractionEff: 0.99
 };
@@ -200,7 +200,7 @@ ok('ESC brake respects the 7 N rear-grip cap', Math.max.apply(null, brake.escN) 
 ok('friction brake picks up the surplus', Math.max.apply(null, brake.fricN) > 1);
 
 console.log('\n=== 8. Drag-polynomial fit recovers known constants ===========');
-const trueC = { c0: 2.9, c1: 0.35, c2: 0.11 }, mEff = 2.708;
+const trueC = { c0: 2.9, c1: 0.35, c2: 0.11 }, mEff = 2.873;
 const vs = [], ds2 = [];
 for (let v = 0.5; v <= 6; v += 0.25) {
     vs.push(v);

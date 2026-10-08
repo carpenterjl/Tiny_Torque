@@ -15,8 +15,11 @@ namespace AIHWSim.Telemetry
     /// a timestamped name and a JSON metadata sidecar. The temp file is discarded
     /// on <see cref="End"/>, so an unsaved session leaves nothing behind.
     ///
-    /// Columns are fixed at <see cref="Begin"/> from the hub's registered channels,
-    /// so all channels must be registered first.
+    /// Columns are taken at <see cref="Begin"/> from the hub's registered channels.
+    /// The hub only ever appends channels, so when one appears mid-session (a hot
+    /// reload adding <c>dbg/*</c>) the file is rewritten once with the wider
+    /// header and the earlier rows padded with empty cells, keeping every row the
+    /// same width as the header.
     /// </summary>
     public sealed class CsvLogger : IDisposable
     {
@@ -81,6 +84,7 @@ namespace AIHWSim.Telemetry
         private void OnFrame(float time)
         {
             if (_writer == null) return;
+            if (_hub.Channels.Count + 1 != _columns.Length) WidenColumns();
             _dirtySinceSave = true;
 
             _sb.Clear();
@@ -91,6 +95,30 @@ namespace AIHWSim.Telemetry
                 _sb.Append(ch.Latest.ToString("R", CultureInfo.InvariantCulture));
             }
             _writer.WriteLine(_sb.ToString());
+        }
+
+        /// <summary>
+        /// Rewrite the temp file with a header that includes channels registered
+        /// since <see cref="Begin"/>. Rows written before then get empty cells for
+        /// the new columns: they were never sampled, and 0 would be a lie.
+        /// </summary>
+        private void WidenColumns()
+        {
+            var cols = new List<string> { "time" };
+            foreach (var ch in _hub.Channels) cols.Add(ch.Name);
+            int added = cols.Count - _columns.Length;
+            if (added <= 0) { _columns = cols.ToArray(); return; }
+
+            _writer.Flush();
+            _writer.Dispose();
+            string[] lines = File.ReadAllLines(TempPath, Encoding.UTF8);
+            string pad = new string(',', added);
+
+            _writer = new StreamWriter(TempPath, append: false, Encoding.UTF8);
+            _writer.WriteLine(string.Join(",", cols));
+            for (int i = 1; i < lines.Length; i++)
+                _writer.WriteLine(lines[i] + pad);
+            _columns = cols.ToArray();
         }
 
         /// <summary>

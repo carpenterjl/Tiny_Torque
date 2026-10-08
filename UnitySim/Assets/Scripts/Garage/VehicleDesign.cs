@@ -293,7 +293,7 @@ namespace AIHWSim.Garage
         public float massKg = 0.18f;          // 2S 1300 mAh LiPo
         public float nominalV = 7.4f;
         public float internalR = 0.03f;       // pack + leads + connector (Ω)
-        public float capacitymAh = 0f;        // reserved: 0 = infinite (SoC deferred)
+        public float capacitymAh = 0f;        // 0 = infinite supply (no SoC); > 0 enables SoC + OCV sag
 
         public BatterySpec Clone() => (BatterySpec)MemberwiseClone();
     }

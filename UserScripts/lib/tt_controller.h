@@ -30,9 +30,20 @@
 #define TT_UNUSED(x) ((void)(x))
 
 /* Wheel radius of the stock car, in metres. Wheel angular velocity arrives in
- * rad/s, so ground speed = rad/s * this. Matches CarVehicle.wheelRadius on the
- * Unity side; if you build a car with different wheels, change it here. */
-#define TT_WHEEL_RADIUS_M 0.35f
+ * rad/s, so ground speed = rad/s * this. 0.033 m is the 66 mm touring tyre on
+ * the stock car, the Real Twin and the Opus Vector (CarVehicle.wheelRadius on
+ * the Unity side). The TT Coupe / Baja / Patrol run bigger wheels (0.044 /
+ * 0.052 / 0.039 m): define TT_WHEEL_RADIUS_M before including this header to
+ * match yours. The manifest does not carry the radius yet. */
+#ifndef TT_WHEEL_RADIUS_M
+#define TT_WHEEL_RADIUS_M 0.033f
+#endif
+
+/* Motor voltage limit used when the manifest reports none: the stock 2S pack's
+ * nominal 7.4 V. Only a broken manifest ever hits this. */
+#ifndef TT_FALLBACK_VMAX
+#define TT_FALLBACK_VMAX 7.4f
+#endif
 
 #define TT_MAX_SENSORS 32
 #define TT_MAX_MOTORS  8
@@ -72,13 +83,19 @@ static inline float tt_deadzone(float v, float width) {
  * car is stuck against a wall and then slam the throttle when it comes free),
  * and the derivative is taken on the MEASUREMENT rather than the error (so a
  * step change in your target does not produce a spike).
+ *
+ * The integrator stores the I TERM itself (ki * sum of err*dt), so its clamp is
+ * in output units: tt_pid_limits(p, -6, 6) on a volts PID means "the I term
+ * never contributes more than 6 V". The whole output has its own, separate
+ * clamp (tt_pid_output_limits), off by default.
  */
 typedef struct TtPid {
     float kp, ki, kd;
-    float i_min, i_max;   /* integrator clamp; set both to 0 to disable I */
-    float integral;
+    float i_min, i_max;   /* I-term clamp, output units; both 0 disables I   */
+    float integral;       /* the I term (already multiplied by ki)           */
     float prev_meas;
     int   primed;         /* first update has no valid previous measurement */
+    float out_min, out_max; /* output clamp; equal values disable it         */
 } TtPid;
 
 static inline void tt_pid_init(TtPid* p, float kp, float ki, float kd) {
@@ -87,10 +104,15 @@ static inline void tt_pid_init(TtPid* p, float kp, float ki, float kd) {
     p->i_min = -1.0f; p->i_max = 1.0f;
 }
 
-/* Set the integrator limits. Units are "output", so if your PID drives volts,
+/* Set the I-term limits. Units are "output", so if your PID drives volts,
  * clamp it in volts. */
 static inline void tt_pid_limits(TtPid* p, float lo, float hi) {
     p->i_min = lo; p->i_max = hi;
+}
+
+/* Clamp the whole output (P + I + D). Pass lo == hi to turn it off again. */
+static inline void tt_pid_output_limits(TtPid* p, float lo, float hi) {
+    p->out_min = lo; p->out_max = hi;
 }
 
 static inline void tt_pid_reset(TtPid* p) {
@@ -100,17 +122,31 @@ static inline void tt_pid_reset(TtPid* p) {
 
 static inline float tt_pid_update(TtPid* p, float target, float measured, float dt) {
     float err = target - measured;
-    if (dt <= 0.0f) return p->kp * err;
-
-    p->integral += err * dt;
-    p->integral = tt_clamp(p->integral, p->i_min, p->i_max);
+    int clamp_out = p->out_max > p->out_min;
+    if (dt <= 0.0f) {
+        float u = p->kp * err + p->integral;
+        return clamp_out ? tt_clamp(u, p->out_min, p->out_max) : u;
+    }
 
     float deriv = 0.0f;
     if (p->primed) deriv = -(measured - p->prev_meas) / dt;   /* on measurement */
     p->prev_meas = measured;
     p->primed = 1;
 
-    return p->kp * err + p->ki * p->integral + p->kd * deriv;
+    float pd = p->kp * err + p->kd * deriv;
+    float i_next = tt_clamp(p->integral + p->ki * err * dt, p->i_min, p->i_max);
+    float u = pd + i_next;
+
+    /* Anti-windup: while the output is pinned, only let the I term move back
+     * toward the unsaturated range. */
+    if (clamp_out && ((u > p->out_max && i_next > p->integral) ||
+                      (u < p->out_min && i_next < p->integral))) {
+        i_next = p->integral;
+        u = pd + i_next;
+    }
+    p->integral = i_next;
+
+    return clamp_out ? tt_clamp(u, p->out_min, p->out_max) : u;
 }
 
 /* ──────────────────────────── the car context ───────────────────────────── */
@@ -150,10 +186,10 @@ static inline void tt_car_configure(TtCar* car, const SensorInfo* sensors, int c
         car->sensors[i] = sensors[i];
         if (sensors[i].type == SENSOR_MOTOR && car->motor_count < TT_MAX_MOTORS) {
             car->motor_actuator[car->motor_count] = sensors[i].actuator_index;
-            /* range_max is that motor's +maxVoltage. The 24 V fallback matches
-             * the stock pack, for a manifest that somehow reported nothing. */
+            /* range_max is that motor's +maxVoltage. TT_FALLBACK_VMAX covers
+             * a manifest that somehow reported nothing. */
             car->motor_vmax[car->motor_count] =
-                sensors[i].range_max > 0.1f ? sensors[i].range_max : 24.0f;
+                sensors[i].range_max > 0.1f ? sensors[i].range_max : TT_FALLBACK_VMAX;
             car->motor_count++;
         }
     }

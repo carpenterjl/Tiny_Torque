@@ -187,6 +187,12 @@ namespace AIHWSim.Garage
                 }
             }
 
+            // A twin's pack runs down: finite capacity turns on SoC and the
+            // open-circuit-voltage sag with it (0 would be an infinite supply).
+            // 1300 mAh matches the 2S pack whose mass BatterySpec already uses.
+            foreach (var b in d.batteries)
+                b.capacitymAh = 1300f;
+
             // ABI wheel_vel behaves like the physical encoders (set your CPR).
             d.wheelVelNoiseStd = 0.05f;
             d.wheelVelQuantCpr = 360;

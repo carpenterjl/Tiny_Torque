@@ -4,7 +4,8 @@ using System.Runtime.InteropServices;
 namespace AIHWSim.Bridge
 {
     // Blittable mirrors of the structs in Controllers/hal/controller_api.h.
-    // Field order and counts MUST match that header exactly (ABI v2).
+    // Field order and counts MUST match that header exactly (ABI v6 — the layout
+    // last changed at v3; v4-v6 only appended sensor tags and optional exports).
 
     // Sensor type tags — mirror of the enum in controller_api.h.
     public enum SensorType

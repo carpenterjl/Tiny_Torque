@@ -19,6 +19,14 @@
  * Build:
  *   gcc -std=c11 -O2 -I opus_mission -I common -o test_mission \
  *       opus_mission/test_mission.c opus_mission/opus_mission.c common/pid.c -lm
+ * or through CMake, where it is registered as the `opus_mission_bench` test:
+ *   cmake -S . -B build && cmake --build build --target test_mission
+ *   ctest --test-dir build --output-on-failure
+ *
+ * Exit code 0 = mission completed and every leg is inside its tolerance below.
+ * The tolerances are regression bounds for THIS plant, not the in-simulator
+ * acceptance numbers: the bench has no tyres or ESC lag, so it settles a few
+ * centimetres away from the simulator's figures by design.
  */
 #include "opus_mission.h"
 #include "mission_cfg.h"
@@ -26,6 +34,13 @@
 #include <math.h>
 #include <stdio.h>
 #include <string.h>
+
+/* Regression tolerances (see the header). */
+#define TOL_LEG_MM        25.0   /* constant-velocity and post-turn legs */
+#define TOL_BRAKE_MM      75.0   /* braking distance                     */
+#define TOL_TURN_DEG       0.5
+#define TOL_STOP_ERR_MM    5.0   /* the controller's own stop estimate   */
+#define TOL_ODO_DRIFT_MM  60.0   /* odometer vs true path, whole mission */
 
 typedef struct {
     double x, z, psi;      /* world pose, psi positive = left */
@@ -55,6 +70,7 @@ int main(void)
     double mark_leg_a = -1, mark_turn_entry = -1, mark_turn_exit = -1;
     double mark_leg_b = -1, mark_stop = -1, psi_at_entry = 0, psi_at_exit = 0;
     int prev_phase = -99, steps = 0;
+    double psi_dot_prev = 0.0;   /* last step's yaw rate, for the gyro */
 
     memset(&p, 0, sizeof(p));
     memset(phase_seen, 0, sizeof(phase_seen));
@@ -76,16 +92,15 @@ int main(void)
         m.enc_rl_ticks = wrapped_ticks(p.acc_rl);
         m.enc_rr_ticks = wrapped_ticks(p.acc_rr);
         m.enc_rear_valid = 1;
-        m.gyro_y = 0.0f;              /* left-handed host: a left turn reads negative */
+        /* Yaw rate of the previous step feeds the gyro channel, negated to
+         * mimic Unity's left-handed frame (a left turn reads negative), so the
+         * controller's sign-learning path is exercised. */
+        m.gyro_y = (float)-psi_dot_prev;
         m.accel_mag = 9.81f;
         m.batt_v = 7.4f;
         m.tof_front_m = 1e6f;
         m.motor_count = VE_N_MOTORS;
         m.motor_vmax = 7.4f;
-
-        /* Yaw rate of the previous step feeds the gyro channel, negated to
-         * mimic Unity's handedness so the sign-learning path is exercised. */
-        psi_dot = 0.0;
 
         opus_step(&st, &m, &c);
 
@@ -134,6 +149,7 @@ int main(void)
         p.x += p.v * cos(p.psi) * dt;
         p.z += p.v * sin(p.psi) * dt;
         p.psi += psi_dot * dt;
+        psi_dot_prev = psi_dot;
 
         /* Ground truth must NOT use the same left-endpoint sum the encoder does,
          * or it inherits the very bias the controller is correcting for and the
@@ -170,24 +186,48 @@ int main(void)
         return 1;
     }
 
-    printf("%-26s %10s %10s %9s\n", "leg", "target", "actual", "error");
-    printf("%-26s %10.3f %10.3f %+9.1f mm\n", "constant-velocity leg",
-           (double)MI_LEG_A_M, mark_turn_entry - mark_leg_a,
-           (mark_turn_entry - mark_leg_a - MI_LEG_A_M) * 1000.0);
-    printf("%-26s %10.2f %10.2f %+9.2f deg\n", "turn",
-           45.0, (psi_at_exit - psi_at_entry) * OPUS_RAD2DEG,
-           (psi_at_exit - psi_at_entry) * OPUS_RAD2DEG - 45.0);
-    printf("%-26s %10.3f %10.3f %+9.1f mm\n", "post-turn leg",
-           (double)MI_LEG_B_M, mark_leg_b - mark_turn_exit,
-           (mark_leg_b - mark_turn_exit - MI_LEG_B_M) * 1000.0);
-    printf("%-26s %10.3f %10.3f %+9.1f mm\n", "braking distance",
-           (double)MI_BRAKE_M, mark_stop - mark_leg_b,
-           (mark_stop - mark_leg_b - MI_BRAKE_M) * 1000.0);
-    printf("%-26s %10.3f %10.3f %+9.1f mm\n", "total from turn exit",
-           (double)MI_STOP_FROM_EXIT, mark_stop - mark_turn_exit,
-           (mark_stop - mark_turn_exit - MI_STOP_FROM_EXIT) * 1000.0);
-    printf("\ncontroller's own stop error: %+.2f mm\n", st.stop_err_mm);
-    printf("odometer %.4f m vs true path %.4f m (drift %+.1f mm)\n",
-           st.odo_m, p.path, (st.odo_m - p.path) * 1000.0);
-    return 0;
+    {
+        double leg_a  = (mark_turn_entry - mark_leg_a - MI_LEG_A_M) * 1000.0;
+        double turn   = (psi_at_exit - psi_at_entry) * OPUS_RAD2DEG - 45.0;
+        double leg_b  = (mark_leg_b - mark_turn_exit - MI_LEG_B_M) * 1000.0;
+        double brake  = (mark_stop - mark_leg_b - MI_BRAKE_M) * 1000.0;
+        double total  = (mark_stop - mark_turn_exit - MI_STOP_FROM_EXIT) * 1000.0;
+        double drift  = (st.odo_m - p.path) * 1000.0;
+        int failures = 0;
+
+#define CHECK(name, cond) do { if (!(cond)) { printf("FAIL: %s\n", name); failures++; } } while (0)
+
+        printf("%-26s %10s %10s %9s\n", "leg", "target", "actual", "error");
+        printf("%-26s %10.3f %10.3f %+9.1f mm\n", "constant-velocity leg",
+               (double)MI_LEG_A_M, mark_turn_entry - mark_leg_a, leg_a);
+        printf("%-26s %10.2f %10.2f %+9.2f deg\n", "turn",
+               45.0, (psi_at_exit - psi_at_entry) * OPUS_RAD2DEG, turn);
+        printf("%-26s %10.3f %10.3f %+9.1f mm\n", "post-turn leg",
+               (double)MI_LEG_B_M, mark_leg_b - mark_turn_exit, leg_b);
+        printf("%-26s %10.3f %10.3f %+9.1f mm\n", "braking distance",
+               (double)MI_BRAKE_M, mark_stop - mark_leg_b, brake);
+        printf("%-26s %10.3f %10.3f %+9.1f mm\n", "total from turn exit",
+               (double)MI_STOP_FROM_EXIT, mark_stop - mark_turn_exit, total);
+        printf("\ncontroller's own stop error: %+.2f mm\n", st.stop_err_mm);
+        printf("odometer %.4f m vs true path %.4f m (drift %+.1f mm)\n",
+               st.odo_m, p.path, drift);
+        printf("learned gyro sign: %+.0f\n\n", st.gyro_sign);
+
+        CHECK("every phase marker was crossed",
+              mark_leg_a >= 0 && mark_turn_entry >= 0 && mark_turn_exit >= 0 &&
+              mark_leg_b >= 0 && mark_stop >= 0);
+        CHECK("constant-velocity leg", fabs(leg_a) <= TOL_LEG_MM);
+        CHECK("turn angle",            fabs(turn)  <= TOL_TURN_DEG);
+        CHECK("post-turn leg",         fabs(leg_b) <= TOL_LEG_MM);
+        CHECK("braking distance",      fabs(brake) <= TOL_BRAKE_MM);
+        CHECK("controller stop error", fabs(st.stop_err_mm) <= TOL_STOP_ERR_MM);
+        CHECK("odometer drift",        fabs(drift) <= TOL_ODO_DRIFT_MM);
+        /* The gyro is fed negated, so the controller must learn -1. 0 means it
+         * never resolved the sign, i.e. the gyro path was never exercised. */
+        CHECK("gyro sign learned as -1", st.gyro_sign == -1.0f);
+
+#undef CHECK
+        printf(failures ? "%d check(s) FAILED\n" : "all checks passed\n", failures);
+        return failures ? 1 : 0;
+    }
 }

@@ -2846,7 +2846,8 @@ faces the raw physics.
 
 ## Runtime architecture
 
-- **Fixed-rate loop** (`Core/SimulationRunner`): physics at 500 Hz, controller
+- **Fixed-rate loop** (`Core/SimulationRunner`): physics at 400 Hz on the track
+  (`TrackBootstrap`; the runner's own default is 500 Hz), controller
   at a chosen integer division (default 100 Hz) with zero-order-hold on
   actuator commands — deterministic and representative of real loop timing.
 - **Native bridge** (`Bridge/`): manual `LoadLibrary`/`GetProcAddress` on a

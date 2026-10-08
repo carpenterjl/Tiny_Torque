@@ -177,8 +177,8 @@ namespace AIHWSim.Sensors
                 // the ESC would still call a car moving at walking pace
                 // "stationary" and drive when it should brake — which breaks the
                 // last few metres of every braking measurement.
-                bool moving = Mathf.Abs(wheelOmega) >
-                    (motor.escMovingOmega > 0f ? motor.escMovingOmega : 2f);
+                float movingOmega = motor.escMovingOmega > 0f ? motor.escMovingOmega : 2f;
+                bool moving = Mathf.Abs(wheelOmega) > movingOmega;
 
                 if (Mathf.Abs(v) < dead)
                 {
@@ -210,7 +210,7 @@ namespace AIHWSim.Sensors
                         _torque = MotorModel.BrakeTorque(in motor, duty, wheelOmega, out _current);
                         _voltage = 0f;
                     }
-                    else if (v > 0f || _reverseArmed || wheelOmega < -2f)
+                    else if (v > 0f || _reverseArmed || wheelOmega < -movingOmega)
                     {
                         if (v > 0f) _reverseArmed = false;   // next reverse needs a dwell
                         _torque = MotorModel.WheelTorque(in motor, v, wheelOmega,

@@ -105,7 +105,14 @@ namespace AIHWSim.Sensors
             if (_cam == null) return;
             float period = frameRateHz > 0.01f ? 1f / frameRateHz : 0.1f;
             if (_nextCaptureTime >= 0f && simTime < _nextCaptureTime) return;
-            _nextCaptureTime = simTime + period;
+            // Advance from the scheduled time, not from now: this is only asked
+            // on control ticks, so "now + period" rounds every frame up to the
+            // next tick (30 Hz at a 100 Hz control rate became 25 Hz). Re-anchor
+            // only on the first frame or after falling a whole period behind.
+            if (_nextCaptureTime < 0f || simTime - _nextCaptureTime >= period)
+                _nextCaptureTime = simTime + period;
+            else
+                _nextCaptureTime += period;
 
             var prev = RenderTexture.active;
             _cam.Render();

@@ -101,8 +101,8 @@ the +45 mm is what the odometer's residual scale error costs in the real world.
   `VE_TRACTION_EFF` — fixed the brake leg from +1326 mm to +45 mm with no change to the
   cruise behaviour. **A model that predicts one operating point perfectly can still be
   wrong about the physics, and it will only tell you when you invert it.**
-- **`VE_MASS_EFF`.** 0.576 kg of the 2.708 kg this controller accelerates is reflected rotor
-  inertia — it never goes anywhere. Using the vehicle's real 2.13 kg made every force
+- **`VE_MASS_EFF`.** 0.742 kg of the 2.873 kg this controller accelerates is reflected rotor
+  inertia (2.708 / 0.576 kg until 2026-10-07, computed from a stale J = 2.5e-6) — it never goes anywhere. Using the vehicle's real 2.13 kg made every force
   command 27 % small.
 
 ### Guards that had to be loosened, and why that is not cheating

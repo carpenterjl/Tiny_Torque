@@ -853,7 +853,8 @@ float err = fmodf(target - hdg + 540.0f, 360.0f) - 180.0f;</code></pre>
   <div class="tbl-scroll"><table>
     <tr><th>Function</th><th>Returns</th><th>Notes</th></tr>
     <tr><td class="sig">tt_pid_init(TtPid* p, float kp, float ki, float kd)</td><td class="mono">void</td><td>zeroes state; integrator clamp defaults to ±1</td></tr>
-    <tr><td class="sig">tt_pid_limits(TtPid* p, float lo, float hi)</td><td class="mono">void</td><td>integrator clamp in <em>output</em> units (volts if the PID drives volts)</td></tr>
+    <tr><td class="sig">tt_pid_limits(TtPid* p, float lo, float hi)</td><td class="mono">void</td><td>I-term clamp in <em>output</em> units (volts if the PID drives volts)</td></tr>
+    <tr><td class="sig">tt_pid_output_limits(TtPid* p, float lo, float hi)</td><td class="mono">void</td><td>clamp on the whole output (P+I+D), with anti-windup; off by default, <code>lo == hi</code> turns it off</td></tr>
     <tr><td class="sig">tt_pid_reset(TtPid* p)</td><td class="mono">void</td><td>clears integral and derivative history</td></tr>
     <tr><td class="sig">tt_pid_update(TtPid* p, float target, float measured, float dt)</td><td class="mono">float</td><td>one step; pass <code>in-&gt;dt_s</code> as dt</td></tr>
   </table></div>
@@ -865,7 +866,7 @@ float err = fmodf(target - hdg + 540.0f, 360.0f) - 180.0f;</code></pre>
     <tr><td class="sig">tt_sensor_index(const TtCar*, const char* name)</td><td class="mono">int</td><td>manifest index of a named sensor, or −1</td></tr>
     <tr><td class="sig">tt_sensor_of_type(const TtCar*, int type)</td><td class="mono">int</td><td>first sensor of a <code>SENSOR_*</code> type, or −1</td></tr>
     <tr><td class="sig">tt_sensor_value(car, in, int index, int slot, float fallback)</td><td class="mono">float</td><td>one float from a sensor's slice — the universal, type-generic read. Every missing-data path returns <code>fallback</code>.</td></tr>
-    <tr><td class="sig">tt_speed(const CtrlInputs* in)</td><td class="mono">float</td><td>ground speed m/s, 4-wheel average × <code>TT_WHEEL_RADIUS_M</code> (0.35). Signed.</td></tr>
+    <tr><td class="sig">tt_speed(const CtrlInputs* in)</td><td class="mono">float</td><td>ground speed m/s, 4-wheel average × <code>TT_WHEEL_RADIUS_M</code> (0.033 m, the 66 mm stock tyre; <code>#define</code> it before the include for other wheels). Signed.</td></tr>
     <tr><td class="sig">tt_tof(car, in, name, fallback)</td><td class="mono">float</td><td>metres from a named ToF; range_max on no hit</td></tr>
     <tr><td class="sig">tt_color_r / _g / _b(car, in, name, fallback)</td><td class="mono">float</td><td>colour channels 0..1</td></tr>
     <tr><td class="sig">tt_reflectance(car, in, name, fallback)</td><td class="mono">float</td><td>Rec.709 luminance 0..1 — the line-follow signal</td></tr>

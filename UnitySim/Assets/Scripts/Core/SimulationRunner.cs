@@ -94,9 +94,20 @@ namespace AIHWSim.Core
         // samples) from GameSettings.noiseSeed, or drawn randomly when 0. Either
         // way the effective value is stamped into the CSV metadata so any run
         // can be reproduced exactly afterwards.
+        //
+        // The per-instance ordinals restart with every session (every frame in
+        // which a runner wakes; split-screen runners wake in the same frame and
+        // share one restart). Without that, instance seeds kept counting up from
+        // the previous session and a stamped seed only reproduced the first run.
         private static bool _seedApplied;
+        private static int _ordinalsResetFrame = -1;
         private static void ApplyNoiseSeed()
         {
+            if (_ordinalsResetFrame != Time.frameCount)
+            {
+                _ordinalsResetFrame = Time.frameCount;
+                NoiseModel.ResetOrdinals();
+            }
             if (_seedApplied) return;
             _seedApplied = true;
             int configured = Persistence.SettingsStore.Current.noiseSeed;
@@ -360,7 +371,7 @@ namespace AIHWSim.Core
 
         /// <summary>
         /// Re-arm the controller after the vehicle was teleported home (respawn,
-        /// or a run restart). Runs ctrl_init + ctrl_configure again so a stateful
+        /// or a run restart). Runs ctrl_shutdown, ctrl_init + ctrl_configure again so a stateful
         /// controller drops the odometry, heading and phase it accumulated before
         /// the jump, and flushes the actuation-delay pipe so no pre-teleport
         /// command survives it. Cheaper and less disruptive than a full DLL
@@ -373,6 +384,10 @@ namespace AIHWSim.Core
             if (!ControllerReady) return;
             try
             {
+                // Close the old session first: the ABI promises init is always
+                // preceded by shutdown, and a controller that allocates in init
+                // would otherwise leak once per respawn.
+                _loader.Shutdown?.Invoke();
                 int rc = _loader.Init(controlRateHz);
                 if (rc != 0) Debug.LogWarning($"[SimRunner] ctrl_init returned {rc} on re-arm");
                 ConfigureControllerSensors();

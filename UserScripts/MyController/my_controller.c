@@ -53,7 +53,7 @@
 
 /* Speed loop. Higher KP responds harder to being off-target; too high and the
  * car surges. KI removes the steady error that KP alone leaves behind (a car
- * holding 9.7 m/s when you asked for 10). KD damps the response. */
+ * holding 2.8 m/s when you asked for 3). KD damps the response. */
 static const float SPEED_KP = 6.0f;    /* volts per (m/s) of error */
 static const float SPEED_KI = 3.0f;
 static const float SPEED_KD = 0.0f;
@@ -66,7 +66,7 @@ static const float STEER_GAIN = 1.0f;
  * controller starts braking and stops driving; set it to 0 to switch the whole
  * behaviour off. The braking ramps in — full brakes the moment something is
  * seen would be no fun to drive. */
-static const float BRAKE_DISTANCE_M = 6.0f;
+static const float BRAKE_DISTANCE_M = 1.0f;  /* inside the 4 m ToF range */
 
 /* Name of the front range sensor, as it is called in the garage. If your car
  * has no sensor by that name, obstacle braking simply never triggers. */
@@ -115,10 +115,12 @@ CTRL_EXPORT int ctrl_init(float control_rate_hz) {
     TT_UNUSED(control_rate_hz);
 
     tt_pid_init(&g_speed, SPEED_KP, SPEED_KI, SPEED_KD);
-    /* Clamp the integrator in the units the PID outputs — volts, here. Without
+    /* Clamp the I term in the units the PID outputs — volts, here. Without
      * this, holding the throttle against a wall winds it up for as long as you
-     * are stuck, and the car launches when it comes free. */
-    tt_pid_limits(&g_speed, -24.0f, 24.0f);
+     * are stuck, and the car launches when it comes free. ctrl_configure
+     * narrows both clamps to this car's real motor voltage once it knows it. */
+    tt_pid_limits(&g_speed, -TT_FALLBACK_VMAX, TT_FALLBACK_VMAX);
+    tt_pid_output_limits(&g_speed, -TT_FALLBACK_VMAX, TT_FALLBACK_VMAX);
 
     g_ready = 1;
     return 0;
@@ -161,6 +163,11 @@ CTRL_EXPORT int ctrl_get_vehicle(void) {
  */
 CTRL_EXPORT void ctrl_configure(const SensorInfo* sensors, int count) {
     tt_car_configure(&g_car, sensors, count);
+
+    /* No point asking the PID for more volts than the motor will take. */
+    float vmax = g_car.motor_count > 0 ? g_car.motor_vmax[0] : TT_FALLBACK_VMAX;
+    tt_pid_limits(&g_speed, -vmax, vmax);
+    tt_pid_output_limits(&g_speed, -vmax, vmax);
 }
 
 /*
@@ -256,9 +263,9 @@ CTRL_EXPORT void ctrl_step(const CtrlInputs* in, CtrlOutputs* out) {
  *    read.
  *
  * 3. Make STEER_GAIN depend on speed — full authority when parking, much less
- *    at 30 m/s:
+ *    at 10 m/s:
  *
- *        float g = tt_lerp(1.0f, 0.35f, speed / 30.0f);
+ *        float g = tt_lerp(1.0f, 0.35f, speed / 10.0f);
  *        tt_steer(out, tt_clamp1(driver_steer * g));
  *
  * 4. Take the driver out of it entirely. Below is a complete autopilot: it
@@ -271,7 +278,7 @@ CTRL_EXPORT void ctrl_step(const CtrlInputs* in, CtrlOutputs* out) {
  *        if (!g_ready || in == 0) return;
  *
  *        float speed = tt_speed(in);
- *        float volts = tt_pid_update(&g_speed, 8.0f, speed, in->dt_s);
+ *        float volts = tt_pid_update(&g_speed, 2.0f, speed, in->dt_s);
  *
  *        // -1 = left half brighter, +1 = right half brighter. Only the bottom
  *        // 20 rows: that is the road just ahead, not the horizon.

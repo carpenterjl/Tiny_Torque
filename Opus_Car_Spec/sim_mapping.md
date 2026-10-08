@@ -17,7 +17,7 @@ Tags: **P** published · **D** derived · **E** estimated · **C** design choice
 | `bodySize` | (0.200, 0.090, 0.420) m | C | 1/10 touring footprint |
 | `mass` (chassis only) | 1.5685 kg | D | `mass_budget.md` |
 | `useCompositeMass` | `true` | C | Total mass and CoM come from the part masses |
-| `steerRate` | 600 °/s | D | Savox 0.09 s/60° = 667 °/s, 10 % load derate |
+| `steerRate` | 667 °/s | D | Savox 0.09 s/60° = 667 °/s no-load, as set in `VehiclePresets.cs`; a ~10 % load derate (≈600 °/s) is not applied |
 | `ackermannPct` | 100 | C | Proper steering geometry |
 | `imuVibration` | 0.10 | E | Motor-borne chassis vibration reaching the BNO055 |
 | `wheelVelQuantCpr` | 4096 | P | Matches the real encoder resolution |

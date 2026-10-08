@@ -100,7 +100,8 @@ enum {
  *   SENSOR_IMU     -> [gx,gy,gz, ax,ay,az]      (mirror of gyro[]/accel[])
  *   SENSOR_CAMERA  -> (no floats; frame arrives via cam_pixels/cam_width/height)
  *   SENSOR_SUSPENSION -> [spring_force_N, compression_01, angle_deg]
- *   SENSOR_BATTERY -> [terminal_V, total_current_A, soc_01]  (soc fixed 1.0 for now)
+ *   SENSOR_BATTERY -> [terminal_V, total_current_A, soc_01]  (soc stays 1.0 on an
+ *                     infinite pack, capacitymAh 0; coulomb-counted otherwise)
  *   SENSOR_COLOR   -> [r, g, b, reflect]  all 0..1; black when nothing in range;
  *                     reflect is Rec.709 luminance (aim it down = line follower)
  *   SENSOR_RF      -> [count, id0, rssi0_dbm, bearing0_deg,

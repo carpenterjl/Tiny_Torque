@@ -83,10 +83,13 @@
 
 /* Effective longitudinal inertia. The rotors turn at gear^2 times the wheel's
  * rate, so their inertia is reflected to the road as
- *     m_rot = N * J * gear^2 / r^2 = 2 * 2.5e-6 * 11.2^2 / 0.033^2 = 0.576 kg
+ *     m_rot = N * J * gear^2 / r^2 = 2 * 3.22e-6 * 11.2^2 / 0.033^2 = 0.742 kg
  * on top of the 2.1315 kg of actual car. A quarter of the "mass" this
- * controller accelerates and brakes never moves anywhere. */
-#define VE_MASS_EFF        2.708f    /* kg */
+ * controller accelerates and brakes never moves anywhere. J is the simulated
+ * per-motor rotor inertia, motor.rotorInertia in the Opus preset
+ * (VehiclePresets.cs) — half the real motor's 6.44e-6. Change one, change both;
+ * Tools/verify.js checks the pair. */
+#define VE_MASS_EFF        2.873f    /* kg */
 
 /* Fraction of the force commanded at the driven wheels that reaches the road.
  * The old PhysX tyre lost 53 % of it to slip (0.47 measured) — a simulator
