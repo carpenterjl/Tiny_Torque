@@ -201,6 +201,15 @@ For a v7 controller the host:
   The design picks the drive per motor (`MotorParams.driveMode`); a v6
   controller sees the same tag and slot units it would not understand, so FOC
   designs are for v7 controllers.
+- **Reports a raw MEMS IMU part as `SENSOR_IMU6`** (tag 13): `[gx, gy, gz
+  rad/s, ax, ay, az m/s²]` in the chip's own right-handed frame (x along the
+  part's aim, y to its left, z up out of the package). Rotate it into the
+  body with the entry's mount `rpy_rad`; `pos_m` is the lever arm, and the
+  values include its centripetal and tangential terms. `rate_hz` is the
+  chip's output data rate. The values carry the part's datasheet errors
+  (noise density, bias instability, turn-on bias, scale and cross-axis error,
+  digital low-pass, full-scale clip, LSB). The top-level `gyro[]`/`accel[]`
+  stay the simulator's built-in body IMU.
 - **Calls `ctrl_reset`** on a respawn or run restart, if exported, instead of
   `ctrl_shutdown` + `ctrl_init` + configure — the way an MCU never re-inits
   its peripherals.

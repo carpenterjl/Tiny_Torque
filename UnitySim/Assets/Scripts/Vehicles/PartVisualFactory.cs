@@ -748,6 +748,20 @@ namespace AIHWSim.Vehicles
                 new Vector3(0f, 0.004f, 0.005f), Vector3.zero, new Vector3(0.002f, 0.002f, 0.002f));
         }
 
+        // ==================== MEMS IMU ====================
+
+        /// <summary>IMU breakout: PCB + a square LGA package with a pin-1 dot
+        /// toward +Z, the chip's x axis.</summary>
+        public static void BuildImuViz(Transform parent)
+        {
+            Piece(PrimitiveType.Cube, parent, Pcb,
+                Vector3.zero, Vector3.zero, new Vector3(0.016f, 0.002f, 0.016f));
+            Piece(PrimitiveType.Cube, parent, Housing,
+                new Vector3(0f, 0.0018f, 0f), Vector3.zero, new Vector3(0.0050f, 0.0016f, 0.0050f));
+            Piece(PrimitiveType.Cube, parent, Emitter,
+                new Vector3(0f, 0.0028f, 0.0018f), Vector3.zero, new Vector3(0.0008f, 0.0005f, 0.0008f));
+        }
+
         // ==================== BUMP SENSOR ====================
 
         /// <summary>Bump switch: housing + a whisker lever poking along +Z.</summary>

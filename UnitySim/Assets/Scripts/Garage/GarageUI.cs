@@ -104,6 +104,7 @@ namespace AIHWSim.Garage
                 ("suspension", "Susp sensor", "Reads one wheel's spring force, compression and strut angle."),
                 ("color", "Color", "Surface colour + reflectance along its aim — point it down to follow lines."),
                 ("mag", "Compass", "Magnetometer — absolute heading in degrees, drift tunable."),
+                ("imu", "IMU", "Raw 6-axis MEMS IMU — rate + specific force in its own frame; datasheet noise, bias, filter."),
                 ("bump", "Bump", "Contact switch — fires when the car touches something near its mount."),
                 ("rf", "RF antenna", "Hears beacon pings (RSSI + bearing, strongest 3); can also emit."),
                 ("led", "LED", "Firmware-driven indicator — set colour/blink from your controller."),
@@ -697,6 +698,7 @@ namespace AIHWSim.Garage
                                 : key == "suspension" ? SensorType.Suspension
                                 : key == "color" ? SensorType.Color
                                 : key == "mag" ? SensorType.Mag
+                                : key == "imu" ? SensorType.Imu6
                                 : key == "bump" ? SensorType.Bump
                                 : key == "rf" ? SensorType.Rf
                                 : key == "led" ? SensorType.Led : SensorType.Tof;
@@ -705,6 +707,7 @@ namespace AIHWSim.Garage
                 // Per-kind spec defaults where the shared field's ToF default is wrong.
                 if (kind == SensorType.Color) _pendingSensor.range = 0.3f;
                 if (kind == SensorType.Bump) _pendingSensor.coneAngle = 120f;
+                if (kind == SensorType.Imu6) _pendingSensor.updateRateHz = 200f;   // chip ODR
                 _ghost = PartGhost.ForSensor(kind, 0f);
                 if (_mirrorMode) _ghostTwin = PartGhost.ForSensor(kind, 0f);
             }
@@ -1679,6 +1682,19 @@ namespace AIHWSim.Garage
                 case SensorType.Mag:
                     spec.declinationDeg = Slider("Declination°", spec.declinationDeg, -30f, 30f);
                     break;
+                case SensorType.Imu6:
+                {
+                    var im = spec.imu ??= new Sensors.ImuSpec();
+                    im.dlpfHz = Slider("DLPF Hz", im.dlpfHz, 0f, 200f);
+                    im.gyroNoiseDensityDps = Slider("Gyro °/s/√Hz", im.gyroNoiseDensityDps, 0f, 0.02f);
+                    im.gyroBiasInstabDph = Slider("Gyro BI °/h", im.gyroBiasInstabDph, 0f, 30f);
+                    im.gyroTurnOnBiasDps = Slider("Gyro bias σ °/s", im.gyroTurnOnBiasDps, 0f, 1f);
+                    im.accelNoiseDensityUg = Slider("Accel µg/√Hz", im.accelNoiseDensityUg, 0f, 400f);
+                    im.accelBiasInstabUg = Slider("Accel BI µg", im.accelBiasInstabUg, 0f, 300f);
+                    im.accelTurnOnBiasMg = Slider("Accel bias σ mg", im.accelTurnOnBiasMg, 0f, 40f);
+                    im.vibration = Slider("Vibration", im.vibration, 0f, 2f);
+                    break;
+                }
                 case SensorType.Bump:
                     spec.bumpRadius = Slider("Radius m", spec.bumpRadius, 0.02f, 0.2f);
                     spec.coneAngle = Slider("Cone°", spec.coneAngle, 30f, 180f);
@@ -1699,9 +1715,13 @@ namespace AIHWSim.Garage
             if (spec.kind != SensorType.Camera && spec.kind != SensorType.Led)
             {
                 GUILayout.Label("Realism");
-                spec.noiseStd = Slider("Noise σ", spec.noiseStd, 0f, 0.5f);
-                spec.noiseQuant = Slider("Quant step", spec.noiseQuant, 0f, 0.1f);
-                spec.driftRate = Slider("Drift /√s", spec.driftRate, 0f, 0.05f);
+                // The IMU carries its own datasheet error model (above).
+                if (spec.kind != SensorType.Imu6)
+                {
+                    spec.noiseStd = Slider("Noise σ", spec.noiseStd, 0f, 0.5f);
+                    spec.noiseQuant = Slider("Quant step", spec.noiseQuant, 0f, 0.1f);
+                    spec.driftRate = Slider("Drift /√s", spec.driftRate, 0f, 0.05f);
+                }
                 spec.updateRateHz = Slider("Rate Hz (0=tick)", spec.updateRateHz, 0f, 100f);
                 spec.latencyMs = Slider("Latency ms", spec.latencyMs, 0f, 100f);
                 spec.phaseOffsetMs = Slider("Phase ms", spec.phaseOffsetMs, 0f, 20f);

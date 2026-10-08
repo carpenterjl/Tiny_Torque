@@ -128,6 +128,7 @@ namespace AIHWSim.Garage
             dst.latencyMs = src.latencyMs;
             dst.phaseOffsetMs = src.phaseOffsetMs;
             dst.jitterUs = src.jitterUs;
+            dst.imu = src.imu != null ? src.imu.Clone() : new Sensors.ImuSpec();
         }
 
         public static void MirrorInto(AeroSpec src, AeroSpec dst)

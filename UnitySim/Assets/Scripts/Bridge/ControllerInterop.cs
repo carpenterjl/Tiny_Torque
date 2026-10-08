@@ -39,7 +39,7 @@ namespace AIHWSim.Bridge
         Mag        = 10,  // v6: [heading_deg] 0..360
         Bump       = 11,  // v6: [contact_01, force_n]
         Led        = 12,  // v6: actuator part; readback [r,g,b,lit]
-        Imu6       = 13,  // v7 (reserved): raw 6-axis IMU part with a mount pose
+        Imu6       = 13,  // v7: raw 6-axis IMU part, chip frame (MemsImuSensor)
         TofMz      = 14,  // v7 (reserved): multizone ToF
         Flow       = 15,  // v7 (reserved): optical flow
         Uwb        = 16,  // v7 (reserved): UWB ranging

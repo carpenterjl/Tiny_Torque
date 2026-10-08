@@ -47,6 +47,13 @@ namespace AIHWSim.Sensors
         /// <summary>Write exactly DataCount floats into dest starting at offset.</summary>
         public abstract void Sample(float dt, float[] dest, int offset);
 
+        /// <summary>
+        /// Called on every physics step, before any sample is taken at that
+        /// step, for sensors whose signal chain runs faster than they report
+        /// (an IMU's die and digital filter). Default: nothing.
+        /// </summary>
+        public virtual void PhysicsStep(long tUs, float dt) { }
+
         // ---- sample clock + latency ring (TIM-02/03/04) ----------------------
 
         private float[][] _ring;           // [size][DataCount]

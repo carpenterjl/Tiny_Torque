@@ -39,6 +39,7 @@ namespace AIHWSim.Garage
                 "suspension"    => p => PartVisualFactory.BuildSuspensionViz(p),
                 "color"         => p => PartVisualFactory.BuildColorViz(p),
                 "mag"           => p => PartVisualFactory.BuildMagViz(p),
+                "imu"           => p => PartVisualFactory.BuildImuViz(p),
                 "bump"          => p => PartVisualFactory.BuildBumpViz(p),
                 "rf"            => p => PartVisualFactory.BuildRfViz(p),
                 // The LED's dome deliberately lives on the DEFAULT layer (the

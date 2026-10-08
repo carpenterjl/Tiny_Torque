@@ -64,9 +64,14 @@ namespace AIHWSim.Garage
         // Bump switch (kind Bump); the acceptance cone reuses coneAngle.
         public float bumpRadius = 0.06f;
 
+        // Raw MEMS IMU (kind Imu6): datasheet parameters, ICM-42688-P defaults.
+        public Sensors.ImuSpec imu = new Sensors.ImuSpec();
+
         public SensorSpec Clone()
         {
-            return (SensorSpec)MemberwiseClone();
+            var c = (SensorSpec)MemberwiseClone();
+            c.imu = imu != null ? imu.Clone() : new Sensors.ImuSpec();
+            return c;
         }
     }
 

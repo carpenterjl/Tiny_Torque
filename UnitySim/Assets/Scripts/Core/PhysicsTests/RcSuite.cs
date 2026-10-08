@@ -66,6 +66,7 @@ namespace AIHWSim.Core.PhysicsTests
         private VehicleDesign _design;
         private CarVehicle _car;
         private Rigidbody _body;
+        private MemsImuSensor _imu;
         private GameObject _carRoot, _ground;
         private readonly float[] _cmd = new float[8];
         private float _dt;
@@ -155,6 +156,57 @@ namespace AIHWSim.Core.PhysicsTests
             R7FullPackDerates(400);
             R7FullPackTrips(400);
             foreach (int hz in new[] { 400, 1600 }) R10EncoderCrawl(hz);
+            ImuInTheCar(400);
+        }
+
+        /// <summary>
+        /// SEN-01 in the car: the twin's IMU (with its datasheet errors) reads
+        /// +1 g and no rate at rest, and its forward channel follows the car's
+        /// measured acceleration in a torque step. The step is judged as a
+        /// change from rest, so the part's turn-on bias cancels; what is left
+        /// is noise, scale error and the car's squat (pitch adds g·sinθ).
+        /// </summary>
+        private void ImuInTheCar(int hz)
+        {
+            Build(hz, 0f);
+            if (_imu == null) { Line("IMU   the vehicle carries no SENSOR_IMU6 part: skipped"); return; }
+            var buf = new float[6];
+            // tilt = g·sin(pitch) of the chip's x axis: what gravity alone puts
+            // on the forward channel.
+            Vector3 MeanImu(float seconds, out Vector3 gyro, out float tilt)
+            {
+                int n = Mathf.RoundToInt(seconds / _dt);
+                Vector3 a = Vector3.zero, g = Vector3.zero;
+                tilt = 0f;
+                for (int i = 0; i < n; i++)
+                {
+                    Step();
+                    _imu.Sample(_dt, buf, 0);
+                    g += new Vector3(buf[0], buf[1], buf[2]);
+                    a += new Vector3(buf[3], buf[4], buf[5]);
+                    tilt += -Physics.gravity.y * Vector3.Dot(_imu.transform.forward, Vector3.up);
+                }
+                gyro = g / n;
+                tilt /= n;
+                return a / n;
+            }
+            Vector3 rest = MeanImu(0.5f, out Vector3 gRest, out float tiltRest);
+            Check("IMU", "at rest: specific force up (m/s²)", rest.z, 9.80665f, 0.02f);
+            Check("IMU", "at rest: yaw rate, turn-on bias included (rad/s)", gRest.z, 0f, 0.012f, abs: true);
+
+            const float iq = 3f;
+            SetIq(iq);
+            Run(0.15f);
+            Vector3 p0 = _body.position;
+            float v0 = Speed();
+            const float win = 0.30f;
+            Vector3 drive = MeanImu(win, out _, out float tiltDrive);
+            float aCar = (Speed() - v0) / win;
+            float squat = tiltDrive - tiltRest;
+            Check("IMU", $"torque step: forward accel change vs the car's {aCar:0.000} m/s² + squat g·sinθ {squat:0.000} (m/s²)",
+                  drive.x - rest.x, aCar + squat, 0.02f);
+            Line($"IMU   mount {_imu.transform.localPosition}, spec ODR {_imu.updateRateHz:0} Hz, DLPF {_imu.spec.dlpfHz:0} Hz; " +
+                 $"rest a ({rest.x:0.000}, {rest.y:0.000}, {rest.z:0.000}) m/s², step a_x {drive.x:0.000}");
         }
 
         /// <summary>
@@ -536,6 +588,7 @@ namespace AIHWSim.Core.PhysicsTests
             _car = built.car;
             _body = _carRoot.GetComponent<Rigidbody>();
             built.rig.Initialize(_car, _carRoot.transform);
+            _imu = _carRoot.GetComponentInChildren<MemsImuSensor>();
             _fwd0 = fwd;
 
             // Settle on its suspension, motors off. On a grade, hold it with
@@ -551,7 +604,7 @@ namespace AIHWSim.Core.PhysicsTests
         {
             if (_carRoot != null) DestroyImmediate(_carRoot);
             if (_ground != null) DestroyImmediate(_ground);
-            _carRoot = null; _ground = null; _car = null; _body = null;
+            _carRoot = null; _ground = null; _car = null; _body = null; _imu = null;
         }
 
         private void SetIq(float iq)
@@ -566,6 +619,7 @@ namespace AIHWSim.Core.PhysicsTests
             _car.SetCommands(_cmd);
             _car.StepPhysics(_dt);
             Physics.Simulate(_dt);
+            _imu?.PhysicsStep(0, _dt);
             _t += _dt;
             if (_tr != null)
             {

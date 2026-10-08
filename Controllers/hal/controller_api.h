@@ -81,9 +81,12 @@ enum {
     SENSOR_BUMP       = 11, /* contact switch at the mount point (v6 append)    */
     SENSOR_LED        = 12, /* actuator part: firmware-driven LED (v6 append)   */
     /* v7 tags. Reserved now so the numbers never move; the sim emits each one
-     * once the matching part exists (SENSOR_STEER_FB and SENSOR_FOC_FB are
-     * emitted already). */
-    SENSOR_IMU6       = 13, /* raw 6-axis IMU part with a mount pose           */
+     * once the matching part exists (SENSOR_IMU6, SENSOR_STEER_FB and
+     * SENSOR_FOC_FB are emitted already). */
+    SENSOR_IMU6       = 13, /* raw 6-axis IMU part: [gx,gy,gz rad/s, ax,ay,az
+                               m/s^2] in the CHIP frame (x = aim, y left, z up
+                               out of the package; right-handed). Rotate by the
+                               v7 manifest's rpy_rad; pos_m is the lever arm. */
     SENSOR_TOF_MZ     = 14, /* multizone ToF                                   */
     SENSOR_FLOW       = 15, /* optical flow                                    */
     SENSOR_UWB        = 16, /* UWB ranging                                     */

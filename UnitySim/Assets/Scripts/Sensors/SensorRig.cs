@@ -165,8 +165,12 @@ namespace AIHWSim.Sensors
         /// </summary>
         public void PhysicsTick(long tUs, long anchorUs, long controlPeriodUs, long physPeriodUs)
         {
+            float dt = physPeriodUs * 1e-6f;
             for (int i = 0; i < _sensors.Count; i++)
+            {
+                _sensors[i].PhysicsStep(tUs, dt);
                 _sensors[i].PhysicsTick(tUs, anchorUs, controlPeriodUs, physPeriodUs);
+            }
         }
 
         /// <summary>Fill the flat buffer with what the firmware sees at this

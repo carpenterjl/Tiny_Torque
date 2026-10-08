@@ -41,6 +41,7 @@ namespace AIHWSim.Garage
         public const float BumpSensorMass = 0.004f;      // switch + whisker
         public const float RfSensorMass = 0.006f;        // module + whip
         public const float LedMass = 0.002f;
+        public const float ImuMass = 0.002f;             // breakout board
 
         public static float SensorMass(SensorSpec s)
         {
@@ -55,6 +56,7 @@ namespace AIHWSim.Garage
                 Bridge.SensorType.Bump => BumpSensorMass,
                 Bridge.SensorType.Rf => RfSensorMass,
                 Bridge.SensorType.Led => LedMass,
+                Bridge.SensorType.Imu6 => ImuMass,
                 _ => TofMass,
             };
         }

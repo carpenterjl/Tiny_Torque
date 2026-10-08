@@ -391,6 +391,14 @@ namespace AIHWSim.Garage
                     PartVisualFactory.BuildRfViz(go.transform);
                     break;
                 }
+                case SensorType.Imu6:
+                {
+                    var m = go.AddComponent<MemsImuSensor>();
+                    m.spec = spec.imu != null ? spec.imu.Clone() : new ImuSpec();
+                    sc = m;
+                    PartVisualFactory.BuildImuViz(go.transform);
+                    break;
+                }
                 case SensorType.Led:
                 {
                     var l = go.AddComponent<LedPart>();

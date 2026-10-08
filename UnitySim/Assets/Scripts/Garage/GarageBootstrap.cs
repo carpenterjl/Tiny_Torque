@@ -226,6 +226,7 @@ namespace AIHWSim.Garage
                 case SensorType.Bump: return new Color(0.95f, 0.25f, 0.25f);
                 case SensorType.Rf: return new Color(0.35f, 1f, 0.5f);
                 case SensorType.Led: return new Color(1f, 1f, 0.6f);
+                case SensorType.Imu6: return new Color(0.6f, 0.6f, 1f);
                 default: return Color.white;
             }
         }
