@@ -21,8 +21,11 @@ namespace AIHWSim.Ipc
     /// each <c>MotorPart.ActuatorIndex</c>, [6] is steer -1..1, [7] is brake 0..1.
     /// The client is told each motor's index in <c>list_vehicles</c> rather than
     /// having to assume the order.
+    ///
+    /// Being an <see cref="IRawActuatorDriver"/> is what switches the car's
+    /// arcade assists off while the client holds it (BUG-17).
     /// </summary>
-    public sealed class IpcActuatorDriver : MonoBehaviour, IManualDriver, ISetpointSource
+    public sealed class IpcActuatorDriver : MonoBehaviour, IRawActuatorDriver, ISetpointSource
     {
         /// <summary>The runner's actuator buffer is float[8]; a client that sends
         /// more is telling us something we cannot act on.</summary>

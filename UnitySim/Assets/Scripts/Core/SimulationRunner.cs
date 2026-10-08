@@ -194,6 +194,7 @@ namespace AIHWSim.Core
             inputBehaviour = behaviour;
             _manualDriver = behaviour as IManualDriver;
             _setpointSource = behaviour as ISetpointSource;
+            SyncAssistGate();   // a raw driver turns assists off; putting CarInput back restores them
         }
 
         /// <summary>
@@ -531,11 +532,13 @@ namespace AIHWSim.Core
             }
         }
 
-        /// <summary>Arcade assists help humans only — C firmware faces raw physics.</summary>
+        /// <summary>Arcade assists help humans only — C firmware, and a program
+        /// driving raw actuators over IPC, face the raw physics.</summary>
         private void SyncAssistGate()
         {
             if (vehicleBehaviour is Vehicles.CarVehicle car)
-                car.assistsActive = Mode == DriveMode.Manual;
+                car.assistsActive = Mode == DriveMode.Manual
+                                    && !(_manualDriver is IRawActuatorDriver);
         }
 
         private void FixedUpdate()

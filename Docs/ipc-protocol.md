@@ -142,7 +142,7 @@ driven.
 | Level | What you send | What happens |
 |---|---|---|
 | `drive` | `drive` messages: normalized throttle/steer/brake | Goes through `CarInput`, so assists, arcade handling and the steering-rate limit all apply — identical to a gamepad. |
-| `raw` | `actuate` messages: the float[8] actuator vector | Written straight into the runner. Nothing shapes it. What a firmware-style loop wants. |
+| `raw` | `actuate` messages: the float[8] actuator vector | Written straight into the runner. Nothing shapes it: assists are switched off while the car is held at this level, as they are for C firmware, and come back on release. What a firmware-style loop wants. |
 
 `deadManMs` is milliseconds of silence after which **the car brakes itself**. 0
 takes the default (500 ms). Negative disables it — only sane for a client that
@@ -265,7 +265,7 @@ gaps.
 | Type | Body | Notes |
 |---|---|---|
 | `set_tunable` | `vehicleId`, `name`, `value` | Names and ranges from `get_tunables`. Clamped to the range, not rejected. |
-| `set_assists` | `vehicleId`, `steer`, `stability`, `traction`, `abs`, `launch` | 0–1 each. |
+| `set_assists` | `vehicleId`, `steer`, `stability`, `traction`, `abs`, `launch` | 0–1 each. Stored, but has no effect while the car is held at `raw`. |
 | `set_session_config` | partial: `targetLaps`, `targetScore`, `timeLimitSec`, `rubberBand`, `arcade`, `trackLimits`, `arcadeHandling`, `arcadeTyreThermal` | Live within a frame. |
 | `set_mode_tuning` | `name`, `value` | One field on the scene's `ModeConfigOverride`, by name. |
 | `set_arcade_tuning` | `name`, `value` | Same for `ArcadeConfigOverride`. |
