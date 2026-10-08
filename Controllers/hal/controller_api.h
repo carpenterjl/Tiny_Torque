@@ -95,7 +95,10 @@ enum {
                                carries Iq (CTRL_UNITS_AMPS_IQ). Faults: 1 over-
                                voltage, 2 over-temp derate, 4 current-limited,
                                8 voltage-limited                              */
-    SENSOR_STEER_FB   = 18  /* the steering servo: describes actuator[6]       */
+    SENSOR_STEER_FB   = 18, /* the steering servo: describes actuator[6]       */
+    SENSOR_STEER_ANGLE = 19 /* measured road-wheel angle: [angle_rad], + = LEFT
+                               (bicycle model; a pot or encoder on the knuckle,
+                               after the servo lag and the linkage backlash)  */
 };
 
 /*

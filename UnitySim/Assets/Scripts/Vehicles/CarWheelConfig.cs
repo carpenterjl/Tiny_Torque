@@ -72,6 +72,8 @@ namespace AIHWSim.Vehicles
         public float relaxLenM;
         /// <summary>Rolling resistance and bearing drag (PHY-02); 0 = none.</summary>
         public float rollCrr, bearingNm, bearingNmsPerRad;
+        /// <summary>Tyre parameters (PHY-03); 0 = the legacy constants.</summary>
+        public float slipStiffness, corneringStiffness, slideRatio, muLatRatio;
 
         public static CarWheelConfig Default(Vector3 pos, bool steers)
         {

@@ -158,6 +158,98 @@ namespace AIHWSim.Core.PhysicsTests
             foreach (int hz in new[] { 400, 1600 }) R10EncoderCrawl(hz);
             ImuInTheCar(400);
             RealismInTheCar(400);
+            R6ServoStep(400);
+        }
+
+        /// <summary>
+        /// R6 — servo step, against the second-order model the design states:
+        /// a small step tracks the closed-form response of (ω_n, ζ) to within
+        /// 2 % of the step (the deadband shortens the step it settles to); a
+        /// full-lock step slews at the no-load rate derated by the linkage
+        /// friction; a command inside the deadband moves nothing; reversing
+        /// loses exactly the backlash; and motion starts within one PWM frame.
+        /// The real counterpart is a video or steering-encoder log.
+        /// </summary>
+        private void R6ServoStep(int hz)
+        {
+            Build(hz, 0f);
+            if (!_car.ServoModelled) { Line("R6    the design has no servo model (ACT-09): skipped"); return; }
+            const int steer = 6;
+            float lockDeg = _car.MaxSteerDeg;
+            float db = _car.servoDeadbandPct * 0.01f;
+            float halfLash = 0.5f * _car.servoBacklashDeg / lockDeg;
+            Run(0.2f);
+
+            // Deadband: half of it commanded, nothing moves.
+            float h0 = _car.SteerServoHornFrac;
+            _cmd[steer] = 0.5f * db;
+            Run(0.2f);
+            Check("R6", "command inside the deadband: horn motion (fraction of lock)",
+                  Mathf.Abs(_car.SteerServoHornFrac - h0), 0f, 1e-6f, abs: true);
+            _cmd[steer] = 0f;
+            Run(0.2f);
+
+            // Small step against the closed form, from the first moving step.
+            const float step = 0.2f;
+            float wn = 2f * Mathf.PI * _car.servoBandwidthHz, z = _car.servoDamping;
+            _cmd[steer] = step;
+            var horn = new List<float>();
+            int n = Mathf.RoundToInt(0.6f / _dt);
+            for (int i = 0; i < n; i++) { Step(); horn.Add(_car.SteerServoHornFrac); }
+            int k0 = horn.FindIndex(v => Mathf.Abs(v) > 1e-6f);
+            float frame = _car.servoFrameHz > 0f ? 1f / _car.servoFrameHz : 0f;
+            Check("R6", "motion starts within one PWM frame + one step (ms)",
+                  k0 >= 0 ? (k0 + 1) * _dt * 1000f : 999f, 0f, (frame + _dt) * 1000f + 0.01f, abs: true);
+            float target = step - db;
+            double sse = 0, peak = 0;
+            float wd = wn * Mathf.Sqrt(Mathf.Max(1e-6f, 1f - z * z));
+            for (int i = Mathf.Max(0, k0); i < n; i++)
+            {
+                float t = (i - k0 + 1) * _dt;
+                float y = target * (1f - Mathf.Exp(-z * wn * t) *
+                    (Mathf.Cos(wd * t) + z / Mathf.Sqrt(Mathf.Max(1e-6f, 1f - z * z)) * Mathf.Sin(wd * t)));
+                sse += (horn[i] - y) * (horn[i] - y);
+                peak = System.Math.Max(peak, horn[i]);
+            }
+            float rms = (float)System.Math.Sqrt(sse / System.Math.Max(1, n - k0));
+            Check("R6", $"0.2 step vs the 2nd-order model (ω_n {wn:0.0} rad/s, ζ {z:0.00}): RMS error / step",
+                  rms / step, 0f, 0.02f, abs: true);
+            float overshootPred = Mathf.Exp(-Mathf.PI * z / Mathf.Sqrt(1f - z * z)) * 100f;
+            Check("R6", "0.2 step overshoot (%)", (float)(peak / target - 1.0) * 100f, overshootPred, 0.1f);
+
+            // Backlash: on a slow ramp (no overshoot, no reversal) the wheel
+            // trails the horn by half the play going out and leads it by half
+            // coming back.
+            float Ramp(float from, float to, float seconds)
+            {
+                int m = Mathf.RoundToInt(seconds / _dt);
+                for (int i = 1; i <= m; i++) { _cmd[steer] = Mathf.Lerp(from, to, i / (float)m); Step(); }
+                return _car.SteerServoHornFrac - _car.SteerAngleVirtualDeg / lockDeg;
+            }
+            float lagOut = Ramp(step, 0.6f, 2f);
+            float lagBack = Ramp(0.6f, 0.2f, 2f);
+            Check("R6", "reversal loses the backlash (deg)", (lagOut - lagBack) * lockDeg,
+                  _car.servoBacklashDeg, 0.01f);
+
+            // Lock-to-lock step: far enough that the loop saturates at the slew
+            // the torque-speed line allows at rest.
+            _cmd[steer] = -1f;
+            Run(0.6f);
+            _cmd[steer] = 1f;
+            float vMax = 0f, prev = _car.SteerServoHornFrac;
+            for (int i = 0; i < n; i++)
+            {
+                Step();
+                float h = _car.SteerServoHornFrac;
+                vMax = Mathf.Max(vMax, (h - prev) / _dt);
+                prev = h;
+            }
+            float rate = _car.steerRateDegPerSec / lockDeg;
+            if (_car.servoStallNm > 0f) rate *= Mathf.Clamp01(1f - 0.02f / _car.servoStallNm);
+            Check("R6", "lock-to-lock step: peak slew vs the no-load rate less linkage friction (lock/s)",
+                  vMax, rate, 0.03f);
+            Line($"R6    lock {lockDeg:0.0} deg, deadband {db * 100f:0.##} %, backlash {_car.servoBacklashDeg:0.##} deg, " +
+                 $"frame {_car.servoFrameHz:0} Hz, start delay {(k0 + 1) * _dt * 1000f:0.0} ms, half-lash {halfLash:0.0000}");
         }
 
         /// <summary>SEN-06/09 in the car: on a realistic design the pack

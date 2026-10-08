@@ -89,6 +89,7 @@ namespace AIHWSim.Garage
                 case SensorType.Rf:         PartVisualFactory.BuildRfViz(g.Root.transform); break;
                 case SensorType.Led:        PartVisualFactory.BuildLedViz(g.Root.transform); break;
                 case SensorType.Imu6:       PartVisualFactory.BuildImuViz(g.Root.transform); break;
+                case SensorType.SteerAngle: PartVisualFactory.BuildEncoderViz(g.Root.transform); break;
                 default:                    PartVisualFactory.BuildTofViz(g.Root.transform); break;
             }
             g.Finish();

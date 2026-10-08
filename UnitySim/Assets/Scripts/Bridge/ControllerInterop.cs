@@ -45,6 +45,7 @@ namespace AIHWSim.Bridge
         Uwb        = 16,  // v7 (reserved): UWB ranging
         FocFb      = 17,  // v7 (reserved): FOC driver feedback
         SteerFb    = 18,  // v7: the steering servo; describes actuator[6]
+        SteerAngle = 19,  // v7: measured road-wheel angle [rad, + left] (SteerAngleSensor)
     }
 
     // One manifest entry per configured sensor. char name[32] is an inline

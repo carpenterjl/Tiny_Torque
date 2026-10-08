@@ -85,6 +85,12 @@ namespace AIHWSim.Garage
             car.steerRateDegPerSec = design.steerRate;
             car.servoStallNm = Mathf.Max(0f, design.servoStallNm);
             car.ackermannPct = design.ackermannPct;
+            car.servoBandwidthHz = Mathf.Max(0f, design.servoBandwidthHz);
+            car.servoDamping = Mathf.Max(0f, design.servoDamping);
+            car.servoDeadbandPct = Mathf.Max(0f, design.servoDeadbandPct);
+            car.servoBacklashDeg = Mathf.Max(0f, design.servoBacklashDeg);
+            car.servoFrameHz = Mathf.Max(0f, design.servoFrameHz);
+            car.steerMap = design.steerMap != null ? (float[])design.steerMap.Clone() : new float[0];
             car.imuVibration = design.imuVibration;
             car.wheelVelNoiseStd = design.wheelVelNoiseStd;
             car.wheelVelQuantCpr = design.wheelVelQuantCpr;
@@ -115,8 +121,14 @@ namespace AIHWSim.Garage
                 var mp = MassProperties.Compute(design);
                 car.useCompositeMass = true;
                 car.compositeMass = mp.totalMass;
-                car.compositeCoM = mp.com;
-                car.compositeInertia = mp.inertiaDiag;
+                car.compositeCoM = design.hasComOverride ? design.comOverride : mp.com;
+                // Unity's principal axes are (pitch x, yaw y, roll z); the
+                // override is authored (roll, pitch, yaw).
+                Vector3 io = design.inertiaOverride, id = mp.inertiaDiag;
+                car.compositeInertia = new Vector3(
+                    io.y > 0f ? io.y : id.x,
+                    io.z > 0f ? io.z : id.y,
+                    io.x > 0f ? io.x : id.z);
             }
 
             // Wheels are placeable parts. Convert each to a CarWheelConfig; the
@@ -156,6 +168,10 @@ namespace AIHWSim.Garage
                     rollCrr = Mathf.Max(0f, w.rollCrr),
                     bearingNm = Mathf.Max(0f, w.bearingNm),
                     bearingNmsPerRad = Mathf.Max(0f, w.bearingNmsPerRad),
+                    slipStiffness = Mathf.Max(0f, w.slipStiffness),
+                    corneringStiffness = Mathf.Max(0f, w.corneringStiffness),
+                    slideRatio = Mathf.Clamp01(w.slideRatio),
+                    muLatRatio = Mathf.Max(0f, w.muLatRatio),
                     // Reflected drivetrain inertia J·gear² for powered wheels
                     // (0 on old JSON / unpowered wheels = legacy spin inertia).
                     // A motor with gear lash keeps its rotor as its own body
@@ -397,6 +413,13 @@ namespace AIHWSim.Garage
                     PartVisualFactory.BuildRfViz(go.transform);
                     break;
                 }
+                case SensorType.SteerAngle:
+                {
+                    var s = go.AddComponent<SteerAngleSensor>();
+                    sc = s;
+                    PartVisualFactory.BuildEncoderViz(go.transform);
+                    break;
+                }
                 case SensorType.Imu6:
                 {
                     var m = go.AddComponent<MemsImuSensor>();
@@ -441,6 +464,7 @@ namespace AIHWSim.Garage
                 MagSensor ma => ma.noise,
                 BumpSensor bu => bu.noise,
                 RfSensor rf => rf.noise,
+                SteerAngleSensor sa => sa.noise,
                 _ => null,
             };
             if (nm != null)

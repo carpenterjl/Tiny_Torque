@@ -50,6 +50,7 @@ namespace AIHWSim.EditorTools
             CheckContract<LedPart>();
             CheckContract<MemsImuSensor>();
             CheckContract<BatterySensor>();
+            CheckContract<SteerAngleSensor>();
             CheckAbiTags();
             CheckRealismProfile();
             CheckSoundField();
@@ -129,6 +130,7 @@ namespace AIHWSim.EditorTools
             True("SensorType.Bump == 11", (int)SensorType.Bump == 11);
             True("SensorType.Led == 12", (int)SensorType.Led == 12);
             True("SensorType.Imu6 == 13", (int)SensorType.Imu6 == 13);
+            True("SensorType.SteerAngle == 19", (int)SensorType.SteerAngle == 19);
         }
 
         // ---- SEN-06/09: the realistic profile -------------------------------

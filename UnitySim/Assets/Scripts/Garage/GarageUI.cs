@@ -105,6 +105,7 @@ namespace AIHWSim.Garage
                 ("color", "Color", "Surface colour + reflectance along its aim — point it down to follow lines."),
                 ("mag", "Compass", "Magnetometer — absolute heading in degrees, drift tunable."),
                 ("imu", "IMU", "Raw 6-axis MEMS IMU — rate + specific force in its own frame; datasheet noise, bias, filter."),
+                ("steerfb", "Steer sensor", "Steering-angle pot/encoder — the road-wheel angle the servo actually reached."),
                 ("bump", "Bump", "Contact switch — fires when the car touches something near its mount."),
                 ("rf", "RF antenna", "Hears beacon pings (RSSI + bearing, strongest 3); can also emit."),
                 ("led", "LED", "Firmware-driven indicator — set colour/blink from your controller."),
@@ -699,6 +700,7 @@ namespace AIHWSim.Garage
                                 : key == "color" ? SensorType.Color
                                 : key == "mag" ? SensorType.Mag
                                 : key == "imu" ? SensorType.Imu6
+                                : key == "steerfb" ? SensorType.SteerAngle
                                 : key == "bump" ? SensorType.Bump
                                 : key == "rf" ? SensorType.Rf
                                 : key == "led" ? SensorType.Led : SensorType.Tof;

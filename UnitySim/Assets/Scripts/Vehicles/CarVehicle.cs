@@ -102,6 +102,35 @@ namespace AIHWSim.Vehicles
         // Ackermann steering: 0 = parallel (legacy), 100 = true Ackermann (inner
         // wheel steers sharper about a shared turn centre on the rear-axle line).
         public float ackermannPct = 0f;
+
+        // Servo realism (ACT-09), all 0/empty = the legacy per-wheel slew.
+        // The servo is ONE actuator: the command is latched once per PWM
+        // frame, mapped to a fraction of lock through the linkage table,
+        // passed through the position loop's deadband, and tracked by a
+        // second-order loop (ω_n, ζ) whose speed is capped by the torque-
+        // speed line above; the road wheels then follow through the
+        // linkage backlash. Ackermann is applied after, per wheel.
+        public float servoBandwidthHz = 0f;   // position-loop natural frequency
+        public float servoDamping = 0.7f;     // ζ (used when the bandwidth is set)
+        public float servoDeadbandPct = 0f;   // dead zone, % of full command
+        public float servoBacklashDeg = 0f;   // road-wheel lost motion (deg)
+        public float servoFrameHz = 0f;       // PWM frame rate; 0 = continuous
+        public float[] steerMap = System.Array.Empty<float>(); // fraction of lock at evenly spaced commands −1..+1
+
+        private float _svCmd, _svFrameT, _svPos, _svVel, _svWheel, _svLegacy;
+
+        /// <summary>The servo horn (output shaft) position, fraction of lock,
+        /// before the linkage backlash.</summary>
+        public float SteerServoHornFrac => _svPos;
+
+        /// <summary>True when any ACT-09 servo knob is set.</summary>
+        public bool ServoModelled => servoBandwidthHz > 0f || servoDeadbandPct > 0f
+            || servoBacklashDeg > 0f || servoFrameHz > 0f || (steerMap != null && steerMap.Length >= 2);
+
+        /// <summary>The steering's bicycle-model road-wheel angle (deg, + = right)
+        /// after the servo and the backlash — what a sensor on the knuckle reads.</summary>
+        public float SteerAngleVirtualDeg => (ServoModelled ? _svWheel : _svLegacy) * MaxSteerDeg;
+
         public float maxBrakeTorque = 0.8f;       // lock threshold ≈ 0.23 N·m
         /// <summary>False for a car with no friction brake (ACT-08): the brake
         /// slot and handbrake do nothing and nothing parks the car — the
@@ -1624,9 +1653,11 @@ namespace AIHWSim.Vehicles
             _padPinned = false;
             _launchScale = 1f;   // fresh launch, fresh governor
 
+            _svCmd = _svFrameT = _svPos = _svVel = _svWheel = _svLegacy = 0f;
             foreach (var w in _wheels)
             {
                 w.currentSteer = 0f;
+                w.servoSteer = 0f;
                 w.col.motorTorque = 0f;
                 w.col.brakeTorque = 0f;
                 w.col.steerAngle = 0f;
@@ -1675,6 +1706,63 @@ namespace AIHWSim.Vehicles
         /// volts, [6] = steer [-1,1], [7] = brake [0,1]. Both Manual (CarInput) and
         /// Autonomous (the DLL) produce this same layout.
         /// </summary>
+        /// <summary>
+        /// One physics step of the steering servo (ACT-09), in fractions of
+        /// lock. <paramref name="rate"/> is the torque-speed-limited slew
+        /// (fraction/s). Returns the road-wheel position after the backlash.
+        /// </summary>
+        private float ServoStep(float cmd, float rate, float dt)
+        {
+            // The servo only sees a new pulse once per PWM frame.
+            if (servoFrameHz > 0f)
+            {
+                _svFrameT -= dt;
+                if (_svFrameT <= 0f)
+                {
+                    _svCmd = cmd;
+                    _svFrameT += 1f / servoFrameHz;
+                    if (_svFrameT <= 0f) _svFrameT = 1f / servoFrameHz;
+                }
+            }
+            else _svCmd = cmd;
+
+            float target = SteerMapAt(_svCmd);
+            float e = target - _svPos;
+            float db = Mathf.Max(0f, servoDeadbandPct) * 0.01f;
+            e -= Mathf.Clamp(e, -db, db);   // nothing drives inside the dead zone
+
+            if (servoBandwidthHz > 0f)
+            {
+                float wn = 2f * Mathf.PI * servoBandwidthHz;
+                float acc = wn * wn * e - 2f * Mathf.Max(0f, servoDamping) * wn * _svVel;
+                _svVel = Mathf.Clamp(_svVel + acc * dt, -rate, rate);
+                _svPos += _svVel * dt;
+            }
+            else
+            {
+                float step = Mathf.Clamp(e, -rate * dt, rate * dt);
+                _svVel = dt > 0f ? step / dt : 0f;
+                _svPos += step;
+            }
+
+            // The wheels follow the horn through the linkage's free play.
+            float lockDeg = MaxSteerDeg;
+            float half = lockDeg > 1e-3f ? 0.5f * Mathf.Max(0f, servoBacklashDeg) / lockDeg : 0f;
+            _svWheel = Mathf.Clamp(_svWheel, _svPos - half, _svPos + half);
+            return _svWheel;
+        }
+
+        /// <summary>The linkage table: fraction of lock at a command, by linear
+        /// interpolation over points evenly spaced on −1..+1. Empty = linear.</summary>
+        public float SteerMapAt(float cmd)
+        {
+            cmd = Mathf.Clamp(cmd, -1f, 1f);
+            if (steerMap == null || steerMap.Length < 2) return cmd;
+            float x = (cmd + 1f) * 0.5f * (steerMap.Length - 1);
+            int i = Mathf.Min(steerMap.Length - 2, Mathf.FloorToInt(x));
+            return Mathf.Lerp(steerMap[i], steerMap[i + 1], x - i);
+        }
+
         public void SetCommands(float[] actuatorCommands)
         {
             int n = Mathf.Min(actuatorCommands.Length, _cmd.Length);
@@ -1907,6 +1995,14 @@ namespace AIHWSim.Vehicles
                 else ebd = false;   // airborne: nothing to proportion against
             }
 
+            // ACT-09: one servo for the whole rack; its output (a fraction of
+            // lock) replaces the command, and the wheels take it directly.
+            bool servo = ServoModelled;
+            float lockDeg = MaxSteerDeg;
+            float steerFrac = servo ? ServoStep(steerCmd, lockDeg > 1e-3f ? steerRate / lockDeg : 0f, dt) : steerCmd;
+            if (!servo && lockDeg > 1e-3f)
+                _svLegacy = Mathf.MoveTowards(_svLegacy, steerCmd, steerRate / lockDeg * dt);
+
             foreach (var w in _wheels)
             {
                 // Per-wheel steering servo (slew toward the commanded angle).
@@ -1916,7 +2012,7 @@ namespace AIHWSim.Vehicles
                     // Ackermann angle for THIS wheel's position: the turn centre
                     // sits y_c = L/tan(δv) beside the rear-axle line, and the
                     // wheel steers to point at it — the inner wheel sharper.
-                    float dv = steerCmd * w.cfg.steerAngle;
+                    float dv = steerFrac * w.cfg.steerAngle;
                     float di = dv;
                     if (ackermannPct > 0f && Mathf.Abs(dv) >= 0.25f)
                     {
@@ -1934,7 +2030,7 @@ namespace AIHWSim.Vehicles
                     }
                     float sgn = w.cfg.reverseSteering ? -1f : 1f;
                     float target = di * sgn;
-                    w.servoSteer = Mathf.MoveTowards(w.servoSteer, target, steerRate * dt);
+                    w.servoSteer = servo ? target : Mathf.MoveTowards(w.servoSteer, target, steerRate * dt);
                 }
                 else w.servoSteer = 0f;
 
@@ -2093,14 +2189,20 @@ namespace AIHWSim.Vehicles
                     // the tyre is gripping, above it it is sliding. Recomputing a
                     // separate proxy here would just be a second opinion that
                     // disagrees with the physics.
+                    // PHY-03: the per-tyre curve. The readout uses the µ the
+                    // force path will use (the legacy constants don't need it).
+                    bool authoredCurve = w.cfg.slipStiffness > 0f || w.cfg.corneringStiffness > 0f
+                                         || w.cfg.slideRatio > 0f || w.cfg.muLatRatio > 0f;
                     {
                         float den = Mathf.Max(Mathf.Abs(vx), TyreModel.VLow);
-                        float sx = ((w.omega * r - vx) / den) / TyreModel.KappaPeak;
+                        var rc = authoredCurve
+                            ? TyreModel.Curve.For(w.cfg, surf.frictionMult * GripMult(w.cfg) * loadFactor * arcadeGripMult, fz)
+                            : TyreModel.Curve.Legacy(fz, w.cfg.ratedLoadN);
+                        float sx = ((w.omega * r - vx) / den) / rc.kappaPeak;
                         // Same load-dependent peak the force path uses — a readout
                         // normalised by a different number would be a second
                         // opinion that disagrees with the physics.
-                        float sy = ((-vy) / den)
-                                 / TyreModel.AlphaPeakAt(fz, w.cfg.ratedLoadN);
+                        float sy = ((-vy) / den) / rc.alphaPeak;
                         w.slipNorm = Mathf.Sqrt(sx * sx + sy * sy);
                         w.patchSpeed = Mathf.Sqrt(vx * vx + vy * vy);
                     }
@@ -2155,19 +2257,22 @@ namespace AIHWSim.Vehicles
                                   TyreThermal.GripVsPressure(pRun);
                         // _gripStiffness is the Tune "Grip (side)" knob; its legacy
                         // neutral value 2.0 maps to a lateral µ scale of 1.
+                        var curve = authoredCurve
+                            ? TyreModel.Curve.For(w.cfg, mu, fz)
+                            : TyreModel.Curve.Legacy(fz, w.cfg.ratedLoadN);
                         if (w.cfg.relaxLenM > 0f)
                             TyreModel.BristleForces(vx, vy, w.omega, r, fz, mu,
                                 _gripStiffness * 0.5f, dt,
                                 _wheels.Count / Mathf.Max(0.05f, _body.mass),
                                 r * r / Mathf.Max(1e-9f, w.coupledJ > 0f ? w.spinInertia + w.coupledJ : w.spinInertia),
-                                w.cfg.ratedLoadN, w.cfg.relaxLenM,
+                                curve, w.cfg.relaxLenM,
                                 ref w.ux, ref w.uy, out fx, out fy);
                         else
                             TyreModel.Forces(vx, vy, w.omega, r, fz, mu,
                                 _gripStiffness * 0.5f, dt,
                                 _wheels.Count / Mathf.Max(0.05f, _body.mass),
                                 r * r / Mathf.Max(1e-9f, w.coupledJ > 0f ? w.spinInertia + w.coupledJ : w.spinInertia),
-                                w.cfg.ratedLoadN, w.driveTorque, resist,
+                                curve, w.driveTorque, resist,
                                 out fx, out fy);
 
                         // Where the lateral force reaches the SPRUNG mass. It does

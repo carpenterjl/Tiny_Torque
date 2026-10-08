@@ -210,6 +210,11 @@ For a v7 controller the host:
   (noise density, bias instability, turn-on bias, scale and cross-axis error,
   digital low-pass, full-scale clip, LSB). The top-level `gyro[]`/`accel[]`
   stay the simulator's built-in body IMU.
+- **Reports a steering-angle sensor as `SENSOR_STEER_ANGLE`** (tag 19):
+  `[angle_rad]`, the bicycle-model road-wheel angle, + = left, after the
+  servo's lag and the linkage backlash. It's an optional part (a pot or
+  encoder on the steering), separate from the `SENSOR_STEER_FB` entry that
+  describes the actuator.
 - **Calls `ctrl_reset`** on a respawn or run restart, if exported, instead of
   `ctrl_shutdown` + `ctrl_init` + configure — the way an MCU never re-inits
   its peripherals.

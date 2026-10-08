@@ -669,6 +669,8 @@ namespace AIHWSim.Garage
             d.controllerDll = "opus_foc_controller.dll";
             d.hasFrictionBrake = false;   // ACT-08: no brake to lean on
             d.linearDamping = 0f;         // drag is modelled (aero, rolling, bearings)
+            d.angularDamping = 0f;        // PHY-04: no fake yaw/roll damper; tyres and
+                                          // suspension damp the real car
 
             var motor = MotorParams.Default();
             motor.driveMode = (int)MotorDriveMode.CurrentFoc;
@@ -725,6 +727,27 @@ namespace AIHWSim.Garage
 
             // Pi 5 + sensors + servo idle, from the pack whatever the motors do.
             d.batteries[0].auxLoadA = 0.7f;
+
+            // ACT-09: the servo as a servo, not a slew. A Savox SC-1251MG class
+            // digital servo [D: 667 °/s, 0.883 N·m, ~1 µs deadband] driven at
+            // 333 Hz by the MCU; its position loop and the linkage play are
+            // estimates [E] until the R6 bench (video or steering encoder).
+            d.servoBandwidthHz = 6f;
+            d.servoDamping = 0.6f;
+            d.servoDeadbandPct = 0.2f;        // 1 µs of the ±500 µs throw
+            d.servoBacklashDeg = 0.5f;
+            d.servoFrameHz = 333f;
+            // A 12-bit magnetic encoder on the steering (0.088° per count):
+            // the angle the wheels actually reached, for the firmware's own loop.
+            d.sensors.Add(new SensorSpec
+            {
+                name = "steer_angle",
+                kind = SensorType.SteerAngle,
+                localPos = new Vector3(0f, 0.030f, 0.150f),
+                noiseStd = 0.0003f,           // rad
+                noiseQuant = 0.00153f,        // 2π / 4096
+                massKg = 0.003f,
+            });
 
             // SEN-06/09: the pack, the drivers and any compass report what the
             // real parts measure, with their errors; SoC and torque are not

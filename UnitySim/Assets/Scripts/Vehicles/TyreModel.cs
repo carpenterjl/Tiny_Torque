@@ -78,13 +78,49 @@ namespace AIHWSim.Vehicles
         /// <paramref name="ratedLoadN"/> ≤ 0 returns <see cref="AlphaPeak"/>
         /// verbatim — the sentinel every pre-existing design takes.
         /// </summary>
-        public static float AlphaPeakAt(float fz, float ratedLoadN)
+        public static float AlphaPeakAt(float fz, float ratedLoadN) =>
+            AlphaPeakAt(fz, ratedLoadN, AlphaPeak);
+
+        /// <summary><see cref="AlphaPeakAt(float, float)"/> about a peak slip
+        /// <paramref name="alpha0"/> at the rated load instead of the constant.</summary>
+        public static float AlphaPeakAt(float fz, float ratedLoadN, float alpha0)
         {
-            if (ratedLoadN <= 0f || fz <= 0f) return AlphaPeak;
+            if (ratedLoadN <= 0f || fz <= 0f) return alpha0;
             float x = fz / ratedLoadN;
             float shape = Mathf.Sin(2f * Mathf.Atan(x));
-            if (shape < 1e-4f) return AlphaPeak;
-            return AlphaPeak * x / shape;
+            if (shape < 1e-4f) return alpha0;
+            return alpha0 * x / shape;
+        }
+
+        /// <summary>
+        /// Per-tyre curve parameters (PHY-03), resolved for this µ and load.
+        /// An authored stiffness C/F_z fixes the curve's initial slope, so the
+        /// peak slip is 2µ/(C/F_z) — it moves with grip, as a brush tyre's does.
+        /// Every field 0 gives exactly the legacy constants.
+        /// </summary>
+        public struct Curve
+        {
+            public float kappaPeak, alphaPeak, slide, latScale;
+
+            public static Curve For(in CarWheelConfig cfg, float mu, float fz)
+            {
+                float kp = cfg.slipStiffness > 0f ? 2f * mu / cfg.slipStiffness : KappaPeak;
+                float a0 = cfg.corneringStiffness > 0f ? 2f * mu / cfg.corneringStiffness : AlphaPeak;
+                return new Curve
+                {
+                    kappaPeak = kp,
+                    alphaPeak = AlphaPeakAt(fz, cfg.ratedLoadN, a0),
+                    slide = cfg.slideRatio > 0f ? cfg.slideRatio : SlideRatio,
+                    latScale = cfg.muLatRatio > 0f ? cfg.muLatRatio : 1f,
+                };
+            }
+
+            /// <summary>The legacy constants at this load.</summary>
+            public static Curve Legacy(float fz, float ratedLoadN) => new Curve
+            {
+                kappaPeak = KappaPeak, alphaPeak = AlphaPeakAt(fz, ratedLoadN),
+                slide = SlideRatio, latScale = 1f,
+            };
         }
 
         /// <summary>Force fraction remaining in a deep slide (full lock / donut).</summary>
@@ -120,21 +156,33 @@ namespace AIHWSim.Vehicles
             float mu, float latMuScale, float dt,
             float invMassEff, float rSqOverJ,
             float ratedLoadN, float driveTorque, float resistTorque,
+            out float fx, out float fy) =>
+            Forces(vx, vy, omega, r, fz, mu, latMuScale, dt, invMassEff, rSqOverJ,
+                   Curve.Legacy(fz, ratedLoadN), driveTorque, resistTorque, out fx, out fy);
+
+        /// <summary><see cref="Forces(float, float, float, float, float, float, float, float, float, float, float, float, float, out float, out float)"/>
+        /// with per-tyre curve parameters (PHY-03).</summary>
+        public static void Forces(
+            float vx, float vy, float omega, float r, float fz,
+            float mu, float latMuScale, float dt,
+            float invMassEff, float rSqOverJ,
+            in Curve curve, float driveTorque, float resistTorque,
             out float fx, out float fy)
         {
             fx = 0f; fy = 0f;
             if (fz <= 0f || mu <= 0f) return;
+            if (curve.latScale != 1f) latMuScale *= curve.latScale;
 
             float denom = Mathf.Max(Mathf.Abs(vx), VLow);
             float vsx = omega * r - vx;   // slip velocity, + = wheel outrunning ground
             float vsy = -vy;              // patch resists its own sideways motion
 
-            float sx = (vsx / denom) / KappaPeak;
-            float sy = (vsy / denom) / AlphaPeakAt(fz, ratedLoadN);
+            float sx = (vsx / denom) / curve.kappaPeak;
+            float sy = (vsy / denom) / curve.alphaPeak;
             float s = Mathf.Sqrt(sx * sx + sy * sy);
             if (s < 1e-6f) return;
 
-            float f = mu * fz * Shape(s);
+            float f = mu * fz * Shape(s, curve.slide);
             float fx0 = f * (sx / s);
             float fy0 = f * (sy / s) * Mathf.Max(0.1f, latMuScale);
 
@@ -211,13 +259,25 @@ namespace AIHWSim.Vehicles
             float invMassEff, float rSqOverJ,
             float ratedLoadN, float sigma,
             ref float ux, ref float uy,
+            out float fx, out float fy) =>
+            BristleForces(vx, vy, omega, r, fz, mu, latMuScale, dt, invMassEff, rSqOverJ,
+                          Curve.Legacy(fz, ratedLoadN), sigma, ref ux, ref uy, out fx, out fy);
+
+        /// <summary>The deflection-state tyre with per-tyre curve parameters (PHY-03).</summary>
+        public static void BristleForces(
+            float vx, float vy, float omega, float r, float fz,
+            float mu, float latMuScale, float dt,
+            float invMassEff, float rSqOverJ,
+            in Curve curve, float sigma,
+            ref float ux, ref float uy,
             out float fx, out float fy)
         {
             fx = 0f; fy = 0f;
             if (fz <= 0f || mu <= 0f || sigma <= 0f) { ux = 0f; uy = 0f; return; }
+            if (curve.latScale != 1f) latMuScale *= curve.latScale;
 
-            float kp = KappaPeak;
-            float ap = AlphaPeakAt(fz, ratedLoadN);
+            float kp = curve.kappaPeak;
+            float ap = curve.alphaPeak;
             float lat = Mathf.Max(0.1f, latMuScale);
             float muFz = mu * fz;
 
@@ -246,7 +306,7 @@ namespace AIHWSim.Vehicles
             }
             if (s < 1e-9f) return;
 
-            float f = muFz * Shape(s);
+            float f = muFz * Shape(s, curve.slide);
             fx = f * (sx / s);
             fy = f * (sy / s) * lat;
 
@@ -274,10 +334,10 @@ namespace AIHWSim.Vehicles
 
         /// <summary>Normalized force curve: parabolic rise to the peak at s = 1,
         /// then a linear ease down to SlideRatio by s = 3.</summary>
-        private static float Shape(float s)
+        private static float Shape(float s, float slide)
         {
             if (s <= 1f) return s * (2f - s);
-            return 1f - (1f - SlideRatio) * Mathf.Min(1f, (s - 1f) * 0.5f);
+            return 1f - (1f - slide) * Mathf.Min(1f, (s - 1f) * 0.5f);
         }
     }
 }

@@ -207,6 +207,18 @@ namespace AIHWSim.Garage
         public float bearingNm = 0f;
         public float bearingNmsPerRad = 0f;
 
+        /// <summary>Tyre parameters (PHY-03), each 0 = the legacy constant.
+        /// slipStiffness = C_κ/F_z (per unit slip) and corneringStiffness =
+        /// C_α/F_z at the rated load (per rad) set the initial slopes directly,
+        /// so stiffness no longer scales with µ (the peak slip moves instead,
+        /// as on a real tyre). Legacy: 2µ/0.10 and 2µ/0.12. slideRatio = force
+        /// left in a deep slide (legacy 0.85); muLatRatio = µ_y/µ_x (legacy 1).
+        /// What the RC suite's ID line reports as slip_stiffness is C_κ/F_z.</summary>
+        public float slipStiffness = 0f;
+        public float corneringStiffness = 0f;
+        public float slideRatio = 0f;
+        public float muLatRatio = 0f;
+
         // Drive motor (only used when powered)
         public bool powered = false;
         public MotorParams motor = MotorParams.Default();
@@ -379,6 +391,13 @@ namespace AIHWSim.Garage
         public float steerRate = 480f;                       // steering servo slew (deg/s, no-load)
         public float servoStallNm = 0f;                      // servo stall torque; 0 = ideal (legacy)
         public float ackermannPct = 0f;                      // 0 = parallel (legacy), 100 = true Ackermann
+        // Servo realism (ACT-09); all 0/empty = the legacy per-wheel slew.
+        public float servoBandwidthHz = 0f;                  // position loop ω_n/2π
+        public float servoDamping = 0.7f;                    // ζ
+        public float servoDeadbandPct = 0f;                  // % of full command
+        public float servoBacklashDeg = 0f;                  // road-wheel lost motion
+        public float servoFrameHz = 0f;                      // PWM frame rate; 0 = continuous
+        public float[] steerMap = new float[0];              // fraction of lock at commands −1..+1
         // Firmware this vehicle ships with: the DLL file name inside
         // Plugins/x86_64 that Autonomous mode loads. "" = the shared default
         // (car_controller.dll), which is what every pre-existing design gets
@@ -524,6 +543,16 @@ namespace AIHWSim.Garage
         /// model only). Was a hard-coded 30 mm drop — right for a 40 cm car,
         /// meaningless on a 4.5 m one.</summary>
         public Vector3 chassisCoM = new Vector3(0f, -0.03f, 0f);
+
+        /// <summary>PHY-04: measured rigid-body properties that replace the
+        /// composite estimate (composite mass model only). inertiaOverride is
+        /// (roll, pitch, yaw) about the CoM in kg·m² — bifilar pendulum and
+        /// tilt tests — each component 0 = keep the estimate. comOverride is
+        /// the measured CoM in body-local metres (x right, y up, z forward),
+        /// used when hasComOverride is set (corner weights + axle lift).</summary>
+        public Vector3 inertiaOverride = Vector3.zero;
+        public bool hasComOverride = false;
+        public Vector3 comOverride = Vector3.zero;
 
         /// <summary>
         /// The stock car: a 1/10-scale RC (F1TENTH-style) — four wheels (steered
