@@ -59,7 +59,7 @@ namespace AIHWSim.Sensors
 
             long wrapped = wrap > 0 ? ((_totalTicks % wrap) + wrap) % wrap : _totalTicks;
 
-            dest[offset] = noise.Apply(quantVel);
+            dest[offset] = noise.Apply(quantVel, dt);
             dest[offset + 1] = wrapped;
         }
     }

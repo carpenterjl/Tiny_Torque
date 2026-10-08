@@ -419,6 +419,9 @@ namespace AIHWSim.Garage
                 nm.noiseStdDev = spec.noiseStd;
                 nm.quantizationStep = spec.noiseQuant;
                 nm.driftRate = spec.driftRate;
+                nm.bias = spec.noiseBias;
+                nm.noiseDensity = spec.noiseDensity;
+                nm.bandwidthHz = spec.noiseBandwidthHz;
             }
             return sc;
         }

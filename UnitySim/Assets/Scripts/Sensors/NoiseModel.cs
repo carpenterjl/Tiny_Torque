@@ -8,6 +8,16 @@ namespace AIHWSim.Sensors
     /// random-walk bias drift (thermal drift). Applying realistic corruption in
     /// sim is what lets filters tuned here survive contact with real hardware.
     ///
+    /// White noise is given either as a per-sample σ (<see cref="noiseStdDev"/>)
+    /// or, the way a datasheet states it, as a density (units/√Hz,
+    /// <see cref="noiseDensity"/>): σ = density·√bandwidth. A density keeps its
+    /// meaning when the sample rate changes; a per-sample σ does not (SEN-07).
+    ///
+    /// One instance may serve several fields of a sensor (an IMU's three axes,
+    /// a colour sensor's r/g/b). Each field passes its own <c>channel</c>, so
+    /// each gets its own independent drift walk advanced once per sample —
+    /// not one walk shared by every field and stepped once per field.
+    ///
     /// Randomness is deterministic: each instance owns a System.Random seeded
     /// from <see cref="GlobalSeed"/> + a per-instance ordinal, so two runs with
     /// the same seed produce byte-identical sensor streams (repeatable controller
@@ -23,6 +33,10 @@ namespace AIHWSim.Sensors
         public float quantizationStep = 0f;
         [Tooltip("Random-walk bias drift rate (sensor units per √s). 0 disables drift.")]
         public float driftRate = 0f;
+        [Tooltip("White-noise density (sensor units per √Hz). When > 0 it replaces noiseStdDev: σ = density·√bandwidth.")]
+        public float noiseDensity = 0f;
+        [Tooltip("Noise bandwidth for noiseDensity (Hz). 0 = the Nyquist band of the sample rate, 1/(2·dt).")]
+        public float bandwidthHz = 0f;
 
         // ---- deterministic seeding ----------------------------------------
 
@@ -41,7 +55,8 @@ namespace AIHWSim.Sensors
         public static void ResetOrdinals() => _nextOrdinal = 0;
 
         [System.NonSerialized] private System.Random _rng;
-        [System.NonSerialized] private float _walk;
+        [System.NonSerialized] private float _walk;           // channel 0
+        [System.NonSerialized] private float[] _walks;        // channels 1..n
         [System.NonSerialized] private bool _hasSpare;
         [System.NonSerialized] private float _spare;
 
@@ -52,24 +67,60 @@ namespace AIHWSim.Sensors
         public void ResetState()
         {
             _walk = 0f;
+            _walks = null;
             _hasSpare = false;
             _rng = null;
         }
 
-        /// <summary>Legacy overload: bias + noise + quantization, no drift.</summary>
-        public float Apply(float trueValue) => Apply(trueValue, 0f);
+        /// <summary>Legacy overload: bias + noise + quantization; no drift, and
+        /// a noise density cannot apply without a sample period.</summary>
+        public float Apply(float trueValue) => Apply(trueValue, 0f, 0);
 
-        public float Apply(float trueValue, float dt)
+        public float Apply(float trueValue, float dt) => Apply(trueValue, dt, 0);
+
+        /// <summary>Corrupt one field. <paramref name="channel"/> picks the
+        /// field's own drift walk when one instance serves several fields.</summary>
+        public float Apply(float trueValue, float dt, int channel)
         {
+            float walk = WalkFor(channel);
             if (driftRate > 0f && dt > 0f)
-                _walk += NextGaussian() * driftRate * Mathf.Sqrt(dt);
+            {
+                walk += NextGaussian() * driftRate * Mathf.Sqrt(dt);
+                SetWalk(channel, walk);
+            }
 
-            float v = trueValue + bias + _walk;
-            if (noiseStdDev > 0f)
-                v += NextGaussian() * noiseStdDev;
+            float v = trueValue + bias + walk;
+            float sigma = Sigma(dt);
+            if (sigma > 0f)
+                v += NextGaussian() * sigma;
             if (quantizationStep > 1e-9f)
                 v = Mathf.Round(v / quantizationStep) * quantizationStep;
             return v;
+        }
+
+        /// <summary>Per-sample white-noise σ at sample period <paramref name="dt"/>.</summary>
+        public float Sigma(float dt)
+        {
+            if (noiseDensity > 0f)
+            {
+                float bw = bandwidthHz > 0f ? bandwidthHz : (dt > 0f ? 0.5f / dt : 0f);
+                if (bw > 0f) return noiseDensity * Mathf.Sqrt(bw);
+            }
+            return noiseStdDev;
+        }
+
+        private float WalkFor(int channel)
+        {
+            if (channel <= 0) return _walk;
+            return _walks != null && channel - 1 < _walks.Length ? _walks[channel - 1] : 0f;
+        }
+
+        private void SetWalk(int channel, float w)
+        {
+            if (channel <= 0) { _walk = w; return; }
+            if (_walks == null || channel - 1 >= _walks.Length)
+                System.Array.Resize(ref _walks, channel);
+            _walks[channel - 1] = w;
         }
 
         // Box–Muller transform on the instance RNG (both outputs used).

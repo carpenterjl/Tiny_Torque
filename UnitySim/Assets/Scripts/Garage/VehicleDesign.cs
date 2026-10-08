@@ -35,6 +35,9 @@ namespace AIHWSim.Garage
         public float noiseStd = 0f;               // Gaussian σ (sensor units)
         public float noiseQuant = 0f;             // quantization step (sensor units)
         public float driftRate = 0f;              // random-walk bias drift (units/√s)
+        public float noiseBias = 0f;              // constant offset (sensor units)
+        public float noiseDensity = 0f;           // white noise, units/√Hz; > 0 replaces noiseStd
+        public float noiseBandwidthHz = 0f;       // band for noiseDensity; 0 = Nyquist of the sample rate
         public float updateRateHz = 0f;           // 0 = fresh sample every control tick
         public float latencyMs = 0f;              // reported values delayed this much
 

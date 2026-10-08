@@ -246,8 +246,8 @@ namespace AIHWSim.Sensors
 
         public override void Sample(float dt, float[] dest, int offset)
         {
-            dest[offset] = noise.Apply(_voltage);
-            dest[offset + 1] = noise.Apply(_current);
+            dest[offset] = noise.Apply(_voltage, dt, 0);
+            dest[offset + 1] = noise.Apply(_current, dt, 1);
             dest[offset + 2] = _torque;
         }
     }

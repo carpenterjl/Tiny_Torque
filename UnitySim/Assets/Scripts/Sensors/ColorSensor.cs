@@ -68,9 +68,9 @@ namespace AIHWSim.Sensors
             // Noise per channel in a fixed order (deterministic RNG draw count),
             // then reflectance recomputed from the NOISY rgb so the four fields
             // stay consistent with each other.
-            float r = Mathf.Clamp01(noise.Apply(c.r, dt));
-            float g = Mathf.Clamp01(noise.Apply(c.g, dt));
-            float b = Mathf.Clamp01(noise.Apply(c.b, dt));
+            float r = Mathf.Clamp01(noise.Apply(c.r, dt, 0));
+            float g = Mathf.Clamp01(noise.Apply(c.g, dt, 1));
+            float b = Mathf.Clamp01(noise.Apply(c.b, dt, 2));
             dest[offset]     = r;
             dest[offset + 1] = g;
             dest[offset + 2] = b;

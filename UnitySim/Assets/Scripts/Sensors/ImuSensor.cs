@@ -53,15 +53,18 @@ namespace AIHWSim.Sensors
             bodyAngVel += vibGyro;
             bodyAccel += vibAccel;
 
+            // dt reaches the noise model now, so bias drift actually runs
+            // (it was dead code without it, BUG-08) and each axis walks on its
+            // own channel instead of all three sharing one walk (SEN-07).
             gyro = new Vector3(
-                gyroNoise.Apply(bodyAngVel.x),
-                gyroNoise.Apply(bodyAngVel.y),
-                gyroNoise.Apply(bodyAngVel.z));
+                gyroNoise.Apply(bodyAngVel.x, dt, 0),
+                gyroNoise.Apply(bodyAngVel.y, dt, 1),
+                gyroNoise.Apply(bodyAngVel.z, dt, 2));
 
             accel = new Vector3(
-                accelNoise.Apply(bodyAccel.x),
-                accelNoise.Apply(bodyAccel.y),
-                accelNoise.Apply(bodyAccel.z));
+                accelNoise.Apply(bodyAccel.x, dt, 0),
+                accelNoise.Apply(bodyAccel.y, dt, 1),
+                accelNoise.Apply(bodyAccel.z, dt, 2));
         }
     }
 }

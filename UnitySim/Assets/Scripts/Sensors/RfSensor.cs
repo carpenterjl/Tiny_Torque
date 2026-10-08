@@ -70,7 +70,7 @@ namespace AIHWSim.Sensors
                     // Noise on the RSSI only; id and bearing stay exact (the
                     // id is a label, and bearing noise would double-count the
                     // corruption a real DF rig gets from RSSI jitter anyway).
-                    r.rssiDbm = Mathf.Clamp(noise.Apply(r.rssiDbm, dt), RfField.RssiFloorDbm, 0f);
+                    r.rssiDbm = Mathf.Clamp(noise.Apply(r.rssiDbm, dt, s), RfField.RssiFloorDbm, 0f);
                     present = r.rssiDbm >= minRssiDbm;
                 }
                 if (!present)

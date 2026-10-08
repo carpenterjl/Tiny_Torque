@@ -33,8 +33,8 @@ namespace AIHWSim.Sensors
 
         public override void Sample(float dt, float[] dest, int offset)
         {
-            dest[offset]     = noise.Apply(_vehicle != null ? _vehicle.BatteryTerminalV : 0f);
-            dest[offset + 1] = noise.Apply(_vehicle != null ? _vehicle.BatteryCurrent : 0f);
+            dest[offset]     = noise.Apply(_vehicle != null ? _vehicle.BatteryTerminalV : 0f, dt, 0);
+            dest[offset + 1] = noise.Apply(_vehicle != null ? _vehicle.BatteryCurrent : 0f, dt, 1);
             dest[offset + 2] = _vehicle != null ? _vehicle.BatterySoc : 1f;
         }
     }

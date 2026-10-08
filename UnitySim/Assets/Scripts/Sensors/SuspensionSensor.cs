@@ -41,7 +41,7 @@ namespace AIHWSim.Sensors
             float comp  = _vehicle != null ? _vehicle.GetSuspensionCompression(wheelIndex) : 0f;
             float angle = _vehicle != null ? _vehicle.GetSuspensionAngle(wheelIndex) : 0f;
 
-            dest[offset]     = noise.Apply(force);
+            dest[offset]     = noise.Apply(force, dt);
             dest[offset + 1] = comp;
             dest[offset + 2] = angle;
         }

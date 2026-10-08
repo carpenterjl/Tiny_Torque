@@ -52,7 +52,7 @@ namespace AIHWSim.Sensors
                 if (d < best) best = d;
             }
 
-            float reading = Mathf.Clamp(noise.Apply(best), 0f, maxRange);
+            float reading = Mathf.Clamp(noise.Apply(best, dt), 0f, maxRange);
             dest[offset] = reading;
         }
 
