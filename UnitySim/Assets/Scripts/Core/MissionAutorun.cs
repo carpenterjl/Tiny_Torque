@@ -47,6 +47,9 @@ namespace AIHWSim.Core
             /// <summary>Sensor-noise seed for this run; 0 keeps the saved
             /// setting (random when that is 0 too). Fix it to diff two runs.</summary>
             public int noiseSeed;
+            /// <summary>Control rate to tick the firmware at; 0 keeps the
+            /// scene's (TIM-06: the same firmware at a different loop rate).</summary>
+            public int controlHz;
         }
 
         [Serializable]
@@ -67,6 +70,7 @@ namespace AIHWSim.Core
             public float controllerStopErr_mm;
             public float cruiseSpeedMean, cruiseSpeedMin, turnSpeedMin;
             public int noiseSeed;
+            public int controlHz;
             public string note = "";
         }
 
@@ -134,6 +138,7 @@ namespace AIHWSim.Core
                     }
 
             SimulationRunner.NoiseSeedOverride = _req.noiseSeed;
+            SimulationRunner.ControlRateOverride = _req.controlHz;
             GameFlow.ActiveDesign = design;
             if (track != null)
             {
@@ -291,6 +296,7 @@ namespace AIHWSim.Core
             _res.completed = ok;
             _res.note = note;
             _res.noiseSeed = Sensors.NoiseModel.GlobalSeed;
+            _res.controlHz = _runner != null ? _runner.controlRateHz : 0;
             _res.phase = _prevPhase;
             _res.fault = Dbg("dbg/fault", 0);
             _res.elapsedSec = _elapsed;

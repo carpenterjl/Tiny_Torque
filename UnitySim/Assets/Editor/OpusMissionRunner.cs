@@ -38,9 +38,11 @@ namespace AIHWSim.EditorTools
             // -opusCam WxH forces the camera resolution. All absent — which is
             // every mission run — leaves the scored mission exactly as it was.
             // -opusSeed N fixes the sensor-noise seed, so two runs can be diffed.
+            // -opusControlHz N ticks the firmware at N Hz instead of the scene's.
             int seed = int.TryParse(ArgValue("-opusSeed"), out int sd) ? sd : 0;
+            int hz = int.TryParse(ArgValue("-opusControlHz"), out int h) ? h : 0;
             Begin(result, timeout, ArgValue("-opusController") ?? "",
-                  ArgValue("-opusTrack"), ArgValue("-opusCam"), seed);
+                  ArgValue("-opusTrack"), ArgValue("-opusCam"), seed, hz);
         }
 
         private static string DefaultResultPath() =>
@@ -57,7 +59,7 @@ namespace AIHWSim.EditorTools
 
         private static void Begin(string resultPath, float timeoutSec,
                                   string controllerDll = "", string track = null,
-                                  string cam = null, int noiseSeed = 0)
+                                  string cam = null, int noiseSeed = 0, int controlHz = 0)
         {
             var req = new MissionAutorun.Request
             {
@@ -65,6 +67,7 @@ namespace AIHWSim.EditorTools
                 timeoutSec = timeoutSec,
                 controllerDll = controllerDll ?? "",
                 noiseSeed = noiseSeed,
+                controlHz = controlHz,
             };
             if (!string.IsNullOrEmpty(track)) req.track = track;
             // "128x128". Both halves or neither — a half-parsed size would run at

@@ -135,6 +135,12 @@ namespace AIHWSim.Core
         /// process without touching the saved settings. Set by the headless
         /// mission harness (<c>-opusSeed</c>) so two runs can be diffed.</summary>
         public static int NoiseSeedOverride;
+
+        /// <summary>Non-zero makes the next controller load tick at this rate
+        /// (nearest divisor of the physics rate), over the controller's own
+        /// request. Set by the headless harness (<c>-opusControlHz</c>) to show a
+        /// firmware is rate-independent (TIM-06).</summary>
+        public static int ControlRateOverride;
         private static void ApplyNoiseSeed()
         {
             if (_ordinalsResetFrame != Time.frameCount)
@@ -453,10 +459,13 @@ namespace AIHWSim.Core
         /// </summary>
         private void ApplyRequestedControlRate()
         {
-            if (_loader?.GetControlRate == null) return;
-            float want;
-            try { want = _loader.GetControlRate(); }
-            catch (Exception e) { Debug.LogWarning($"[SimRunner] ctrl_get_control_rate threw: {e.Message}"); return; }
+            float want = 0f;
+            if (_loader?.GetControlRate != null)
+            {
+                try { want = _loader.GetControlRate(); }
+                catch (Exception e) { Debug.LogWarning($"[SimRunner] ctrl_get_control_rate threw: {e.Message}"); }
+            }
+            if (ControlRateOverride > 0) want = ControlRateOverride;
             if (!(want > 0f)) return;
             int hz = Mathf.RoundToInt(want);
             if (hz == controlRateHz) return;
