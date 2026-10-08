@@ -175,14 +175,32 @@ namespace AIHWSim.EditorTools
             catch { return null; }
         }
 
-        private static void Report()
+        private static void Report() => Report(Load);
+
+        /// <summary>
+        /// Grade results already on disk, without running anything: each test's
+        /// JSON in <c>-physResultDir</c> stands for both passes (the directory
+        /// keeps only the last one, so determinism is not re-checked here).
+        /// </summary>
+        public static void ReportFromDir()
+        {
+            Report((id, pass) =>
+            {
+                string path = PhysicsTest.ResultPathFor(id);
+                if (!File.Exists(path)) return null;
+                try { return JsonUtility.FromJson<Result>(File.ReadAllText(path)); }
+                catch { return null; }
+            });
+        }
+
+        private static void Report(Func<string, int, Result> load)
         {
             var sb = new StringBuilder();
-            int failed = 0, missing = 0, unstable = 0;
+            int failed = 0, missing = 0, unstable = 0, invalid = 0;
 
             foreach (var e in PhysicsTestMenu.All)
             {
-                Result a = Load(e.Id, 1), b = Load(e.Id, 2);
+                Result a = load(e.Id, 1), b = load(e.Id, 2);
                 if (a == null || b == null)
                 {
                     Debug.LogError($"[PHYS] {e.Id} MISSING — no result from "
@@ -205,23 +223,30 @@ namespace AIHWSim.EditorTools
                 bool isFail = string.Equals(a.kind, "Fail", StringComparison.OrdinalIgnoreCase)
                            || string.Equals(b.kind, "Fail", StringComparison.OrdinalIgnoreCase);
                 bool isUnstable = gates && spread > SpreadTolerance;
+                // Invalid = the test produced no measurement (degenerate fit,
+                // timeout, an empty sample window). In an unattended suite
+                // there is no manual override, so that is a broken test, and
+                // it must not read as a pass — Info tests included.
+                bool isInvalid = string.Equals(a.kind, "Invalid", StringComparison.OrdinalIgnoreCase)
+                              || string.Equals(b.kind, "Invalid", StringComparison.OrdinalIgnoreCase);
 
                 if (isFail) failed++;
                 if (isUnstable) unstable++;
+                if (isInvalid) invalid++;
 
                 string line = $"[PHYS] {e.Id} {a.kind.ToUpperInvariant()} "
                               + $"{a.value:0.########} {a.units} (expect {a.expected}) "
                               + $"· run2 {b.value:0.########} · spread {spread * 100.0:0.####} %"
                               + (isUnstable ? "  ← NON-DETERMINISTIC" : "")
                               + (string.IsNullOrEmpty(a.detail) ? "" : $" — {a.detail}");
-                if (isFail || isUnstable) Debug.LogError(line); else Debug.Log(line);
+                if (isFail || isUnstable || isInvalid) Debug.LogError(line); else Debug.Log(line);
                 sb.AppendLine(line);
             }
 
-            int bad = failed + missing + unstable;
+            int bad = failed + missing + unstable + invalid;
             string summary = bad == 0
                 ? $"[PHYS] RESULT ALL PASS ({PhysicsTestMenu.All.Length} tests × 2 runs)"
-                : $"[PHYS] RESULT {failed} FAILED · {unstable} NON-DETERMINISTIC · "
+                : $"[PHYS] RESULT {failed} FAILED · {invalid} INVALID · {unstable} NON-DETERMINISTIC · "
                   + $"{missing} MISSING";
             if (bad == 0) Debug.Log(summary); else Debug.LogError(summary);
 

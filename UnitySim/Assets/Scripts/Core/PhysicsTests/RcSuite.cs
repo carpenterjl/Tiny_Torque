@@ -103,8 +103,8 @@ namespace AIHWSim.Core.PhysicsTests
             }
 
             string summary = _failed == 0
-                ? $"{Tag} RESULT ALL PASS ({_checks} checks)"
-                : $"{Tag} RESULT {_failed} FAILED of {_checks} checks";
+                ? $"{Tag} RESULT ALL PASS ({_checks} checks" + (_skipped > 0 ? $", {_skipped} SKIPPED" : "") + ")"
+                : $"{Tag} RESULT {_failed} FAILED of {_checks} checks" + (_skipped > 0 ? $", {_skipped} SKIPPED" : "");
             Debug.Log(_log.ToString().TrimEnd());
             if (_failed == 0) Debug.Log(summary); else Debug.LogError(summary);
             try
@@ -333,7 +333,7 @@ namespace AIHWSim.Core.PhysicsTests
                     extras.Clear();
                     Physics.SyncTransforms();
                 }
-                else Line("S03   the vehicle carries no multizone ToF: skipped");
+                else Skip("S03   the vehicle carries no multizone ToF");
 
                 if (flow != null)
                 {
@@ -372,7 +372,7 @@ namespace AIHWSim.Core.PhysicsTests
                     Check("S04", $"flow: over the rate limit at {Speed():0.0} m/s the chip loses track (squal)", fb[2], 0f, 0f, abs: true);
                     SetIq(0f);
                 }
-                else Line("S04   the vehicle carries no flow sensor: skipped");
+                else Skip("S04   the vehicle carries no flow sensor");
 
                 if (uwb != null)
                 {
@@ -428,7 +428,7 @@ namespace AIHWSim.Core.PhysicsTests
                           nb > 0 ? (float)(bias / nb) : 0f, uwb.nlosBiasMeanM, 0.25f);
                     Check("S05", "UWB NLOS: first-path power gap says NLOS (dB)", nb > 0 ? (float)(db / nb) : 0f, 6f, 0f, above: true);
                 }
-                else Line("S05   the vehicle carries no UWB tag: skipped");
+                else Skip("S05   the vehicle carries no UWB tag");
             }
             finally
             {
@@ -448,7 +448,7 @@ namespace AIHWSim.Core.PhysicsTests
         private void R6ServoStep(int hz)
         {
             Build(hz, 0f);
-            if (!_car.ServoModelled) { Line("R6    the design has no servo model (ACT-09): skipped"); return; }
+            if (!_car.ServoModelled) { Skip("R6    the design has no servo model (ACT-09)"); return; }
             const int steer = 6;
             float lockDeg = _car.MaxSteerDeg;
             float db = _car.servoDeadbandPct * 0.01f;
@@ -532,7 +532,7 @@ namespace AIHWSim.Core.PhysicsTests
         /// converters' errors — close to the truth, never equal to it.</summary>
         private void RealismInTheCar(int hz)
         {
-            if (_design.sensorRealism <= 0) { Line("SEN   the design keeps the legacy sensor profile: skipped"); return; }
+            if (_design.sensorRealism <= 0) { Skip("SEN   the design keeps the legacy sensor profile"); return; }
             Build(hz, 0f);
             SetIq(2f);
             Run(0.3f);
@@ -564,7 +564,7 @@ namespace AIHWSim.Core.PhysicsTests
         private void ImuInTheCar(int hz)
         {
             Build(hz, 0f);
-            if (_imu == null) { Line("IMU   the vehicle carries no SENSOR_IMU6 part: skipped"); return; }
+            if (_imu == null) { Skip("IMU   the vehicle carries no SENSOR_IMU6 part"); return; }
             var buf = new float[6];
             // tilt = g·sin(pitch) of the chip's x axis: what gravity alone puts
             // on the forward channel.
@@ -1214,5 +1214,16 @@ namespace AIHWSim.Core.PhysicsTests
         }
 
         private void Line(string s) => _log.AppendLine($"{Tag} {s}");
+
+        /// <summary>A test this vehicle cannot run (it lacks the part). Not a
+        /// failure, but counted in the RESULT line so a missing part on a twin
+        /// that should carry it cannot pass silently.</summary>
+        private void Skip(string why)
+        {
+            _skipped++;
+            Line(why + ": SKIPPED");
+        }
+
+        private int _skipped;
     }
 }
