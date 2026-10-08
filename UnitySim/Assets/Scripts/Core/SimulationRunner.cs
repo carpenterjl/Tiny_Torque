@@ -76,6 +76,16 @@ namespace AIHWSim.Core
 
         private int _decimation = 1;
         private int _physCounter;
+
+        // Sim clock (TIM-05). Integer: physics ticks consumed by control steps
+        // since the last rebase, at the rate in force since then. time_us is
+        // derived from it, so it never accumulates rounding — the old
+        // `_simTime += 0.01f` drifted measurably within minutes. _simTime is
+        // the float view of it, kept for every existing reader.
+        private long _timeBaseUs;
+        private long _ticksSinceBase;
+        private int _baseRateHz;
+        private uint _controlTick;
         private float _simTime;
 
         // Reusable managed buffers (avoid per-tick GC).
@@ -145,6 +155,7 @@ namespace AIHWSim.Core
             _decimation = Mathf.Max(1, Mathf.RoundToInt((float)physicsRateHz / controlRateHz));
             // Snap control rate to the exact achievable value after decimation.
             controlRateHz = Mathf.RoundToInt((float)physicsRateHz / _decimation);
+            if (physicsRateHz != _baseRateHz) RebaseClock(TimeUs);
 
             // Reports through PhysicsRateAuthority, which applies exactly this
             // write and additionally notices when a second runner in the same
@@ -638,7 +649,9 @@ namespace AIHWSim.Core
 
             // 4. Telemetry.
             RecordTelemetry(sp, ref outputs);
-            _simTime += controlDt;
+            _ticksSinceBase += _decimation;
+            _controlTick++;
+            _simTime = (float)(TimeUs * 1e-6);
 
             // 5. Optional hot reload.
             if (autoReloadOnChange && _loader != null && _loader.SourceIsNewer())
@@ -702,15 +715,35 @@ namespace AIHWSim.Core
         /// <summary>Sim clock (control-step time), e.g. for session snapshots.</summary>
         public float SimTime => _simTime;
 
+        /// <summary>Sim clock in microseconds: exact, no accumulated rounding.</summary>
+        public long TimeUs => _baseRateHz > 0
+            ? _timeBaseUs + _ticksSinceBase * 1_000_000L / _baseRateHz
+            : _timeBaseUs;
+
+        /// <summary>Control ticks since the run started (wraps at 2^32).</summary>
+        public uint ControlTick => _controlTick;
+
         /// <summary>Restore the sim clock when resuming a saved session.</summary>
-        public void RestoreSimTime(float t) => _simTime = Mathf.Max(0f, t);
+        public void RestoreSimTime(float t) => RebaseClock((long)Math.Round(Math.Max(0.0, t) * 1e6));
+
+        /// <summary>Restart the integer clock at <paramref name="us"/>, at the
+        /// current physics rate. Called on a rate change so earlier ticks keep
+        /// the period they were taken at.</summary>
+        private void RebaseClock(long us)
+        {
+            _timeBaseUs = us;
+            _ticksSinceBase = 0;
+            _baseRateHz = physicsRateHz;
+            _simTime = (float)(us * 1e-6);
+        }
 
         /// <summary>Reset the run in place: respawn the vehicle and clear telemetry history.</summary>
         public void RestartRun()
         {
             _vehicle?.ResetVehicle();
             Hub?.Clear();
-            _simTime = 0f;
+            RebaseClock(0);
+            _controlTick = 0;
             _physCounter = 0;
         }
 
