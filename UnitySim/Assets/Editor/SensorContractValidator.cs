@@ -51,6 +51,9 @@ namespace AIHWSim.EditorTools
             CheckContract<MemsImuSensor>();
             CheckContract<BatterySensor>();
             CheckContract<SteerAngleSensor>();
+            CheckContract<MultizoneTofSensor>();
+            CheckContract<FlowSensor>();
+            CheckContract<UwbSensor>();
             CheckAbiTags();
             CheckRealismProfile();
             CheckSoundField();
@@ -131,6 +134,9 @@ namespace AIHWSim.EditorTools
             True("SensorType.Led == 12", (int)SensorType.Led == 12);
             True("SensorType.Imu6 == 13", (int)SensorType.Imu6 == 13);
             True("SensorType.SteerAngle == 19", (int)SensorType.SteerAngle == 19);
+            True("SensorType.TofMz == 14", (int)SensorType.TofMz == 14);
+            True("SensorType.Flow == 15", (int)SensorType.Flow == 15);
+            True("SensorType.Uwb == 16", (int)SensorType.Uwb == 16);
         }
 
         // ---- SEN-06/09: the realistic profile -------------------------------

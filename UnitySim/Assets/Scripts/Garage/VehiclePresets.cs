@@ -749,6 +749,33 @@ namespace AIHWSim.Garage
                 massKg = 0.003f,
             });
 
+            // SEN-03/04/05, the navigation sensors:
+            // - a VL53L5CX 8×8 multizone ToF on the nose, 15 Hz;
+            // - a PAA5100JE optical-flow sensor under the chassis, looking down
+            //   (its up toward the nose: x forward, y left), read at 100 Hz;
+            // - a DW3000 UWB tag on the roof, 40 slots/s (10 Hz per anchor with
+            //   the proving ground's four anchors).
+            d.sensors.Add(new SensorSpec
+            {
+                name = "tof_mz", kind = SensorType.TofMz,
+                localPos = new Vector3(0f, 0.035f, 0.205f),
+                range = 4f, zones = 8, zoneFovDeg = 45f,
+                updateRateHz = 15f, latencyMs = 5f, massKg = 0.002f,
+            });
+            d.sensors.Add(new SensorSpec
+            {
+                name = "flow", kind = SensorType.Flow,
+                localPos = new Vector3(0f, -0.068f, 0f),   // 25 mm off the floor, on a bracket
+                aimEuler = new Vector3(90f, 0f, 0f),
+                flowPart = 0, updateRateHz = 100f, massKg = 0.002f,
+            });
+            d.sensors.Add(new SensorSpec
+            {
+                name = "uwb", kind = SensorType.Uwb,
+                localPos = new Vector3(0f, 0.095f, -0.060f),
+                updateRateHz = 40f, massKg = 0.005f,
+            });
+
             // SEN-06/09: the pack, the drivers and any compass report what the
             // real parts measure, with their errors; SoC and torque are not
             // measurable.

@@ -64,6 +64,15 @@ namespace AIHWSim.Garage
         // Bump switch (kind Bump); the acceptance cone reuses coneAngle.
         public float bumpRadius = 0.06f;
 
+        // Multizone ToF (kind TofMz): zones per side (4 or 8) and the square FoV.
+        // The range reuses `range`.
+        public int zones = 8;
+        public float zoneFovDeg = 45f;
+
+        // Optical flow (kind Flow): 0 = PAA5100JE (near-field, 15–35 mm),
+        // 1 = PMW3901 (≥ 80 mm).
+        public int flowPart = 0;
+
         // Raw MEMS IMU (kind Imu6): datasheet parameters, ICM-42688-P defaults.
         public Sensors.ImuSpec imu = new Sensors.ImuSpec();
 

@@ -58,6 +58,9 @@ namespace AIHWSim.Garage
                 Bridge.SensorType.Led => LedMass,
                 Bridge.SensorType.Imu6 => ImuMass,
                 Bridge.SensorType.SteerAngle => EncoderMass,
+                Bridge.SensorType.TofMz => TofMass,
+                Bridge.SensorType.Flow => ColorSensorMass,
+                Bridge.SensorType.Uwb => RfSensorMass,
                 _ => TofMass,
             };
         }

@@ -81,15 +81,25 @@ enum {
     SENSOR_BUMP       = 11, /* contact switch at the mount point (v6 append)    */
     SENSOR_LED        = 12, /* actuator part: firmware-driven LED (v6 append)   */
     /* v7 tags. Reserved now so the numbers never move; the sim emits each one
-     * once the matching part exists (SENSOR_IMU6, SENSOR_STEER_FB and
-     * SENSOR_FOC_FB are emitted already). */
+     * once the matching part exists; all of them are emitted now. */
     SENSOR_IMU6       = 13, /* raw 6-axis IMU part: [gx,gy,gz rad/s, ax,ay,az
                                m/s^2] in the CHIP frame (x = aim, y left, z up
                                out of the package; right-handed). Rotate by the
                                v7 manifest's rpy_rad; pos_m is the lever arm. */
-    SENSOR_TOF_MZ     = 14, /* multizone ToF                                   */
-    SENSOR_FLOW       = 15, /* optical flow                                    */
-    SENSOR_UWB        = 16, /* UWB ranging                                     */
+    SENSOR_TOF_MZ     = 14, /* multizone ToF: [d_0..d_{N*N-1} m, status_0..] with
+                               N*N = data_count/2; zone = row*N + col, row 0 at
+                               the top, col 0 at the left looking along the aim.
+                               Status 5 valid, 4 weak (noisier), 0 no target
+                               (d = range_max). rate_hz is the frame rate.     */
+    SENSOR_FLOW       = 15, /* optical flow: [dx, dy counts since the last read,
+                               squal 0-255]; x = the part's up, y = its left
+                               (aimed down, up toward the nose: x forward, y
+                               left); vehicle-motion sign. m = v/h + w x aim, so
+                               rotation reads as flow; squal 0 = invalid.     */
+    SENSOR_UWB        = 16, /* UWB ranging, one anchor per read (TDMA): [anchor
+                               id (-1 = no reply), range m, first-path power gap
+                               dB (> 6 suggests NLOS), anchor x, y, z m in the
+                               world frame x = Unity +z, y = -x, z = up]      */
     SENSOR_FOC_FB     = 17, /* an FOC-driven motor: [Iq A, Id A, w_m rad/s (driver
                                PLL), Vbus V, T_winding C, fault bits]; its slot
                                carries Iq (CTRL_UNITS_AMPS_IQ). Faults: 1 over-

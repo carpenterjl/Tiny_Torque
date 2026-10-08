@@ -283,6 +283,7 @@ namespace AIHWSim.TrackEd
             }
 
             var checkpoints = interactive ? d.OrderedCheckpoints() : null;
+            int uwbAnchors = 0;
             // Scenery that provably never moves gets static-batched at the end.
             // A themed map runs 40-60 mesh props; left unbatched that is a few
             // hundred draw calls on its own, more than the whole rest of the scene.
@@ -309,6 +310,13 @@ namespace AIHWSim.TrackEd
                 go.AddComponent<PlacedItemMarker>().index = i;
 
                 if (!interactive) continue;
+
+                if (def.id == "uwb_anchor")
+                {
+                    var head = go.transform.Find("Antenna");
+                    var anchor = (head != null ? head.gameObject : go).AddComponent<AIHWSim.Sensors.UwbAnchor>();
+                    anchor.anchorId = uwbAnchors++;
+                }
 
                 // Anything with a Rigidbody or a behaviour component can move or
                 // be toggled, so only inert scenery is eligible for batching —

@@ -416,6 +416,15 @@ namespace AIHWSim.TrackEd
                 dynamicMass = 0.03f, bottomHeavy = true, // light, weighted base: flies when hit, settles fast
                 build = p => TrackBuilder.Cone("Cone", Vector3.zero, 0.18f, 0.07f, ConeOrange, p) },
 
+            // A surveyed UWB anchor (SEN-05): a 1.5 m pole, the antenna on top.
+            // TrackFactory gives each one a UwbAnchor, numbered in item order.
+            new ItemDef { id = "uwb_anchor", label = "UWB anchor", category = ItemCategory.Misc,
+                build = p =>
+                {
+                    LCyl("Pole", p, Metal, new Vector3(0, 0.75f, 0), Vector3.zero, new Vector3(0.03f, 0.75f, 0.03f));
+                    LBox("Antenna", p, BarrierYellow, new Vector3(0, 1.52f, 0), Vector3.zero, new Vector3(0.06f, 0.04f, 0.06f));
+                } },
+
             new ItemDef { id = "barrier", label = "Barrier", category = ItemCategory.Obstacle,
                 build = p => LBox("Barrier", p, BarrierYellow, new Vector3(0, 0.125f, 0), Vector3.zero, new Vector3(0.6f, 0.25f, 0.125f)) },
 

@@ -413,6 +413,37 @@ namespace AIHWSim.Garage
                     PartVisualFactory.BuildRfViz(go.transform);
                     break;
                 }
+                case SensorType.TofMz:
+                {
+                    var t = go.AddComponent<MultizoneTofSensor>();
+                    t.zonesPerSide = spec.zones == 4 ? 4 : 8;
+                    t.fovDeg = spec.zoneFovDeg > 0f ? spec.zoneFovDeg : 45f;
+                    t.maxRange = spec.range > 0f ? spec.range : 4f;
+                    sc = t;
+                    PartVisualFactory.BuildTofViz(go.transform);
+                    break;
+                }
+                case SensorType.Flow:
+                {
+                    var f = go.AddComponent<FlowSensor>();
+                    if (spec.flowPart == 1)
+                    {
+                        // PMW3901: 7.4 rad/s, focused from 80 mm out.
+                        f.maxRateRadS = 7.4f;
+                        f.minHeightM = 0.08f;
+                        f.maxHeightM = 2f;
+                    }
+                    sc = f;
+                    PartVisualFactory.BuildColorViz(go.transform);
+                    break;
+                }
+                case SensorType.Uwb:
+                {
+                    var u = go.AddComponent<UwbSensor>();
+                    sc = u;
+                    PartVisualFactory.BuildRfViz(go.transform);
+                    break;
+                }
                 case SensorType.SteerAngle:
                 {
                     var s = go.AddComponent<SteerAngleSensor>();

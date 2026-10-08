@@ -210,6 +210,20 @@ For a v7 controller the host:
   (noise density, bias instability, turn-on bias, scale and cross-axis error,
   digital low-pass, full-scale clip, LSB). The top-level `gyro[]`/`accel[]`
   stay the simulator's built-in body IMU.
+- **Reports the navigation sensors** (Phase 3):
+  - `SENSOR_TOF_MZ` (14), a VL53L5CX/L7CX-class multizone ToF: `[d × N², status ×
+    N²]`, zone = row·N + col (row 0 at the top, col 0 at the left, looking
+    along the aim); status 5 valid, 4 weak, 0 no target (d = `range_max`).
+  - `SENSOR_FLOW` (15), a PAA5100JE/PMW3901-class optical-flow sensor: `[dx,
+    dy counts since the last read, squal 0–255]`, x = the part's up and y =
+    its left. The apparent motion is v⊥/h + ω × aim, so rotation reads as
+    flow; remove it with the gyro. squal 0 means lost (out of working height,
+    or over the rate limit).
+  - `SENSOR_UWB` (16), a DW3000-class tag ranging one anchor per read
+    (TDMA): `[anchor_id (−1 = no reply), range_m, nlos_db, anchor_x, anchor_y,
+    anchor_z]`. The anchor position is in the world frame x = Unity +z, y =
+    −x, z = up. Errors: antenna-delay bias, LOS σ, NLOS bias and dropouts,
+    rare outliers.
 - **Reports a steering-angle sensor as `SENSOR_STEER_ANGLE`** (tag 19):
   `[angle_rad]`, the bicycle-model road-wheel angle, + = left, after the
   servo's lag and the linkage backlash. It's an optional part (a pot or

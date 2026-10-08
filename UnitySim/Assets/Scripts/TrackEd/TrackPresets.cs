@@ -2080,6 +2080,13 @@ namespace AIHWSim.TrackEd
             d.items.Add(It("tire_stack", 18.2f, 6.4f));
             d.items.Add(It("tire_stack", 19.4f, 7.4f));
             d.items.Add(It("tire_stack", -18.6f, -5.0f));
+
+            // SEN-05: four UWB anchors at the corners of the field, far from
+            // the driven path; ids 0-3 counter-clockwise from the start end.
+            d.items.Add(It("uwb_anchor", -18.5f, -9.0f));
+            d.items.Add(It("uwb_anchor",  18.5f, -9.0f));
+            d.items.Add(It("uwb_anchor",  18.5f,  9.0f));
+            d.items.Add(It("uwb_anchor", -18.5f,  9.0f));
             return d;
         }
     }

@@ -67,6 +67,7 @@ namespace AIHWSim.Core.PhysicsTests
         private CarVehicle _car;
         private Rigidbody _body;
         private MemsImuSensor _imu;
+        private SensorComponent[] _parts = System.Array.Empty<SensorComponent>();
         private GameObject _carRoot, _ground;
         private readonly float[] _cmd = new float[8];
         private float _dt;
@@ -159,6 +160,179 @@ namespace AIHWSim.Core.PhysicsTests
             ImuInTheCar(400);
             RealismInTheCar(400);
             R6ServoStep(400);
+            NavSensorsInTheCar(400);
+        }
+
+        /// <summary>
+        /// SEN-03/04/05 in the car. Multizone ToF: a wall 1 m ahead covering
+        /// only the left half of the view is seen by the left zones at the
+        /// geometric distance and not by the right ones (rows 0–3 look level
+        /// or up, so the floor stays out of it). Optical flow: at a steady
+        /// crawl the counts integrate to K·v/h, sideways to nothing; past the
+        /// rate limit the chip loses track. UWB: four anchors 5 m out read the
+        /// true range plus the tag's antenna bias with the stated σ, one anchor
+        /// per slot in turn; behind a wall the range is biased long and the
+        /// power gap says NLOS.
+        /// </summary>
+        private void NavSensorsInTheCar(int hz)
+        {
+            Build(hz, 0f);
+            var mz = _carRoot.GetComponentInChildren<MultizoneTofSensor>();
+            var flow = _carRoot.GetComponentInChildren<FlowSensor>();
+            var uwb = _carRoot.GetComponentInChildren<UwbSensor>();
+            var extras = new List<GameObject>();
+            try
+            {
+                if (mz != null)
+                {
+                    Vector3 o = mz.transform.position, f = mz.transform.forward, rgt = mz.transform.right;
+                    var wall = GameObject.CreatePrimitive(PrimitiveType.Cube);
+                    wall.name = "nav_wall";
+                    wall.transform.rotation = Quaternion.LookRotation(f, Vector3.up);
+                    // 2 m wide, its right edge 5 cm left of the aim line.
+                    wall.transform.position = o + f * 1.05f - rgt * 1.05f + Vector3.up * 0.9f;
+                    wall.transform.localScale = new Vector3(2f, 2f, 0.1f);
+                    extras.Add(wall);
+                    Physics.SyncTransforms();
+                    var buf = new float[mz.DataCount];
+                    int n = mz.zonesPerSide, z = n * n;
+                    double sumErr = 0; int cnt = 0, leftValid = 0, rightNone = 0, rightCells = 0, leftCells = 0;
+                    for (int rep = 0; rep < 20; rep++)
+                    {
+                        mz.Sample(_dt, buf, 0);
+                        for (int row = 0; row < n / 2; row++)
+                            for (int col = 0; col < n; col++)
+                            {
+                                int i = row * n + col;
+                                if (col < n / 2 - 1)
+                                {
+                                    leftCells++;
+                                    if (buf[z + i] == MultizoneTofSensor.StatusValid) leftValid++;
+                                    // Closest sub-ray to the plane 1 m ahead.
+                                    float best = float.MaxValue;
+                                    for (int a = 0; a < mz.subRays; a++)
+                                        for (int b = 0; b < mz.subRays; b++)
+                                        {
+                                            Vector3 d = mz.ZoneDirection(row, col, (a + 0.5f) / mz.subRays, (b + 0.5f) / mz.subRays);
+                                            best = Mathf.Min(best, 1.0f / Mathf.Max(1e-3f, Vector3.Dot(d, f)));
+                                        }
+                                    sumErr += buf[i] - best; cnt++;
+                                }
+                                else if (col > n / 2)
+                                {
+                                    rightCells++;
+                                    if (buf[z + i] == MultizoneTofSensor.StatusNone) rightNone++;
+                                }
+                            }
+                    }
+                    Check("S03", "multizone ToF: left zones valid on the wall (fraction)", leftValid / (float)leftCells, 1f, 0f, abs: true);
+                    Check("S03", "multizone ToF: left zones' mean error vs geometry (m)", (float)(sumErr / cnt), 0f, 0.005f, abs: true);
+                    Check("S03", "multizone ToF: right zones see no target (fraction)", rightNone / (float)rightCells, 1f, 0f, abs: true);
+                    foreach (var g in extras) DestroyImmediate(g);
+                    extras.Clear();
+                    Physics.SyncTransforms();
+                }
+                else Line("S03   the vehicle carries no multizone ToF: skipped");
+
+                if (flow != null)
+                {
+                    var fb = new float[3];
+                    DriveToSpeed(0.8f, 3f);
+                    SetIq(0.4f);                       // hold a crawl against the losses
+                    Run(0.3f);
+                    flow.Sample(_dt, fb, 0);           // drop what accumulated so far
+                    double sx = 0, sy = 0, truth = 0, sq = 0; int reads = 0, steps = 0;
+                    int perRead = Mathf.Max(1, Mathf.RoundToInt(0.01f / _dt));
+                    for (int k = 0; k < 50; k++)
+                    {
+                        for (int s = 0; s < perRead; s++)
+                        {
+                            Step();
+                            // Independent of the sensor's own formula: the
+                            // body's forward speed over the height it sees.
+                            truth += Speed() / Mathf.Max(1e-4f, flow.TruthHeight) * flow.countsPerRad * _dt;
+                            steps++;
+                        }
+                        flow.Sample(_dt, fb, 0);
+                        sx += fb[0]; sy += fb[1]; sq += fb[2]; reads++;
+                    }
+                    float h = flow.TruthHeight;
+                    Check("S04", $"flow: working height at the mount (mm)", h * 1000f, 25f, 10f, abs: true);
+                    Check("S04", $"flow: forward counts vs K·∫v/h (body speed, height) over 0.5 s at {Speed():0.00} m/s (counts)",
+                          (float)sx, (float)truth, 0.03f);
+                    Check("S04", "flow: sideways counts on a straight run (counts)", (float)sy, 0f, 10f, abs: true);
+                    Check("S04", "flow: squal while tracking (0-255)", (float)(sq / reads), 128f, 0f, above: true);
+                    // Past the limit: 2 m/s at 25 mm is 80 rad/s, over 45.6.
+                    SetIq(3f);
+                    while (Speed() < 2f && _t < 60.0) Step();
+                    flow.Sample(_dt, fb, 0);
+                    Run(0.01f);
+                    flow.Sample(_dt, fb, 0);
+                    Check("S04", $"flow: over the rate limit at {Speed():0.0} m/s the chip loses track (squal)", fb[2], 0f, 0f, abs: true);
+                    SetIq(0f);
+                }
+                else Line("S04   the vehicle carries no flow sensor: skipped");
+
+                if (uwb != null)
+                {
+                    Build(hz, 0f);
+                    uwb = _carRoot.GetComponentInChildren<UwbSensor>();
+                    Vector3 c = uwb.transform.position;
+                    for (int a = 0; a < 4; a++)
+                    {
+                        float ang = a * Mathf.PI * 0.5f + 0.4f;
+                        var go = new GameObject($"uwb_anchor_{a}");
+                        go.transform.position = c + new Vector3(5f * Mathf.Cos(ang), 1.2f, 5f * Mathf.Sin(ang));
+                        go.AddComponent<UwbAnchor>().anchorId = a;
+                        extras.Add(go);
+                    }
+                    var ub = new float[6];
+                    var err = new List<float>[4];
+                    for (int a = 0; a < 4; a++) err[a] = new List<float>();
+                    bool robin = true; int expect = -1, drops = 0;
+                    for (int k = 0; k < 2000; k++)
+                    {
+                        uwb.Sample(_dt, ub, 0);
+                        if (expect >= 0 && uwb.TruthAnchor != expect) robin = false;
+                        expect = (uwb.TruthAnchor + 1) % 4;
+                        if (ub[0] < 0f) { drops++; continue; }
+                        float e = ub[1] - uwb.TruthRange - uwb.AntennaBias;
+                        if (Mathf.Abs(e) < 0.4f) err[(int)ub[0]].Add(e);   // outliers aside
+                    }
+                    Check("S05", "UWB: one anchor per slot, in id order (1 = yes)", robin ? 1f : 0f, 1f, 0f, abs: true);
+                    double m = 0, s2 = 0; int nn = 0;
+                    foreach (var l in err) foreach (var e in l) { m += e; s2 += e * e; nn++; }
+                    m /= nn; float sd = (float)System.Math.Sqrt(s2 / nn - m * m);
+                    Check("S05", "UWB LOS: mean range error after the antenna bias (m)", (float)m, 0f, 0.01f, abs: true);
+                    Check("S05", $"UWB LOS: range sigma (m)", sd, uwb.losSigmaM, 0.15f);
+                    Check("S05", "UWB LOS: dropout fraction", drops / 2000f, uwb.losDropout, 0.015f, abs: true);
+
+                    // A wall between the tag and anchor 0.
+                    Vector3 p0 = extras[extras.Count - 4].transform.position;
+                    var wall = GameObject.CreatePrimitive(PrimitiveType.Cube);
+                    wall.name = "uwb_wall";
+                    wall.transform.position = Vector3.Lerp(c, p0, 0.5f);
+                    wall.transform.rotation = Quaternion.LookRotation((p0 - c).normalized, Vector3.up);
+                    wall.transform.localScale = new Vector3(1.5f, 4f, 0.1f);
+                    extras.Add(wall);
+                    Physics.SyncTransforms();
+                    double bias = 0, db = 0; int nb = 0;
+                    for (int k = 0; k < 4000; k++)
+                    {
+                        uwb.Sample(_dt, ub, 0);
+                        if (ub[0] != 0f || !uwb.TruthNlos) continue;
+                        bias += ub[1] - uwb.TruthRange - uwb.AntennaBias; db += ub[2]; nb++;
+                    }
+                    Check("S05", "UWB NLOS: anchor behind a wall reads long (mean bias, m)",
+                          nb > 0 ? (float)(bias / nb) : 0f, uwb.nlosBiasMeanM, 0.25f);
+                    Check("S05", "UWB NLOS: first-path power gap says NLOS (dB)", nb > 0 ? (float)(db / nb) : 0f, 6f, 0f, above: true);
+                }
+                else Line("S05   the vehicle carries no UWB tag: skipped");
+            }
+            finally
+            {
+                foreach (var g in extras) if (g != null) DestroyImmediate(g);
+            }
         }
 
         /// <summary>
@@ -709,6 +883,7 @@ namespace AIHWSim.Core.PhysicsTests
             _body = _carRoot.GetComponent<Rigidbody>();
             built.rig.Initialize(_car, _carRoot.transform);
             _imu = _carRoot.GetComponentInChildren<MemsImuSensor>();
+            _parts = _carRoot.GetComponentsInChildren<SensorComponent>();
             _fwd0 = fwd;
 
             // Settle on its suspension, motors off. On a grade, hold it with
@@ -739,7 +914,8 @@ namespace AIHWSim.Core.PhysicsTests
             _car.SetCommands(_cmd);
             _car.StepPhysics(_dt);
             Physics.Simulate(_dt);
-            _imu?.PhysicsStep(0, _dt);
+            // Every part's physics-rate signal chain, as the runner's rig does.
+            foreach (var p in _parts) p.PhysicsStep(0, _dt);
             _t += _dt;
             if (_tr != null)
             {

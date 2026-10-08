@@ -40,9 +40,9 @@ namespace AIHWSim.Bridge
         Bump       = 11,  // v6: [contact_01, force_n]
         Led        = 12,  // v6: actuator part; readback [r,g,b,lit]
         Imu6       = 13,  // v7: raw 6-axis IMU part, chip frame (MemsImuSensor)
-        TofMz      = 14,  // v7 (reserved): multizone ToF
-        Flow       = 15,  // v7 (reserved): optical flow
-        Uwb        = 16,  // v7 (reserved): UWB ranging
+        TofMz      = 14,  // v7: multizone ToF [d × N², status × N²] (MultizoneTofSensor)
+        Flow       = 15,  // v7: optical flow [dx, dy counts, squal] (FlowSensor)
+        Uwb        = 16,  // v7: UWB ranging [id, range, nlos_db, anchor xyz] (UwbSensor)
         FocFb      = 17,  // v7 (reserved): FOC driver feedback
         SteerFb    = 18,  // v7: the steering servo; describes actuator[6]
         SteerAngle = 19,  // v7: measured road-wheel angle [rad, + left] (SteerAngleSensor)
