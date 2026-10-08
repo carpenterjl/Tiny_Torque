@@ -15,9 +15,16 @@ namespace AIHWSim.Core
     /// Physics runs at <see cref="physicsRateHz"/> (Unity FixedUpdate). The
     /// controller runs at <see cref="controlRateHz"/>, an integer division of
     /// the physics rate; between control ticks the actuator commands are held
-    /// (zero-order hold, like a real DAC/PWM latch). Sensor sampling, the
-    /// native controller call, and telemetry commit all happen on the control
-    /// tick, so logged timestamps are uniform at the control rate.
+    /// (zero-order hold, like a real DAC/PWM latch). The native controller call
+    /// and telemetry commit happen on the control tick, so logged timestamps
+    /// are uniform at the control rate.
+    ///
+    /// Timing (Phase 3): a sensor with its own rate, latency, phase or jitter
+    /// is sampled on the PHYSICS step its clock lands on (TIM-04), and its
+    /// latency is resolved to the physics step (TIM-02). A command reaches the
+    /// actuators <c>computeLatencyUs</c> after its control tick, also resolved
+    /// to the physics step (TIM-02), and the firmware's own time stamp can be
+    /// jittered (TIM-03). All default to 0 = the legacy timing.
     /// </summary>
     public sealed class SimulationRunner : MonoBehaviour
     {
@@ -118,6 +125,14 @@ namespace AIHWSim.Core
         // Actuation transport delay ring (actuationDelayTicks control ticks).
         private float[][] _cmdRing;
         private int _cmdRingHead;
+
+        // TIM-02 compute latency: commands waiting for their physics step.
+        private readonly CommandLatch _latch = new CommandLatch();
+        private long _physTick;
+
+        // TIM-03 control-tick jitter: the time stamp handed to the firmware.
+        private System.Random _jitterRng;
+        private long _lastReportedUs = long.MinValue;
 
         // Session noise seed: set once per process launch (before any sensor
         // samples) from GameSettings.noiseSeed, or drawn randomly when 0. Either
@@ -368,6 +383,11 @@ namespace AIHWSim.Core
                 { "noise_seed", NoiseModel.GlobalSeed.ToString() },
                 { "actuation_delay_ticks", actuationDelayTicks.ToString() },
             };
+            if (Car != null)
+            {
+                md["compute_latency_us"] = Car.computeLatencyUs.ToString();
+                md["control_jitter_us"] = Car.controlJitterUs.ToString("R");
+            }
             if (_loader != null && !string.IsNullOrEmpty(_loader.SourcePath) && File.Exists(_loader.SourcePath))
                 md["dll_write_utc"] = File.GetLastWriteTimeUtc(_loader.SourcePath).ToString("o");
             AddIdentity(md);
@@ -409,6 +429,8 @@ namespace AIHWSim.Core
                     sb.Append(sc.sensorName).Append(':').Append(sc.Type)
                       .Append(" rate=").Append(sc.updateRateHz.ToString("0.###"))
                       .Append("Hz lat=").Append(sc.latencyMs.ToString("0.###")).Append("ms");
+                    if (sc.phaseOffsetMs > 0f) sb.Append(" phase=").Append(sc.phaseOffsetMs.ToString("0.###")).Append("ms");
+                    if (sc.jitterUs > 0f) sb.Append(" jitter=").Append(sc.jitterUs.ToString("0.#")).Append("us");
                 }
                 md["sensors"] = sb.ToString();
             }
@@ -515,6 +537,7 @@ namespace AIHWSim.Core
         {
             _cmdRing = null;
             _cmdRingHead = 0;
+            _latch.Clear();
             if (!ControllerReady) return;
             try
             {
@@ -682,13 +705,92 @@ namespace AIHWSim.Core
             if (_vehicle == null) return;
 
             _physCounter++;
-            if (_physCounter >= _decimation)
+            bool control = _physCounter >= _decimation;
+
+            // TIM-04: sensors with a clock of their own sample on the physics
+            // step their clock lands on. TimeUs already points at the NEXT
+            // control tick between control steps, so this step is
+            // (decimation − counter) physics ticks before it. Steps before the
+            // first control tick (negative time) are skipped.
+            if (sensorRig != null)
+            {
+                long back = control ? 0 : _decimation - _physCounter;
+                long tick = _ticksSinceBase - back;
+                if (tick >= 0)
+                {
+                    long anchor = control ? _ticksSinceBase : _ticksSinceBase - _decimation;
+                    sensorRig.PhysicsTick(TicksToUs(tick), TicksToUs(System.Math.Max(0L, anchor)),
+                        ControlPeriodUs, PhysPeriodUs);
+                }
+            }
+
+            if (control)
             {
                 _physCounter = 0;
                 ControlStep();
             }
 
+            ApplyDueCommands();
             _vehicle.StepPhysics(Time.fixedDeltaTime);
+            _physTick++;
+        }
+
+        private long TicksToUs(long ticks) => _baseRateHz > 0
+            ? _timeBaseUs + ticks * 1_000_000L / _baseRateHz
+            : _timeBaseUs;
+
+        private long PhysPeriodUs => 1_000_000L / Math.Max(1, physicsRateHz);
+        private long ControlPeriodUs => _decimation * 1_000_000L / Math.Max(1, physicsRateHz);
+
+        private CarVehicle Car => vehicleBehaviour as CarVehicle;
+
+        /// <summary>
+        /// Hand a command vector to the actuators: now (compute latency 0, the
+        /// legacy behaviour) or queued for the physics step that lies
+        /// computeLatencyUs after this control tick (TIM-02). Motors and LEDs
+        /// get the same array at the same step.
+        /// </summary>
+        private void LatchCommands(float[] cmd)
+        {
+            var car = Car;
+            int latUs = car != null ? car.computeLatencyUs : 0;
+            long steps = latUs > 0
+                ? (long)Math.Round(latUs * (double)physicsRateHz / 1e6) : 0;
+            if (steps <= 0)
+            {
+                _vehicle.SetCommands(cmd);
+                sensorRig?.ApplyActuators(cmd, _simTime);
+                return;
+            }
+            _latch.Push(cmd, _physTick + steps);
+        }
+
+        /// <summary>Apply every queued command whose physics step has come;
+        /// the newest of them stays latched (zero-order hold).</summary>
+        private void ApplyDueCommands()
+        {
+            float[] cmd;
+            while ((cmd = _latch.PopDue(_physTick)) != null)
+            {
+                _vehicle.SetCommands(cmd);
+                sensorRig?.ApplyActuators(cmd, _simTime);
+            }
+        }
+
+        /// <summary>Firmware time stamp for this control tick: the true tick
+        /// time, plus Gaussian jitter when the car sets controlJitterUs
+        /// (clipped to ±¼ period so ticks never reorder).</summary>
+        private long ReportedTimeUs()
+        {
+            var car = Car;
+            float sigma = car != null ? car.controlJitterUs : 0f;
+            if (sigma <= 0f) return TimeUs;
+            if (_jitterRng == null)
+                _jitterRng = new System.Random(unchecked(NoiseModel.GlobalSeed * 486187739 ^ 0x71C4));
+            double u1 = 1.0 - _jitterRng.NextDouble(), u2 = _jitterRng.NextDouble();
+            double z = Math.Sqrt(-2.0 * Math.Log(u1)) * Math.Cos(2.0 * Math.PI * u2);
+            double lim = 0.25 * ControlPeriodUs;
+            return TimeUs + (long)Math.Round(Math.Max(-lim, Math.Min(lim, z * sigma)));
         }
 
         private unsafe void ControlStep()
@@ -697,7 +799,14 @@ namespace AIHWSim.Core
 
             // 1. Sensors — built-in (wheel vel + IMU) and the configurable rig.
             _vehicle.SampleSensors(controlDt, _wheelVel, _gyro, _accel);
-            sensorRig?.Sample(controlDt, TimeUs * 1e-6);
+            sensorRig?.Sample(controlDt, TimeUs);
+
+            // The clock as the firmware reads it (TIM-03 jitter), and the dt
+            // that follows from it.
+            long reportedUs = ReportedTimeUs();
+            float firmwareDt = _lastReportedUs == long.MinValue || reportedUs <= _lastReportedUs
+                ? controlDt : (reportedUs - _lastReportedUs) * 1e-6f;
+            _lastReportedUs = reportedUs;
 
             // 2. Operator setpoints.
             float[] sp = _setpointSource != null ? _setpointSource.Setpoints : null;
@@ -729,8 +838,8 @@ namespace AIHWSim.Core
             {
                 bool v7 = _loader.IsV7;
                 CtrlInputs inputs = default;
-                inputs.time_s = _simTime;
-                inputs.dt_s = controlDt;
+                inputs.time_s = (float)(reportedUs * 1e-6);
+                inputs.dt_s = firmwareDt;
                 for (int i = 0; i < 3; i++) { inputs.gyro[i] = _inGyro[i]; inputs.accel[i] = _inAccel[i]; }
                 for (int i = 0; i < 4; i++) inputs.wheel_vel[i] = _wheelVel[i];
                 if (sp != null) for (int i = 0; i < 4; i++) inputs.setpoint[i] = sp[i];
@@ -755,7 +864,7 @@ namespace AIHWSim.Core
                     {
                         inputs.tick = _controlTick;
                         inputs.flags = ControllerAbi.InFlu;
-                        inputs.time_us = (ulong)TimeUs;
+                        inputs.time_us = (ulong)reportedUs;
                         inputs.stamps = stampPtr;
                     }
 
@@ -797,15 +906,13 @@ namespace AIHWSim.Core
                 }
                 Array.Copy(_actuators, _cmdRing[_cmdRingHead], 8);
                 int tail = (_cmdRingHead + 1) % _cmdRing.Length; // oldest entry
-                _vehicle.SetCommands(_cmdRing[tail]);
                 // LEDs decode from the same delayed array the motors get.
-                sensorRig?.ApplyActuators(_cmdRing[tail], _simTime);
+                LatchCommands(_cmdRing[tail]);
                 _cmdRingHead = tail;
             }
             else
             {
-                _vehicle.SetCommands(_actuators);
-                sensorRig?.ApplyActuators(_actuators, _simTime);
+                LatchCommands(_actuators);
             }
 
             // 4. Telemetry.
@@ -887,9 +994,7 @@ namespace AIHWSim.Core
         public float SimTime => _simTime;
 
         /// <summary>Sim clock in microseconds: exact, no accumulated rounding.</summary>
-        public long TimeUs => _baseRateHz > 0
-            ? _timeBaseUs + _ticksSinceBase * 1_000_000L / _baseRateHz
-            : _timeBaseUs;
+        public long TimeUs => TicksToUs(_ticksSinceBase);
 
         /// <summary>Control ticks since the run started (wraps at 2^32).</summary>
         public uint ControlTick => _controlTick;
@@ -916,6 +1021,8 @@ namespace AIHWSim.Core
             RebaseClock(0);
             _controlTick = 0;
             _physCounter = 0;
+            _latch.Clear();
+            _lastReportedUs = long.MinValue;
         }
 
         private void OnGUI()
@@ -940,5 +1047,44 @@ namespace AIHWSim.Core
             SafeShutdown();
             _csv?.End();
         }
+    }
+
+    /// <summary>
+    /// Commands waiting for their physics step (TIM-02 compute latency): a
+    /// bounded FIFO of (apply-at physics tick, actuator vector). Pushes come
+    /// in tick order, so the head is always the next one due. A latency longer
+    /// than the queue drops the oldest command rather than growing.
+    /// </summary>
+    public sealed class CommandLatch
+    {
+        public const int Capacity = 64;
+        private readonly float[][] _cmd = new float[Capacity][];
+        private readonly long[] _at = new long[Capacity];
+        private int _head, _count;
+
+        public int Count => _count;
+
+        public void Push(float[] cmd, long applyAtTick)
+        {
+            if (_count == Capacity) { _head = (_head + 1) % Capacity; _count--; }
+            int slot = (_head + _count) % Capacity;
+            _cmd[slot] ??= new float[8];
+            Array.Copy(cmd, _cmd[slot], Math.Min(8, cmd.Length));
+            _at[slot] = applyAtTick;
+            _count++;
+        }
+
+        /// <summary>The oldest command due at or before <paramref name="tick"/>,
+        /// or null. The array stays valid until Capacity more pushes.</summary>
+        public float[] PopDue(long tick)
+        {
+            if (_count == 0 || _at[_head] > tick) return null;
+            var c = _cmd[_head];
+            _head = (_head + 1) % Capacity;
+            _count--;
+            return c;
+        }
+
+        public void Clear() { _head = 0; _count = 0; }
     }
 }

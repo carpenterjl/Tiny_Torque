@@ -1704,6 +1704,8 @@ namespace AIHWSim.Garage
                 spec.driftRate = Slider("Drift /√s", spec.driftRate, 0f, 0.05f);
                 spec.updateRateHz = Slider("Rate Hz (0=tick)", spec.updateRateHz, 0f, 100f);
                 spec.latencyMs = Slider("Latency ms", spec.latencyMs, 0f, 100f);
+                spec.phaseOffsetMs = Slider("Phase ms", spec.phaseOffsetMs, 0f, 20f);
+                spec.jitterUs = Slider("Jitter σ µs", spec.jitterUs, 0f, 2000f);
             }
 
             SymmetryUtil.SyncTwin(D, spec);

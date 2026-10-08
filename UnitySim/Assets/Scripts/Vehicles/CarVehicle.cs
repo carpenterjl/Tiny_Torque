@@ -391,6 +391,13 @@ namespace AIHWSim.Vehicles
         public float wheelVelNoiseStd = 0f;
         public int wheelVelQuantCpr = 0;
 
+        [Header("Firmware timing (factory-set; 0 = legacy)")]
+        // TIM-02: a command is applied this long after the control tick that
+        // sampled its inputs, resolved to the physics step.
+        public int computeLatencyUs = 0;
+        // TIM-03: σ of the jitter on the time stamp (and dt) the firmware sees.
+        public float controlJitterUs = 0f;
+
         private readonly float[] _vibPhase = new float[8];
         private NoiseModel[] _wheelVelNoise;
         // Quantized wheel_vel: a virtual encoder per wheel. The angle keeps the

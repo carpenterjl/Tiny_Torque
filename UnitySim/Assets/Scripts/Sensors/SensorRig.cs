@@ -10,9 +10,10 @@ namespace AIHWSim.Sensors
     /// Owns the sensor loadout for one vehicle. Discovers all child
     /// <see cref="SensorComponent"/>s, lays their outputs out contiguously in a
     /// flat float buffer, builds the <see cref="SensorInfo"/> manifest handed to
-    /// the controller via ctrl_configure(), samples everything at the control
-    /// rate, and publishes per-field telemetry channels. The first camera's frame
-    /// is exposed for the ABI's cam_pixels.
+    /// the controller via ctrl_configure(), samples the sensors (on the physics
+    /// step for those with a clock of their own, TIM-04; on the control tick
+    /// otherwise), and publishes per-field telemetry channels. The first
+    /// camera's frame is exposed for the ABI's cam_pixels.
     /// </summary>
     public sealed class SensorRig : MonoBehaviour
     {
@@ -155,24 +156,38 @@ namespace AIHWSim.Sensors
                     hub.RegisterChannel(n);
         }
 
-        /// <summary>Sample every sensor into the flat buffer (control-rate tick).</summary>
-        public void Sample(float dt, double simTime)
+        /// <summary>
+        /// Physics-step entry point (TIM-04): every sensor that keeps its own
+        /// sample clock takes its due samples here, on the physics grid. Called
+        /// on every physics step, before a control step that falls on the same
+        /// step. <paramref name="anchorUs"/> is the latest control tick at or
+        /// before <paramref name="tUs"/>.
+        /// </summary>
+        public void PhysicsTick(long tUs, long anchorUs, long controlPeriodUs, long physPeriodUs)
+        {
+            for (int i = 0; i < _sensors.Count; i++)
+                _sensors[i].PhysicsTick(tUs, anchorUs, controlPeriodUs, physPeriodUs);
+        }
+
+        /// <summary>Fill the flat buffer with what the firmware sees at this
+        /// control tick: fresh samples for clock-less sensors, the latency-
+        /// selected buffered sample for the rest.</summary>
+        public void Sample(float dt, long timeUs)
         {
             for (int i = 0; i < _sensors.Count; i++)
             {
                 var s = _sensors[i];
-                // SampleGated = per-sensor update rate + latency ring; with both
-                // at 0 (default) it's a straight fresh sample (legacy behaviour).
                 if (s.DataCount > 0)
                 {
-                    s.SampleGated(dt, simTime, _flat, _manifest[i].data_offset);
+                    s.Output(dt, timeUs, _flat, _manifest[i].data_offset);
                     _stamps[i].seq = s.StampSeq;
                     // Low 32 bits of the µs clock: firmware compares by difference.
-                    _stamps[i].t_sample_us = unchecked((uint)(long)System.Math.Round(s.StampTime * 1e6));
+                    _stamps[i].t_sample_us = unchecked((uint)s.StampUs);
                 }
             }
+            float simTime = (float)(timeUs * 1e-6);
             for (int c = 0; c < _cameras.Count; c++)
-                _cameras[c].CaptureIfDue((float)simTime);
+                _cameras[c].CaptureIfDue(simTime);
         }
 
         /// <summary>

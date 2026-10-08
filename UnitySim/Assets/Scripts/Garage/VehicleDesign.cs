@@ -43,6 +43,8 @@ namespace AIHWSim.Garage
         public float noiseBandwidthHz = 0f;       // band for noiseDensity; 0 = Nyquist of the sample rate
         public float updateRateHz = 0f;           // 0 = fresh sample every control tick
         public float latencyMs = 0f;              // reported values delayed this much
+        public float phaseOffsetMs = 0f;          // sample instants offset from the control grid (TIM-03)
+        public float jitterUs = 0f;               // σ of the sample-instant jitter (TIM-03)
 
         // Camera
         public int camWidth = 64;
@@ -381,6 +383,13 @@ namespace AIHWSim.Garage
         public float imuVibration = 0f;                      // motor-vibration coupling into the IMU
         public float wheelVelNoiseStd = 0f;                  // ABI wheel_vel Gaussian σ (rad/s)
         public int wheelVelQuantCpr = 0;                     // ABI wheel_vel CPR quantization; 0 = ideal
+        // Firmware timing (TIM-02/03; 0 = legacy). computeLatencyUs: a command
+        // reaches the actuators this long after the control tick that sampled
+        // its inputs, resolved to the physics step (the MCU's compute time, or
+        // one whole period for a timer-latched output). controlJitterUs: σ of
+        // the jitter on the time stamp (and so dt) the firmware is handed.
+        public int computeLatencyUs = 0;
+        public float controlJitterUs = 0f;
         public List<WheelSpec> wheels = new List<WheelSpec>();
         public List<SensorSpec> sensors = new List<SensorSpec>();
         public List<AeroSpec> aero = new List<AeroSpec>();   // old JSON → stays empty

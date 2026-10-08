@@ -50,6 +50,9 @@ namespace AIHWSim.Core
             /// <summary>Control rate to tick the firmware at; 0 keeps the
             /// scene's (TIM-06: the same firmware at a different loop rate).</summary>
             public int controlHz;
+            /// <summary>Compute latency (µs) to give the car; -1 keeps the
+            /// design's own (TIM-02: the same firmware with a later command).</summary>
+            public int computeLatencyUs = -1;
         }
 
         [Serializable]
@@ -137,6 +140,11 @@ namespace AIHWSim.Core
                         s.camHeight = _req.camHeight;
                     }
 
+            if (_req.computeLatencyUs >= 0)
+            {
+                design.computeLatencyUs = _req.computeLatencyUs;
+                Debug.Log($"[MissionAutorun] compute latency {_req.computeLatencyUs} us");
+            }
             SimulationRunner.NoiseSeedOverride = _req.noiseSeed;
             SimulationRunner.ControlRateOverride = _req.controlHz;
             GameFlow.ActiveDesign = design;

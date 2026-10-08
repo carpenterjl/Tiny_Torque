@@ -41,11 +41,13 @@ namespace AIHWSim.EditorTools
             // -opusControlHz N ticks the firmware at N Hz instead of the scene's.
             // -opusVehicle names another preset (e.g. "Opus Vector FOC", the
             // per-wheel FOC twin, which brings its own DLL).
+            // -opusComputeLatencyUs N applies each command N µs after its tick.
             int seed = int.TryParse(ArgValue("-opusSeed"), out int sd) ? sd : 0;
             int hz = int.TryParse(ArgValue("-opusControlHz"), out int h) ? h : 0;
+            int lat = int.TryParse(ArgValue("-opusComputeLatencyUs"), out int l) ? l : -1;
             Begin(result, timeout, ArgValue("-opusController") ?? "",
                   ArgValue("-opusTrack"), ArgValue("-opusCam"), seed, hz,
-                  ArgValue("-opusVehicle"));
+                  ArgValue("-opusVehicle"), lat);
         }
 
         private static string DefaultResultPath() =>
@@ -63,7 +65,7 @@ namespace AIHWSim.EditorTools
         private static void Begin(string resultPath, float timeoutSec,
                                   string controllerDll = "", string track = null,
                                   string cam = null, int noiseSeed = 0, int controlHz = 0,
-                                  string vehicle = null)
+                                  string vehicle = null, int computeLatencyUs = -1)
         {
             var req = new MissionAutorun.Request
             {
@@ -72,6 +74,7 @@ namespace AIHWSim.EditorTools
                 controllerDll = controllerDll ?? "",
                 noiseSeed = noiseSeed,
                 controlHz = controlHz,
+                computeLatencyUs = computeLatencyUs,
             };
             if (!string.IsNullOrEmpty(track)) req.track = track;
             if (!string.IsNullOrEmpty(vehicle)) req.vehicle = vehicle;

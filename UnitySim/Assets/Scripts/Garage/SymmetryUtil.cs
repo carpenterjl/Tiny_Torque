@@ -126,6 +126,8 @@ namespace AIHWSim.Garage
             dst.driftRate = src.driftRate;
             dst.updateRateHz = src.updateRateHz;
             dst.latencyMs = src.latencyMs;
+            dst.phaseOffsetMs = src.phaseOffsetMs;
+            dst.jitterUs = src.jitterUs;
         }
 
         public static void MirrorInto(AeroSpec src, AeroSpec dst)

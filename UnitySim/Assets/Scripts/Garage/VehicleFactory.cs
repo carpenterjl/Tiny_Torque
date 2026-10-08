@@ -88,6 +88,8 @@ namespace AIHWSim.Garage
             car.imuVibration = design.imuVibration;
             car.wheelVelNoiseStd = design.wheelVelNoiseStd;
             car.wheelVelQuantCpr = design.wheelVelQuantCpr;
+            car.computeLatencyUs = Mathf.Max(0, design.computeLatencyUs);
+            car.controlJitterUs = Mathf.Max(0f, design.controlJitterUs);
 
             // Scale-dependent constants the design now authors. The first three
             // were already public CarVehicle fields that nothing ever assigned,
@@ -414,6 +416,8 @@ namespace AIHWSim.Garage
             // (all 0 = clean fresh-sample-every-tick = legacy behaviour).
             sc.updateRateHz = spec.updateRateHz;
             sc.latencyMs = spec.latencyMs;
+            sc.phaseOffsetMs = spec.phaseOffsetMs;
+            sc.jitterUs = spec.jitterUs;
             NoiseModel nm = sc switch
             {
                 TofSensor t => t.noise,

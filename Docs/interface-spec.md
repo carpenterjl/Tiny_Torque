@@ -163,6 +163,15 @@ For a v7 controller the host:
   `seq` changes only when a sensor takes a **fresh** sample, so a 15 Hz ToF
   read inside a 100 Hz loop is recognisable as old; `t_sample_us` is when the
   value was sampled (low 32 bits of the µs clock — compare by difference).
+
+  Sample timing: a sensor with its own rate, latency, phase offset or jitter
+  is sampled on the **physics** step its clock lands on, so `t_sample_us` sits
+  on the physics grid (2.5 ms at 400 Hz), not the control grid. Its latency is
+  resolved to the physics step too. A sensor with no rate of its own takes one
+  sample per control period, exactly `latency_s` before the tick that reads
+  it. A design can also set a compute latency (a command reaches the
+  actuators that long after its tick) and a jitter on `time_us`/`dt_s`. By
+  default all of these are 0, which gives the older timing.
 - **Uses the FLU body frame.** SI units; x forward, y left, z up,
   right-handed (ISO 8855 / ROS REP-103). A left turn is a positive yaw rate,
   a car at rest reads accel ≈ (0, 0, +9.81), an RF bearing is positive to the
