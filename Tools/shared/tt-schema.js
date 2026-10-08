@@ -61,18 +61,46 @@
         escDeadbandV: 0.10,
         escTimeConstMs: 5,
         escSlewVPerS: 0,
+        escMovingOmega: 0,
         escDragBrakePct: 0,
         escBrakeStrengthPct: 100,
-        escReverseLockMs: 150
+        escReverseLockMs: 150,
+        // Phase 2 (ACT-01..07): drive mode, FOC, thermal, cogging, lash — all
+        // 0 = the legacy hobby-ESC motor,
+        driveMode: 0,
+        etaBack: 0,
+        polePairs: 0,
+        inductance: 0,
+        currentLoopHz: 0,
+        cmdPeriodMs: 0,
+        cmdLatencyMs: 0,
+        maxRegenCurrent: 0,
+        modulationMax: 0,
+        busOvTripV: 0,
+        busOvDerateV: 0,
+        thermalRwcKPerW: 0,
+        thermalCwJPerK: 0,
+        thermalRcaKPerW: 0,
+        thermalCcJPerK: 0,
+        tempDerateStartC: 0,
+        tempLimitC: 0,
+        coggingNm: 0,
+        coggingPerRev: 0,
+        rippleFrac: 0,
+        lashRad: 0
     };
     // Serialization order — must match MotorParams field declaration order.
     const MOTOR_FIELDS = [
         'maxVoltage', 'kt', 'resistance', 'gearRatio', 'noLoadCurrent',
         'viscousDamping', 'efficiency', 'maxCurrent', 'coulombScale',
         'rotorInertia', 'escPwmSteps', 'escDeadbandV', 'escTimeConstMs',
-        'escSlewVPerS', 'escDragBrakePct', 'escBrakeStrengthPct', 'escReverseLockMs'
+        'escSlewVPerS', 'escMovingOmega', 'escDragBrakePct', 'escBrakeStrengthPct', 'escReverseLockMs',
+        'driveMode', 'etaBack', 'polePairs', 'inductance', 'currentLoopHz', 'cmdPeriodMs',
+        'cmdLatencyMs', 'maxRegenCurrent', 'modulationMax', 'busOvTripV', 'busOvDerateV', 'thermalRwcKPerW',
+        'thermalCwJPerK', 'thermalRcaKPerW', 'thermalCcJPerK', 'tempDerateStartC', 'tempLimitC', 'coggingNm',
+        'coggingPerRev', 'rippleFrac', 'lashRad'
     ];
-    const MOTOR_INT_FIELDS = ['escPwmSteps'];
+    const MOTOR_INT_FIELDS = ['escPwmSteps', 'driveMode', 'polePairs', 'coggingPerRev'];
 
     const DATASHEET_DEFAULT = { nominalVoltage: 0, stallTorque: 0, noLoadRpm: 0, noLoadCurrent: 0 };
     const DATASHEET_FIELDS = ['nominalVoltage', 'stallTorque', 'noLoadRpm', 'noLoadCurrent'];
@@ -144,7 +172,7 @@
     const BATTERY_DEFAULT = {
         name: 'battery',
         localPos: { x: 0, y: -0.02, z: -0.05 },
-        mirrorGroup: -1, massKg: 0.18, nominalV: 7.4, internalR: 0.03, capacitymAh: 0
+        mirrorGroup: -1, massKg: 0.18, nominalV: 7.4, internalR: 0.03, capacitymAh: 0, auxLoadA: 0
     };
 
     const DESIGN_DEFAULT = {
@@ -507,7 +535,8 @@
             ['massKg', num(b.massKg)],
             ['nominalV', num(b.nominalV)],
             ['internalR', num(b.internalR)],
-            ['capacitymAh', num(b.capacitymAh)]
+            ['capacitymAh', num(b.capacitymAh)],
+            ['auxLoadA', num(b.auxLoadA)]
         ], ind);
     }
 

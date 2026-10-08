@@ -81,12 +81,17 @@ enum {
     SENSOR_BUMP       = 11, /* contact switch at the mount point (v6 append)    */
     SENSOR_LED        = 12, /* actuator part: firmware-driven LED (v6 append)   */
     /* v7 tags. Reserved now so the numbers never move; the sim emits each one
-     * once the matching part exists (SENSOR_STEER_FB is emitted already). */
+     * once the matching part exists (SENSOR_STEER_FB and SENSOR_FOC_FB are
+     * emitted already). */
     SENSOR_IMU6       = 13, /* raw 6-axis IMU part with a mount pose           */
     SENSOR_TOF_MZ     = 14, /* multizone ToF                                   */
     SENSOR_FLOW       = 15, /* optical flow                                    */
     SENSOR_UWB        = 16, /* UWB ranging                                     */
-    SENSOR_FOC_FB     = 17, /* FOC driver feedback: Iq, Id, w_m, Vbus, T, faults */
+    SENSOR_FOC_FB     = 17, /* an FOC-driven motor: [Iq A, Id A, w_m rad/s (driver
+                               PLL), Vbus V, T_winding C, fault bits]; its slot
+                               carries Iq (CTRL_UNITS_AMPS_IQ). Faults: 1 over-
+                               voltage, 2 over-temp derate, 4 current-limited,
+                               8 voltage-limited                              */
     SENSOR_STEER_FB   = 18  /* the steering servo: describes actuator[6]       */
 };
 

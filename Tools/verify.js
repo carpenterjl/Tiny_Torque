@@ -69,7 +69,15 @@ ok('every original field survives the round trip', diffs.length === 0, diffs.sli
     ok('output carries "' + k + '" (absent in the old file)', k in reparsed);
 });
 ok('wheel gains wheelStyle + suspLength', 'wheelStyle' in reparsed.wheels[0] && 'suspLength' in reparsed.wheels[0]);
-ok('motor object is complete (17 fields)', Object.keys(reparsed.wheels[0].motor).length === 17,
+// The C# struct is the source of truth: read MotorParams' fields from it.
+const csMotorFields = (() => {
+    const src = fs.readFileSync(path.join(__dirname, '..', 'UnitySim', 'Assets', 'Scripts', 'Vehicles', 'MotorModel.cs'), 'utf8');
+    const body = src.slice(src.indexOf('struct MotorParams'), src.indexOf('public static MotorParams Default()'));
+    return [...body.matchAll(/^\s*public\s+(?:float|int)\s+(\w+)\s*;/gm)].map(m => m[1]);
+})();
+ok('MOTOR_FIELDS match MotorParams in MotorModel.cs, in order',
+    JSON.stringify(csMotorFields) === JSON.stringify(S.MOTOR_FIELDS), csMotorFields.length + ' fields');
+ok('motor object is complete', Object.keys(reparsed.wheels[0].motor).length === csMotorFields.length,
     Object.keys(reparsed.wheels[0].motor).length + ' fields');
 S.MOTOR_FIELDS.forEach(f => { if (!(f in reparsed.wheels[0].motor)) { fails++; console.log('  FAIL  motor missing ' + f); } });
 ok('motor field ORDER matches MotorParams declaration',

@@ -103,6 +103,10 @@ namespace AIHWSim.Vehicles
         // wheel steers sharper about a shared turn centre on the rear-axle line).
         public float ackermannPct = 0f;
         public float maxBrakeTorque = 0.8f;       // lock threshold ≈ 0.23 N·m
+        /// <summary>False for a car with no friction brake (ACT-08): the brake
+        /// slot and handbrake do nothing and nothing parks the car — the
+        /// firmware holds it with motor current, as on the real thing.</summary>
+        public bool hasFrictionBrake = true;
         public float handbrakeTorque = 1.2f;
         /// <summary>Distribute foot-brake torque with instantaneous wheel load
         /// (EBD / proportioning valve). False = the fixed per-wheel
@@ -346,7 +350,12 @@ namespace AIHWSim.Vehicles
 
         /// <summary>Pack terminal voltage this step (0 when no battery part).</summary>
         public float BatteryTerminalV { get; private set; }
-        /// <summary>Total |motor current| drawn last step (A).</summary>
+        /// <summary>Electronics that draw from the pack whatever the motors do
+        /// (MCU, sensors, servo idle), A. 0 = none (old designs).</summary>
+        public float batteryAuxA = 0f;
+
+        /// <summary>Pack current last step (A, signed): the motors' power-balance
+        /// draw plus the auxiliary load. Negative = regen is charging it (ACT-02).</summary>
         public float BatteryCurrent { get; private set; }
         /// <summary>State of charge 0..1 (pinned at 1 when capacity = 0).</summary>
         public float BatterySoc { get; private set; } = 1f;
@@ -414,6 +423,13 @@ namespace AIHWSim.Vehicles
             public float patchSpeed;     // contact-patch ground speed (m/s, readout only)
             public bool grounded;        // last step's contact state (readout only)
             public float lastFy;         // last lateral tyre force (N) — servo load
+            public double angle;         // unwrapped spin angle (rad) for encoders and
+                                         // cogging; never reset, like a powered encoder
+            public float coupledJ;       // extra inertia riding on the wheel this step
+                                         // (a lash-modelled rotor in contact), 0 = none
+            public float lastExtTorque;  // last step's non-motor wheel torque (N·m)
+            public float ux, uy;         // contact-patch deflection (m), low-speed tyre
+            public float lastFz;         // last normal load (N), readout only
 
             // ---- tyre thermal state (cfg.pressureKpa > 0 only) ----
             // Integrated from the friction power the tyre model already computes,
@@ -603,6 +619,62 @@ namespace AIHWSim.Vehicles
         /// dump that reads WheelColliders.</summary>
         public float WheelSpinInertia(int i) =>
             i >= 0 && i < _wheels.Count ? _wheels[i].spinInertia : 0f;
+
+        /// <summary>Wheel i's unwrapped spin angle (rad, forward +), advanced
+        /// every physics step with the wheel's final speed. Never reset: a real
+        /// encoder keeps counting through a respawn.</summary>
+        public double WheelAngle(int i) =>
+            i >= 0 && i < _wheels.Count ? _wheels[i].angle : 0.0;
+
+        /// <summary>Last step's torque on wheel i from everything but its motor
+        /// (tyre force × r, brake, rolling resistance), N·m. Read by a lash-
+        /// modelled motor to decide whether its teeth stay in contact.</summary>
+        public float WheelLastExternalTorque(int i) =>
+            i >= 0 && i < _wheels.Count ? _wheels[i].lastExtTorque : 0f;
+
+        /// <summary>Inertia riding on wheel i for the coming step on top of its
+        /// own (a lash-modelled rotor while its teeth are in contact).</summary>
+        public void SetCoupledInertia(int i, float j)
+        {
+            if (i >= 0 && i < _wheels.Count) _wheels[i].coupledJ = Mathf.Max(0f, j);
+        }
+
+        /// <summary>Overwrite wheel i's spin (brush path only) — the inelastic
+        /// engagement of gear teeth across the lash.</summary>
+        public void SetWheelOmega(int i, float omega)
+        {
+            if (i >= 0 && i < _wheels.Count && TyreModel.Enabled) _wheels[i].omega = omega;
+        }
+
+        /// <summary>Body drag area Cd·A (m²) the aero model uses — read-only,
+        /// for validators that predict a coast-down from first principles.</summary>
+        public float AeroCdA
+        {
+            get { EffectiveAero(out float cd, out float area, out _); return cd * area; }
+        }
+
+        /// <summary>Set the pack's state of charge (0..1) — a partly used pack
+        /// for regen tests. Needs a finite capacity; no-op otherwise.</summary>
+        public void SetBatterySoc(float soc)
+        {
+            if (batteryCapacitymAh <= 0f) return;
+            soc = Mathf.Clamp01(soc);
+            _battAhUsed = (1f - soc) * batteryCapacitymAh * 0.001f;
+            BatterySoc = soc;
+        }
+
+        /// <summary>Every wheel runs the low-speed deflection tyre, which holds
+        /// the car statically by itself (PHY-01).</summary>
+        private bool AllWheelsHoldStatically()
+        {
+            if (_wheels.Count == 0) return false;
+            foreach (var w in _wheels) if (!(w.cfg.relaxLenM > 0f)) return false;
+            return true;
+        }
+
+        /// <summary>Wheel i's normal load last step (N; brush path).</summary>
+        public float WheelLoadN(int i) =>
+            i >= 0 && i < _wheels.Count ? _wheels[i].lastFz : 0f;
 
         /// <summary>Wheel i's longitudinal slip ratio κ.</summary>
         public float WheelSlipRatio(int i) =>
@@ -1553,6 +1625,9 @@ namespace AIHWSim.Vehicles
                 w.col.steerAngle = 0f;
                 w.omega = 0f;
                 w.spinAngle = 0f;
+                w.ux = w.uy = 0f;
+                w.coupledJ = 0f;
+                w.lastExtTorque = 0f;
                 w.driveTorque = 0f;
                 w.slipRatio = 0f;
                 w.slipNorm = 0f;
@@ -1649,7 +1724,8 @@ namespace AIHWSim.Vehicles
                 float v0 = batteryNominalV;
                 if (batteryCapacitymAh > 0f)
                 {
-                    _battAhUsed += BatteryCurrent * dt / 3600f;
+                    // Regen runs the counter backwards; a pack cannot go past full.
+                    _battAhUsed = Mathf.Max(0f, _battAhUsed + BatteryCurrent * dt / 3600f);
                     BatterySoc = Mathf.Clamp01(1f - _battAhUsed / (batteryCapacitymAh * 0.001f));
                     int cells = Mathf.Max(1, Mathf.RoundToInt(batteryNominalV / 3.7f));
                     v0 = cells * CellOcv(BatterySoc);
@@ -1658,9 +1734,10 @@ namespace AIHWSim.Vehicles
             }
             BatteryTerminalV = batteryNominalV > 0f ? vTerm : 0f;
 
-            // Drive: each motor turns its latched voltage into wheel torque via the
-            // DC model, so the achievable torque/current emerges from the physics.
-            float iTotal = 0f;
+            // Drive: each motor turns its latched command into wheel torque through
+            // its drive (DC model behind an ESC, or a current-controlled FOC
+            // driver), so the achievable torque/current emerges from the physics.
+            float iTotal = batteryAuxA;
             for (int i = 0; i < _motors.Count; i++)
             {
                 var m = _motors[i];
@@ -1669,21 +1746,25 @@ namespace AIHWSim.Vehicles
                 float volts = Frozen ? 0f : ((idx >= 0 && idx < _cmd.Length) ? _cmd[idx] : 0f);
                 volts *= arcadeDriveMult;                      // 1 outside arcade
                 volts *= _launchScale;                         // 1 unless launch control is cutting
-                if (batteryNominalV > 0f)
+                if (batteryNominalV > 0f && !m.IsFoc)
                     volts = Mathf.Clamp(volts, -vTerm, vTerm); // sagging rail caps the command
                 // The live rail, not the nominal maxVoltage, is the motor's ceiling:
                 // a fresh pack above nominal must not be clamped down to it (BUG-07).
+                // (An FOC command is amps; its driver applies the rail itself.)
                 m.BusVoltage = batteryNominalV > 0f ? Mathf.Max(0.01f, vTerm) : 0f;
-                m.SetVoltage(volts);
+                m.SetCommand(volts);
                 m.StepDrive(dt);
-                // Pack draw only — a shorted-winding ESC brake circulates its
-                // current inside the bridge and loads the pack not at all.
+                // Signed pack draw from each motor's power balance — a shorted-
+                // winding ESC brake circulates its current inside the bridge and
+                // loads the pack not at all; regen charges it.
                 iTotal += m.PackCurrent;
             }
             BatteryCurrent = iTotal;
 
             float steerCmd = Mathf.Clamp(_cmd[SteerActuator], -1f, 1f);
             float brake = Mathf.Clamp01(_cmd[BrakeActuator]) * maxBrakeTorque;
+            // A car with no friction brake (ACT-08) ignores the brake slot; its
+            // firmware stops and holds the car with motor current.
             float boost = arcadeBoostAccel;   // 0 outside arcade; pads max against it
             // Pads are accumulated separately so the pin latch below can stand
             // THEM down without touching an item boost or a drift carry. Maxing
@@ -1693,6 +1774,7 @@ namespace AIHWSim.Vehicles
 
             // Race countdown hold: full brakes, no drive/steer until GO.
             if (Frozen) { brake = maxBrakeTorque; steerCmd = 0f; }
+            if (!hasFrictionBrake) brake = 0f;
 
             // Rolling resistance must oppose MOTION, not act as a parking brake:
             // ramp it in from 0 at a standstill to full above RollResistRampSpeed.
@@ -1718,7 +1800,14 @@ namespace AIHWSim.Vehicles
             // on all four corners); only at true rest do we brake the phantom
             // wheels so the constraints return and park the car (slope hold).
             bool stickyHold = true;
-            if (TyreModel.Enabled)
+            if (TyreModel.Enabled && ((!hasFrictionBrake && !Frozen) || AllWheelsHoldStatically()))
+            {
+                // No friction brake, so nothing parks the car but its tyres and
+                // its motors (ACT-08) — or tyres that hold statically on their
+                // own (PHY-01): keep the PhysX constraint released always.
+                stickyHold = false;
+            }
+            else if (TyreModel.Enabled)
             {
                 if (_body.linearVelocity.sqrMagnitude > RestSpeed * RestSpeed)
                     stickyHold = false;
@@ -1869,7 +1958,7 @@ namespace AIHWSim.Vehicles
                               ? brake * w.brakeShare
                               : (w.cfg.brakeScale == 1f || w.cfg.brakeScale <= 0f
                                     ? brake : brake * w.cfg.brakeScale))
-                        + ((_handbrake && !w.cfg.allowsSteering)
+                        + ((_handbrake && !w.cfg.allowsSteering && hasFrictionBrake)
                             ? handbrakeTorque * arcadeHandbrakeMult : 0f);
 
                 // Per-tile surface (custom maps only): friction scaling, rolling
@@ -2009,6 +2098,7 @@ namespace AIHWSim.Vehicles
                         w.patchSpeed = Mathf.Sqrt(vx * vx + vy * vy);
                     }
                     w.grounded = grounded;
+                    w.lastFz = fz;
 
                     // Traction control cuts drive on wheelspin; ABS releases the
                     // foot brake toward lockup (deliberate handbrake locks exempt).
@@ -2037,6 +2127,12 @@ namespace AIHWSim.Vehicles
                     // rolling part heats the rubber — brake heat goes to the disc.
                     float rollTerm = grounded ? surf.rollingResist * rollScale : 0f;
                     if (thermal && grounded) rollTerm *= TyreThermal.RollResistScale(pRun);
+                    // Per-wheel rolling resistance and bearing drag (PHY-02): no
+                    // speed fade — the integrator's clamp already stops it
+                    // reversing the wheel, and a fade would hold nothing.
+                    if (w.cfg.rollCrr > 0f || w.cfg.bearingNm > 0f || w.cfg.bearingNmsPerRad > 0f)
+                        rollTerm += w.cfg.rollCrr * fz * r + w.cfg.bearingNm
+                                  + w.cfg.bearingNmsPerRad * Mathf.Abs(w.omega);
                     float resist = b + rollTerm;
 
                     float fx = 0f, fy = 0f;
@@ -2052,12 +2148,20 @@ namespace AIHWSim.Vehicles
                                   TyreThermal.GripVsPressure(pRun);
                         // _gripStiffness is the Tune "Grip (side)" knob; its legacy
                         // neutral value 2.0 maps to a lateral µ scale of 1.
-                        TyreModel.Forces(vx, vy, w.omega, r, fz, mu,
-                            _gripStiffness * 0.5f, dt,
-                            _wheels.Count / Mathf.Max(0.05f, _body.mass),
-                            r * r / Mathf.Max(1e-9f, w.spinInertia),
-                            w.cfg.ratedLoadN, w.driveTorque, resist,
-                            out fx, out fy);
+                        if (w.cfg.relaxLenM > 0f)
+                            TyreModel.BristleForces(vx, vy, w.omega, r, fz, mu,
+                                _gripStiffness * 0.5f, dt,
+                                _wheels.Count / Mathf.Max(0.05f, _body.mass),
+                                r * r / Mathf.Max(1e-9f, w.coupledJ > 0f ? w.spinInertia + w.coupledJ : w.spinInertia),
+                                w.cfg.ratedLoadN, w.cfg.relaxLenM,
+                                ref w.ux, ref w.uy, out fx, out fy);
+                        else
+                            TyreModel.Forces(vx, vy, w.omega, r, fz, mu,
+                                _gripStiffness * 0.5f, dt,
+                                _wheels.Count / Mathf.Max(0.05f, _body.mass),
+                                r * r / Mathf.Max(1e-9f, w.coupledJ > 0f ? w.spinInertia + w.coupledJ : w.spinInertia),
+                                w.cfg.ratedLoadN, w.driveTorque, resist,
+                                out fx, out fy);
 
                         // Where the lateral force reaches the SPRUNG mass. It does
                         // not arrive at the contact patch: it travels up the
@@ -2090,6 +2194,7 @@ namespace AIHWSim.Vehicles
                                 hit.point + transform.up * w.rollCentreH, ForceMode.Force);
                         }
                     }
+                    if (!(grounded && fz > 0f)) { w.ux = 0f; w.uy = 0f; }   // airborne: bristles relax
                     w.lastFy = fy;   // next step's servo load
 
                     // Tyre heat balance, integrated BEFORE the spin update so the
@@ -2119,7 +2224,8 @@ namespace AIHWSim.Vehicles
                     // as a decel toward zero. MoveTowards can never flip ω's sign
                     // in one step — that IS the static-hold clamp; a held wheel
                     // under way then skids (κ → −1) until ABS or release.
-                    float J = Mathf.Max(1e-9f, w.spinInertia);
+                    float J = Mathf.Max(1e-9f, w.coupledJ > 0f ? w.spinInertia + w.coupledJ : w.spinInertia);
+                    w.lastExtTorque = -fx * r - (resist > 0f ? Mathf.Sign(w.omega) * resist : 0f);
                     w.omega += (w.driveTorque - fx * r) / J * dt;
                     if (resist > 0f)
                         w.omega = Mathf.MoveTowards(w.omega, 0f, resist / J * dt);
@@ -2172,6 +2278,12 @@ namespace AIHWSim.Vehicles
                     w.col.brakeTorque = b;
                 }
             }
+
+            // Gear lash closes after the wheels have moved; then every wheel's
+            // angle advances with its final speed (semi-implicit, as the body
+            // moves), which is what an encoder counts (SEN-02).
+            for (int i = 0; i < _motors.Count; i++) _motors[i]?.AfterWheelStep(dt);
+            for (int i = 0; i < _wheels.Count; i++) _wheels[i].angle += WheelOmega(i) * (double)dt;
 
             // Pad pin latch — see the constants above. Off a pad this resets and
             // nothing else here runs, which is what keeps it invisible to any

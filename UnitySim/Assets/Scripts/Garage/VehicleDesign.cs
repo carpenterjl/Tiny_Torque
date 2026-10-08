@@ -28,6 +28,9 @@ namespace AIHWSim.Garage
         public int wheelIndex = 0;
         public int cprTicks = 360;                // encoder counts/rev
         public float encoderGearRatio = 1f;       // 1 = on wheel; >1 = on motor shaft
+        public int hallPolePairs = 0;             // >0 = Hall commutation as the encoder (6/elec rev)
+        public float inlDeg = 0f;                 // per-turn sinusoidal angle error (deg)
+        public int absAngleBits = 0;              // >0 = absolute-angle channel of this width
 
         public float massKg = 0f;                 // part mass; 0 = auto by kind
 
@@ -184,6 +187,19 @@ namespace AIHWSim.Garage
         /// derived rather than fitted.</summary>
         public float ratedLoadN = 0f;
 
+        /// <summary>Tyre relaxation length σ (m). &gt; 0 switches this wheel to the
+        /// deflection-state low-speed tyre (PHY-01), which holds statically on
+        /// its own and is timestep-independent at crawl speed. 0 = the legacy
+        /// slip model with its VLow damper and the PhysX park-hold.</summary>
+        public float relaxLenM = 0f;
+
+        /// <summary>Rolling resistance (PHY-02), in the spin integrator with no
+        /// speed fade: τ = rollCrr·F_z·r + bearingNm + bearingNmsPerRad·|ω|.
+        /// All 0 = none beyond the surface's own (legacy).</summary>
+        public float rollCrr = 0f;
+        public float bearingNm = 0f;
+        public float bearingNmsPerRad = 0f;
+
         // Drive motor (only used when powered)
         public bool powered = false;
         public MotorParams motor = MotorParams.Default();
@@ -297,6 +313,7 @@ namespace AIHWSim.Garage
         public float nominalV = 7.4f;
         public float internalR = 0.03f;       // pack + leads + connector (Ω)
         public float capacitymAh = 0f;        // 0 = infinite supply (no SoC); > 0 enables SoC + OCV sag
+        public float auxLoadA = 0f;           // MCU, sensors, servo idle: drawn whatever the motors do (A)
 
         public BatterySpec Clone() => (BatterySpec)MemberwiseClone();
     }
@@ -423,6 +440,13 @@ namespace AIHWSim.Garage
 
         /// <summary>Foot-brake torque per wheel (N·m).</summary>
         public float maxBrakeTorque = 0.8f;
+
+        /// <summary>False for a car with no friction brake — an FOC car that
+        /// stops and holds on motor current (ACT-08). The brake slot and the
+        /// handbrake then do nothing, and the PhysX park-hold never engages,
+        /// so firmware tuned in the sim cannot come to lean on a brake the
+        /// real car does not have.</summary>
+        public bool hasFrictionBrake = true;
 
         /// <summary>Handbrake torque (N·m). Also the park brake the sticky-tyre
         /// hold applies at rest.</summary>

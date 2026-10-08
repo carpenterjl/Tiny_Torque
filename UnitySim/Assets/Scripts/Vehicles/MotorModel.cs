@@ -53,6 +53,49 @@ namespace AIHWSim.Vehicles
         public float escBrakeStrengthPct; // full-brake duty scale (%); ≤0 = 100 (old JSON)
         public float escReverseLockMs;    // neutral dwell before reverse engages; ≤0 = 150 (old JSON)
 
+        // ---- Phase 2 (sim-to-real ACT-01..07): what drives this motor ----
+        // Every field below is 0 in old JSON, and 0 means "as before", except
+        // that a hobby ESC at neutral with no drag brake now coasts (ACT-03).
+
+        /// <summary><see cref="MotorDriveMode"/> as an int (JsonUtility-safe).
+        /// 0 = HobbyEsc, the only kind there was.</summary>
+        public int driveMode;
+        /// <summary>Gearbox efficiency when the WHEEL drives the motor (braking,
+        /// regen). The wheel then feels τ_m·G/η_back: the losses add to the
+        /// braking. 0 = the legacy ×efficiency both ways (BUG-05) on the voltage
+        /// drives; an FOC drive always divides, by <c>efficiency</c> if unset.</summary>
+        public float etaBack;
+
+        // FOC current drive (driveMode = CurrentFoc). The command is Iq in amps.
+        public int polePairs;            // electrical / mechanical; 0 → 7
+        public float inductance;         // phase L (H); 0 = no cross-coupling term
+        public float currentLoopHz;      // closed current-loop bandwidth; 0 = instant
+        public float cmdPeriodMs;        // command sample-and-hold period; 0 = every step
+        public float cmdLatencyMs;       // transport delay, MCU frame → driver; 0 = none
+        public float maxRegenCurrent;    // braking-current limit (A); 0 = maxCurrent
+        public float modulationMax;      // usable fraction of V_bus; 0 → 0.95
+        public float busOvTripV;         // over-voltage fault (V); 0 = none
+        public float busOvDerateV;       // regen fades from here to the trip; 0 = trip − 0.3 V
+
+        // Thermal (ACT-05): winding ↔ case ↔ ambient. R_wc = 0 = model off.
+        public float thermalRwcKPerW;    // winding → case
+        public float thermalCwJPerK;     // winding heat capacity
+        public float thermalRcaKPerW;    // case → ambient
+        public float thermalCcJPerK;     // case heat capacity
+        public float tempDerateStartC;   // current limits derate linearly from here…
+        public float tempLimitC;         // …to zero here; 0 = no derate
+
+        // Cogging and torque ripple (ACT-06), motor shaft. 0 = off.
+        public float coggingNm;          // cogging amplitude
+        public int coggingPerRev;        // cogging periods per mechanical turn
+        public float rippleFrac;         // 6th-harmonic ripple as a fraction of kt·Iq
+
+        // Gear lash (ACT-07), referred to the WHEEL: total free play (rad).
+        // 0 = rigid, the rotor inertia riding on the wheel as before. The teeth
+        // are rigid once in contact and engage inelastically — the stiff-spring
+        // limit, which needs no sub-stepping.
+        public float lashRad;
+
         // A 540-class brushed motor on a 2S LiPo (the 1/10 RC / F1TENTH staple):
         // ~23,000 rpm no-load, 82 A stall (ESC-clamped to 40 A), 8:1 reduction.
         // Two on the rear wheels top a ~1.8 kg car out near ~10 m/s.
@@ -79,6 +122,21 @@ namespace AIHWSim.Vehicles
                 escReverseLockMs = 150f,
             };
         }
+    }
+
+    /// <summary>What sits between the firmware's command and the motor.</summary>
+    public enum MotorDriveMode
+    {
+        /// <summary>Volts through a hobby ESC: deadband, PWM, lag, and the
+        /// drive/brake/reverse state machine. The legacy model.</summary>
+        HobbyEsc = 0,
+        /// <summary>Signed volts straight onto the winding, four-quadrant, no
+        /// state machine (a bench supply or an H-bridge with no brake logic).</summary>
+        Voltage4Q = 1,
+        /// <summary>An FOC driver with a closed current loop. The command is Iq
+        /// (A); negative while rolling forward is regen braking, reversing has
+        /// no lockout, and zero current coasts.</summary>
+        CurrentFoc = 2,
     }
 
     /// <summary>Datasheet-style figures, an alternate way to specify a motor.</summary>
@@ -125,17 +183,92 @@ namespace AIHWSim.Vehicles
             // stalled motor below breakaway produces exactly zero (no 400 Hz chatter).
             // coulombScale = 0 (old JSON) reproduces the legacy frictionless equation.
             float tc = Mathf.Max(0f, p.coulombScale) * p.kt * Mathf.Max(0f, p.noLoadCurrent);
-            float torqueMotor;
+            float torqueMotor = WithFriction(tauEm, tauVisc, tc, omegaMotor);
+            return GearToWheel(in p, torqueMotor, omegaMotor);
+        }
+
+        /// <summary>
+        /// Shaft torque after friction. Running: Coulomb opposes rotation.
+        /// Near standstill: a breakaway branch that is dissipative-only — it
+        /// reduces |net torque| but never reverses it, so a stalled motor below
+        /// breakaway produces exactly zero (no 400 Hz chatter).
+        /// </summary>
+        public static float WithFriction(float tauEm, float tauVisc, float tc, float omegaMotor)
+        {
             if (Mathf.Abs(omegaMotor) > 0.5f)
-            {
-                torqueMotor = tauEm - tauVisc - tc * Mathf.Sign(omegaMotor);
-            }
-            else
-            {
-                float net = tauEm - tauVisc;
-                torqueMotor = Mathf.Sign(net) * Mathf.Max(0f, Mathf.Abs(net) - tc);
-            }
+                return tauEm - tauVisc - tc * Mathf.Sign(omegaMotor);
+            float net = tauEm - tauVisc;
+            return Mathf.Sign(net) * Mathf.Max(0f, Mathf.Abs(net) - tc);
+        }
+
+        /// <summary>Coulomb friction torque Tc = scale·kt·I0 (motor shaft).</summary>
+        public static float CoulombTorque(in MotorParams p) =>
+            Mathf.Max(0f, p.coulombScale) * p.kt * Mathf.Max(0f, p.noLoadCurrent);
+
+        /// <summary>
+        /// Open circuit: no current, so only the motor's friction and the
+        /// gearbox act — what a real ESC does at neutral with drag brake off
+        /// (ACT-03 / BUG-04). The car coasts.
+        /// </summary>
+        public static float CoastTorque(in MotorParams p, float wheelOmega)
+        {
+            float omegaMotor = wheelOmega * Mathf.Max(1e-3f, p.gearRatio);
+            float torqueMotor = WithFriction(0f, p.viscousDamping * omegaMotor,
+                                             CoulombTorque(in p), omegaMotor);
+            return GearToWheel(in p, torqueMotor, omegaMotor);
+        }
+
+        /// <summary>
+        /// Motor-shaft torque → wheel torque through the gearbox. Driving, the
+        /// gearbox loses (1 − η) of it. Back-driven (the wheel turns the motor:
+        /// braking, regen) the losses ADD to the braking, so the wheel feels
+        /// τ_m·G/η_back (ACT-04). <c>etaBack</c> = 0 keeps the legacy ×η both
+        /// ways (BUG-05) — the same expression, so existing designs' torques are
+        /// unchanged bit for bit.
+        /// </summary>
+        public static float GearToWheel(in MotorParams p, float torqueMotor, float omegaMotor)
+        {
+            float gear = Mathf.Max(1e-3f, p.gearRatio);
+            if (p.etaBack > 0f && torqueMotor * omegaMotor < 0f)
+                return torqueMotor * gear / Mathf.Clamp(p.etaBack, 0.05f, 1f);
             return torqueMotor * gear * Mathf.Clamp01(p.efficiency <= 0f ? 1f : p.efficiency);
+        }
+
+        /// <summary>The FOC drive's version: always divides when back-driven,
+        /// by <c>etaBack</c> or else by <c>efficiency</c> — an FOC design is new,
+        /// so it has no legacy number to keep.</summary>
+        public static float FocGearToWheel(in MotorParams p, float torqueMotor, float omegaMotor)
+        {
+            float gear = Mathf.Max(1e-3f, p.gearRatio);
+            float etaD = Mathf.Clamp(p.efficiency <= 0f ? 1f : p.efficiency, 0.05f, 1f);
+            float etaB = p.etaBack > 0f ? Mathf.Clamp(p.etaBack, 0.05f, 1f) : etaD;
+            return torqueMotor * omegaMotor < 0f
+                ? torqueMotor * gear / etaB
+                : torqueMotor * gear * etaD;
+        }
+
+        /// <summary>
+        /// The Iq interval an FOC inverter can actually push at this speed
+        /// (ACT-01, voltage ceiling). With Id = 0 the winding needs
+        /// Vq = R·Iq + Ke·ω_m and Vd = −ω_e·L·Iq, and the modulator can supply
+        /// |V_dq| ≤ V_lim. Solving that circle for Iq gives [lo, hi]: the torque
+        /// roll-off at speed, and less of it on a sagging pack. When the
+        /// back-EMF alone is outside the circle (no field weakening is modelled)
+        /// both ends collapse onto the nearest reachable point.
+        /// </summary>
+        public static void FocIqWindow(float r, float ke, float l, int polePairs,
+                                       float omegaM, float vLim, out float lo, out float hi)
+        {
+            float xl = polePairs * omegaM * l;          // ω_e·L
+            float e = ke * omegaM;                      // back-EMF
+            float a = r * r + xl * xl;
+            float b = 2f * r * e;
+            float c = e * e - vLim * vLim;
+            float disc = b * b - 4f * a * c;
+            if (disc <= 0f) { lo = hi = -b / (2f * a); return; }
+            float s = Mathf.Sqrt(disc);
+            lo = (-b - s) / (2f * a);
+            hi = (-b + s) / (2f * a);
         }
 
         /// <summary>
@@ -164,7 +297,7 @@ namespace AIHWSim.Vehicles
             float tc = Mathf.Max(0f, p.coulombScale) * p.kt * Mathf.Max(0f, p.noLoadCurrent);
             float torqueMotor = -Mathf.Sign(omegaMotor) * (p.kt * iBrake + tc)
                                 - p.viscousDamping * omegaMotor;
-            return torqueMotor * gear * Mathf.Clamp01(p.efficiency <= 0f ? 1f : p.efficiency);
+            return GearToWheel(in p, torqueMotor, omegaMotor);
         }
 
         // ---- datasheet ↔ constants ----

@@ -274,7 +274,7 @@ namespace AIHWSim.Core
                     if (m == null) continue;
                     int idx = m.ActuatorIndex;
                     if (idx >= 0 && idx < actuatorOut.Length)
-                        actuatorOut[idx] = throttle * m.MaxVoltage;
+                        actuatorOut[idx] = throttle * m.MaxCommand;   // volts, or amps on FOC
                 }
             }
             if (CarVehicle.SteerActuator < actuatorOut.Length)

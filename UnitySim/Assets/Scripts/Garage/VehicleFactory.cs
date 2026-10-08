@@ -95,6 +95,7 @@ namespace AIHWSim.Garage
             // and one anti-roll bar; the design defaults are those same numbers,
             // so nothing moves.
             car.maxBrakeTorque = design.maxBrakeTorque;
+            car.hasFrictionBrake = design.hasFrictionBrake;
             car.handbrakeTorque = design.handbrakeTorque;
             car.brakeProportioning = design.brakeProportioning;
             car.antiRoll = design.antiRoll;
@@ -149,9 +150,15 @@ namespace AIHWSim.Garage
                     brakeScale = w.brakeScale,
                     linkage = w.linkage,
                     ratedLoadN = w.ratedLoadN,
+                    relaxLenM = Mathf.Max(0f, w.relaxLenM),
+                    rollCrr = Mathf.Max(0f, w.rollCrr),
+                    bearingNm = Mathf.Max(0f, w.bearingNm),
+                    bearingNmsPerRad = Mathf.Max(0f, w.bearingNmsPerRad),
                     // Reflected drivetrain inertia J·gear² for powered wheels
                     // (0 on old JSON / unpowered wheels = legacy spin inertia).
-                    extraSpinInertia = w.powered && w.motor.rotorInertia > 0f
+                    // A motor with gear lash keeps its rotor as its own body
+                    // (MotorPart), coupled only while the teeth are in contact.
+                    extraSpinInertia = w.powered && w.motor.rotorInertia > 0f && !(w.motor.lashRad > 0f)
                         ? w.motor.rotorInertia * w.motor.gearRatio * w.motor.gearRatio
                         : 0f,
                 };
@@ -194,6 +201,7 @@ namespace AIHWSim.Garage
                     car.batteryNominalV = Mathf.Max(0.01f, b.nominalV);
                     car.batteryInternalR = Mathf.Max(0f, b.internalR);
                     car.batteryCapacitymAh = Mathf.Max(0f, b.capacitymAh); // 0 = ∞
+                    car.batteryAuxA = Mathf.Max(0f, b.auxLoadA);
                 }
                 batteryVisuals[i] = CreateBatteryVisual(root.transform, b, withSensor: true);
             }
@@ -331,6 +339,9 @@ namespace AIHWSim.Garage
                     e.wheelIndex = spec.wheelIndex;
                     e.countsPerRev = spec.cprTicks;
                     e.gearRatio = spec.encoderGearRatio;
+                    e.hallPolePairs = Mathf.Max(0, spec.hallPolePairs);
+                    e.inlDeg = spec.inlDeg;
+                    e.absAngleBits = Mathf.Max(0, spec.absAngleBits);
                     sc = e;
                     PartVisualFactory.BuildEncoderViz(go.transform);
                     break;

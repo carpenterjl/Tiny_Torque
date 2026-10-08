@@ -92,13 +92,14 @@ namespace AIHWSim.Sensors
                 };
 
                 // Motors are also actuators: give each a distinct actuator slot and
-                // advertise its voltage limits via range_min/range_max.
+                // advertise its command limits via range_min/range_max — volts
+                // for a voltage drive, amps of Iq for an FOC drive.
                 if (s is MotorPart motor)
                 {
                     motor.ActuatorIndex = motorOrdinal++;
                     info.actuator_index = motor.ActuatorIndex;
-                    info.range_min = -motor.MaxVoltage;
-                    info.range_max = motor.MaxVoltage;
+                    info.range_min = -motor.MaxCommand;
+                    info.range_max = motor.MaxCommand;
                     _motors.Add(motor);
                 }
 
@@ -218,13 +219,13 @@ namespace AIHWSim.Sensors
                 {
                     case WheelEncoderSensor enc:
                         wheel = enc.wheelIndex;
-                        e.cpr = enc.countsPerRev;
+                        e.cpr = enc.EffectiveCpr;
                         e.wrap = enc.wrap;
                         e.gear_ratio = enc.gearRatio;
                         break;
                     case MotorPart mp:
                         wheel = mp.wheelIndex;
-                        e.units = (int)ActuatorUnits.Volts;
+                        e.units = (int)mp.Units;
                         e.gear_ratio = mp.motor.gearRatio;
                         e.kt = mp.motor.kt;
                         e.resistance_ohm = mp.motor.resistance;

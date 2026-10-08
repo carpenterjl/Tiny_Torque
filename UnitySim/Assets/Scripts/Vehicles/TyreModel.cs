@@ -179,6 +179,92 @@ namespace AIHWSim.Vehicles
             }
         }
 
+        /// <summary>
+        /// The low-speed tyre (PHY-01): the same combined-slip curve as
+        /// <see cref="Forces"/>, but driven by a contact-patch deflection state
+        /// instead of a slip ratio over a floored speed.
+        ///
+        /// Per axis the bristles deflect with the slip velocity and relax over a
+        /// relaxation length σ: u̇ = v_slip − (|v_x|/σ)·u. At speed u settles to
+        /// σ·κ, so u/σ IS the slip ratio and the force is exactly the brush
+        /// curve's. At v → 0 the relaxation term vanishes and u integrates slip
+        /// displacement: the tyre is a stiff spring that holds a car statically,
+        /// so no PhysX sticky constraint and no <see cref="VLow"/> damper are
+        /// needed — and stopping, creeping and slope hold stop depending on the
+        /// timestep. Below the force peak the bristles also carry damping, which
+        /// leaves the steady state alone (u̇ = 0 there).
+        ///
+        /// Numerics: the relaxation term is integrated implicitly; the spring
+        /// closes through the body and wheel explicitly (symplectic), which is
+        /// stable while ω_n·dt stays below 2 — so the relaxation length is
+        /// floored to keep ω_n·dt ≤ 1.5 at a coarse timestep. Deflection is
+        /// capped where the curve has fully slid (normalised slip 3), so a
+        /// wheelspin from rest unwinds as soon as the slip reverses.
+        /// </summary>
+        /// <param name="sigma">Relaxation length (m).</param>
+        /// <param name="ux">Longitudinal deflection state (m), carried per wheel.</param>
+        /// <param name="uy">Lateral deflection state (m), + = the patch resisting
+        /// motion to the right, as <see cref="Forces"/> signs vsy.</param>
+        public static void BristleForces(
+            float vx, float vy, float omega, float r, float fz,
+            float mu, float latMuScale, float dt,
+            float invMassEff, float rSqOverJ,
+            float ratedLoadN, float sigma,
+            ref float ux, ref float uy,
+            out float fx, out float fy)
+        {
+            fx = 0f; fy = 0f;
+            if (fz <= 0f || mu <= 0f || sigma <= 0f) { ux = 0f; uy = 0f; return; }
+
+            float kp = KappaPeak;
+            float ap = AlphaPeakAt(fz, ratedLoadN);
+            float lat = Mathf.Max(0.1f, latMuScale);
+            float muFz = mu * fz;
+
+            // Stability floor on the relaxation length, per axis: the small-slip
+            // stiffness 2µF_z/(σ·peak) against the compliance K it closes through.
+            float kx = invMassEff + rSqOverJ, ky = invMassEff;
+            const float wDtMax2 = 1.5f * 1.5f;
+            float dt2 = dt * dt;
+            float sx0 = Mathf.Max(sigma, 2f * muFz * kx * dt2 / (kp * wDtMax2));
+            float sy0 = Mathf.Max(sigma, 2f * muFz * lat * ky * dt2 / (ap * wDtMax2));
+
+            float vsx = omega * r - vx;
+            float vsy = -vy;
+            float avx = Mathf.Abs(vx);
+            float uxOld = ux, uyOld = uy;
+            ux = (ux + dt * vsx) / (1f + dt * avx / sx0);
+            uy = (uy + dt * vsy) / (1f + dt * avx / sy0);
+
+            float sx = ux / (sx0 * kp);
+            float sy = uy / (sy0 * ap);
+            float s = Mathf.Sqrt(sx * sx + sy * sy);
+            if (s > 3f)
+            {
+                float k = 3f / s;
+                ux *= k; uy *= k; sx *= k; sy *= k; s = 3f;
+            }
+            if (s < 1e-9f) return;
+
+            float f = muFz * Shape(s);
+            fx = f * (sx / s);
+            fy = f * (sy / s) * lat;
+
+            if (s < 1f)
+            {
+                // Bristle damping at ζ ≈ 0.5 of the patch mode.
+                const float zeta = 0.5f;
+                float kxs = 2f * muFz / (sx0 * kp);
+                float kys = 2f * muFz * lat / (sy0 * ap);
+                float cx = 2f * zeta * Mathf.Sqrt(kxs / Mathf.Max(1e-9f, kx));
+                float cy = 2f * zeta * Mathf.Sqrt(kys / Mathf.Max(1e-9f, ky));
+                fx += cx * (ux - uxOld) / dt;
+                fy += cy * (uy - uyOld) / dt;
+                float mag = Mathf.Sqrt(fx * fx + fy * fy);
+                if (mag > muFz) { fx *= muFz / mag; fy *= muFz / mag; }
+            }
+        }
+
         /// <summary>Longitudinal slip ratio (for TC/ABS logic and telemetry).</summary>
         public static float SlipRatio(float vx, float omega, float r)
         {

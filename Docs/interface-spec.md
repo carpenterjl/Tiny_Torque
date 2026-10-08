@@ -177,10 +177,21 @@ For a v7 controller the host:
   position and roll/pitch/yaw from the vehicle origin), `rate_hz`,
   `latency_s`, the encoder's `cpr`/`wrap`/`gear_ratio`, the motor's
   `kt`/`resistance_ohm`/`gear_ratio`/`efficiency`, `wheel_radius_m`, and the
-  actuator slot's `units` (`CTRL_UNITS_VOLTS` today; `CTRL_UNITS_AMPS_IQ` for
-  an FOC drive). One extra `SENSOR_STEER_FB` entry describes the steering
-  actuator: `actuator_index` 6, range ± full lock in radians. Bind parts by
-  type and wheel index, not by name.
+  actuator slot's `units` (`CTRL_UNITS_VOLTS` for a motor behind a hobby ESC or
+  a plain voltage drive, `CTRL_UNITS_AMPS_IQ` for an FOC drive). One extra
+  `SENSOR_STEER_FB` entry describes the steering actuator: `actuator_index` 6,
+  range ± full lock in radians. Bind parts by type and wheel index, not by
+  name.
+- **Reports an FOC-driven motor as `SENSOR_FOC_FB`** (tag 17) instead of
+  `SENSOR_MOTOR`. Its slot takes Iq in amps (range ± the motoring current
+  limit; negative while rolling forward is regen braking, zero coasts), and
+  its six channels are what a real driver can measure: `[Iq A, Id A, ω_m rad/s
+  (the driver's PLL), V_bus V, T_winding °C, fault bits]` — fault 1 =
+  over-voltage (latched, bridge off), 2 = thermal derate, 4 = current-limited,
+  8 = voltage-limited. There is no torque channel: torque is not measurable.
+  The design picks the drive per motor (`MotorParams.driveMode`); a v6
+  controller sees the same tag and slot units it would not understand, so FOC
+  designs are for v7 controllers.
 - **Calls `ctrl_reset`** on a respawn or run restart, if exported, instead of
   `ctrl_shutdown` + `ctrl_init` + configure — the way an MCU never re-inits
   its peripherals.
