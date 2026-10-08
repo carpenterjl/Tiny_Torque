@@ -1,6 +1,8 @@
 # Host-side checks that need no Unity licence: the controller C code (CTest:
-# Opus mission bench with tolerance asserts, tt_controller helper unit test)
-# and the Tools/ shared-module regression (verify.js).
+# Opus mission bench with tolerance asserts at 100 and 500 Hz, the core's unit
+# test, the tt_controller helper unit test), the portable core cross-compiled
+# for an MCU and as a 32-bit program, and the Tools/ checks (verify.js, the
+# generated parameter files).
 #
 # The Unity-side validators (OpusMissionRunner.RunHeadless etc.) need a
 # licensed editor and stay a local step for now — see SIM_TO_REAL_PLAN VAL-02.
@@ -35,12 +37,48 @@ jobs:
       - name: Test
         run: ctest --test-dir build -C Release --output-on-failure
 
+  embedded:
+    # FW-11: the portable core (params, PID, Opus mission) for a Cortex-M4F,
+    # warnings as errors, -Wdouble-promotion included. Compile-only: no board
+    # is chosen yet, so there is nothing to link against.
+    name: Core for Cortex-M4F (arm-none-eabi)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install toolchain
+        run: sudo apt-get update && sudo apt-get install -y gcc-arm-none-eabi libnewlib-arm-none-eabi
+      - name: Configure
+        run: cmake -S Controllers -B build-arm -DTT_TARGET=embedded -DCMAKE_TOOLCHAIN_FILE=Controllers/cmake/arm-none-eabi.cmake -DCMAKE_BUILD_TYPE=Release
+      - name: Build
+        run: cmake --build build-arm
+      - name: Size
+        run: arm-none-eabi-size -t build-arm/*.a
+
+  host32:
+    # FW-11: the same core as an ILP32 program (as Zephyr's native_sim does),
+    # so `long` and pointer-size assumptions fail here and not on the MCU.
+    name: Core as 32-bit host
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install multilib
+        run: sudo apt-get update && sudo apt-get install -y gcc-multilib
+      - name: Configure
+        run: cmake -S Controllers -B build32 -DTT_TARGET=host -DCMAKE_C_FLAGS=-m32 -DCMAKE_BUILD_TYPE=Release
+      - name: Build
+        run: cmake --build build32
+      - name: Test
+        run: ctest --test-dir build32 --output-on-failure
+
   tools:
-    name: Tools verify.js
+    name: Tools checks
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
           node-version: 20
-      - run: node Tools/verify.js
+      - name: verify.js
+        run: node Tools/verify.js
+      - name: Generated parameters are up to date
+        run: node Tools/gen_params.js --check

@@ -635,12 +635,11 @@ namespace AIHWSim.Core
                 inputs.dt_s = controlDt;
                 if (v7)
                 {
-                    // ABI-04: FLU for a v7 controller. Unity is x right, y up,
-                    // z forward, left-handed: a = (a.z, -a.x, a.y), and a
-                    // pseudo-vector also flips sign with the handedness:
-                    // w = (-w.z, w.x, -w.y).
-                    inputs.gyro[0] = -_gyro[2]; inputs.gyro[1] = _gyro[0]; inputs.gyro[2] = -_gyro[1];
-                    inputs.accel[0] = _accel[2]; inputs.accel[1] = -_accel[0]; inputs.accel[2] = _accel[1];
+                    // ABI-04: FLU for a v7 controller (see FluFrame).
+                    Vector3 g = FluFrame.Rate(new Vector3(_gyro[0], _gyro[1], _gyro[2]));
+                    Vector3 a = FluFrame.Vector(new Vector3(_accel[0], _accel[1], _accel[2]));
+                    inputs.gyro[0] = g.x; inputs.gyro[1] = g.y; inputs.gyro[2] = g.z;
+                    inputs.accel[0] = a.x; inputs.accel[1] = a.y; inputs.accel[2] = a.z;
                 }
                 else
                     for (int i = 0; i < 3; i++) { inputs.gyro[i] = _gyro[i]; inputs.accel[i] = _accel[i]; }

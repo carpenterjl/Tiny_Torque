@@ -13,6 +13,9 @@
  * Nothing here depends on the simulator. Ported to the real car, the vehicle
  * block is retyped from the same spec sheet and the calibration block is
  * re-measured by the same procedure.
+ *
+ * (Since FW-07 both of those live in the parameter store instead — see the
+ * note where the vehicle block used to be. This file keeps the mission.)
  */
 #ifndef OPUS_MISSION_CFG_H
 #define OPUS_MISSION_CFG_H
@@ -35,108 +38,18 @@
  * silently drift apart from the stated total. */
 #define MI_STOP_FROM_EXIT  (MI_LEG_B_M + MI_BRAKE_M)
 
-/* ---------------------------------------------------------------- vehicle --
- * From Opus_Car_Spec/sim_mapping.md. Do not edit these to make a run come out
- * right — that is what the calibration block is for.
- */
-#define VE_WHEEL_R         0.033f    /* m, 66 mm touring tyre */
-#define VE_WHEELBASE       0.300f    /* m */
-#define VE_TRACK_FRONT     0.172f    /* m, front axle track — the heading baseline */
-#define VE_MASS            2.1315f   /* kg, all-up (Opus_Car_Spec/mass_budget.md) */
-#define VE_ENC_CPR         4096.0f   /* counts/rev, 1024-line quadrature on the wheel */
-#define VE_ENC_WRAP        65536     /* the sensor's 16-bit tick register */
-
-#define VE_KT              0.0025130f /* N*m/A, = 60/(2*pi*3800 Kv) */
-#define VE_GEAR            11.2f      /* final drive */
-#define VE_R_MOTOR         0.060f     /* ohm, per SIMULATED motor (2x the real 30 mOhm) */
-#define VE_ETA             0.85f      /* drivetrain efficiency */
-#define VE_N_MOTORS        2          /* simulated motors standing in for one real one */
-#define VE_ESC_DEADBAND_V  0.10f      /* below this the ESC outputs nothing */
-#define VE_V_RAIL          7.4f       /* nominal 2S; the live value is read from the pack */
-
-#define VE_MAX_STEER_DEG   28.0f
-#define VE_SERVO_SLEW_DPS  600.0f     /* for the servo observer only; not a command limit */
-#define VE_MAX_BRAKE_NM    0.8f       /* per wheel, at brake command 1.0 */
-
-/* Referred to the road. Derived, not independent — see
- * Opus_Car_Spec/derived_parameters.md section 5. */
-#define VE_BEMF_V_PER_MS   (VE_KT * VE_GEAR / VE_WHEEL_R)           /* 0.8529 V per m/s */
-#define VE_FORCE_PER_AMP   (VE_BEMF_V_PER_MS * VE_ETA)              /* 0.7250 N per motor-amp */
-#define VE_FORCE_PER_AMP_ALL (VE_FORCE_PER_AMP * (float)VE_N_MOTORS)/* 1.4499 N per per-motor-amp */
-
-/* COAST drag only, F = c0 + c1*v + c2*v^2 — the force that decelerates a car
- * with no torque through the driven wheels. Feed-forward for the speed loop.
+/* ------------------------------------------------- vehicle & calibration --
+ * Moved to the parameter store (FW-07): Controllers/params/opus_vector.json,
+ * generated into core/params_opus_vector.c as TtParams. That covers geometry,
+ * encoders, motor constants, drag, the friction brake, the motor-braking
+ * capability and the measured calibration (CAL_SCALE / CAL_BRAKE). What
+ * stays here is how the MISSION behaves, not what the car is.
  *
- * RE-MEASURED for the iteration-22 brush tyre model (the previous figures were
- * PhysX WheelCollider artifacts: its stylised slip curve dissipated ~4x the
- * physical losses, which is why the old c-values summed to ~13 N at cruise).
- * Under the brush model the analytic budget of derived_parameters.md §6 (motor
- * Coulomb + gearbox viscosity + aero) is close to the whole story.
- * PROVISIONAL pending the calibration rerun — measured values land here. */
-/* MEASURED (run R1, 2026-07-25): holding a true 4.41 m/s took 2.91 N of
- * commanded wheel force — the whole coast budget, since driven slip is now
- * ~1 %. c0 = the Coulomb term from derived_parameters §6, c2 = analytic aero;
- * c1 absorbs the measured remainder. */
-#define VE_DRAG_C0         0.90f
-#define VE_DRAG_C1         0.38f
-#define VE_DRAG_C2         0.015f
-
-/* Effective longitudinal inertia. The rotors turn at gear^2 times the wheel's
- * rate, so their inertia is reflected to the road as
- *     m_rot = N * J * gear^2 / r^2 = 2 * 3.22e-6 * 11.2^2 / 0.033^2 = 0.742 kg
- * on top of the 2.1315 kg of actual car. A quarter of the "mass" this
- * controller accelerates and brakes never moves anywhere. J is the simulated
- * per-motor rotor inertia, motor.rotorInertia in the Opus preset
- * (VehiclePresets.cs) — half the real motor's 6.44e-6. Change one, change both;
- * Tools/verify.js checks the pair. */
-#define VE_MASS_EFF        2.873f    /* kg */
-
-/* Fraction of the force commanded at the driven wheels that reaches the road.
- * The old PhysX tyre lost 53 % of it to slip (0.47 measured) — a simulator
- * artifact. MEASURED under the brush tyre: ~1 % slip loss at cruise loads. */
-#define VE_TRACTION_EFF    0.99f
-
-/* ESC shorted-winding brake, referred to the road. A hobby ESC brakes by
- * shorting the motor: braking force is proportional to BOTH the brake duty and
- * the speed (back-EMF drives the current through R), fading to nothing at rest:
- *   F(duty, v) = duty * N*kt^2*gear^2*eta/(R_motor*r^2) * v
- * current-limited at the ESC's 30 A per motor. This replaces the old smooth
- * signed-voltage "regen" model (EN_REGEN_CAP_N) — the host now runs a real
- * drive/brake/reverse state machine, and a negative command while rolling
- * forward IS a brake duty of |v_cmd|/V_rail. */
-#define VE_ESC_BRAKE_N_PER_MS  20.6f  /* = 2*kt^2*gear^2*eta/(R*r^2) */
-#define VE_ESC_BRAKE_MAX_N     43.5f  /* at the 30 A/motor ESC current limit */
-/* Rear-grip ceiling on the ESC brake — the modern form of the old regen cap,
- * for the same physical reason: the ESC brakes through the REAR tyres only,
- * and braking weight transfer unloads exactly that axle. MEASURED (run R1):
- * asking the rears for 16.6 N saturated them at ~9 N (the whole car decelerated
- * at 4.1 m/s^2 with the friction brake never called). 7 N keeps the rear slip
- * in the linear range; the friction brake — all four wheels — takes the rest. */
-#define EN_ESC_BRAKE_CAP_N     7.0f
-
-/* ------------------------------------------------------------ calibration --
- * MEASURED against ground truth. See Opus_Car_Spec/calibration.md.
- *
- * CAL_SCALE is the big one: a free-rolling wheel that carries any drag runs at
- * negative slip, so its encoder under-reads the ground. Everything else in the
- * error budget is a rounding error next to it.
+ * Gone for good: VE_N_MOTORS and the doubled R (the core now commands torque
+ * per driven wheel, so it never needed to know the sim splits one real motor
+ * into two), and every ESC detail (deadband, duty, rail) — those belong to
+ * the drive, which in the sim is the adapter's virtual driver.
  */
-/* Iteration 22: the old 0.116 was a PhysX WheelCollider artifact (its slip
- * curve ran the free-rolling fronts at ~10 % slip). MEASURED (run R1) over the
- * 14.5 m constant-velocity leg per the unchanged calibration.md procedure:
- * d_truth/d_raw − 1 = −0.00011 — the free-rolling fronts carry so little drag
- * in the brush model that their slip is unresolvable. On the physical car this
- * returns to the 1–4 % band (bearing drag + carcass deformation the sim does
- * not model on unpowered wheels); the PROCEDURE, not the value, transfers. */
-#define CAL_SCALE          0.0000f   /* v_ground = v_enc * (1 + CAL_SCALE) */
-/* MEASURED (run R2): the friction brake now does real work through the FRONT
- * wheels (the ESC brake is rear-grip-capped), so the free-rolling odometer
- * axle finally slips while braking — 115 mm went missing over 1.15 m of
- * braked rolling at brake_cmd ≈ 0.1: k = missing/∫brake·ds ≈ 1.0. FRACTIONAL
- * scale per unit brake command (multiplicative with the rolled distance —
- * slip is proportional to road speed, so it must vanish at rest). Under the
- * old model the brake barely brushed the fronts and this was unmeasurable. */
-#define CAL_BRAKE          1.0f      /* extra fractional slip per unit brake cmd */
 
 /* ----------------------------------------------------------------- limits --*/
 #define LI_A_LAUNCH        6.0f      /* m/s^2. Below the ~15.7 m/s^2 traction limit on
@@ -174,8 +87,10 @@
 #define GA_YAW_KP          1.5f
 #define GA_YAW_KI          4.0f
 #define GA_YAW_TRIM        8.0f      /* deg */
-#define GA_YAW_FILT        0.4f      /* yaw-rate low-pass; the tick-quantised
-                                      * differential is coarse at 0.03 rad/s */
+/* Yaw-rate low-pass time constant; the tick-quantised differential is coarse
+ * at 0.03 rad/s. 19.6 ms is the old per-tick 0.4 blend at 100 Hz, now
+ * rate-independent (FW-05). */
+#define GA_YAW_TAU_S       0.019576f
 /* Heading closure INSIDE the turn. The trapezoid alone is open-loop in heading:
  * whatever the yaw-rate loop fails to deliver is simply lost, and the first run
  * measured 41.4 deg of an intended 45. Adding a proportional term on the
@@ -199,9 +114,13 @@
 #define EN_DONE_V          0.02f     /* m/s */
 #define EN_HOLD_S          1.0f      /* zero motion for this long before declaring DONE */
 #define EN_DEAD_TIME_S     0.020f    /* loop dead time, led out of the braking profile */
-/* (EN_REGEN_CAP_N is gone: motor braking is now the ESC shorted-winding model,
- * VE_ESC_BRAKE_* above — strong at speed, fading to nothing at rest, which is
- * exactly why the friction brake still finishes the stop.) */
+/* Speed low-pass for the creep loop and the stop tests: 23.2 ms is the old
+ * per-tick 0.35 blend at 100 Hz (FW-05). */
+#define EN_VFILT_TAU_S     0.023214f
+/* (EN_REGEN_CAP_N is gone: how hard the motors can brake is the regen_*
+ * capability in TtParams — for this car's ESC strong at speed and fading to
+ * nothing at rest, which is exactly why the friction brake still finishes
+ * the stop.) */
 
 /* -------------------------------------------------------------- sequencing --*/
 #define SQ_ARM_BRAKE_S     1.0f      /* held-brake settling window */
@@ -215,9 +134,10 @@
 /* ...but only if it PERSISTS. A single short return is far more likely to be
  * the nose-down attitude under braking bouncing the beam off the road than a
  * real obstacle, and a 1/10 car pitches several degrees under 6.75 m/s^2. Real
- * ToF firmware debounces for exactly this reason. 5 ticks = 50 ms = 22 cm of
- * travel at cruise, still far enough out to stop for something real. */
-#define SF_TOF_TICKS       5
+ * ToF firmware debounces for exactly this reason. 50 ms = 22 cm of travel at
+ * cruise, still far enough out to stop for something real. (Was 5 ticks:
+ * thresholds are times now, so the loop rate cannot change them. FW-05) */
+#define SF_TOF_S           0.050f
 /* Impact / teleport detector. 60 m/s^2 (6 g) was far too tight: a 1/10 car on a
  * 400 Hz solver puts single-tick spikes of that size through the IMU whenever a
  * suspension corner loads up quickly — brake application alone tripped it. A
@@ -225,8 +145,13 @@
  * firmware debounces instead of latching on one sample. 15 g sustained for 3
  * ticks is a crash; anything shorter is the road. */
 #define SF_ACCEL_ABORT     150.0f    /* m/s^2 */
-#define SF_ACCEL_TICKS     3
-#define SF_TICK_GLITCH     4000      /* counts in one tick (~4.5x cruise) = bad read */
+#define SF_ACCEL_S         0.030f    /* sustained this long (was 3 ticks) */
+/* An encoder rate this high (~4.5x cruise) is a bad read, not motion. Was
+ * 4000 counts per 10 ms tick. */
+#define SF_GLITCH_CPS      400000.0f
+/* The loop period may wander this far from the rate the host promised at
+ * init before the standing check refuses to arm. */
+#define SF_DT_TOL          0.20f
 
 /* Fault bits, reported on debug[1]. */
 #define FA_NO_MANIFEST     0x0001
@@ -242,5 +167,6 @@
 #define FA_IMPACT          0x0400
 #define FA_OBSTACLE        0x0800
 #define FA_TICK_GLITCH     0x1000
+#define FA_PARAMS          0x2000    /* parameter set invalid, or contradicts the manifest */
 
 #endif /* OPUS_MISSION_CFG_H */

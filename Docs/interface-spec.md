@@ -74,9 +74,11 @@ Each `SensorInfo` names a sensor, tags its type, and points at the slice
 
 Type tags are append-only (an old controller iterating the manifest simply
 ignores unknown tags), so appending `SUSPENSION`/`BATTERY` did not change the
-ABI layout — it stayed at **v3** then. The header is now at **v6**: v4–v6
-added conventions, an optional export and sensor tags 8–12, none of which moved
-a field (see the version notes at the top of `controller_api.h`).
+ABI layout — it stayed at **v3** then. v4–v6 added conventions, an optional
+export and sensor tags 8–12, none of which moved a field. The header is now at
+**v7**, which appends a tail to `CtrlInputs` and is opt-in — see
+[ABI v7](#abi-v7-opt-in) below and the version notes at the top of
+`controller_api.h`.
 
 Sensor readings are also published to telemetry as `sens/<name>/<field>` and
 logged to CSV in both Manual and Autonomous modes. See
@@ -107,6 +109,10 @@ name these. A wheel with no motor free-rolls. Manual mode drives the same slots
 | `ctrl_get_debug_names`  | `const char* (void)`                         | Comma-separated labels for `debug[]`.    |
 | `ctrl_configure`        | `void (const SensorInfo*, int count)`        | **Optional** (ABI v2). Sensor manifest; called once after `ctrl_init`. |
 | `ctrl_get_vehicle`      | `int (void)`                                 | **Optional** (ABI v5). One `CTRL_VEHICLE_*` value; the car to load into. |
+| `ctrl_abi_version`      | `int (int* sizeof_inputs, int* sizeof_outputs)` | **Optional** (ABI v7). Makes the DLL a v7 controller; write it with `CTRL_DEFINE_ABI_VERSION()`. |
+| `ctrl_configure2`       | `void (const SensorInfo2*, int count)`       | **Optional** (ABI v7). Extended manifest; replaces `ctrl_configure` when exported. |
+| `ctrl_reset`            | `void (void)`                                | **Optional** (ABI v7). Respawn: drop mission state, keep one-time init. |
+| `ctrl_get_control_rate` | `float (void)`                               | **Optional** (ABI v7). Wanted tick rate in Hz; 0 = host default. Asked before `ctrl_init`. |
 
 `debug[i]` is graphed/logged as `dbg/<name_i>`, where names come from
 `ctrl_get_debug_names()` in order.
@@ -131,6 +137,62 @@ stands; the number is never a way around the picker's list. `0`, a controller
 built before v5, and a DLL with no such export are all the same answer: whatever
 the menu picked.
 
+## ABI v7 (opt-in)
+
+v7 exists so the same firmware can run in the simulator and on a real car. It
+is **opt-in**: a DLL becomes a v7 controller only by exporting
+`ctrl_abi_version()` (one line: `CTRL_DEFINE_ABI_VERSION()`). Every older
+controller — the built-in ones, UserScripts, generated code — is driven exactly
+as before, in the same frame, with the same signs.
+
+For a v7 controller the host:
+
+- **Checks the build.** `ctrl_abi_version()` returns the ABI it was compiled
+  against and the sizes of `CtrlInputs` / `CtrlOutputs`. A newer ABI, or sizes
+  that differ from the host's, and the DLL is refused with a message rather
+  than driven with fields at the wrong offsets.
+- **Fills the v7 tail of `CtrlInputs`:**
+
+  | Field     | Type                 | Meaning |
+  |-----------|----------------------|---------|
+  | `tick`    | uint32               | Control ticks since the run started |
+  | `flags`   | uint32               | `CTRL_IN_FLU` (always set for v7) |
+  | `time_us` | uint64               | Sim time in exact integer microseconds |
+  | `stamps`  | const `SensorStamp*` | One `{seq, t_sample_us}` per manifest entry |
+
+  `seq` changes only when a sensor takes a **fresh** sample, so a 15 Hz ToF
+  read inside a 100 Hz loop is recognisable as old; `t_sample_us` is when the
+  value was sampled (low 32 bits of the µs clock — compare by difference).
+- **Uses the FLU body frame.** SI units; x forward, y left, z up,
+  right-handed (ISO 8855 / ROS REP-103). A left turn is a positive yaw rate,
+  a car at rest reads accel ≈ (0, 0, +9.81), an RF bearing is positive to the
+  left. Older controllers keep the simulator's native frame (x right, y up,
+  z forward, left-handed). `Editor/FrameConventionCheck` verifies the
+  conversion against real rigid-body motion.
+- **Takes steering in radians.** `actuator[6]` is the road-wheel angle,
+  positive LEFT, clamped to full lock (older controllers: `[-1, 1]`, positive
+  right).
+- **Hands over an extended manifest** through `ctrl_configure2`, if exported.
+  Each `SensorInfo2` is the v6 entry plus: `wheel_index`, the mount pose (FLU
+  position and roll/pitch/yaw from the vehicle origin), `rate_hz`,
+  `latency_s`, the encoder's `cpr`/`wrap`/`gear_ratio`, the motor's
+  `kt`/`resistance_ohm`/`gear_ratio`/`efficiency`, `wheel_radius_m`, and the
+  actuator slot's `units` (`CTRL_UNITS_VOLTS` today; `CTRL_UNITS_AMPS_IQ` for
+  an FOC drive). One extra `SENSOR_STEER_FB` entry describes the steering
+  actuator: `actuator_index` 6, range ± full lock in radians. Bind parts by
+  type and wheel index, not by name.
+- **Calls `ctrl_reset`** on a respawn or run restart, if exported, instead of
+  `ctrl_shutdown` + `ctrl_init` + configure — the way an MCU never re-inits
+  its peripherals.
+- **Asks `ctrl_get_control_rate`** before `ctrl_init` and ticks the controller
+  at the nearest whole divisor of the physics rate (which can be the physics
+  rate itself). `ctrl_init` receives the rate actually used.
+
+`Controllers/targets/sim/opus_main.c` is the reference v7 controller. It turns
+`CtrlInputs` into the portable `TtMeas` (`Controllers/core/tt_types.h`), runs
+the mission core, and turns the `TtCmd` (wheel torque per wheel, steer in
+radians) back into actuator slots.
+
 ## Per-vehicle conventions
 
 ### Differential-drive robot
@@ -144,12 +206,14 @@ the menu picked.
 
 ## Portability rule
 
-Control logic (`common/`, `diffdrive_pid/`) includes only `pid.h` /
-`diffdrive_control.h` and the C standard library — never `controller_api.h` or
-anything Unity-specific. Only the *target* layer (`targets/sim/sim_main.c`)
-touches the ABI. A future `targets/arduino/` reads real peripherals and calls
-the identical `diffdrive_update()`, which is what makes the same source run in
-sim and on hardware.
+Control logic (`common/`, `diffdrive_pid/`, `opus_mission/`, `core/`) includes
+only its own headers and the C standard library — never `controller_api.h` or
+anything Unity-specific. Only the *target* layer (`targets/sim/*.c`) touches
+the ABI. The portable firmware core speaks `TtMeas` / `TtCmd` / `TtParams`
+(`Controllers/core/`); a real board implements `hal/tt_hal.h` and calls the
+identical core, which is what makes the same source run in sim and on
+hardware. CMake's `TT_TARGET=embedded` builds just the portable libraries for
+an MCU toolchain (`Controllers/cmake/arm-none-eabi.cmake`).
 
 ## Writing a controller against this spec
 

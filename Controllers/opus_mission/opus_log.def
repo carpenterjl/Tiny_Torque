@@ -1,0 +1,25 @@
+/*
+ * opus_log.def — the Opus mission's log channels, in order (FW-09).
+ *
+ * TT_LOG(name, unit, description). One table, three uses: the sim's debug
+ * channel names (dbg/<name>), the MCU's binary TtLogFrame, and the CSV header
+ * the host decoder (Tools/tt_log_decode.js) writes for a car log. Append only:
+ * debug[0] = state is matched by the game's MissionHud, and the order is the
+ * binary frame's layout. The sim carries at most 16 of these (CtrlOutputs).
+ */
+TT_LOG(state,        "",      "mission phase (OpusPhase)")
+TT_LOG(fault,        "",      "FA_* fault bits")
+TT_LOG(odo_m,        "m",     "front-axle odometer since arm")
+TT_LOG(leg_rem_m,    "m",     "distance left in the measured leg")
+TT_LOG(v_meas,       "m/s",   "odometry speed")
+TT_LOG(target_speed, "m/s",   "speed reference")
+TT_LOG(v_err,        "m/s",   "reference minus measured")
+TT_LOG(yaw_deg,      "deg",   "heading since arm, + = left")
+TT_LOG(yaw_rate,     "rad/s", "fused yaw rate, + = left")
+TT_LOG(steer_cmd,    "rad",   "road-wheel angle command, + = left")
+TT_LOG(motor_v,      "V",     "drive output: volts on the first driven motor (0 for an Iq drive)")
+TT_LOG(i_cmd,        "A",     "Iq commanded on the first driven motor")
+TT_LOG(brake_cmd,    "",      "friction brake 0..1")
+TT_LOG(batt_v,       "V",     "pack voltage")
+TT_LOG(slip_pct,     "%",     "driven vs odometry wheel speed")
+TT_LOG(stop_err_mm,  "mm",    "controller's own stop error")

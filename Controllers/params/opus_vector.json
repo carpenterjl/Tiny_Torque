@@ -1,0 +1,49 @@
+{
+  "_about": "Opus Vector firmware parameters (TtParams, Controllers/core/tt_params.h). The source of record: Tools/gen_params.js turns this into Controllers/core/params_opus_vector.c. Keys starting with _ are notes and are ignored. Values come from Opus_Car_Spec/sim_mapping.md and calibration.md.",
+  "name": "opus_vector",
+  "version": 1,
+
+  "wheel_radius_m": 0.033,
+  "wheelbase_m": 0.300,
+  "track_front_m": 0.172,
+  "mass_kg": 2.1315,
+  "mass_eff_kg": 2.873,
+  "_mass_eff_kg": "m + N*J*gear^2/r^2 = 2.1315 + 2*3.22e-6*11.2^2/0.033^2. J is the simulated per-motor rotor inertia (VehiclePresets.cs); Tools/verify.js checks the pair.",
+
+  "odo_wheel_mask": ["FL", "FR"],
+  "enc_cpr": [4096, 4096, 4096, 4096],
+  "enc_ratio": [1, 1, 1, 1],
+
+  "driven_mask": ["RL", "RR"],
+  "gear": [0, 0, 11.2, 11.2],
+  "kt": [0, 0, 0.0025130, 0.0025130],
+  "_kt": "N*m/A = 60/(2*pi*3800 Kv)",
+  "eta_drive": 0.85,
+  "eta_back": 1.1764706,
+  "_eta_back": "1/0.85: mirrors the sim, which multiplies by eta when back-driven (BUG-05). Set the measured value when ACT-04 fixes the sim.",
+  "regen_n_per_ms": 20.6,
+  "_regen_n_per_ms": "hobby-ESC shorted-winding brake at the road, whole car: 2*kt^2*gear^2*eta/(R*r^2), R = 0.060 per simulated motor",
+  "regen_max_n": 43.5,
+  "_regen_max_n": "at the ESC's 30 A per motor",
+  "regen_grip_cap_n": 7.0,
+  "_regen_grip_cap_n": "MEASURED (run R1): the rear axle unloads under braking and saturates near 9 N",
+  "traction_eff": 0.99,
+  "v_rail_nom": 7.4,
+
+  "max_steer_rad": 0.48869219,
+  "_max_steer_rad": "28 deg",
+  "servo_slew_rad_s": 10.4719755,
+  "_servo_slew_rad_s": "600 deg/s, for the servo observer only",
+  "brake_max_nm": 0.8,
+  "drag_c0": 0.90,
+  "drag_c1": 0.38,
+  "drag_c2": 0.015,
+  "_drag": "coast drag; MEASURED run R1, 2026-07-25",
+
+  "cal_scale": 0.0,
+  "cal_brake": 1.0,
+  "_cal": "MEASURED runs R1/R2, see mission_cfg.h history and Opus_Car_Spec/calibration.md",
+
+  "odo_lead_comp": 1,
+  "_odo_lead_comp": "sim only: corrects WheelEncoderSensor's left-endpoint integration bias. 0 on the real car; delete with SEN-02."
+}

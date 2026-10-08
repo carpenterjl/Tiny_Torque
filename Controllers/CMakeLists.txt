@@ -4,6 +4,36 @@ project(AIHWSimControllers C)
 set(CMAKE_C_STANDARD 11)
 set(CMAKE_C_STANDARD_REQUIRED ON)
 
+# What to build (FW-11):
+#   sim       the Unity controller DLLs, the host tests and UserScripts (default)
+#   host      the portable libraries and host tests only — no DLL copy, no
+#             UserScripts; what the 32-bit CI build uses
+#   embedded  the portable libraries only, for an MCU toolchain:
+#               cmake -S Controllers -B build-arm -DTT_TARGET=embedded \
+#                     -DCMAKE_TOOLCHAIN_FILE=Controllers/cmake/arm-none-eabi.cmake
+#             A CubeMX / Pico SDK / ESP-IDF project add_subdirectory()s this
+#             directory with TT_TARGET=embedded and links `opuslib`.
+set(TT_TARGET "sim" CACHE STRING "sim | host | embedded")
+set_property(CACHE TT_TARGET PROPERTY STRINGS sim host embedded)
+if(NOT TT_TARGET MATCHES "^(sim|host|embedded)$")
+    message(FATAL_ERROR "TT_TARGET must be sim, host or embedded (got '${TT_TARGET}')")
+endif()
+
+# Firmware hygiene for the portable core (FW-04). GCC/Clang only; MSVC has no
+# equivalent of -Wdouble-promotion. -ffast-math is deliberately absent: it
+# deletes the NaN checks the core relies on. Warnings are errors on the
+# embedded build, where a stray double costs a software-float call.
+function(tt_core_warnings target)
+    if(CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
+        target_compile_options(${target} PRIVATE
+            -Wall -Wextra -Wdouble-promotion -Wfloat-conversion -Wshadow
+            -fno-math-errno -ffp-contract=off)
+        if(TT_TARGET STREQUAL "embedded")
+            target_compile_options(${target} PRIVATE -Werror)
+        endif()
+    endif()
+endfunction()
+
 # Where Unity looks for native plugins (64-bit).
 #
 # CACHE, and load-bearing: the game's in-game "Build & Reload" overrides this via
@@ -17,6 +47,29 @@ set(UNITY_PLUGIN_DIR "${CMAKE_SOURCE_DIR}/../UnitySim/Assets/Plugins/x86_64"
 # copy without duplicate-symbol clashes.
 add_library(pidlib STATIC common/pid.c)
 target_include_directories(pidlib PUBLIC common)
+tt_core_warnings(pidlib)
+
+# The portable core's shared pieces: TtMeas/TtCmd types, the parameter store
+# and its generated defaults (Tools/gen_params.js), the log schema, and the
+# board interface every non-sim target implements (hal/tt_hal.h).
+add_library(ttcore STATIC core/tt_params.c core/params_opus_vector.c)
+target_include_directories(ttcore PUBLIC core hal)
+tt_core_warnings(ttcore)
+
+# Opus Vector mission controller: dead-reckoned multi-phase manoeuvre on
+# TtMeas/TtCmd. Portable (math.h, pid.h and the core), so the same sources
+# build for a real MCU target.
+add_library(opuslib STATIC opus_mission/opus_mission.c)
+target_include_directories(opuslib PUBLIC opus_mission)
+target_link_libraries(opuslib PUBLIC pidlib ttcore)
+tt_core_warnings(opuslib)
+if(NOT MSVC)
+    target_link_libraries(opuslib PUBLIC m)
+endif()
+
+if(TT_TARGET STREQUAL "embedded")
+    return()   # libraries only; the MCU project supplies main(), HAL and startup
+endif()
 
 # Per-vehicle portable control logic.
 add_library(controllib STATIC diffdrive_pid/diffdrive_control.c)
@@ -27,15 +80,12 @@ add_library(carlib STATIC car_pid/car_control.c)
 target_include_directories(carlib PUBLIC car_pid)
 target_link_libraries(carlib PUBLIC pidlib)
 
-# Opus Vector mission controller: dead-reckoned multi-phase manoeuvre. Portable
-# (only math.h + pid.h), so the same sources build for a real MCU target.
-add_library(opuslib STATIC opus_mission/opus_mission.c)
-target_include_directories(opuslib PUBLIC opus_mission)
-target_link_libraries(opuslib PUBLIC pidlib)
-
 # Helper: build a SHARED controller DLL from one sim-target source, emit exactly
-# "<name>.dll", and copy it into Unity after each build.
+# "<name>.dll", and copy it into Unity after each build. Sim target only.
 function(add_controller name source)
+    if(NOT TT_TARGET STREQUAL "sim")
+        return()
+    endif()
     add_library(${name} SHARED ${source})
     target_include_directories(${name} PRIVATE hal)
     target_link_libraries(${name} PRIVATE ${ARGN})
@@ -74,10 +124,16 @@ add_controller(car_sensors_controller car_sensors/car_sensors.c)
 # The test executables are not copied anywhere; only the DLLs above are.
 enable_testing()
 
-# Opus mission against a simplified plant, with tolerance asserts.
+# Opus mission against a simplified plant, with tolerance asserts, at 100 and
+# 500 Hz.
 add_executable(test_mission opus_mission/test_mission.c)
 target_link_libraries(test_mission PRIVATE opuslib)
 add_test(NAME opus_mission_bench COMMAND test_mission)
+
+# The core's shared pieces: parameter store, torque -> Iq, log schema.
+add_executable(test_core tests/test_core.c)
+target_link_libraries(test_core PRIVATE opuslib)
+add_test(NAME tt_core_unit COMMAND test_core)
 
 # The UserScripts helper header (PID clamps, wheel radius, manifest fallback).
 add_executable(test_tt_controller tests/test_tt_controller.c)
@@ -86,7 +142,6 @@ target_include_directories(test_tt_controller PRIVATE
 add_test(NAME tt_controller_unit COMMAND test_tt_controller)
 
 if(NOT MSVC)
-    target_link_libraries(test_mission PRIVATE m)
     target_link_libraries(test_tt_controller PRIVATE m)
 endif()
 
@@ -110,7 +165,7 @@ endif()
 set(USER_SCRIPTS_DIR "${CMAKE_SOURCE_DIR}/../UserScripts"
     CACHE PATH "Player-written controllers, one DLL per subfolder")
 
-if(IS_DIRECTORY "${USER_SCRIPTS_DIR}")
+if(TT_TARGET STREQUAL "sim" AND IS_DIRECTORY "${USER_SCRIPTS_DIR}")
     file(GLOB _tt_user_dirs CONFIGURE_DEPENDS "${USER_SCRIPTS_DIR}/*")
     foreach(_tt_dir ${_tt_user_dirs})
         if(NOT IS_DIRECTORY "${_tt_dir}")

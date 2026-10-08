@@ -1,11 +1,11 @@
 /*
  * opus_mission.h — the Opus Vector's autonomous mission controller.
  *
- * Portable C. Depends only on <math.h>, mission_cfg.h and the shared PID in
- * common/pid.h. It knows nothing about the simulator, the ABI, or Unity: the
- * host adapter (targets/sim/opus_main.c) is the only file that includes
- * controller_api.h. That separation is what lets this same source drive a real
- * MCU with a different adapter.
+ * Portable C11, float32 only. It sees the car through TtMeas / TtCmd
+ * (core/tt_types.h) and TtParams (core/tt_params.h), and knows nothing about
+ * the simulator, the ABI or Unity: each target's adapter fills a TtMeas and
+ * applies the TtCmd (targets/sim/opus_main.c in the sim). That separation is
+ * what lets this same source drive a real MCU.
  *
  * The controller is handed measurements and returns commands. It never reads
  * operator input: the mission runs start to finish on sensor feedback alone.
@@ -13,10 +13,14 @@
 #ifndef OPUS_MISSION_H
 #define OPUS_MISSION_H
 
+#include <stdint.h>
 #include "pid.h"
+#include "tt_types.h"
+#include "tt_params.h"
 
-/* Mission phases. The numeric values are published on debug[0] and are matched
- * by the game's MissionHud, so they are part of the interface — append only. */
+/* Mission phases. The numeric values are published as log channel `state` and
+ * are matched by the game's MissionHud, so they are part of the interface —
+ * append only. */
 typedef enum {
     OPUS_FAULT      = -1,
     OPUS_BOOT       = 0,
@@ -32,71 +36,53 @@ typedef enum {
     OPUS_DONE       = 10
 } OpusPhase;
 
-/* One front-wheel encoder's tick tracking. */
+/* The log frame: one float per opus_log.def entry, in table order. */
+#define TT_LOG(name, unit, desc) float name;
 typedef struct {
-    int   prev_ticks;      /* last raw register value, 0..VE_ENC_WRAP-1 */
-    int   has_prev;
-    double total_m;        /* unwrapped distance since arm */
-} OpusEncoder;
-
-/* Everything the host must supply each tick. Filling this from the ABI is the
- * adapter's whole job. */
-typedef struct {
-    float dt;              /* s */
-    float time_s;          /* host clock, used only to detect a restart */
-    float enc_left_ticks;  /* front-left raw tick register  */
-    float enc_right_ticks; /* front-right raw tick register */
-    int   enc_valid;       /* both FRONT encoders were located in the manifest */
-    float enc_rl_ticks;    /* rear-left  — diagnostics only (wheelspin/lock) */
-    float enc_rr_ticks;    /* rear-right */
-    int   enc_rear_valid;
-    float gyro_y;          /* rad/s about the vehicle's up axis, host sign */
-    float accel_mag;       /* |specific force|, m/s^2 — impact/teleport detector */
-    float batt_v;          /* pack terminal volts (<= 0 if unknown) */
-    float tof_front_m;     /* forward range, or a large number if unknown */
-    int   motor_count;     /* motors found in the manifest */
-    float motor_vmax;      /* per-motor voltage limit from the manifest */
-} OpusMeas;
-
-/* What the controller wants done. */
-typedef struct {
-    float motor_v;         /* signed volts, same command to every motor */
-    float steer;           /* [-1, 1]; positive steers RIGHT (host convention) */
-    float brake;           /* [0, 1] */
-} OpusCmd;
+#include "opus_log.def"
+} OpusLog;
+#undef TT_LOG
+#define OPUS_LOG_N ((uint32_t)(sizeof(OpusLog) / sizeof(float)))
 
 typedef struct {
+    const TtParams *p;     /* the car, as the firmware believes it          */
+    float  rate_hz;        /* tick rate the scheduler promised (0 = unknown) */
+    int    odo_l, odo_r;   /* wheels giving odometry and the heading baseline */
+
     OpusPhase phase;
     int   fault;           /* FA_* bitmask */
 
-    /* Estimator state */
-    OpusEncoder enc_l, enc_r, enc_rl, enc_rr;
-    double odo_m;          /* slip-corrected front-axle path length since arm */
+    /* Estimator state. Odometry is kept in whole encoder counts (exact at any
+     * distance) plus a small float correction, and turned into metres only
+     * where it is used — never a float accumulating millimetres. */
+    int32_t enc_prev[TT_MAX_WHEELS];
+    uint8_t enc_has_prev[TT_MAX_WHEELS];
+    int32_t odo_cnt_l, odo_cnt_r;  /* accepted counts since arm */
+    float  odo_corr_m;     /* calibration corrections since arm (slip)        */
     float  v_meas;         /* m/s from the tick delta */
     float  v_rear;         /* m/s from the driven wheels — slip diagnostic only */
     float  v_filt;         /* lightly filtered, for the creep loop */
     float  psi;            /* rad, heading since arm; POSITIVE = LEFT */
     float  psi_dot;        /* rad/s, fused */
     float  psi_dot_f;      /* low-passed — what the loops and exit tests use */
-    float  gyro_sign;      /* +-1, learned at runtime; 0 while unknown */
-    float  gyro_corr;      /* running correlation used to learn the sign */
-    float  steer_obs_deg;  /* modelled servo position, positive = left */
+    float  steer_obs_rad;  /* modelled servo position, positive = left */
 
     /* Sequencing */
     float  phase_t;        /* s in the current phase */
     float  hold_t;
     float  settle_t;
-    float  live_l, live_r;  /* accumulated front-wheel travel, for the liveness test */
+    float  live_l, live_r;  /* accumulated odometry-wheel travel, for liveness */
     int    live_checked;
-    int    tof_hits;        /* consecutive short forward returns (debounce) */
-    int    accel_hits;      /* consecutive over-threshold accelerations       */
-    double leg_start_m;    /* odometer at the start of the current measured leg */
-    double stop_target_m;  /* absolute odometer value the car must stop on */
+    float  tof_t;           /* how long the forward return has been short   */
+    float  accel_t;         /* how long the acceleration has been excessive */
+    float  leg_start_m;    /* odometer at the start of the current measured leg */
+    float  stop_target_m;  /* absolute odometer value the car must stop on */
     float  psi_ref;        /* heading the straight-line loops hold */
     float  turn_t;         /* s into the turn profile */
     float  turn_cmd_rad;   /* integral of the COMMANDED yaw rate */
     float  v_leg_start;    /* speed at the last leg boundary (trapezoid correction) */
-    float  prev_time_s;
+    tt_us_t prev_us;
+    int    has_prev_us;
 
     /* Results, latched for reporting */
     float  leg_a_actual;
@@ -109,19 +95,26 @@ typedef struct {
     Pid spd_pid;
     Pid yaw_pid;
 
-    /* Last command, mirrored for telemetry */
-    OpusCmd cmd;
-    float  i_cmd;
+    /* Last command, mirrored for telemetry and for the brake-slip correction */
+    TtCmd  cmd;
+    float  t_cmd_nm;       /* torque asked of each driven wheel */
     float  slip_pct;
     float  v_ref;
     float  leg_rem;        /* signed distance left in the current measured leg */
+    OpusLog log;
 } OpusState;
 
-/* Reset to the power-on state. Called from ctrl_init, and again whenever the
- * host reports the vehicle was teleported home. */
-void opus_init(OpusState *st);
+/* Power-on. `p` must outlive the state; rate_hz is the tick rate the
+ * scheduler will run (0 = unknown, which skips the standing dt check). */
+void opus_init(OpusState *st, const TtParams *p, float rate_hz);
+
+/* The car was put back at the start: forget the mission, keep the setup. */
+void opus_reset(OpusState *st);
 
 /* One control tick. */
-void opus_step(OpusState *st, const OpusMeas *m, OpusCmd *out);
+void opus_step(OpusState *st, const TtMeas *m, TtCmd *out);
+
+/* Odometer, metres since arm. */
+float opus_odo_m(const OpusState *st);
 
 #endif /* OPUS_MISSION_H */

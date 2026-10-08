@@ -272,13 +272,13 @@ namespace AIHWSim.Sensors
         {
             Transform root = _root != null ? _root : transform;
             Vector3 lp = root.InverseTransformPoint(t.position);
-            pos = new Vector3(lp.z, -lp.x, lp.y);
+            pos = FluFrame.Vector(lp);
 
             Quaternion q = Quaternion.Inverse(root.rotation) * t.rotation;
             // Sensor axes in FLU: forward = local z, left = -local x, up = local y.
-            Vector3 fx = ToFlu(q * Vector3.forward);
-            Vector3 fy = ToFlu(q * Vector3.left);
-            Vector3 fz = ToFlu(q * Vector3.up);
+            Vector3 fx = FluFrame.Vector(q * Vector3.forward);
+            Vector3 fy = FluFrame.Vector(q * Vector3.left);
+            Vector3 fz = FluFrame.Vector(q * Vector3.up);
             // R columns are fx, fy, fz. Z-Y-X Euler: yaw, pitch, roll.
             float yaw = Mathf.Atan2(fx.y, fx.x);
             float pitch = Mathf.Asin(Mathf.Clamp(-fx.z, -1f, 1f));
@@ -286,7 +286,6 @@ namespace AIHWSim.Sensors
             rpy = new Vector3(roll, pitch, yaw);
         }
 
-        private static Vector3 ToFlu(Vector3 u) => new Vector3(u.z, -u.x, u.y);
 
         /// <summary>
         /// Forward the (possibly transport-delayed) actuator command array to

@@ -11,11 +11,14 @@
  *   1. Odometry comes from the UNPOWERED FRONT wheels' tick COUNTERS. Drive
  *      wheels lie under acceleration and the velocity channel is the noisy one.
  *   2. Heading comes primarily from the front-encoder DIFFERENTIAL, not the
- *      gyro. It is geometric, so it cannot drift, and the gyro's sign is learned
- *      at runtime rather than assumed.
+ *      gyro. It is geometric, so it cannot drift. The gyro (FLU, so a left turn
+ *      is positive by definition) supplies the high-rate content.
  *   3. Every distance target is an ABSOLUTE odometer value and nothing is reset
  *      at a phase boundary, so a phase trigger that fires one tick late shifts
  *      where the car is, never how far it has gone.
+ *
+ * Firmware hygiene (FW-04/05): float32 only, every literal suffixed, every
+ * threshold a time or a rate, dt measured from timestamps.
  */
 #include "opus_mission.h"
 #include "mission_cfg.h"
@@ -37,69 +40,106 @@ static int finitef_(float v)
     return (v == v) && (v < 1e18f) && (v > -1e18f);
 }
 
+/* First-order low-pass blend for a time constant, so a filter means the same
+ * thing at any loop rate. */
+static float lp_alpha(float dt, float tau)
+{
+    return tau > 0.0f ? 1.0f - expf(-dt / tau) : 1.0f;
+}
+
+static int popcount4(uint32_t m)
+{
+    return (int)((m & 1u) + ((m >> 1) & 1u) + ((m >> 2) & 1u) + ((m >> 3) & 1u));
+}
+
 /* Coast-down drag at speed v. Feed-forward only — error here costs accuracy,
  * not stability, because the speed loop trims what is left. */
-static float drag_n(float v)
+static float drag_n(const TtParams *p, float v)
 {
     float a = v < 0.0f ? -v : v;
-    float f = VE_DRAG_C0 + VE_DRAG_C1 * a + VE_DRAG_C2 * a * a;
+    float f = p->drag_c0 + p->drag_c1 * a + p->drag_c2 * a * a;
     return v >= 0.0f ? f : -f;
 }
 
 /* ------------------------------------------------------------- odometry ----
- * The tick register wraps at 65536. At cruise the car covers 889 counts per
- * 10 ms tick against a 32768 half-wrap, a 37x margin, so resolving the wrap by
- * sign is unambiguous. A jump larger than SF_TICK_GLITCH cannot be real motion
- * and is dropped rather than believed.
+ * Encoder counts arrive cumulative (the target unwraps the hardware register),
+ * so a delta is one int32 subtraction. A jump faster than SF_GLITCH_CPS
+ * cannot be real motion and is dropped rather than believed.
  */
-static float enc_delta_m(OpusEncoder *e, float raw_ticks, int *glitch)
+static int32_t enc_delta(OpusState *st, const TtMeas *m, int w, float dt, int *glitch)
 {
-    int t = (int)(raw_ticks + (raw_ticks >= 0.0f ? 0.5f : -0.5f));
-    int d;
-
-    if (!e->has_prev) { e->prev_ticks = t; e->has_prev = 1; return 0.0f; }
-
-    d = t - e->prev_ticks;
-    if (d > VE_ENC_WRAP / 2)       d -= VE_ENC_WRAP;
-    else if (d < -VE_ENC_WRAP / 2) d += VE_ENC_WRAP;
-    e->prev_ticks = t;
-
-    if (d > SF_TICK_GLITCH || d < -SF_TICK_GLITCH) { if (glitch) *glitch = 1; return 0.0f; }
-
-    /* 2*pi*r/CPR = 0.0506 mm per count at 4096 CPR on a 33 mm wheel. */
-    return (float)d * (2.0f * OPUS_PI * VE_WHEEL_R / VE_ENC_CPR);
+    int32_t d;
+    if (!m->enc[w].st.valid) return 0;
+    if (!st->enc_has_prev[w]) {
+        st->enc_prev[w] = m->enc[w].count;
+        st->enc_has_prev[w] = 1;
+        return 0;
+    }
+    d = (int32_t)((uint32_t)m->enc[w].count - (uint32_t)st->enc_prev[w]);
+    st->enc_prev[w] = m->enc[w].count;
+    if ((float)(d < 0 ? -d : d) > SF_GLITCH_CPS * dt) { if (glitch) *glitch = 1; return 0; }
+    return d;
 }
 
-/* Effective odometer: the raw integral plus the integration-bias correction.
- *
- * The encoder integrates with a left-endpoint sum (angle += omega*dt sampled
- * before the step), so over a leg it over-reads by (dt/2)*(v_start - v_now).
- * On the constant-speed legs that is sub-millimetre; across the 4.5 -> 0
- * braking leg it is 22.5 mm, all of it in the direction of stopping SHORT.
- * Correcting it continuously also covers profiles that are not clean ramps.
- */
-static double odo_effective(const OpusState *st, float dt)
+float opus_odo_m(const OpusState *st)
 {
-    return st->odo_m + 0.5 * (double)dt * (double)(st->v_meas - st->v_leg_start);
+    const TtParams *p = st->p;
+    return 0.5f * ((float)st->odo_cnt_l * tt_m_per_count(p, st->odo_l) +
+                   (float)st->odo_cnt_r * tt_m_per_count(p, st->odo_r)) + st->odo_corr_m;
+}
+
+/* Effective odometer: the raw odometer plus, in the sim only, the
+ * integration-bias correction (TtParams.odo_lead_comp).
+ *
+ * The sim's encoder integrates with a left-endpoint sum (angle += omega*dt
+ * sampled before the step), so over a leg it over-reads by
+ * (dt/2)*(v_start - v_now). On the constant-speed legs that is sub-millimetre;
+ * across the 4.5 -> 0 braking leg it is 22.5 mm, all of it in the direction of
+ * stopping SHORT. A real encoder has no such bias, hence the parameter; it
+ * goes away entirely when SEN-02 fixes the sim encoder.
+ */
+static float odo_effective(const OpusState *st, float dt)
+{
+    float odo = opus_odo_m(st);
+    if (st->p->odo_lead_comp)
+        odo += 0.5f * dt * (st->v_meas - st->v_leg_start);
+    return odo;
 }
 
 /* -------------------------------------------------------------- lifecycle --*/
 
-void opus_init(OpusState *st)
+void opus_init(OpusState *st, const TtParams *p, float rate_hz)
 {
     memset(st, 0, sizeof(*st));
+    st->p = p;
+    st->rate_hz = rate_hz;
+    /* Odometry and the heading baseline: the front pair if both are odometry
+     * wheels (the Opus case), else the rear pair. */
+    if ((p->odo_wheel_mask & 0x3u) == 0x3u) { st->odo_l = TT_FL; st->odo_r = TT_FR; }
+    else                                    { st->odo_l = TT_RL; st->odo_r = TT_RR; }
+    opus_reset(st);
+}
+
+void opus_reset(OpusState *st)
+{
+    const TtParams *p = st->p;
+    float rate = st->rate_hz;
+    int l = st->odo_l, r = st->odo_r;
+
+    memset(st, 0, sizeof(*st));
+    st->p = p;
+    st->rate_hz = rate;
+    st->odo_l = l;
+    st->odo_r = r;
     st->phase = OPUS_BOOT;
-    st->gyro_sign = 0.0f;          /* unknown until the correlation resolves it */
-    st->stop_err_mm = 0.0f;
-    st->prev_time_s = -1.0f;
 
     pid_init(&st->spd_pid, GA_SPD_KP, GA_SPD_KI, 0.0f, -GA_SPD_TRIM, GA_SPD_TRIM);
     pid_init(&st->yaw_pid, GA_YAW_KP, GA_YAW_KI, 0.0f, -GA_YAW_TRIM, GA_YAW_TRIM);
 }
 
-static void enter(OpusState *st, OpusPhase p)
+static void enter(OpusState *st, OpusPhase ph)
 {
-    st->phase = p;
+    st->phase = ph;
     st->phase_t = 0.0f;
     /* A leg's integral must not leak into the next one. */
     pid_reset(&st->spd_pid);
@@ -113,10 +153,9 @@ static void enter(OpusState *st, OpusPhase p)
  * apply the PREVIOUS leg's correction to the new leg's datum and bake a fixed
  * offset into every subsequent measurement (worth 22 mm at a 0 -> 4.5 m/s
  * boundary, which is most of a leg's error budget). */
-static void begin_leg(OpusState *st, float dt)
+static void begin_leg(OpusState *st)
 {
-    (void)dt;
-    st->leg_start_m = st->odo_m;
+    st->leg_start_m = opus_odo_m(st);
     st->v_leg_start = st->v_meas;
 }
 
@@ -126,107 +165,93 @@ static void begin_leg(OpusState *st, float dt)
  * everything that CAN be checked at rest, and encoder liveness is proven over
  * the first half-metre of the launch instead.
  */
-static void arm_checks(OpusState *st, const OpusMeas *m)
+static void arm_checks(OpusState *st, const TtMeas *m)
 {
-    int f = 0;
+    const TtParams *p = st->p;
+    int f = 0, w;
 
-    if (m->motor_count <= 0)                      f |= FA_NO_MOTORS;
-    if (!m->enc_valid)                            f |= FA_NO_ENCODERS;
-    if (m->motor_vmax > 0.0f && m->motor_vmax < 6.0f) f |= FA_NO_MOTORS;
+    if (tt_params_validate(p) != 0) f |= FA_PARAMS;
+
+    for (w = 0; w < TT_MAX_WHEELS; w++) {
+        if ((p->driven_mask & (1u << w)) && !m->drv[w].st.valid)    f |= FA_NO_MOTORS;
+        if ((p->odo_wheel_mask & (1u << w)) && !m->enc[w].st.valid) f |= FA_NO_ENCODERS;
+    }
 
     /* Battery: present and near full, drawing nothing while stopped. */
-    if (m->batt_v > 0.0f && m->batt_v < 0.85f * VE_V_RAIL) f |= FA_BATTERY;
+    if (m->batt.st.valid && m->batt.v > 0.0f && m->batt.v < 0.85f * p->v_rail_nom) f |= FA_BATTERY;
 
-    /* The host is supposed to tick us at a steady 100 Hz. */
-    if (!(m->dt > 0.008f && m->dt < 0.012f))      f |= FA_DT;
+    /* The scheduler must deliver the rate it promised at init. */
+    if (st->rate_hz > 0.0f) {
+        float nom = 1.0f / st->rate_hz;
+        if (!(m->dt_s > nom * (1.0f - SF_DT_TOL) && m->dt_s < nom * (1.0f + SF_DT_TOL))) f |= FA_DT;
+    }
 
-    /* Specific force at rest is -g, i.e. magnitude ~9.81. */
-    if (m->accel_mag > 0.0f && (m->accel_mag < 9.3f || m->accel_mag > 10.3f)) f |= FA_IMU;
-
-    if (!finitef_(m->gyro_y) || !finitef_(m->enc_left_ticks) ||
-        !finitef_(m->enc_right_ticks))            f |= FA_NAN;
+    /* Specific force at rest is +g up, i.e. magnitude ~9.81. */
+    if (m->imu.st.valid) {
+        const float *a = m->imu.accel;
+        float mag = sqrtf(a[0] * a[0] + a[1] * a[1] + a[2] * a[2]);
+        if (mag < 9.3f || mag > 10.3f) f |= FA_IMU;
+        if (!finitef_(m->imu.gyro[2])) f |= FA_NAN;
+    }
 
     st->fault |= f;
 }
 
 /* ----------------------------------------------------------- longitudinal --
- * Force-based, not voltage-based. A voltage PID has no handle on tyre force and
- * spends its authority fighting back-EMF; here the loop produces an
- * acceleration, which becomes a force, a current, and only then a voltage
- * through the inverse machine model. At cruise 94 % of the command is
- * feed-forward, so the PID trims rather than drives.
+ * Force-based. The loop produces an acceleration, which becomes a road force
+ * and then a torque per driven wheel. Turning torque into the drive's own
+ * units (Iq for an FOC drive, volts for the sim's brushed ESC) is the
+ * target's job, so nothing here knows what kind of motor is fitted. At cruise
+ * 94 % of the command is feed-forward, so the PID trims rather than drives.
  */
-static void longitudinal(OpusState *st, const OpusMeas *m,
-                         float v_ref, float a_ff, int allow_brake, OpusCmd *out)
+static void longitudinal(OpusState *st, const TtMeas *m,
+                         float v_ref, float a_ff, int allow_brake, TtCmd *out)
 {
-    float a_trim, a_cmd, f_req, f_motor, f_fric, i_each, v_cmd, v_lim, rail;
-    float brake_duty = -1.0f;   /* < 0 = driving */
+    const TtParams *p = st->p;
+    int   n_driven = popcount4(p->driven_mask), w;
+    float a_trim, a_cmd, f_req, f_motor, f_fric, t_each;
 
-    a_trim = pid_update(&st->spd_pid, v_ref, st->v_meas, m->dt);
+    a_trim = pid_update(&st->spd_pid, v_ref, st->v_meas, m->dt_s);
     a_cmd  = clampf(a_ff + a_trim, -LI_A_MAX, LI_A_MAX);
 
     /* Total longitudinal force the car needs, coast drag included. Note the
      * EFFECTIVE mass: a fifth of what has to be accelerated is spinning rotor,
      * not translating car, and ignoring it makes every force command small. */
-    f_req = VE_MASS_EFF * a_cmd + drag_n(st->v_meas);
-
-    /* Stay inside the pack's live terminal voltage so the host's own sag clamp
-     * never silently truncates the command and breaks the inverse model. */
-    rail  = (m->batt_v > 1.0f) ? m->batt_v : VE_V_RAIL;
-    v_lim = 0.95f * rail;
-    if (m->motor_vmax > 0.1f && m->motor_vmax < v_lim) v_lim = m->motor_vmax;
+    f_req = p->mass_eff_kg * a_cmd + drag_n(p, st->v_meas);
 
     if (f_req >= 0.0f) {
         /* Driving. The driven tyres run at slip, so slightly more force is
          * commanded at the wheel than reaches the road (a scale on force, not
          * speed — it must NOT hide inside the drag polynomial). */
-        f_motor = f_req / VE_TRACTION_EFF;
+        f_motor = f_req / p->traction_eff;
         f_fric  = 0.0f;
     } else {
-        /* Braking. The ESC brakes by shorting the winding: force available is
-         * proportional to duty AND speed (back-EMF drives the current), fading
-         * to nothing at rest — so the friction brake takes the growing surplus
-         * as the car slows. A negative command IS the duty request: the host's
-         * ESC state machine reads |v_cmd|/V_rail as brake duty while rolling. */
+        /* Braking. The motors take what they can and the friction brake takes
+         * the rest. What they can is the car's regen capability: for this car's
+         * hobby ESC (shorted winding) proportional to speed, fading to nothing
+         * at rest — so the friction brake takes the growing surplus as the car
+         * slows — and capped by the grip of the driven axle, which unloads
+         * under braking. An FOC car states a flat current limit instead. */
         float need  = -f_req;
         float v_eff = st->v_meas > 0.05f ? st->v_meas : 0.05f;
-        float f_esc_max = VE_ESC_BRAKE_N_PER_MS * v_eff;
-        float f_esc;
-        if (f_esc_max > VE_ESC_BRAKE_MAX_N) f_esc_max = VE_ESC_BRAKE_MAX_N;
-        /* Rear-grip ceiling: the ESC brakes the rear axle only, and that axle
-         * unloads under braking. Past ~9 N the rears just slide (measured). */
-        if (f_esc_max > EN_ESC_BRAKE_CAP_N) f_esc_max = EN_ESC_BRAKE_CAP_N;
-        f_esc = need < f_esc_max ? need : f_esc_max;
-        brake_duty = clampf(f_esc / (VE_ESC_BRAKE_N_PER_MS * v_eff), 0.0f, 1.0f);
-        f_motor = -f_esc;
-        f_fric  = allow_brake ? (need - f_esc) : 0.0f;
+        float cap   = p->regen_n_per_ms > 0.0f ? p->regen_n_per_ms * v_eff : need;
+        if (p->regen_max_n > 0.0f && cap > p->regen_max_n) cap = p->regen_max_n;
+        if (p->regen_grip_cap_n > 0.0f && cap > p->regen_grip_cap_n) cap = p->regen_grip_cap_n;
+        f_motor = -(need < cap ? need : cap);
+        f_fric  = allow_brake ? (need + f_motor) : 0.0f;
     }
 
-    i_each = f_motor / VE_FORCE_PER_AMP_ALL;
+    /* Equal split across the driven wheels: an open differential. Torque
+     * vectoring (FW-06) replaces this line. */
+    t_each = n_driven > 0 ? f_motor * p->wheel_radius_m / (float)n_driven : 0.0f;
+    for (w = 0; w < TT_MAX_WHEELS; w++)
+        out->wheel_torque_nm[w] = (p->driven_mask & (1u << w)) ? t_each : 0.0f;
 
-    if (brake_duty < 0.0f) {
-        /* Drive: inverse machine model, back-EMF feed-forward + IR term. */
-        v_cmd = VE_BEMF_V_PER_MS * st->v_meas + VE_R_MOTOR * i_each;
-        /* Push past the ESC deadband when force is genuinely wanted, and snap
-         * to zero when it is not — small commands must not vanish silently. */
-        if (v_cmd > 0.0f && v_cmd < VE_ESC_DEADBAND_V)
-            v_cmd = (f_motor > 0.05f) ? VE_ESC_DEADBAND_V : 0.0f;
-        else if (v_cmd < 0.0f)
-            v_cmd = 0.0f;   /* drive branch never commands reverse at speed */
-    } else {
-        /* Brake: duty maps linearly onto the negative command range. The ESC
-         * normalises duty against its NOMINAL rail (the host divides by the
-         * motor's rated voltage), not the live pack voltage — using the live
-         * rail here over-brakes by the fresh-pack surcharge. */
-        v_cmd = -brake_duty * VE_V_RAIL;
-        if (v_cmd < 0.0f && v_cmd > -VE_ESC_DEADBAND_V)
-            v_cmd = (f_motor < -0.05f) ? -VE_ESC_DEADBAND_V : 0.0f;
-    }
+    /* The friction brake acts on all four wheels. */
+    out->brake_01 = p->brake_max_nm > 0.0f
+        ? clampf(f_fric * p->wheel_radius_m / (4.0f * p->brake_max_nm), 0.0f, 1.0f) : 0.0f;
 
-    out->motor_v = clampf(v_cmd, -v_lim, v_lim);
-    out->brake   = clampf(f_fric * VE_WHEEL_R / (4.0f * VE_MAX_BRAKE_NM), 0.0f, 1.0f);
-
-    st->i_cmd = i_each;
+    st->t_cmd_nm = t_each;
     st->v_ref = v_ref;
 }
 
@@ -234,25 +259,24 @@ static void longitudinal(OpusState *st, const OpusMeas *m,
  * Never open-loop the steer angle. The kinematic angle for this corner is
  * 3.4 degrees, but at 4.5 m/s the tyres need another 3 or so of slip that
  * cannot be known in advance, so feed-forward sets the ballpark and a yaw-rate
- * loop finds the rest. Sign convention here: positive is LEFT throughout, and
- * only the final line flips into the host's positive-is-right command.
+ * loop finds the rest. Positive is LEFT throughout, command included.
  */
-static void lateral(OpusState *st, const OpusMeas *m, float psi_dot_ref, OpusCmd *out)
+static void lateral(OpusState *st, const TtMeas *m, float psi_dot_ref, TtCmd *out)
 {
-    float v_eff = st->v_meas > 0.5f ? st->v_meas : 0.5f;
-    float ff_deg = atan2f(VE_WHEELBASE * psi_dot_ref, v_eff) * OPUS_RAD2DEG;
-    float trim   = pid_update(&st->yaw_pid, psi_dot_ref, st->psi_dot_f, m->dt);
-    float deg    = ff_deg + trim;
+    const TtParams *p = st->p;
+    float v_eff  = st->v_meas > 0.5f ? st->v_meas : 0.5f;
+    float ff_deg = atan2f(p->wheelbase_m * psi_dot_ref, v_eff) * OPUS_RAD2DEG;
+    float trim   = pid_update(&st->yaw_pid, psi_dot_ref, st->psi_dot_f, m->dt_s);
+    float rad    = clampf((ff_deg + trim) * OPUS_DEG2RAD, -p->max_steer_rad, p->max_steer_rad);
 
-    /* Servo observer — the ABI gives no steer feedback, so model it. Used for
+    /* Servo observer — a hobby servo gives no position, so model it. Used for
      * reporting, not for control. */
     {
-        float step = VE_SERVO_SLEW_DPS * m->dt;
-        float err  = clampf(deg, -VE_MAX_STEER_DEG, VE_MAX_STEER_DEG) - st->steer_obs_deg;
-        st->steer_obs_deg += clampf(err, -step, step);
+        float step = p->servo_slew_rad_s * m->dt_s;
+        st->steer_obs_rad += clampf(rad - st->steer_obs_rad, -step, step);
     }
 
-    out->steer = -clampf(deg / VE_MAX_STEER_DEG, -1.0f, 1.0f);
+    out->steer_rad = rad;
 }
 
 /* Trapezoidal yaw-rate reference. Ramping in and out keeps the inner front
@@ -276,98 +300,148 @@ static float turn_profile(float t, float *out_rate)
     return ramp + hold + ramp;   /* total duration */
 }
 
+static float heading_hold(const OpusState *st)
+{
+    return clampf(GA_HEAD_KP * (st->psi_ref - st->psi), -GA_HEAD_MAX_RATE, GA_HEAD_MAX_RATE);
+}
+
+static void fill_log(OpusState *st, const TtMeas *m)
+{
+    OpusLog *g = &st->log;
+    g->state        = (float)st->phase;
+    g->fault        = (float)st->fault;
+    g->odo_m        = opus_odo_m(st);
+    g->leg_rem_m    = st->leg_rem;
+    g->v_meas       = st->v_meas;
+    g->target_speed = st->v_ref;
+    g->v_err        = st->v_ref - st->v_meas;
+    g->yaw_deg      = st->psi * OPUS_RAD2DEG;
+    g->yaw_rate     = st->psi_dot;
+    g->steer_cmd    = st->cmd.steer_rad;
+    g->motor_v      = 0.0f;   /* the drive's business: filled by the target */
+    g->i_cmd        = 0.0f;   /* ditto */
+    g->brake_cmd    = st->cmd.brake_01;
+    g->batt_v       = m->batt.st.valid ? m->batt.v : -1.0f;
+    g->slip_pct     = st->slip_pct;
+    g->stop_err_mm  = st->stop_err_mm;
+}
+
 /* -------------------------------------------------------------------- step --*/
 
-void opus_step(OpusState *st, const OpusMeas *m, OpusCmd *out)
+void opus_step(OpusState *st, const TtMeas *m, TtCmd *out)
 {
-    float dt = m->dt;
+    const TtParams *p = st->p;
+    float dt = m->dt_s;
     float ds_l, ds_r, ds, psi_dot_enc, psi_dot_ref = 0.0f;
-    float v_ref = 0.0f, a_ff = 0.0f;
-    int   allow_brake = 1, glitch = 0;
-    double odo_eff;
+    float v_ref = 0.0f, a_ff = 0.0f, odo_eff, mpc_l, mpc_r;
+    int32_t dl, dr;
+    int   allow_brake = 1, glitch = 0, w;
 
-    out->motor_v = 0.0f;
-    out->steer   = 0.0f;
-    out->brake   = 0.0f;
+    memset(out, 0, sizeof(*out));
+    out->t_us = m->now_us;
 
-    if (!(dt > 1e-5f) || !finitef_(dt)) { st->cmd = *out; return; }
+    if (!(dt > 1e-5f) || !finitef_(dt)) { st->cmd = *out; fill_log(st, m); return; }
 
-    /* A host clock that went backwards means the run was restarted underneath
-     * us; start over rather than integrating across the discontinuity. */
-    if (st->prev_time_s >= 0.0f && m->time_s < st->prev_time_s - 1e-3f) {
-        opus_init(st);
-    }
-    st->prev_time_s = m->time_s;
+    /* A clock that went backwards means the run was restarted underneath us
+     * without a reset; start over rather than integrating across it. */
+    if (st->has_prev_us && (int32_t)(m->now_us - st->prev_us) < -1000)
+        opus_reset(st);
+    st->prev_us = m->now_us;
+    st->has_prev_us = 1;
 
     /* ---- estimators ---------------------------------------------------- */
 
-    ds_l = enc_delta_m(&st->enc_l, m->enc_left_ticks,  &glitch);
-    ds_r = enc_delta_m(&st->enc_r, m->enc_right_ticks, &glitch);
+    mpc_l = tt_m_per_count(p, st->odo_l);
+    mpc_r = tt_m_per_count(p, st->odo_r);
+    dl = enc_delta(st, m, st->odo_l, dt, &glitch);
+    dr = enc_delta(st, m, st->odo_r, dt, &glitch);
     if (glitch) st->fault |= FA_TICK_GLITCH;
+    ds_l = (float)dl * mpc_l;
+    ds_r = (float)dr * mpc_r;
 
-    /* Averaging the two front wheels cancels the track-width term exactly, so
-     * no steering-angle compensation is needed on the measured legs. */
+    /* Averaging the two odometry wheels cancels the track-width term exactly,
+     * so no steering-angle compensation is needed on the measured legs. */
     ds = 0.5f * (ds_l + ds_r);
+    st->odo_cnt_l += dl;
+    st->odo_cnt_r += dr;
     /* Brake slip is MULTIPLICATIVE on the rolled distance (a braked wheel runs
      * at negative slip proportional to road speed), never additive — an
      * additive term manufactures phantom metres while the car sits at rest
      * with the brake held, which is exactly the ARM rolling check's job to
      * catch (it did — fault 0x40, run R3). */
-    ds = ds * (1.0f + CAL_SCALE + CAL_BRAKE * st->cmd.brake);
+    {
+        float k = p->cal_scale + p->cal_brake * st->cmd.brake_01;
+        st->odo_corr_m += ds * k;
+        ds *= 1.0f + k;
+    }
 
-    st->odo_m += (double)ds;
     st->v_meas = ds / dt;
-    st->v_filt += (st->v_meas - st->v_filt) * 0.35f;
+    st->v_filt += (st->v_meas - st->v_filt) * lp_alpha(dt, EN_VFILT_TAU_S);
 
-    if (m->enc_rear_valid) {
-        int g2 = 0;
-        float rl = enc_delta_m(&st->enc_rl, m->enc_rl_ticks, &g2);
-        float rr = enc_delta_m(&st->enc_rr, m->enc_rr_ticks, &g2);
-        st->v_rear = 0.5f * (rl + rr) / dt;
-        st->slip_pct = (st->v_meas > 0.3f)
-            ? (st->v_rear - st->v_meas) / st->v_meas * 100.0f : 0.0f;
+    /* Driven-wheel speed, for the slip diagnostic only. */
+    {
+        float sum = 0.0f;
+        int   n = 0;
+        for (w = 0; w < TT_MAX_WHEELS; w++) {
+            /* An odometry wheel was already differenced this tick; doing it
+             * again would read zero. */
+            if (w == st->odo_l || w == st->odo_r) continue;
+            if ((p->driven_mask & (1u << w)) && m->enc[w].st.valid) {
+                int g2 = 0;
+                sum += (float)enc_delta(st, m, w, dt, &g2) * tt_m_per_count(p, w);
+                n++;
+            }
+        }
+        if (n > 0) {
+            st->v_rear = sum / (float)n / dt;
+            st->slip_pct = (st->v_meas > 0.3f)
+                ? (st->v_rear - st->v_meas) / st->v_meas * 100.0f : 0.0f;
+        }
     }
 
     /* Heading. The differential of two wheels on a known baseline is a purely
      * geometric yaw measurement: no bias, no drift, and one tick of resolution
      * is 0.02 degrees over this turn. The gyro is fused for its high-rate
-     * content only, once its sign has been established. */
-    psi_dot_enc = (ds_r - ds_l) / (VE_TRACK_FRONT * dt);
-
-    st->gyro_corr += m->gyro_y * psi_dot_enc * dt;
-    if (st->gyro_sign == 0.0f && (st->gyro_corr > 0.05f || st->gyro_corr < -0.05f))
-        st->gyro_sign = st->gyro_corr > 0.0f ? 1.0f : -1.0f;
-
-    if (st->gyro_sign != 0.0f) {
-        float gy = st->gyro_sign * m->gyro_y;
-        st->psi_dot = GA_GYRO_ALPHA * gy + (1.0f - GA_GYRO_ALPHA) * psi_dot_enc;
-    } else {
+     * content; in FLU a left turn is positive, so there is no sign to learn. */
+    psi_dot_enc = (ds_r - ds_l) / (p->track_front_m * dt);
+    if (m->imu.st.valid && finitef_(m->imu.gyro[2]))
+        st->psi_dot = GA_GYRO_ALPHA * m->imu.gyro[2] + (1.0f - GA_GYRO_ALPHA) * psi_dot_enc;
+    else
         st->psi_dot = psi_dot_enc;   /* adequate on its own; just noisier */
-    }
     st->psi += st->psi_dot * dt;
     /* One tick of encoder differential is 0.03 rad/s, so the raw estimate is
      * coarse. Integrate the raw value (quantisation averages out) but close the
      * loops on the filtered one. */
-    st->psi_dot_f += (st->psi_dot - st->psi_dot_f) * GA_YAW_FILT;
+    st->psi_dot_f += (st->psi_dot - st->psi_dot_f) * lp_alpha(dt, GA_YAW_TAU_S);
 
     odo_eff = odo_effective(st, dt);
 
     /* ---- standing faults ----------------------------------------------- */
 
-    if (m->accel_mag > SF_ACCEL_ABORT) {
-        if (++st->accel_hits >= SF_ACCEL_TICKS) st->fault |= FA_IMPACT;
-    } else {
-        st->accel_hits = 0;
+    if (m->imu.st.valid) {
+        const float *a = m->imu.accel;
+        float mag = sqrtf(a[0] * a[0] + a[1] * a[1] + a[2] * a[2]);
+        if (mag > SF_ACCEL_ABORT) {
+            st->accel_t += dt;
+            if (st->accel_t >= SF_ACCEL_S - 1e-4f) st->fault |= FA_IMPACT;
+        } else {
+            st->accel_t = 0.0f;
+        }
     }
-    if (st->phase >= OPUS_LAUNCH && st->phase <= OPUS_BRAKE &&
-        m->tof_front_m > 0.0f && m->tof_front_m < SF_TOF_ABORT_M) {
-        if (++st->tof_hits >= SF_TOF_TICKS) st->fault |= FA_OBSTACLE;
-    } else {
-        st->tof_hits = 0;
+    {
+        float tof = (m->tof.st.valid && m->tof.zones > 0 && m->tof.status[0] == 0)
+                  ? m->tof.range_m[0] : 1e6f;
+        if (st->phase >= OPUS_LAUNCH && st->phase <= OPUS_BRAKE &&
+            tof > 0.0f && tof < SF_TOF_ABORT_M) {
+            st->tof_t += dt;
+            if (st->tof_t >= SF_TOF_S - 1e-4f) st->fault |= FA_OBSTACLE;
+        } else {
+            st->tof_t = 0.0f;
+        }
     }
 
     if (st->fault & (FA_IMPACT | FA_OBSTACLE | FA_ENC_DEAD | FA_NO_ENCODERS |
-                     FA_NO_MOTORS | FA_NAN))
+                     FA_NO_MOTORS | FA_NAN | FA_PARAMS))
         st->phase = OPUS_FAULT;
 
     st->phase_t += dt;
@@ -383,7 +457,7 @@ void opus_step(OpusState *st, const OpusMeas *m, OpusCmd *out)
     case OPUS_ARM_STATIC:
         /* Brake held first so the car is definitely still, then released so a
          * silent roll-away or a sloped pad shows up as counter movement. */
-        out->brake = (st->phase_t < SQ_ARM_BRAKE_S) ? 1.0f : 0.0f;
+        out->brake_01 = (st->phase_t < SQ_ARM_BRAKE_S) ? 1.0f : 0.0f;
         if (st->phase_t > SQ_ARM_BRAKE_S) {
             if (ds > 0.002f || ds < -0.002f) st->fault |= FA_ROLLING;
         }
@@ -391,16 +465,17 @@ void opus_step(OpusState *st, const OpusMeas *m, OpusCmd *out)
             arm_checks(st, m);
             if (st->fault) { st->phase = OPUS_FAULT; break; }
             /* Zero the estimators so the mission's datum is the arm point. */
-            st->odo_m = 0.0; st->psi = 0.0f; st->psi_ref = 0.0f;
+            st->odo_cnt_l = 0; st->odo_cnt_r = 0; st->odo_corr_m = 0.0f;
+            st->psi = 0.0f; st->psi_ref = 0.0f;
             enter(st, OPUS_ARMED);
         }
         break;
 
     case OPUS_ARMED:
-        out->brake = 1.0f;
+        out->brake_01 = 1.0f;
         if (st->phase_t > SQ_ARM_DWELL_S) {
             st->v_ref = 0.0f;
-            begin_leg(st, dt);
+            begin_leg(st);
             enter(st, OPUS_LAUNCH);
         }
         break;
@@ -412,8 +487,7 @@ void opus_step(OpusState *st, const OpusMeas *m, OpusCmd *out)
         v_ref = st->v_ref + LI_A_LAUNCH * dt;
         if (v_ref > MI_V_CRUISE) v_ref = MI_V_CRUISE;
         a_ff = (v_ref < MI_V_CRUISE) ? LI_A_LAUNCH : 0.0f;
-        psi_dot_ref = clampf(GA_HEAD_KP * (st->psi_ref - st->psi),
-                             -GA_HEAD_MAX_RATE, GA_HEAD_MAX_RATE);
+        psi_dot_ref = heading_hold(st);
 
         /* The only real encoder-liveness test: both counters must advance once
          * the car is definitely moving. Judged on ACCUMULATED distance over the
@@ -425,29 +499,28 @@ void opus_step(OpusState *st, const OpusMeas *m, OpusCmd *out)
         st->live_l += ds_l;
         st->live_r += ds_r;
         if (!st->live_checked && odo_eff > SQ_LIVENESS_M) {
-            st->live_checked = 1;
             float lo = st->live_l < st->live_r ? st->live_l : st->live_r;
             float hi = st->live_l < st->live_r ? st->live_r : st->live_l;
+            st->live_checked = 1;
             if (lo <= 0.01f || lo < 0.60f * hi) st->fault |= FA_ENC_DEAD;
         }
 
         if (st->v_meas > MI_V_CRUISE - 0.05f) st->settle_t += dt; else st->settle_t = 0.0f;
         if (st->settle_t > SQ_SETTLE_S) {
-            begin_leg(st, dt);
+            begin_leg(st);
             enter(st, OPUS_CRUISE_A);
         }
         break;
 
     case OPUS_CRUISE_A:
         v_ref = MI_V_CRUISE;
-        psi_dot_ref = clampf(GA_HEAD_KP * (st->psi_ref - st->psi),
-                             -GA_HEAD_MAX_RATE, GA_HEAD_MAX_RATE);
+        psi_dot_ref = heading_hold(st);
         /* Half-tick lead. A leg boundary can only ever land on a control tick,
          * and at 4.5 m/s a tick is 45 mm — so testing the bare threshold always
          * overshoots, by 22 mm on average. Testing the midpoint of the coming
          * tick instead centres the quantisation on zero. */
-        if (odo_eff - st->leg_start_m + 0.5 * st->v_meas * dt >= MI_LEG_A_M) {
-            st->leg_a_actual = (float)(odo_eff - st->leg_start_m);
+        if (odo_eff - st->leg_start_m + 0.5f * st->v_meas * dt >= MI_LEG_A_M) {
+            st->leg_a_actual = odo_eff - st->leg_start_m;
             st->turn_t = 0.0f;
             st->turn_cmd_rad = 0.0f;
             enter(st, OPUS_TURN);
@@ -468,8 +541,7 @@ void opus_step(OpusState *st, const OpusMeas *m, OpusCmd *out)
          * than the lateral-acceleration budget allows. */
         {
             float herr = st->turn_cmd_rad - st->psi;
-            psi_dot_ref += clampf(GA_TURN_KP * herr,
-                                  -GA_TURN_MAX_TRIM, GA_TURN_MAX_TRIM);
+            psi_dot_ref += clampf(GA_TURN_KP * herr, -GA_TURN_MAX_TRIM, GA_TURN_MAX_TRIM);
         }
         /* The settle test needs the heading to have ARRIVED as well as the rate
          * to have died — a loose rate band on its own is satisfied by simply
@@ -484,7 +556,7 @@ void opus_step(OpusState *st, const OpusMeas *m, OpusCmd *out)
              * error is reported, not propagated. */
             st->turn_actual_deg = st->psi * OPUS_RAD2DEG;
             st->psi_ref = st->psi;
-            begin_leg(st, dt);
+            begin_leg(st);
             st->stop_target_m = st->leg_start_m + MI_STOP_FROM_EXIT;
             enter(st, OPUS_CRUISE_B);
         }
@@ -493,10 +565,9 @@ void opus_step(OpusState *st, const OpusMeas *m, OpusCmd *out)
 
     case OPUS_CRUISE_B:
         v_ref = MI_V_CRUISE;
-        psi_dot_ref = clampf(GA_HEAD_KP * (st->psi_ref - st->psi),
-                             -GA_HEAD_MAX_RATE, GA_HEAD_MAX_RATE);
-        if (odo_eff - st->leg_start_m + 0.5 * st->v_meas * dt >= MI_LEG_B_M) {
-            st->leg_b_actual = (float)(odo_eff - st->leg_start_m);
+        psi_dot_ref = heading_hold(st);
+        if (odo_eff - st->leg_start_m + 0.5f * st->v_meas * dt >= MI_LEG_B_M) {
+            st->leg_b_actual = odo_eff - st->leg_start_m;
             st->v_leg_start = st->v_meas;    /* datum for the trapezoid correction */
             enter(st, OPUS_BRAKE);
         }
@@ -507,13 +578,12 @@ void opus_step(OpusState *st, const OpusMeas *m, OpusCmd *out)
          * that makes it self-correcting against modelling error. The lead term
          * removes the transient lag of the loop's own dead time — 20 ms at
          * 4.5 m/s is 90 mm of prediction. */
-        float s_rem = (float)(st->stop_target_m - odo_eff) - st->v_meas * EN_DEAD_TIME_S;
+        float s_rem = (st->stop_target_m - odo_eff) - st->v_meas * EN_DEAD_TIME_S;
         if (s_rem < 0.0f) s_rem = 0.0f;
         v_ref = sqrtf(2.0f * LI_A_BRAKE * s_rem);
         if (v_ref > MI_V_CRUISE) v_ref = MI_V_CRUISE;
         a_ff = -LI_A_BRAKE;
-        psi_dot_ref = clampf(GA_HEAD_KP * (st->psi_ref - st->psi),
-                             -GA_HEAD_MAX_RATE, GA_HEAD_MAX_RATE);
+        psi_dot_ref = heading_hold(st);
 
         /* The friction brake acts on ALL FOUR wheels, so it slips the very
          * wheels the odometer reads. Give it up for the last 40 mm and coast
@@ -526,9 +596,8 @@ void opus_step(OpusState *st, const OpusMeas *m, OpusCmd *out)
          * 1.3 m past the mark. If the distance is gone but the speed is not,
          * stay in BRAKE: s_rem clamps to zero, v_ref goes to zero, and the loop
          * asks for everything it has. */
-        if ((float)(st->stop_target_m - odo_eff) < EN_CREEP_M &&
-            st->v_filt < EN_CREEP_V * 2.0f) {
-            st->brake_actual = (float)(odo_eff - (st->stop_target_m - MI_BRAKE_M));
+        if (st->stop_target_m - odo_eff < EN_CREEP_M && st->v_filt < EN_CREEP_V * 2.0f) {
+            st->brake_actual = odo_eff - (st->stop_target_m - MI_BRAKE_M);
             enter(st, OPUS_CREEP);
         }
         break;
@@ -539,7 +608,7 @@ void opus_step(OpusState *st, const OpusMeas *m, OpusCmd *out)
          * over to a linear position loop. Position resolves to 0.05 mm here;
          * velocity resolves to only 5 mm/s, which is why this closes on
          * distance and not on speed. */
-        float s_rem = (float)(st->stop_target_m - odo_eff);
+        float s_rem = st->stop_target_m - odo_eff;
         allow_brake = 0;
         v_ref = clampf(EN_CREEP_KV * s_rem, -EN_CREEP_V, EN_CREEP_V);
         if (s_rem < EN_DONE_M && st->v_filt < EN_DONE_V && st->v_filt > -EN_DONE_V) {
@@ -550,34 +619,34 @@ void opus_step(OpusState *st, const OpusMeas *m, OpusCmd *out)
     }
 
     case OPUS_HOLD:
-        out->brake = 1.0f;
+        out->brake_01 = 1.0f;
         /* Test the filtered speed, not the raw tick delta: at a few mm/s the
          * counter alternates between one and two ticks per period, so an
          * exact-zero-ticks test can never be satisfied for a whole second. */
         if (st->v_filt < EN_DONE_V && st->v_filt > -EN_DONE_V) st->hold_t += dt;
         else st->hold_t = 0.0f;
         if (st->hold_t > EN_HOLD_S) {
-            st->stop_err_mm = (float)((odo_eff - st->stop_target_m) * 1000.0);
+            st->stop_err_mm = (odo_eff - st->stop_target_m) * 1000.0f;
             enter(st, OPUS_DONE);
         }
         break;
 
     case OPUS_DONE:
-        out->brake = 1.0f;
+        out->brake_01 = 1.0f;
         break;
 
     case OPUS_FAULT:
     default:
-        out->brake = 1.0f;
+        out->brake_01 = 1.0f;
         break;
     }
 
     /* Distance still owed on whichever leg is being measured. */
     switch (st->phase) {
-    case OPUS_CRUISE_A: st->leg_rem = MI_LEG_A_M - (float)(odo_eff - st->leg_start_m); break;
-    case OPUS_CRUISE_B: st->leg_rem = MI_LEG_B_M - (float)(odo_eff - st->leg_start_m); break;
+    case OPUS_CRUISE_A: st->leg_rem = MI_LEG_A_M - (odo_eff - st->leg_start_m); break;
+    case OPUS_CRUISE_B: st->leg_rem = MI_LEG_B_M - (odo_eff - st->leg_start_m); break;
     case OPUS_BRAKE:
-    case OPUS_CREEP:    st->leg_rem = (float)(st->stop_target_m - odo_eff); break;
+    case OPUS_CREEP:    st->leg_rem = st->stop_target_m - odo_eff; break;
     default:            st->leg_rem = 0.0f; break;
     }
 
@@ -586,16 +655,20 @@ void opus_step(OpusState *st, const OpusMeas *m, OpusCmd *out)
     if (st->phase >= OPUS_LAUNCH && st->phase <= OPUS_CREEP) {
         longitudinal(st, m, v_ref, a_ff, allow_brake, out);
         lateral(st, m, psi_dot_ref, out);
+        out->arm = 1;
     } else {
         st->v_ref = 0.0f;
-        st->i_cmd = 0.0f;
+        st->t_cmd_nm = 0.0f;
         pid_reset(&st->spd_pid);
         pid_reset(&st->yaw_pid);
+        out->arm = (st->phase == OPUS_ARMED || st->phase == OPUS_HOLD) ? 1 : 0;
     }
 
     /* Live stop error while it still means something. */
     if (st->phase == OPUS_BRAKE || st->phase == OPUS_CREEP)
-        st->stop_err_mm = (float)((odo_eff - st->stop_target_m) * 1000.0);
+        st->stop_err_mm = (odo_eff - st->stop_target_m) * 1000.0f;
 
+    out->seq = st->cmd.seq + 1u;
     st->cmd = *out;
+    fill_log(st, m);
 }
