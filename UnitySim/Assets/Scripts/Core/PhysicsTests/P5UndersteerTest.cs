@@ -60,7 +60,7 @@ namespace AIHWSim.Core.PhysicsTests
                 return new Verdict
                 {
                     kind = Kind.Invalid,
-                    detail = "not enough samples in the linear region (< 0.4 g)",
+                    detail = "not enough samples in the linear region (< 0.4 g): " + SampleCounts,
                 };
 
             string detail = $"linear-region fit below 0.4 g · peak {PeakLatG:0.000} g · "

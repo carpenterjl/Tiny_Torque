@@ -712,6 +712,21 @@ namespace AIHWSim.Vehicles
         public float WheelLoadN(int i) =>
             i >= 0 && i < _wheels.Count ? _wheels[i].lastFz : 0f;
 
+        /// <summary>Wheel i's lateral tyre force from the last step (N, + =
+        /// the patch pushed to the wheel's right).</summary>
+        public float WheelLateralForceN(int i) =>
+            i >= 0 && i < _wheels.Count ? _wheels[i].lastFy : 0f;
+
+        /// <summary>Wheel i's combined normalised slip as the tyre model
+        /// sees it (1 = the force peak).</summary>
+        public float WheelSlipNorm(int i) =>
+            i >= 0 && i < _wheels.Count ? _wheels[i].slipNorm : 0f;
+
+        /// <summary>Wheel i's current road-wheel angle (deg, + = right),
+        /// servo, Ackermann and roll steer included.</summary>
+        public float WheelSteerDeg(int i) =>
+            i >= 0 && i < _wheels.Count ? _wheels[i].currentSteer : 0f;
+
         /// <summary>Wheel i's longitudinal slip ratio κ.</summary>
         public float WheelSlipRatio(int i) =>
             i >= 0 && i < _wheels.Count ? _wheels[i].slipRatio : 0f;
@@ -1646,6 +1661,7 @@ namespace AIHWSim.Vehicles
             transform.SetPositionAndRotation(pos, rot);
             Physics.SyncTransforms();
             _body.collisionDetectionMode = mode;
+            _rayNextValid = false;   // a teleport: the last raycast's pose means nothing now
 
             // A respawn is also the one guaranteed way out of a boost-pad pin, so
             // clear the latch rather than making the player wait it out.
@@ -1696,6 +1712,7 @@ namespace AIHWSim.Vehicles
             _body.rotation = rot;
             transform.SetPositionAndRotation(pos, rot);
             Physics.SyncTransforms();
+            _rayNextValid = false;
             _body.linearVelocity = vel;
             _body.angularVelocity = angVel;
             _body.collisionDetectionMode = mode;
@@ -1805,8 +1822,34 @@ namespace AIHWSim.Vehicles
         private float _padStallTime;
         private bool _padPinned;
 
+        // PHY-07: the WheelCollider's suspension raycast runs at the START of
+        // PhysX's step, so the hit point read here is where the patch was one
+        // step ago. Read as a world point on the body as it is NOW, it sits
+        // v·dt behind the wheel, and its velocity carries a sideways error of
+        // r·v·dt: a slip-angle bias of yaw-rate × dt, which made cornering
+        // stiffness depend on the timestep (+60 % at 1 m/s on a 2.4 m circle
+        // at 400 Hz). The fix carries the patch from the pose the raycast saw
+        // to the current one.
+        private Vector3 _rayPrevPos, _rayNextPos;
+        private Quaternion _rayPrevRot = Quaternion.identity, _rayNextRot = Quaternion.identity;
+        private bool _rayPrevValid, _rayNextValid;
+
+        /// <summary>A contact point from the last raycast, moved with the body
+        /// from the pose the raycast saw to the current one.</summary>
+        private Vector3 PatchNow(Vector3 hitPoint)
+        {
+            if (!_rayPrevValid) return hitPoint;
+            Vector3 local = Quaternion.Inverse(_rayPrevRot) * (hitPoint - _rayPrevPos);
+            return _body.position + _body.rotation * local;
+        }
+
         public void StepPhysics(float dt)
         {
+            // This step's hits came from the raycast at the previous step's pose;
+            // the raycast after this step will see the pose we are at now.
+            _rayPrevPos = _rayNextPos; _rayPrevRot = _rayNextRot; _rayPrevValid = _rayNextValid;
+            _rayNextPos = _body.position; _rayNextRot = _body.rotation; _rayNextValid = true;
+
             // Battery bus: terminal voltage sags with LAST step's total current
             // across the pack's internal resistance (explicit integration — stable
             // at 400 Hz). internalR/nominalV = 0 (no battery part) = stiff rail.
@@ -2176,8 +2219,8 @@ namespace AIHWSim.Vehicles
                     else fwdW.Normalize();
                     Vector3 rightW = Vector3.Cross(n, fwdW);
 
-                    Vector3 vContact = _body.GetPointVelocity(
-                        grounded ? hit.point : w.col.transform.position);
+                    Vector3 patch = grounded ? PatchNow(hit.point) : w.col.transform.position;
+                    Vector3 vContact = _body.GetPointVelocity(patch);
                     float vx = Vector3.Dot(vContact, fwdW);
                     float vy = Vector3.Dot(vContact, rightW);
 
@@ -2297,13 +2340,13 @@ namespace AIHWSim.Vehicles
                         if (w.rollCentreH == 0f)
                         {
                             _body.AddForceAtPosition(fwdW * fx + rightW * fy,
-                                hit.point, ForceMode.Force);
+                                patch, ForceMode.Force);
                         }
                         else
                         {
-                            _body.AddForceAtPosition(fwdW * fx, hit.point, ForceMode.Force);
+                            _body.AddForceAtPosition(fwdW * fx, patch, ForceMode.Force);
                             _body.AddForceAtPosition(rightW * fy,
-                                hit.point + transform.up * w.rollCentreH, ForceMode.Force);
+                                patch + transform.up * w.rollCentreH, ForceMode.Force);
                         }
                     }
                     if (!(grounded && fz > 0f)) { w.ux = 0f; w.uy = 0f; }   // airborne: bristles relax

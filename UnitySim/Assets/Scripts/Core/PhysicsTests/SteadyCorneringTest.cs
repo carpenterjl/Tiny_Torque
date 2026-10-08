@@ -133,7 +133,12 @@ namespace AIHWSim.Core.PhysicsTests
             // car through its own cornering limit measures the throttle servo.
             d.throttle = 0f;
             d.brake = 0f;
-            SteerCmd = Mathf.Clamp01(steerRatePerSec * t);
+            // The ramp starts when sampling does. Started at t = 0, a 28 m/s
+            // car is already past the 0.4 g linear region by the end of the
+            // settle window (1° of steer is 0.5 g at that speed), and the
+            // linear-region fits had only the few samples a stiffer-looking
+            // tyre happened to leave them.
+            SteerCmd = Mathf.Clamp01(steerRatePerSec * Mathf.Max(0f, t - settleIgnoreSec));
             d.steer = SteerCmd;
         }
 
@@ -145,12 +150,13 @@ namespace AIHWSim.Core.PhysicsTests
             if (latG > PeakLatG) PeakLatG = latG;
 
             float v = Speed;
-            if (v < 1f) return;
+            if (v < 1f) { _skipSlow++; return; }
 
             // Linear region only. Past ~0.4 g the tyres are no longer near their
             // linear range and a gradient fitted through the saturating part is a
             // number about the peak, not about the gradient.
-            if (latG < 0.05f || latG > 0.4f) return;
+            if (latG < 0.05f) { _skipLow++; return; }
+            if (latG > 0.4f) { _skipHigh++; return; }
 
             // Understeer angle = actual steer − the Ackermann steer that this
             // curvature would need with no slip angles at all.
@@ -170,6 +176,13 @@ namespace AIHWSim.Core.PhysicsTests
 
         /// <summary>Least-squares slope of understeer angle against lateral g —
         /// the understeer gradient, in deg/g.</summary>
+        private int _skipSlow, _skipLow, _skipHigh;
+
+        /// <summary>Why the linear-region fit has the samples it has.</summary>
+        protected string SampleCounts =>
+            $"{_n} in 0.05–0.4 g, {_skipLow} below, {_skipHigh} above, {_skipSlow} slow; " +
+            $"peak {PeakLatG:0.000} g, departed at {RunTime:0.0} s, steer cmd {SteerCmd:0.000}";
+
         protected bool TryUndersteerGradient(out float degPerG) =>
             Slope(_n, _sx, _sy, _sxx, _sxy, out degPerG);
 

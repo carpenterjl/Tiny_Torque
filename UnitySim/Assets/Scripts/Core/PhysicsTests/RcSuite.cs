@@ -161,6 +161,107 @@ namespace AIHWSim.Core.PhysicsTests
             RealismInTheCar(400);
             R6ServoStep(400);
             NavSensorsInTheCar(400);
+            R5SteadyCircle(400);
+        }
+
+        /// <summary>
+        /// R5 — constant steer, three speeds. Each circle gives the curvature,
+        /// the lateral acceleration and both axle slip angles (from the body's
+        /// motion at the axles), and so each axle's cornering stiffness
+        /// C = F_y / α with F_y from m·a_y split by the CoM position. Checks:
+        /// the understeer gradient fitted across the speeds matches the
+        /// bicycle model K = (m/L)(b/C_f − a/C_r) built from those
+        /// stiffnesses; and the lateral stiffness per unit load agrees with
+        /// the longitudinal one the ID tug of war measured, scaled by the
+        /// peak-slip ratio κ_peak/α_peak — the brush model's own relation.
+        /// The real counterpart is the same circle with UWB/mocap.
+        /// </summary>
+        private void R5SteadyCircle(int hz)
+        {
+            const float steerCmd = 0.25f;               // + = right
+            var ays = new List<float>(); var lhs = new List<float>();
+            var cfs = new List<float>(); var crs = new List<float>();
+            float L = 0f, a = 0f, b = 0f, m = 0f, fzf = 0f, fzr = 0f;
+            foreach (float vT in new[] { 1.0f, 1.5f, 2.0f })
+            {
+                Build(hz, 0f);
+                m = _body.mass;
+                float zf = float.MinValue, zr = float.MaxValue;
+                for (int i = 0; i < _design.wheels.Count; i++)
+                {
+                    float z = _design.wheels[i].localPos.z;
+                    zf = Mathf.Max(zf, z); zr = Mathf.Min(zr, z);
+                }
+                float zc = _body.centerOfMass.z;
+                a = zf - zc; b = zc - zr; L = a + b;
+                fzf = _car.WheelLoadN(0) + _car.WheelLoadN(1);
+                fzr = _car.WheelLoadN(2) + _car.WheelLoadN(3);
+
+                _cmd[6] = steerCmd;
+                float iq = 0.5f;
+                double sv = 0, sr = 0, sd = 0, saf = 0, sar = 0, sff = 0, sfr = 0, smod = 0; int n = 0;
+                int settle = Mathf.RoundToInt(5f / _dt), avg = Mathf.RoundToInt(1f / _dt);
+                for (int k = 0; k < settle + avg; k++)
+                {
+                    float v = _body.linearVelocity.magnitude;
+                    iq = Mathf.Clamp(iq + 8f * (vT - v) * _dt, 0f, 6f);
+                    SetIq(iq + 2f * (vT - v));
+                    Step();
+                    if (k < settle) continue;
+                    Vector3 vl = _carRoot.transform.InverseTransformDirection(_body.linearVelocity);
+                    float r = _carRoot.transform.InverseTransformDirection(_body.angularVelocity).y;   // + = right
+                    float vx = vl.z, vy = vl.x;
+                    float delta = _car.SteerAngleVirtualDeg * Mathf.Deg2Rad;                     // + = right
+                    saf += delta - Mathf.Atan2(vy + r * a, vx);
+                    sar += -Mathf.Atan2(vy - r * b, vx);
+                    sv += vx; sr += r; sd += delta; n++;
+                    sff += _car.WheelLateralForceN(0) + _car.WheelLateralForceN(1);
+                    sfr += _car.WheelLateralForceN(2) + _car.WheelLateralForceN(3);
+                    for (int w = 0; w < 2; w++)
+                    {
+                        float sn = _car.WheelSlipNorm(w), kn = _car.WheelSlipRatio(w) / TyreModel.KappaPeak;
+                        smod += 0.5 * TyreModel.AlphaPeak * System.Math.Sqrt(System.Math.Max(0.0, sn * sn - kn * kn));
+                    }
+                }
+                float vm = (float)(sv / n), rm = (float)(sr / n), dm = (float)(sd / n);
+                float ay = vm * rm;
+                float af = (float)(saf / n), ar = (float)(sar / n);
+                float cf = (m * ay * b / L) / af, cr = (m * ay * a / L) / ar;
+                ays.Add(ay); lhs.Add(dm - L * rm / Mathf.Max(0.01f, vm));
+                cfs.Add(cf); crs.Add(cr);
+                Line($"R5    v {vm:0.000} m/s: R {vm / Mathf.Max(1e-4f, rm):0.000} m, a_y {ay:0.000} m/s², δ {dm * Mathf.Rad2Deg:0.00}°, " +
+                     $"α_f {af * Mathf.Rad2Deg:0.000}°, α_r {ar * Mathf.Rad2Deg:0.000}°, C_f {cf:0.0} N/rad, C_r {cr:0.0} N/rad; " +
+                     $"tyre F_y front {sff / n:0.000} N, rear {sfr / n:0.000} N (m·a_y split {m * ay * b / L:0.000} / {m * ay * a / L:0.000}); " +
+                     $"the tyre model's own front slip {smod / n * Mathf.Rad2Deg:0.000}°");
+                // PHY-07: the slip the tyre model uses must be the slip the body
+                // motion implies — before the fix it read r·dt more.
+                Check("R5", $"@{vT:0.0} m/s: tyre-model slip angle vs body kinematics (deg)",
+                      (float)(smod / n) * Mathf.Rad2Deg, af * Mathf.Rad2Deg, 0.005f + 0.02f * Mathf.Abs(af * Mathf.Rad2Deg), abs: true);
+            }
+            _cmd[6] = 0f;
+
+            // Understeer gradient: δ − L/R = K·a_y (+ a geometric offset).
+            double sx = 0, sy = 0, sxx = 0, sxy = 0; int np = ays.Count;
+            for (int i = 0; i < np; i++) { sx += ays[i]; sy += lhs[i]; sxx += ays[i] * ays[i]; sxy += ays[i] * lhs[i]; }
+            float kFit = (float)((np * sxy - sx * sy) / (np * sxx - sx * sx));
+            float cfm = 0f, crm = 0f;
+            foreach (var c in cfs) cfm += c / np;
+            foreach (var c in crs) crm += c / np;
+            float kPred = m / L * (b / cfm - a / crm);
+            Line($"ID  cornering stiffness C_a/F_z: front {cfm / fzf:0.00}, rear {crm / fzr:0.00} per rad; " +
+                 $"K_us fit {kFit * Mathf.Rad2Deg:0.000} °/(m/s²), bicycle {kPred * Mathf.Rad2Deg:0.000}  (cornering_stiffness)");
+            _json.Add($"  \"id_cornering_stiffness_front\": {cfm / fzf:0.0000}");
+            _json.Add($"  \"id_understeer_deg_per_mps2\": {kFit * Mathf.Rad2Deg:0.00000}");
+            Check("R5", "understeer gradient: circle fit vs the bicycle model from the axle stiffnesses (°/(m/s²))",
+                  kFit * Mathf.Rad2Deg, kPred * Mathf.Rad2Deg, 0.05f, abs: true);
+            // The brush curve's initial slopes are 2µ/κ_peak and 2µ/α_peak(F_z),
+            // so the lateral stiffness is the longitudinal one × κ_peak/α_peak.
+            float fzWheel = 0.5f * fzf;
+            float ap = TyreModel.AlphaPeakAt(fzWheel, _design.wheels[0].ratedLoadN);
+            float predCa = 2f * _idMu / ap;
+            Check("R5", $"front C_a/F_z vs 2µ/α_peak with µ {_idMu:0.000} from the longitudinal ID (1/rad)",
+                  cfm / fzf, predCa, 0.10f);
+            Check("R5", "front vs rear C_a/F_z (same tyre; fraction)", Mathf.Abs(cfm / fzf - crm / fzr) / (crm / fzr), 0f, 0.05f, abs: true);
         }
 
         /// <summary>
@@ -558,7 +659,21 @@ namespace AIHWSim.Core.PhysicsTests
             Line($"ID    points (kappa %, F N): " + string.Join("  ", kap.ConvertAll(k => (k * 100f).ToString("0.000"))) +
                  " | " + string.Join("  ", frc.ConvertAll(f => f.ToString("0.000"))));
             _json.Add($"  \"id_slip_stiffness\": {ck / fzm:0.0000}");
+            // The straight line above is a secant over the working range (what
+            // the firmware's odometry correction wants). The tyre's own initial
+            // slope comes from fitting the brush curve F = µ·F_z·s(2 − s),
+            // s = κ/κ_peak, through the same points: C_κ/F_z = 2µ/κ_peak.
+            double gg = 0, gf = 0;
+            for (int i = 0; i < np; i++)
+            {
+                double s = kap[i] / TyreModel.KappaPeak, g = fzs[i] * s * (2.0 - s);
+                gg += g * g; gf += g * frc[i];
+            }
+            _idMu = (float)(gf / gg);
+            Line($"ID  brush-curve fit: µ {_idMu:0.000} -> initial C_k/F_z = {2f * _idMu / TyreModel.KappaPeak:0.00}");
         }
+
+        private float _idMu;
 
         /// <summary>R0 — free roll at Iq = 0: decelerates at exactly the losses
         /// over the effective mass.</summary>
