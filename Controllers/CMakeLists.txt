@@ -53,7 +53,7 @@ tt_core_warnings(pidlib)
 # The portable core's shared pieces: TtMeas/TtCmd types, the parameter store
 # and its generated defaults (Tools/gen_params.js), the log schema, and the
 # board interface every non-sim target implements (hal/tt_hal.h).
-add_library(ttcore STATIC core/tt_params.c core/tt_alloc.c
+add_library(ttcore STATIC core/tt_params.c core/tt_alloc.c core/tt_nav.c
             core/params_opus_vector.c core/params_opus_vector_foc.c)
 target_include_directories(ttcore PUBLIC core hal)
 tt_core_warnings(ttcore)
@@ -155,6 +155,15 @@ add_test(NAME opus_mission_bench COMMAND test_mission)
 add_executable(test_core tests/test_core.c)
 target_link_libraries(test_core PRIVATE opuslib)
 add_test(NAME tt_core_unit COMMAND test_core)
+
+# The navigation EKF (UWB + odometry + gyro) on a synthetic drive.
+add_executable(test_nav tests/test_nav.c)
+target_link_libraries(test_nav PRIVATE ttcore)
+add_test(NAME tt_nav_unit COMMAND test_nav)
+
+# Offline replay of a sim run's telemetry through the navigation EKF (VAL-03).
+add_executable(nav_replay tools/nav_replay.c)
+target_link_libraries(nav_replay PRIVATE ttcore)
 
 # Host-only dq PMSM + inverter model: the plant the FOC is tested against.
 add_library(pmsmlib STATIC plant/pmsm_model.c)

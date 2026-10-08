@@ -53,6 +53,10 @@ namespace AIHWSim.Core
             /// <summary>Compute latency (µs) to give the car; -1 keeps the
             /// design's own (TIM-02: the same firmware with a later command).</summary>
             public int computeLatencyUs = -1;
+            /// <summary>Also write every telemetry channel, each control tick,
+            /// to &lt;result&gt;.telemetry.csv — the input to an offline replay
+            /// (Tools/nav_replay).</summary>
+            public bool saveTelemetry;
         }
 
         [Serializable]
@@ -199,6 +203,7 @@ namespace AIHWSim.Core
         private readonly MissionAutorun.Result _res = new MissionAutorun.Result();
 
         private SimulationRunner _runner;
+        private Telemetry.CsvLogger _telemetry;
         private CarVehicle _car;
         private TelemetryHub _hub;
 
@@ -236,6 +241,11 @@ namespace AIHWSim.Core
                     return;
                 }
                 _hub = _runner.Hub;
+                if (_req.saveTelemetry)
+                {
+                    _telemetry = new Telemetry.CsvLogger(_hub);
+                    _telemetry.Begin("mission", null, "mission_telemetry");
+                }
             }
 
             // Ground truth: chord-sum of the actual pose at 400 Hz. Unlike the
@@ -363,6 +373,13 @@ namespace AIHWSim.Core
                     Directory.CreateDirectory(Path.GetDirectoryName(_req.resultPath));
                     File.WriteAllText(_req.resultPath, json);
                     File.WriteAllText(Path.ChangeExtension(_req.resultPath, ".trace.csv"), _trace.ToString());
+                    if (_telemetry != null)
+                    {
+                        _telemetry.Flush();
+                        File.Copy(_telemetry.TempPath, Path.ChangeExtension(_req.resultPath, ".telemetry.csv"), true);
+                        _telemetry.End();
+                        _telemetry = null;
+                    }
                 }
                 Debug.Log("[MissionAutorun] RESULT " + json.Replace("\n", " "));
             }
