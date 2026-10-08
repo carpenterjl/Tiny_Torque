@@ -48,7 +48,10 @@ namespace AIHWSim.EditorTools
             CheckContract<BumpSensor>();
             CheckContract<RfSensor>();
             CheckContract<LedPart>();
+            CheckContract<MemsImuSensor>();
+            CheckContract<BatterySensor>();
             CheckAbiTags();
+            CheckRealismProfile();
             CheckSoundField();
             CheckRfField();
             CheckRfSensorSlots();
@@ -125,6 +128,69 @@ namespace AIHWSim.EditorTools
             True("SensorType.Mag == 10", (int)SensorType.Mag == 10);
             True("SensorType.Bump == 11", (int)SensorType.Bump == 11);
             True("SensorType.Led == 12", (int)SensorType.Led == 12);
+            True("SensorType.Imu6 == 13", (int)SensorType.Imu6 == 13);
+        }
+
+        // ---- SEN-06/09: the realistic profile -------------------------------
+
+        private static void CheckRealismProfile()
+        {
+            int saved = NoiseModel.GlobalSeed;
+            NoiseModel.GlobalSeed = 4242;
+            var go = new GameObject("realism_probe");
+            try
+            {
+                var buf = new float[3];
+                var legacy = go.AddComponent<BatterySensor>();
+                legacy.sensorName = "pack_a";
+                legacy.Bind(null, go.transform);
+                legacy.Sample(0.01f, buf, 0);
+                True("battery, legacy: SoC is reported (1.0 with no pack)", buf[2] == 1f);
+
+                var real = go.AddComponent<BatterySensor>();
+                real.sensorName = "pack_b";
+                real.Bind(null, go.transform);
+                real.ApplyRealism();
+                real.Sample(0.01f, buf, 0);
+                True("battery, realistic: SoC reads NaN (not measurable)", float.IsNaN(buf[2]));
+                float lsbV = SensorRealism.BatteryVolt.lsb;
+                True("battery, realistic: voltage lands on the INA228 LSB",
+                     Mathf.Abs(buf[0] / lsbV - Mathf.Round(buf[0] / lsbV)) < 1e-2f);
+                True("battery, realistic: 0 V reads within 5 mV (offset + noise)", Mathf.Abs(buf[0]) < 0.005f);
+
+                // The compass: legacy reads the vehicle root, realistic its own
+                // mount, after a ~2 deg residual.
+                var root = new GameObject("mag_root");
+                var child = new GameObject("mag");
+                child.transform.SetParent(root.transform, false);
+                child.transform.localRotation = Quaternion.Euler(0f, 30f, 0f);
+                var m1 = child.AddComponent<MagSensor>();
+                m1.sensorName = "mag_a";
+                m1.Bind(null, root.transform);
+                var one = new float[1];
+                m1.Sample(0.01f, one, 0);
+                True("compass, legacy: reads the vehicle root (0 deg)", Mathf.Abs(Mathf.DeltaAngle(one[0], 0f)) < 1e-3f);
+                m1.ApplyRealism();
+                float sum = 0f; const int n = 200;
+                for (int i = 0; i < n; i++) { m1.Sample(0.01f, one, 0); sum += Mathf.DeltaAngle(30f, one[0]); }
+                float err = sum / n;
+                True($"compass, realistic: reads its own 30 deg mount within the residual ({err:+0.00;-0.00} deg)",
+                     Mathf.Abs(err) < 8f);
+                Object.DestroyImmediate(root);
+
+                // Profile errors come from a stream per part name: reproducible,
+                // and independent between parts.
+                var c1 = new SenseChannel(SensorRealism.BatteryAmp, SensorRealism.Rng("x", 1));
+                var c2 = new SenseChannel(SensorRealism.BatteryAmp, SensorRealism.Rng("x", 1));
+                var c3 = new SenseChannel(SensorRealism.BatteryAmp, SensorRealism.Rng("y", 1));
+                True("realism errors: same part, same draw; another part, another draw",
+                     c1.Gain == c2.Gain && c1.Offset == c2.Offset && (c1.Gain != c3.Gain || c1.Offset != c3.Offset));
+            }
+            finally
+            {
+                Object.DestroyImmediate(go);
+                NoiseModel.GlobalSeed = saved;
+            }
         }
 
         // ---- signal fields -------------------------------------------------

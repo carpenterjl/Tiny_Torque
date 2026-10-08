@@ -54,6 +54,19 @@ namespace AIHWSim.Sensors
         /// </summary>
         public virtual void PhysicsStep(long tUs, float dt) { }
 
+        /// <summary>True once <see cref="ApplyRealism"/> ran: the part reports
+        /// what its real counterpart can measure, with that part's errors.</summary>
+        public bool Realistic { get; private set; }
+
+        /// <summary>
+        /// The design's realistic sensor profile (SEN-06/09): channels the
+        /// design has no spec fields for get datasheet-class errors
+        /// (<see cref="SensorRealism"/>), and channels a real car cannot
+        /// measure read NaN. Errors are drawn on first use, after the session
+        /// seed is set. Overrides do their part; the base only sets the flag.
+        /// </summary>
+        public virtual void ApplyRealism() => Realistic = true;
+
         // ---- sample clock + latency ring (TIM-02/03/04) ----------------------
 
         private float[][] _ring;           // [size][DataCount]

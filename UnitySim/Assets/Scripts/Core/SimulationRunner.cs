@@ -622,6 +622,9 @@ namespace AIHWSim.Core
             // live channel set, so a channel that appears later writes rows wider
             // than the header.
             Hub.RegisterChannel("veh/yaw_deg");
+            Hub.RegisterChannel("veh/soc");
+            Hub.RegisterChannel("veh/batt_v");
+            Hub.RegisterChannel("veh/batt_a");
             Hub.RegisterChannel("mode");
             sensorRig?.RegisterChannels(Hub);
             // Per-motor commanded-voltage channels (published by CarVehicle).

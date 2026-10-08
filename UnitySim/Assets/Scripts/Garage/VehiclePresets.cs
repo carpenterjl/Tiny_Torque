@@ -726,6 +726,11 @@ namespace AIHWSim.Garage
             // Pi 5 + sensors + servo idle, from the pack whatever the motors do.
             d.batteries[0].auxLoadA = 0.7f;
 
+            // SEN-06/09: the pack, the drivers and any compass report what the
+            // real parts measure, with their errors; SoC and torque are not
+            // measurable.
+            d.sensorRealism = 1;
+
             // SEN-01: a raw ICM-42688-P class IMU on the deck, 30 mm ahead of
             // centre (a real lever arm), x forward. ImuSpec's defaults are that
             // part's datasheet; the chip runs at 200 Hz ODR, 50 Hz DLPF. Its

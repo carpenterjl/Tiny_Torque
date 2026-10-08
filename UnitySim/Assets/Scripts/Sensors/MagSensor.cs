@@ -34,12 +34,22 @@ namespace AIHWSim.Sensors
             rangeMax = 360f;
         }
 
+        private SenseChannel _sense;
+
         public override void Sample(float dt, float[] dest, int offset)
         {
-            Transform t = _root != null ? _root : transform;
+            // Legacy reads the vehicle root's heading; a realistic part reads
+            // its own (a yawed mount yaws the reading), after calibration
+            // residual and noise (SEN-06).
+            Transform t = Realistic ? transform : _root != null ? _root : transform;
             Vector3 fwd = t.forward;
             float heading = Mathf.Atan2(fwd.x, fwd.z) * Mathf.Rad2Deg + declinationDeg;
             heading = noise.Apply(heading, dt);
+            if (Realistic)
+            {
+                _sense ??= new SenseChannel(SensorRealism.Heading, SensorRealism.Rng(sensorName, 3));
+                heading = _sense.Apply(heading);
+            }
             dest[offset] = Mathf.Repeat(heading, 360f);
         }
 

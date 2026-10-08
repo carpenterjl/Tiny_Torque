@@ -395,6 +395,11 @@ namespace AIHWSim.Garage
         // the jitter on the time stamp (and so dt) the firmware is handed.
         public int computeLatencyUs = 0;
         public float controlJitterUs = 0f;
+        // SEN-06/09 sensor realism profile. 0 = legacy (clean channels; SoC and
+        // brushed-motor torque reported as truth). 1 = realistic: pack, driver
+        // and compass channels get datasheet-class errors, and what a real car
+        // cannot measure (SoC, motor torque) reads NaN.
+        public int sensorRealism = 0;
         public List<WheelSpec> wheels = new List<WheelSpec>();
         public List<SensorSpec> sensors = new List<SensorSpec>();
         public List<AeroSpec> aero = new List<AeroSpec>();   // old JSON → stays empty

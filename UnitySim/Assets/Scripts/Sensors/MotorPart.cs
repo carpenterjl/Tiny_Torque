@@ -626,13 +626,31 @@ namespace AIHWSim.Sensors
 
         // --------------------------------------------------------- feedback --
 
+        // Realistic profile (SEN-06): the driver's own converters.
+        private SenseChannel _senseA, _senseB, _senseBus, _senseT;
+
         public override void Sample(float dt, float[] dest, int offset)
         {
+            if (Realistic && _senseA == null)
+            {
+                var rng = SensorRealism.Rng(sensorName, 2);
+                _senseA = new SenseChannel(SensorRealism.PhaseAmp, rng);
+                _senseB = new SenseChannel(SensorRealism.PhaseAmp, rng);
+                _senseBus = new SenseChannel(SensorRealism.BusVolt, rng);
+                _senseT = new SenseChannel(SensorRealism.WindingC, rng);
+            }
             if (!IsFoc)
             {
+                // Realistic: a brushed ESC senses current and its bus, and
+                // nothing measures torque.
                 dest[offset] = noise.Apply(_voltage, dt, 0);
                 dest[offset + 1] = noise.Apply(_current, dt, 1);
                 dest[offset + 2] = _torque;
+                if (Realistic)
+                {
+                    dest[offset + 1] = _senseA.Apply(dest[offset + 1]);
+                    dest[offset + 2] = float.NaN;
+                }
                 return;
             }
             // What an FOC driver can measure: phase currents through its ADC
@@ -645,6 +663,13 @@ namespace AIHWSim.Sensors
             dest[offset + 3] = noise.Apply(vBus, dt, 2);
             dest[offset + 4] = _tWinding;
             dest[offset + 5] = _fault;
+            if (Realistic)
+            {
+                dest[offset] = _senseA.Apply(dest[offset]);
+                dest[offset + 1] = _senseB.Apply(dest[offset + 1]);
+                dest[offset + 3] = _senseBus.Apply(dest[offset + 3]);
+                dest[offset + 4] = _senseT.Apply(dest[offset + 4]);
+            }
         }
     }
 }

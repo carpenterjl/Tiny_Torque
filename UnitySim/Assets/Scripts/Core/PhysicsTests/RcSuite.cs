@@ -157,6 +157,34 @@ namespace AIHWSim.Core.PhysicsTests
             R7FullPackTrips(400);
             foreach (int hz in new[] { 400, 1600 }) R10EncoderCrawl(hz);
             ImuInTheCar(400);
+            RealismInTheCar(400);
+        }
+
+        /// <summary>SEN-06/09 in the car: on a realistic design the pack
+        /// sensor gives no SoC, and the pack and driver readings carry their
+        /// converters' errors — close to the truth, never equal to it.</summary>
+        private void RealismInTheCar(int hz)
+        {
+            if (_design.sensorRealism <= 0) { Line("SEN   the design keeps the legacy sensor profile: skipped"); return; }
+            Build(hz, 0f);
+            SetIq(2f);
+            Run(0.3f);
+            var batt = _carRoot.GetComponentInChildren<BatterySensor>();
+            if (batt == null) { Check("SEN", "pack sensor present", 0f, 1f, 0f, abs: true); return; }
+            var b = new float[3];
+            batt.Sample(_dt, b, 0);
+            Check("SEN", "pack SoC is not measurable (1 = reads NaN)", float.IsNaN(b[2]) ? 1f : 0f, 1f, 0f, abs: true);
+            Check("SEN", $"pack voltage vs truth {_car.BatteryTerminalV:0.0000} V (V)", b[0], _car.BatteryTerminalV, 0.01f);
+            Check("SEN", "pack voltage is not the truth to the bit (1 = differs)",
+                  b[0] != _car.BatteryTerminalV ? 1f : 0f, 1f, 0f, abs: true);
+            var mp = _car.Motors.Count > 0 ? _car.Motors[0] : null;
+            if (mp != null && mp.IsFoc)
+            {
+                var f = new float[mp.DataCount];
+                mp.Sample(_dt, f, 0);
+                Check("SEN", $"driver bus voltage vs truth {mp.BusVoltage:0.000} V (V)", f[3], mp.BusVoltage, 0.03f);
+                Check("SEN", $"driver Iq vs commanded 2 A (A)", f[0], 2f, 0.1f);
+            }
         }
 
         /// <summary>

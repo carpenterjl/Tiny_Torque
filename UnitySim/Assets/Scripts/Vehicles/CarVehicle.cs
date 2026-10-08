@@ -2683,6 +2683,10 @@ namespace AIHWSim.Vehicles
             hub.SetValue("veh/pos_x", p.x);
             hub.SetValue("veh/pos_z", p.z);
             hub.SetValue("veh/yaw_deg", transform.eulerAngles.y);
+            // SEN-06: truths the firmware is not given on a realistic design.
+            hub.SetValue("veh/soc", BatterySoc);
+            hub.SetValue("veh/batt_v", BatteryTerminalV);
+            hub.SetValue("veh/batt_a", BatteryCurrent);
 
             // Commanded drivetrain state (measured motor V/I/τ come from the rig).
             hub.SetValue("cmd/steer_deg", CurrentSteerAngle);

@@ -242,6 +242,12 @@ namespace AIHWSim.Garage
 
             var rig = root.AddComponent<SensorRig>();
 
+            // SEN-06/09: the realistic profile reaches every part, the motors
+            // and pack sensors included.
+            if (design.sensorRealism > 0)
+                foreach (var part in root.GetComponentsInChildren<SensorComponent>(true))
+                    part.ApplyRealism();
+
             // Every car is audible to world microphones: motor current → loudness,
             // shaft speed → tone. Silent at rest, so old designs are unaffected.
             root.AddComponent<VehicleSoundEmitter>();
