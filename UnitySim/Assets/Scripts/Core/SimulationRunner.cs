@@ -74,6 +74,7 @@ namespace AIHWSim.Core
         private NativeControllerLoader _loader;
         private CsvLogger _csv;
 
+        private const int CarSteerSlot = 6;   // CTRL_STEER_ACTUATOR
         private int _decimation = 1;
         private int _physCounter;
 
@@ -357,6 +358,7 @@ namespace AIHWSim.Core
             string path = AbsoluteDllPath();
             if (_loader.Load(path))
             {
+                ApplyRequestedControlRate();
                 int rc = _loader.Init(controlRateHz);
                 if (rc != 0)
                     Debug.LogWarning($"[SimRunner] ctrl_init returned {rc}");
@@ -372,12 +374,44 @@ namespace AIHWSim.Core
         }
 
         /// <summary>
-        /// Hand the vehicle's sensor manifest to the controller via the optional
-        /// ABI v2 ctrl_configure() export. No-op for pre-v2 controllers or when
-        /// the vehicle has no configurable sensors.
+        /// TIM-06: a v7 controller may name the rate it wants to be ticked at
+        /// (its MCU base tick). The runner takes the nearest whole divisor of
+        /// the physics rate, which can be the physics rate itself.
+        /// </summary>
+        private void ApplyRequestedControlRate()
+        {
+            if (_loader?.GetControlRate == null) return;
+            float want;
+            try { want = _loader.GetControlRate(); }
+            catch (Exception e) { Debug.LogWarning($"[SimRunner] ctrl_get_control_rate threw: {e.Message}"); return; }
+            if (!(want > 0f)) return;
+            int hz = Mathf.RoundToInt(want);
+            if (hz == controlRateHz) return;
+            ReconfigureRates(0, hz);
+            if (controlRateHz != hz)
+                Debug.LogWarning($"[SimRunner] Controller asked for {want:0.#} Hz; running " +
+                                 $"{controlRateHz} Hz (physics {physicsRateHz} Hz / {_decimation}).");
+            else
+                Debug.Log($"[SimRunner] Control rate {controlRateHz} Hz, as the controller asked.");
+        }
+
+        /// <summary>
+        /// Hand the vehicle's sensor manifest to the controller: the extended
+        /// one through ctrl_configure2() for a v7 controller that exports it,
+        /// else the v2 manifest through ctrl_configure(). No-op for pre-v2
+        /// controllers or when the vehicle has no configurable sensors.
         /// </summary>
         private unsafe void ConfigureControllerSensors()
         {
+            if (_loader != null && _loader.IsV7 && _loader.Configure2 != null && sensorRig != null)
+            {
+                SensorInfo2[] m2 = sensorRig.BuildManifest2();
+                fixed (SensorInfo2* p2 = m2)
+                {
+                    _loader.Configure2(p2, m2.Length);
+                }
+                return;
+            }
             if (_loader?.Configure == null || sensorRig == null || sensorRig.SensorCount == 0)
                 return;
             SensorInfo[] manifest = sensorRig.Manifest;
@@ -402,6 +436,14 @@ namespace AIHWSim.Core
             if (!ControllerReady) return;
             try
             {
+                // ABI-05: a v7 controller that exports ctrl_reset drops its
+                // estimator and mission state there and keeps its one-time
+                // init — the way MCU firmware never re-inits its peripherals.
+                if (_loader.Reset != null)
+                {
+                    _loader.Reset();
+                    return;
+                }
                 // Close the old session first: the ABI promises init is always
                 // preceded by shutdown, and a controller that allocates in init
                 // would otherwise leak once per respawn.
@@ -572,7 +614,7 @@ namespace AIHWSim.Core
 
             // 1. Sensors — built-in (wheel vel + IMU) and the configurable rig.
             _vehicle.SampleSensors(controlDt, _wheelVel, _gyro, _accel);
-            sensorRig?.Sample(controlDt, _simTime);
+            sensorRig?.Sample(controlDt, TimeUs * 1e-6);
 
             // 2. Operator setpoints.
             float[] sp = _setpointSource != null ? _setpointSource.Setpoints : null;
@@ -587,26 +629,47 @@ namespace AIHWSim.Core
             }
             else if (ControllerReady)
             {
+                bool v7 = _loader.IsV7;
                 CtrlInputs inputs = default;
                 inputs.time_s = _simTime;
                 inputs.dt_s = controlDt;
-                for (int i = 0; i < 3; i++) { inputs.gyro[i] = _gyro[i]; inputs.accel[i] = _accel[i]; }
+                if (v7)
+                {
+                    // ABI-04: FLU for a v7 controller. Unity is x right, y up,
+                    // z forward, left-handed: a = (a.z, -a.x, a.y), and a
+                    // pseudo-vector also flips sign with the handedness:
+                    // w = (-w.z, w.x, -w.y).
+                    inputs.gyro[0] = -_gyro[2]; inputs.gyro[1] = _gyro[0]; inputs.gyro[2] = -_gyro[1];
+                    inputs.accel[0] = _accel[2]; inputs.accel[1] = -_accel[0]; inputs.accel[2] = _accel[1];
+                }
+                else
+                    for (int i = 0; i < 3; i++) { inputs.gyro[i] = _gyro[i]; inputs.accel[i] = _accel[i]; }
                 for (int i = 0; i < 4; i++) inputs.wheel_vel[i] = _wheelVel[i];
                 if (sp != null) for (int i = 0; i < 4; i++) inputs.setpoint[i] = sp[i];
 
                 // Pin the rig's flat data + camera frame for the duration of the
                 // native call so no GC move invalidates the pointers.
-                float[] flat = sensorRig != null ? sensorRig.FlatData : null;
+                float[] flat = sensorRig == null ? null : v7 ? sensorRig.FlatDataFlu() : sensorRig.FlatData;
                 byte[] cam = sensorRig != null ? sensorRig.CamPixels : null;
+                SensorStamp[] stamps = v7 && sensorRig != null ? sensorRig.Stamps : null;
                 fixed (float* flatPtr = flat)
                 fixed (byte* camPtr = cam)
+                fixed (SensorStamp* stampPtr = stamps)
                 {
                     inputs.sensor_data = flatPtr;
                     inputs.sensor_data_len = flat != null ? flat.Length : 0;
-                    inputs.sensor_count = sensorRig != null ? sensorRig.SensorCount : 0;
+                    inputs.sensor_count = sensorRig == null ? 0
+                        : v7 ? sensorRig.Stamps.Length : sensorRig.SensorCount;
                     inputs.cam_pixels = camPtr;
                     inputs.cam_width = sensorRig != null ? sensorRig.CamWidth : 0;
                     inputs.cam_height = sensorRig != null ? sensorRig.CamHeight : 0;
+                    if (v7)
+                    {
+                        inputs.tick = _controlTick;
+                        inputs.flags = ControllerAbi.InFlu;
+                        inputs.time_us = (ulong)TimeUs;
+                        inputs.stamps = stampPtr;
+                    }
 
                     try
                     {
@@ -620,6 +683,16 @@ namespace AIHWSim.Core
                 }
 
                 for (int i = 0; i < 8; i++) _actuators[i] = outputs.actuator[i];
+
+                // v7 steers in road-wheel radians, + = left; the car takes a
+                // servo fraction, + = right.
+                if (v7 && vehicleBehaviour is Vehicles.CarVehicle car)
+                {
+                    float lockRad = car.MaxSteerDeg * Mathf.Deg2Rad;
+                    float rad = _actuators[CarSteerSlot];
+                    _actuators[CarSteerSlot] = lockRad > 1e-4f && !float.IsNaN(rad)
+                        ? Mathf.Clamp(-rad / lockRad, -1f, 1f) : 0f;
+                }
             }
 
             // Actuation transport delay: hold N control ticks of commands in a

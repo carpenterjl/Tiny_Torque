@@ -491,6 +491,21 @@ namespace AIHWSim.Vehicles
 
         public int WheelCount => _wheels.Count;
 
+        /// <summary>Road-wheel angle (deg) at a full steer command: the servo
+        /// throw of the forward-steering wheels (the bicycle-model angle).
+        /// What a v7 controller's radians command is scaled against.</summary>
+        public float MaxSteerDeg
+        {
+            get
+            {
+                float max = 0f;
+                foreach (var w in _wheels)
+                    if (w.cfg.allowsSteering && !w.cfg.reverseSteering)
+                        max = Mathf.Max(max, Mathf.Abs(w.cfg.steerAngle));
+                return max;
+            }
+        }
+
         public float CurrentSteerAngle
         {
             get

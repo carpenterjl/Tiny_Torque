@@ -52,6 +52,16 @@ namespace AIHWSim.Sensors
         private int _ringCount;
         private double _nextSample = double.NegativeInfinity;
         private double _lastSampleTime;
+        private uint[] _ringSeq;
+        private uint _seq;
+
+        /// <summary>Sequence number of the value currently reported: bumps once
+        /// per FRESH sample, so a reading held by the rate gate keeps its number
+        /// (TIM-01). Never reset, so a respawn cannot make an old number recur.</summary>
+        public uint StampSeq { get; private set; }
+
+        /// <summary>Sim time (s) at which the reported value was sampled.</summary>
+        public double StampTime { get; private set; }
 
         /// <summary>
         /// Rig entry point: samples fresh only when the sensor's own update rate
@@ -70,6 +80,8 @@ namespace AIHWSim.Sensors
             if (updateRateHz <= 0f && latencyMs <= 0f)
             {
                 Sample(dt, dest, offset);
+                StampSeq = ++_seq;
+                StampTime = simTime;
                 return;
             }
 
@@ -78,6 +90,7 @@ namespace AIHWSim.Sensors
                 _ring = new float[RingSize][];
                 for (int i = 0; i < RingSize; i++) _ring[i] = new float[n];
                 _ringTime = new double[RingSize];
+                _ringSeq = new uint[RingSize];
                 _lastSampleTime = simTime - dt;
             }
 
@@ -89,6 +102,7 @@ namespace AIHWSim.Sensors
                 if (_ringCount < RingSize) _ringCount++;
                 Sample(dtEff, _ring[_ringHead], 0);
                 _ringTime[_ringHead] = simTime;
+                _ringSeq[_ringHead] = ++_seq;
                 _lastSampleTime = simTime;
                 if (updateRateHz > 0f)
                 {
@@ -102,7 +116,13 @@ namespace AIHWSim.Sensors
                 }
             }
 
-            if (_ringHead < 0) { Sample(dt, dest, offset); return; }
+            if (_ringHead < 0)
+            {
+                Sample(dt, dest, offset);
+                StampSeq = ++_seq;
+                StampTime = simTime;
+                return;
+            }
 
             // Newest entry at or before (simTime − latency); fall back to the
             // oldest buffered reading while the pipe is still filling.
@@ -115,6 +135,8 @@ namespace AIHWSim.Sensors
                 if (_ringTime[idx] <= cutoff) break;
             }
             System.Array.Copy(_ring[pick], 0, dest, offset, n);
+            StampSeq = _ringSeq[pick];
+            StampTime = _ringTime[pick];
         }
 
         /// <summary>Drop buffered readings (vehicle reset / rig re-init).</summary>

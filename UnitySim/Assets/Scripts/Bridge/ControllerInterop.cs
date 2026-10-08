@@ -4,8 +4,25 @@ using System.Runtime.InteropServices;
 namespace AIHWSim.Bridge
 {
     // Blittable mirrors of the structs in Controllers/hal/controller_api.h.
-    // Field order and counts MUST match that header exactly (ABI v6 — the layout
-    // last changed at v3; v4-v6 only appended sensor tags and optional exports).
+    // Field order and counts MUST match that header exactly. v7 appended a tail
+    // to CtrlInputs and added SensorInfo2 / SensorStamp; a v6 DLL never reads
+    // the tail, and a v7 DLL reports its sizes so a mismatch is refused.
+    public static class ControllerAbi
+    {
+        /// <summary>CTRL_ABI_VERSION this host implements.</summary>
+        public const int Version = 7;
+        /// <summary>CTRL_IN_FLU: vectors are in the FLU body frame.</summary>
+        public const uint InFlu = 0x1u;
+    }
+
+    /// <summary>CTRL_UNITS_*: what an actuator slot carries (v7).</summary>
+    public enum ActuatorUnits
+    {
+        None = 0,
+        Volts = 1,
+        AmpsIq = 2,
+        Radians = 3,
+    }
 
     // Sensor type tags — mirror of the enum in controller_api.h.
     public enum SensorType
@@ -22,6 +39,12 @@ namespace AIHWSim.Bridge
         Mag        = 10,  // v6: [heading_deg] 0..360
         Bump       = 11,  // v6: [contact_01, force_n]
         Led        = 12,  // v6: actuator part; readback [r,g,b,lit]
+        Imu6       = 13,  // v7 (reserved): raw 6-axis IMU part with a mount pose
+        TofMz      = 14,  // v7 (reserved): multizone ToF
+        Flow       = 15,  // v7 (reserved): optical flow
+        Uwb        = 16,  // v7 (reserved): UWB ranging
+        FocFb      = 17,  // v7 (reserved): FOC driver feedback
+        SteerFb    = 18,  // v7: the steering servo; describes actuator[6]
     }
 
     // One manifest entry per configured sensor. char name[32] is an inline
@@ -59,6 +82,36 @@ namespace AIHWSim.Bridge
         }
     }
 
+    // v7 extended manifest entry (ctrl_configure2). base is the v6 entry.
+    [StructLayout(LayoutKind.Sequential)]
+    public unsafe struct SensorInfo2
+    {
+        public SensorInfo @base;
+        public int wheel_index;      // 0..3 for a wheel-bound part, else -1
+        public int units;            // ActuatorUnits when base.actuator_index >= 0
+        public fixed float pos_m[3];   // FLU, from the vehicle origin
+        public fixed float rpy_rad[3]; // FLU roll, pitch, yaw (Z-Y-X)
+        public float rate_hz;
+        public float latency_s;
+        public float cpr;
+        public float wrap;
+        public float gear_ratio;
+        public float kt;
+        public float resistance_ohm;
+        public float efficiency;
+        public float wheel_radius_m;
+        public int truth_only;
+        public fixed float reserved[8];
+    }
+
+    // v7: when a sensor's current value was sampled (one per manifest entry).
+    [StructLayout(LayoutKind.Sequential)]
+    public struct SensorStamp
+    {
+        public uint seq;
+        public uint t_sample_us;
+    }
+
     // Host -> controller. The v2 pointer fields are filled from pinned managed
     // arrays for the duration of the ctrl_step call (see SimulationRunner).
     [StructLayout(LayoutKind.Sequential)]
@@ -78,6 +131,12 @@ namespace AIHWSim.Bridge
         public byte* cam_pixels;
         public int cam_width;
         public int cam_height;
+
+        // --- v7 (filled only for a controller that exports ctrl_abi_version) ---
+        public uint tick;
+        public uint flags;
+        public ulong time_us;
+        public SensorStamp* stamps;
     }
 
     [StructLayout(LayoutKind.Sequential)]
@@ -108,6 +167,20 @@ namespace AIHWSim.Bridge
     // v5 optional export. Null when the loaded DLL predates ABI v5.
     [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
     public delegate int CtrlGetVehicleDelegate();
+
+    // v7 exports. ctrl_abi_version makes a DLL a v7 controller; the rest are
+    // optional on top of it.
+    [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+    public unsafe delegate int CtrlAbiVersionDelegate(int* sizeofInputs, int* sizeofOutputs);
+
+    [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+    public unsafe delegate void CtrlConfigure2Delegate(SensorInfo2* sensors, int count);
+
+    [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+    public delegate void CtrlResetDelegate();
+
+    [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+    public delegate float CtrlGetControlRateDelegate();
 
     /// <summary>
     /// Mirror of the CTRL_VEHICLE_* enum in controller_api.h — the cars a

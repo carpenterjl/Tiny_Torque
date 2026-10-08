@@ -37,6 +37,20 @@ namespace AIHWSim.Bridge
         /// <summary>Optional ABI v2 export; null for pre-v2 controllers.</summary>
         public CtrlConfigureDelegate Configure { get; private set; }
 
+        /// <summary>Optional v7 exports; null unless the DLL is a v7 controller.</summary>
+        public CtrlConfigure2Delegate Configure2 { get; private set; }
+        public CtrlResetDelegate Reset { get; private set; }
+        public CtrlGetControlRateDelegate GetControlRate { get; private set; }
+
+        /// <summary>
+        /// The ABI the loaded DLL was built against: what ctrl_abi_version()
+        /// returned, or 6 for a DLL that does not export it (every v2..v6
+        /// controller is driven the same way). 7+ switches on the v7 behaviour:
+        /// FLU frame, stamps, radians steer, configure2/reset.
+        /// </summary>
+        public int AbiVersion { get; private set; }
+        public bool IsV7 => AbiVersion >= 7;
+
         public bool IsLoaded => _module != IntPtr.Zero;
 
         /// <summary>Source path of the real DLL (in Assets/Plugins/x86_64).</summary>
@@ -93,7 +107,49 @@ namespace AIHWSim.Bridge
                 return false;
             }
 
-            Debug.Log($"[ControllerLoader] Loaded {Path.GetFileName(dllPath)} (built {LoadedStamp:HH:mm:ss} UTC)");
+            if (!Handshake(dllPath)) { Unload(); return false; }
+
+            Debug.Log($"[ControllerLoader] Loaded {Path.GetFileName(dllPath)} " +
+                      $"(ABI v{AbiVersion}, built {LoadedStamp:HH:mm:ss} UTC)");
+            return true;
+        }
+
+        /// <summary>
+        /// ABI-03: a DLL that exports ctrl_abi_version() states which ABI it
+        /// was compiled for and the struct sizes it was compiled with. A newer
+        /// ABI than this host, or sizes that differ, would mean reading and
+        /// writing memory at the wrong offsets — refuse instead.
+        /// </summary>
+        private unsafe bool Handshake(string dllPath)
+        {
+            var version = BindOptional<CtrlAbiVersionDelegate>("ctrl_abi_version");
+            if (version == null) { AbiVersion = 6; return true; }
+
+            int inSize = 0, outSize = 0;
+            int v = version(&inSize, &outSize);
+            int hostIn = Marshal.SizeOf<CtrlInputs>(), hostOut = Marshal.SizeOf<CtrlOutputs>();
+            string name = Path.GetFileName(dllPath);
+            if (v > ControllerAbi.Version)
+            {
+                Debug.LogError($"[ControllerLoader] {name} was built for ABI v{v}; this game " +
+                               $"implements v{ControllerAbi.Version}. Update the game or rebuild " +
+                               "against the controller_api.h it ships with.");
+                return false;
+            }
+            if (v >= 7 && (inSize != hostIn || outSize != hostOut))
+            {
+                Debug.LogError($"[ControllerLoader] {name}: struct sizes differ from the host's " +
+                               $"(CtrlInputs {inSize} vs {hostIn}, CtrlOutputs {outSize} vs {hostOut} " +
+                               "bytes). Rebuild it against this game's controller_api.h.");
+                return false;
+            }
+            AbiVersion = v < 7 ? 6 : v;
+            if (AbiVersion >= 7)
+            {
+                Configure2 = BindOptional<CtrlConfigure2Delegate>("ctrl_configure2");
+                Reset = BindOptional<CtrlResetDelegate>("ctrl_reset");
+                GetControlRate = BindOptional<CtrlGetControlRateDelegate>("ctrl_get_control_rate");
+            }
             return true;
         }
 
@@ -123,6 +179,10 @@ namespace AIHWSim.Bridge
             Shutdown = null;
             GetDebugNames = null;
             Configure = null;
+            Configure2 = null;
+            Reset = null;
+            GetControlRate = null;
+            AbiVersion = 0;
 
             if (_module != IntPtr.Zero)
             {

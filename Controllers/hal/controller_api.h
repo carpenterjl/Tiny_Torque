@@ -20,12 +20,33 @@
  * frame symmetrically (left/right sums, whole-frame brightness) is unaffected
  * either way.
  *
- * ABI v5 (this file) changes no layout either. It adds one OPTIONAL export,
+ * ABI v5 changes no layout either. It adds one OPTIONAL export,
  * ctrl_get_vehicle(), which lets a controller name the car it wants to be
  * loaded into. A DLL that does not export it is driven exactly as in v4.
+ *
+ * ABI v7 (this file) is append-only and opt-in. A controller becomes a v7
+ * controller by exporting ctrl_abi_version() (use CTRL_DEFINE_ABI_VERSION()
+ * below). Only then does the host:
+ *   - check the struct sizes it was compiled with, and refuse on a mismatch;
+ *   - fill the v7 tail of CtrlInputs (tick, time_us, per-sensor stamps);
+ *   - hand over the extended manifest through ctrl_configure2(), if exported;
+ *   - deliver every vector in the FLU body frame (see "Frames" below) and take
+ *     the steering command in radians, positive LEFT;
+ *   - call ctrl_reset() on a respawn instead of shutdown + init, if exported;
+ *   - honour ctrl_get_control_rate(), if exported.
+ * A v6 or older DLL sees none of this: same frame, same signs, same calls.
+ *
+ * Frames (v7). SI units throughout. Body frame FLU: x forward, y left, z up
+ * (ISO 8855 / ROS REP-103), right-handed, so positive yaw rate and positive
+ * steer are both to the LEFT. This applies to gyro[], accel[], the
+ * SENSOR_IMU slices and the RF bearings. Older controllers keep the
+ * simulator's native frame (x right, y up, z forward, left-handed: a left
+ * turn reads as negative gyro[1]).
  */
 #ifndef CONTROLLER_API_H
 #define CONTROLLER_API_H
+
+#include <stdint.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -40,7 +61,7 @@ extern "C" {
 /* v6 changes no layout: it appends sensor types 8-12 (colour, RF, compass,
  * bump, LED) and the LED two-slot actuator convention. A v5 DLL loads and
  * drives unchanged; it only ever sees the new tags if the car carries them. */
-#define CTRL_ABI_VERSION 6
+#define CTRL_ABI_VERSION 7
 
 /*
  * Sensor type tags. A vehicle in the sim is assembled from these parts; the
@@ -58,7 +79,15 @@ enum {
     SENSOR_RF         = 9,  /* RF antenna: strongest-3 beacon pings (v6 append) */
     SENSOR_MAG        = 10, /* magnetometer / compass heading (v6 append)       */
     SENSOR_BUMP       = 11, /* contact switch at the mount point (v6 append)    */
-    SENSOR_LED        = 12  /* actuator part: firmware-driven LED (v6 append)   */
+    SENSOR_LED        = 12, /* actuator part: firmware-driven LED (v6 append)   */
+    /* v7 tags. Reserved now so the numbers never move; the sim emits each one
+     * once the matching part exists (SENSOR_STEER_FB is emitted already). */
+    SENSOR_IMU6       = 13, /* raw 6-axis IMU part with a mount pose           */
+    SENSOR_TOF_MZ     = 14, /* multizone ToF                                   */
+    SENSOR_FLOW       = 15, /* optical flow                                    */
+    SENSOR_UWB        = 16, /* UWB ranging                                     */
+    SENSOR_FOC_FB     = 17, /* FOC driver feedback: Iq, Id, w_m, Vbus, T, faults */
+    SENSOR_STEER_FB   = 18  /* the steering servo: describes actuator[6]       */
 };
 
 /*
@@ -120,6 +149,10 @@ enum {
  *                     reserved steer/brake slots). actuator_index -1 = no free
  *                     slot pair, display-only.
  */
+/* SENSOR_STEER_FB (v7, extended manifest only): a manifest entry for the
+ * steering actuator itself. actuator_index = 6, units = CTRL_UNITS_RAD,
+ * range_min/max = -/+ the road-wheel angle at full lock, in radians. No data
+ * (data_count 0): a hobby servo reports no position. */
 typedef struct SensorInfo {
     char  name[32];        /* user-chosen sensor name (NUL-terminated)      */
     int   type;            /* SENSOR_* tag                                  */
@@ -131,6 +164,51 @@ typedef struct SensorInfo {
                            /*     (and range_min/max = -/+ maxVoltage);     */
                            /*     -1 for non-actuator sensors               */
 } SensorInfo;
+
+/* v7: units of an actuator slot (SensorInfo2.units). */
+enum {
+    CTRL_UNITS_NONE    = 0,  /* not an actuator                              */
+    CTRL_UNITS_VOLTS   = 1,  /* motor slot carries signed volts (brushed/ESC) */
+    CTRL_UNITS_AMPS_IQ = 2,  /* motor slot carries Iq in amps (FOC drive)     */
+    CTRL_UNITS_RAD     = 3   /* steering slot: road-wheel angle, + = left     */
+};
+
+/*
+ * v7 extended manifest entry, handed over by ctrl_configure2(). The first
+ * member is the v6 entry verbatim, so code that only needs the v6 fields can
+ * read sensors[i].base. Every geometric value is FLU, metres and radians.
+ */
+typedef struct SensorInfo2 {
+    SensorInfo base;
+    int32_t wheel_index;     /* 0=FL 1=FR 2=RL 3=RR for a wheel-bound part; -1 otherwise */
+    int32_t units;           /* CTRL_UNITS_* when base.actuator_index >= 0          */
+    float   pos_m[3];        /* mount position from the vehicle origin               */
+    float   rpy_rad[3];      /* mount orientation: roll, pitch, yaw (Z-Y-X)          */
+    float   rate_hz;         /* sensor update rate; 0 = fresh every control tick     */
+    float   latency_s;       /* reported values are this old                         */
+    float   cpr;             /* encoder: counts per rev of its shaft; 0 otherwise    */
+    float   wrap;            /* encoder: tick counter wraps at this; 0 = never       */
+    float   gear_ratio;      /* motor: motor:wheel. encoder: shaft:wheel. else 0     */
+    float   kt;              /* motor torque constant, N*m/A, motor side; 0 if n/a   */
+    float   resistance_ohm;  /* motor winding resistance; 0 if n/a                   */
+    float   efficiency;      /* motor gearbox efficiency 0..1; 0 if n/a              */
+    float   wheel_radius_m;  /* radius of the bound wheel; 0 if not wheel-bound      */
+    int32_t truth_only;      /* 1 = simulator ground truth with no real counterpart  */
+    float   reserved[8];     /* zero; room to grow without changing the stride       */
+} SensorInfo2;
+
+/* v7: when a sensor's latest value was taken. One entry per manifest entry,
+ * in manifest order. seq increments once per FRESH sample, so a reading held
+ * over from an earlier tick (a 15 Hz ToF inside a 100 Hz loop) keeps its seq;
+ * t_sample_us is the sim time of that sample on the time_us clock (low 32
+ * bits: compare by difference). Both stay 0 for an entry with no data. */
+typedef struct SensorStamp {
+    uint32_t seq;
+    uint32_t t_sample_us;
+} SensorStamp;
+
+/* v7: CtrlInputs.flags bits. */
+#define CTRL_IN_FLU 0x1u     /* vectors are in the FLU frame (always set for v7) */
 
 /* Host -> controller, once per control tick. */
 typedef struct CtrlInputs {
@@ -152,6 +230,12 @@ typedef struct CtrlInputs {
     const unsigned char* cam_pixels;
     int   cam_width;                 /* camera frame width  (0 if no cam)  */
     int   cam_height;                /* camera frame height (0 if no cam)  */
+
+    /* --- v7: filled only for a controller that exports ctrl_abi_version() --- */
+    uint32_t tick;                   /* control ticks since the run started */
+    uint32_t flags;                  /* CTRL_IN_* bits                      */
+    uint64_t time_us;                /* sim time, exact integer microseconds */
+    const SensorStamp* stamps;       /* sensor_count entries                */
 } CtrlInputs;
 
 /*
@@ -160,8 +244,12 @@ typedef struct CtrlInputs {
  * actuator[] layout (ABI v3, car vehicle):
  *   actuator[SensorInfo.actuator_index] = that MOTOR's applied VOLTAGE (signed;
  *       sign chooses direction). The host clamps to the motor's ±maxVoltage
- *       (advertised as range_min/range_max in the manifest).
- *   actuator[6] = steering command in [-1, 1] (front-wheel servo angle).
+ *       (advertised as range_min/range_max in the manifest). v7: the slot's
+ *       SensorInfo2.units says what it carries (volts today; Iq in amps for
+ *       an FOC drive).
+ *   actuator[6] = steering command in [-1, 1] (front-wheel servo angle,
+ *       positive RIGHT). v7: the road-wheel angle in RADIANS, positive LEFT,
+ *       clamped to the SENSOR_STEER_FB entry's range.
  *   actuator[7] = brake in [0, 1].
  * Motor slots occupy indices 0..5 (>= steering/brake never overlap for <= 6
  * motors). A wheel with no motor free-rolls.
@@ -208,6 +296,36 @@ CTRL_EXPORT void        ctrl_configure(const SensorInfo* sensors, int count);
  * and the menu's own pick stands.
  */
 CTRL_EXPORT int         ctrl_get_vehicle(void);
+
+/*
+ * v7 exports. ctrl_abi_version() is what makes a DLL a v7 controller; the
+ * others are optional on top of it.
+ *
+ * ctrl_abi_version: return CTRL_ABI_VERSION and write sizeof(CtrlInputs) and
+ *   sizeof(CtrlOutputs) as compiled. The host refuses to drive a DLL whose
+ *   sizes differ from its own. CTRL_DEFINE_ABI_VERSION() writes it for you.
+ * ctrl_configure2: like ctrl_configure, with the extended manifest. Called
+ *   instead of ctrl_configure when both are exported. The pointer is valid
+ *   only for the call.
+ * ctrl_reset: the car was teleported home (respawn, run restart). Drop
+ *   estimator and mission state; keep anything ctrl_init set up once. Without
+ *   it the host runs ctrl_shutdown + ctrl_init + configure, as before.
+ * ctrl_get_control_rate: the rate this firmware wants to be ticked at, in Hz;
+ *   0 = the host's default. Asked before ctrl_init. The host runs the nearest
+ *   whole divisor of its physics rate and passes the result to ctrl_init.
+ */
+CTRL_EXPORT int         ctrl_abi_version(int* sizeof_inputs, int* sizeof_outputs);
+CTRL_EXPORT void        ctrl_configure2(const SensorInfo2* sensors, int count);
+CTRL_EXPORT void        ctrl_reset(void);
+CTRL_EXPORT float       ctrl_get_control_rate(void);
+
+#define CTRL_DEFINE_ABI_VERSION()                                             \
+    CTRL_EXPORT int ctrl_abi_version(int* sizeof_inputs, int* sizeof_outputs) \
+    {                                                                         \
+        if (sizeof_inputs)  *sizeof_inputs  = (int)sizeof(CtrlInputs);        \
+        if (sizeof_outputs) *sizeof_outputs = (int)sizeof(CtrlOutputs);       \
+        return CTRL_ABI_VERSION;                                              \
+    }
 
 #ifdef __cplusplus
 }
