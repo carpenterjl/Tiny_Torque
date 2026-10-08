@@ -66,11 +66,11 @@ Each `SensorInfo` names a sensor, tags its type, and points at the slice
 |---------------------|-----------------------------------------------|
 | `TOF` (1)           | `[distance_m]` (`range_max` on no hit)        |
 | `ENCODER` (2)       | `[ang_vel_rad_s, ticks]` (wrapped counter)    |
-| `MOTOR` (3)         | `[voltage_V, current_A, torque_Nm]` feedback; also an **actuator** (see `actuator_index`, and `range_*` = ±maxVoltage) |
+| `MOTOR` (3)         | `[voltage_V, current_A, torque_Nm]` feedback; also an **actuator** (see `actuator_index`, and `range_*` = ±maxVoltage). On a design with the realistic sensor profile, `torque_Nm` is NaN (not measurable) |
 | `IMU` (4)           | `[gx,gy,gz, ax,ay,az]` (mirror of gyro/accel) |
 | `CAMERA` (5)        | no floats — frame via `cam_pixels`/`cam_*`    |
 | `SUSPENSION` (6)    | `[spring_force_N, compression_01, angle_deg]` |
-| `BATTERY` (7)       | `[terminal_V, total_current_A, soc_01]` — bus voltage sags with load across the pack's internal resistance; a controller can voltage-compensate its motor commands |
+| `BATTERY` (7)       | `[terminal_V, total_current_A, soc_01]` — bus voltage sags with load across the pack's internal resistance; a controller can voltage-compensate its motor commands. On a design with the realistic sensor profile (`sensorRealism` 1), V and I carry INA228-class errors and `soc_01` is NaN: estimate it in firmware |
 
 Type tags are append-only (an old controller iterating the manifest simply
 ignores unknown tags), so appending `SUSPENSION`/`BATTERY` did not change the

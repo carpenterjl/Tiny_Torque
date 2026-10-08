@@ -138,7 +138,9 @@ enum {
  *   SENSOR_CAMERA  -> (no floats; frame arrives via cam_pixels/cam_width/height)
  *   SENSOR_SUSPENSION -> [spring_force_N, compression_01, angle_deg]
  *   SENSOR_BATTERY -> [terminal_V, total_current_A, soc_01]  (soc stays 1.0 on an
- *                     infinite pack, capacitymAh 0; coulomb-counted otherwise)
+ *                     infinite pack, capacitymAh 0; coulomb-counted otherwise;
+ *                     NaN on a design with the realistic sensor profile, like
+ *                     SENSOR_MOTOR's torque: neither is measurable on a car)
  *   SENSOR_COLOR   -> [r, g, b, reflect]  all 0..1; black when nothing in range;
  *                     reflect is Rec.709 luminance (aim it down = line follower)
  *   SENSOR_RF      -> [count, id0, rssi0_dbm, bearing0_deg,
