@@ -1,6 +1,7 @@
 # Host-side checks that need no Unity licence: the controller C code (CTest:
 # Opus mission bench with tolerance asserts at 100 and 500 Hz, the core's unit
-# test, the tt_controller helper unit test), the portable core cross-compiled
+# test, the tt_controller helper unit test, the FOC current loop against a dq
+# PMSM plant), the portable core cross-compiled
 # for an MCU and as a 32-bit program, and the Tools/ checks (verify.js, the
 # generated parameter files).
 #
@@ -38,7 +39,7 @@ jobs:
         run: ctest --test-dir build -C Release --output-on-failure
 
   embedded:
-    # FW-11: the portable core (params, PID, Opus mission) for a Cortex-M4F,
+    # FW-11: the portable core (params, PID, Opus mission, FOC) for a Cortex-M4F,
     # warnings as errors, -Wdouble-promotion included. Compile-only: no board
     # is chosen yet, so there is nothing to link against.
     name: Core for Cortex-M4F (arm-none-eabi)

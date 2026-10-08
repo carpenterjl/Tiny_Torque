@@ -12,7 +12,8 @@ set(CMAKE_C_STANDARD_REQUIRED ON)
 #               cmake -S Controllers -B build-arm -DTT_TARGET=embedded \
 #                     -DCMAKE_TOOLCHAIN_FILE=Controllers/cmake/arm-none-eabi.cmake
 #             A CubeMX / Pico SDK / ESP-IDF project add_subdirectory()s this
-#             directory with TT_TARGET=embedded and links `opuslib`.
+#             directory with TT_TARGET=embedded and links `opuslib` (the
+#             vehicle controller) and/or `foclib` (a wheel's FOC driver).
 set(TT_TARGET "sim" CACHE STRING "sim | host | embedded")
 set_property(CACHE TT_TARGET PROPERTY STRINGS sim host embedded)
 if(NOT TT_TARGET MATCHES "^(sim|host|embedded)$")
@@ -65,6 +66,17 @@ target_link_libraries(opuslib PUBLIC pidlib ttcore)
 tt_core_warnings(opuslib)
 if(NOT MSVC)
     target_link_libraries(opuslib PUBLIC m)
+endif()
+
+# Field-oriented current control for one wheel motor (FW-10): what runs in
+# each FOC driver's ADC ISR. Portable float32 C with no core dependencies, so
+# it cross-compiles with the rest; Unity simulates only the closed current
+# loop, so this is exercised by test_foc_pmsm against plant/ on the host.
+add_library(foclib STATIC foc/foc.c)
+target_include_directories(foclib PUBLIC foc)
+tt_core_warnings(foclib)
+if(NOT MSVC)
+    target_link_libraries(foclib PUBLIC m)
 endif()
 
 if(TT_TARGET STREQUAL "embedded")
@@ -134,6 +146,20 @@ add_test(NAME opus_mission_bench COMMAND test_mission)
 add_executable(test_core tests/test_core.c)
 target_link_libraries(test_core PRIVATE opuslib)
 add_test(NAME tt_core_unit COMMAND test_core)
+
+# Host-only dq PMSM + inverter model: the plant the FOC is tested against.
+add_library(pmsmlib STATIC plant/pmsm_model.c)
+target_include_directories(pmsmlib PUBLIC plant)
+tt_core_warnings(pmsmlib)
+if(NOT MSVC)
+    target_link_libraries(pmsmlib PUBLIC m)
+endif()
+
+# FOC current loop on the PMSM plant: transforms, SVPWM, Iq step response,
+# torque and PLL speed on a loaded rotor, the voltage ceiling, alignment.
+add_executable(test_foc_pmsm tests/test_foc_pmsm.c)
+target_link_libraries(test_foc_pmsm PRIVATE foclib pmsmlib)
+add_test(NAME foc_pmsm COMMAND test_foc_pmsm)
 
 # The UserScripts helper header (PID clamps, wheel radius, manifest fallback).
 add_executable(test_tt_controller tests/test_tt_controller.c)
