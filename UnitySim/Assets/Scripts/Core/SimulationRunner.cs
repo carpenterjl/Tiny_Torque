@@ -101,6 +101,11 @@ namespace AIHWSim.Core
         // the previous session and a stamped seed only reproduced the first run.
         private static bool _seedApplied;
         private static int _ordinalsResetFrame = -1;
+
+        /// <summary>Non-zero overrides <c>GameSettings.noiseSeed</c> for this
+        /// process without touching the saved settings. Set by the headless
+        /// mission harness (<c>-opusSeed</c>) so two runs can be diffed.</summary>
+        public static int NoiseSeedOverride;
         private static void ApplyNoiseSeed()
         {
             if (_ordinalsResetFrame != Time.frameCount)
@@ -110,7 +115,8 @@ namespace AIHWSim.Core
             }
             if (_seedApplied) return;
             _seedApplied = true;
-            int configured = Persistence.SettingsStore.Current.noiseSeed;
+            int configured = NoiseSeedOverride != 0
+                ? NoiseSeedOverride : Persistence.SettingsStore.Current.noiseSeed;
             NoiseModel.GlobalSeed = configured != 0 ? configured : Environment.TickCount;
         }
 

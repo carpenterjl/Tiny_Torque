@@ -44,6 +44,9 @@ namespace AIHWSim.Core
             /// carries. 0 (both) leaves them exactly as authored, which is what
             /// the scored mission uses.</summary>
             public int camWidth, camHeight;
+            /// <summary>Sensor-noise seed for this run; 0 keeps the saved
+            /// setting (random when that is 0 too). Fix it to diff two runs.</summary>
+            public int noiseSeed;
         }
 
         [Serializable]
@@ -63,6 +66,7 @@ namespace AIHWSim.Core
             public float odo_final, truth_final, drift_mm;
             public float controllerStopErr_mm;
             public float cruiseSpeedMean, cruiseSpeedMin, turnSpeedMin;
+            public int noiseSeed;
             public string note = "";
         }
 
@@ -129,6 +133,7 @@ namespace AIHWSim.Core
                         s.camHeight = _req.camHeight;
                     }
 
+            SimulationRunner.NoiseSeedOverride = _req.noiseSeed;
             GameFlow.ActiveDesign = design;
             if (track != null)
             {
@@ -285,6 +290,7 @@ namespace AIHWSim.Core
             _finished = true;
             _res.completed = ok;
             _res.note = note;
+            _res.noiseSeed = Sensors.NoiseModel.GlobalSeed;
             _res.phase = _prevPhase;
             _res.fault = Dbg("dbg/fault", 0);
             _res.elapsedSec = _elapsed;

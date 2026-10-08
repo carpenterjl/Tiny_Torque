@@ -119,6 +119,14 @@ namespace AIHWSim.Sensors
         /// <summary>Latch the commanded voltage (control rate, zero-order hold).</summary>
         public void SetVoltage(float volts) => _commandedVoltage = volts;
 
+        /// <summary>
+        /// Live bus voltage from the vehicle's battery model; 0 = no battery
+        /// (the nominal <c>maxVoltage</c> is the rail). Set every physics step
+        /// before <see cref="StepDrive"/> so a fresh pack above nominal is not
+        /// clamped down to it.
+        /// </summary>
+        public float BusVoltage { get; set; }
+
         public void ResetMotor()
         {
             _commandedVoltage = _voltage = _current = _torque = 0f;
@@ -189,12 +197,12 @@ namespace AIHWSim.Sensors
                     {
                         _braking = true;
                         _torque = MotorModel.BrakeTorque(in motor,
-                            motor.escDragBrakePct / 100f, wheelOmega, out _current);
+                            motor.escDragBrakePct / 100f, wheelOmega, out _current, BusVoltage);
                         _voltage = 0f;
                     }
                     else
                         _torque = MotorModel.WheelTorque(in motor, 0f, wheelOmega,
-                                                         out _voltage, out _current);
+                                                         out _voltage, out _current, BusVoltage);
                 }
                 else
                 {
@@ -207,27 +215,27 @@ namespace AIHWSim.Sensors
                         // never spin the wheel backwards.
                         _braking = true;
                         float duty = Mathf.Abs(v) / Mathf.Max(0.01f, motor.maxVoltage) * strength;
-                        _torque = MotorModel.BrakeTorque(in motor, duty, wheelOmega, out _current);
+                        _torque = MotorModel.BrakeTorque(in motor, duty, wheelOmega, out _current, BusVoltage);
                         _voltage = 0f;
                     }
                     else if (v > 0f || _reverseArmed || wheelOmega < -movingOmega)
                     {
                         if (v > 0f) _reverseArmed = false;   // next reverse needs a dwell
                         _torque = MotorModel.WheelTorque(in motor, v, wheelOmega,
-                                                         out _voltage, out _current);
+                                                         out _voltage, out _current, BusVoltage);
                     }
                     else
                     {
                         // Wants reverse before the lockout expires: ESC holds neutral.
                         _torque = MotorModel.WheelTorque(in motor, 0f, wheelOmega,
-                                                         out _voltage, out _current);
+                                                         out _voltage, out _current, BusVoltage);
                     }
                 }
             }
             else
             {
                 _torque = MotorModel.WheelTorque(in motor, v, wheelOmega,
-                                                 out _voltage, out _current);
+                                                 out _voltage, out _current, BusVoltage);
             }
 
             // Torque sink: the vehicle routes it to its spin integrator (brush

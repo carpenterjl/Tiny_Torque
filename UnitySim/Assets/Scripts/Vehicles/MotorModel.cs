@@ -98,11 +98,14 @@ namespace AIHWSim.Vehicles
         /// <summary>
         /// Compute geared wheel torque for a commanded voltage at the current wheel
         /// speed, and report the electrical operating point (V, I) actually seen.
+        /// <paramref name="railV"/> is the live bus voltage when a battery is
+        /// modelled (a fresh 2S pack sits at 8.4 V, above the 7.4 V nominal);
+        /// 0 = no battery, so the nominal <c>maxVoltage</c> is the rail.
         /// </summary>
         public static float WheelTorque(in MotorParams p, float commandedVoltage, float wheelOmega,
-                                        out float voltage, out float current)
+                                        out float voltage, out float current, float railV = 0f)
         {
-            float vmax = Mathf.Max(0.01f, p.maxVoltage);
+            float vmax = Mathf.Max(0.01f, railV > 0f ? railV : p.maxVoltage);
             voltage = Mathf.Clamp(commandedVoltage, -vmax, vmax);
 
             float r = Mathf.Max(1e-3f, p.resistance);
@@ -146,12 +149,12 @@ namespace AIHWSim.Vehicles
         /// circulates inside the bridge: it draws nothing from the pack.
         /// </summary>
         public static float BrakeTorque(in MotorParams p, float duty, float wheelOmega,
-                                        out float current)
+                                        out float current, float railV = 0f)
         {
             float r = Mathf.Max(1e-3f, p.resistance);
             float gear = Mathf.Max(1e-3f, p.gearRatio);
             float omegaMotor = wheelOmega * gear;
-            float vmax = Mathf.Max(0.01f, p.maxVoltage);
+            float vmax = Mathf.Max(0.01f, railV > 0f ? railV : p.maxVoltage);
 
             float stall = vmax / r;
             if (p.maxCurrent > 0f) stall = Mathf.Min(stall, p.maxCurrent);

@@ -1656,6 +1656,9 @@ namespace AIHWSim.Vehicles
                 volts *= _launchScale;                         // 1 unless launch control is cutting
                 if (batteryNominalV > 0f)
                     volts = Mathf.Clamp(volts, -vTerm, vTerm); // sagging rail caps the command
+                // The live rail, not the nominal maxVoltage, is the motor's ceiling:
+                // a fresh pack above nominal must not be clamped down to it (BUG-07).
+                m.BusVoltage = batteryNominalV > 0f ? Mathf.Max(0.01f, vTerm) : 0f;
                 m.SetVoltage(volts);
                 m.StepDrive(dt);
                 // Pack draw only — a shorted-winding ESC brake circulates its

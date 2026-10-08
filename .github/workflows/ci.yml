@@ -1,0 +1,46 @@
+# Host-side checks that need no Unity licence: the controller C code (CTest:
+# Opus mission bench with tolerance asserts, tt_controller helper unit test)
+# and the Tools/ shared-module regression (verify.js).
+#
+# The Unity-side validators (OpusMissionRunner.RunHeadless etc.) need a
+# licensed editor and stay a local step for now — see SIM_TO_REAL_PLAN VAL-02.
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  controllers:
+    name: Controllers (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        # Windows/MSVC is what builds the shipping DLLs; Linux/gcc keeps the
+        # portable core honest for the eventual MCU toolchain.
+        os: [windows-latest, ubuntu-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure
+        # Plugin copies go into the build tree, never into the Unity project.
+        run: cmake -S Controllers -B build -DCMAKE_BUILD_TYPE=Release -DUNITY_PLUGIN_DIR="${{ github.workspace }}/build/plugins"
+
+      - name: Build
+        run: cmake --build build --config Release
+
+      - name: Test
+        run: ctest --test-dir build -C Release --output-on-failure
+
+  tools:
+    name: Tools verify.js
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - run: node Tools/verify.js
