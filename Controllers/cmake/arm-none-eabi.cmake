@@ -1,7 +1,7 @@
 # arm-none-eabi.cmake — cross-compile the portable core for a Cortex-M (FW-11).
 #
 #   cmake -S Controllers -B build-arm -DTT_TARGET=embedded \
-#         -DCMAKE_TOOLCHAIN_FILE=Controllers/cmake/arm-none-eabi.cmake
+#         -DCMAKE_TOOLCHAIN_FILE="$PWD/Controllers/cmake/arm-none-eabi.cmake"
 #   cmake --build build-arm
 #
 # No board is chosen yet (decision D6), so the default is a generic Cortex-M4F:

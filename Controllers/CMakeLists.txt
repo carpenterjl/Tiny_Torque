@@ -10,7 +10,7 @@ set(CMAKE_C_STANDARD_REQUIRED ON)
 #             UserScripts; what the 32-bit CI build uses
 #   embedded  the portable libraries only, for an MCU toolchain:
 #               cmake -S Controllers -B build-arm -DTT_TARGET=embedded \
-#                     -DCMAKE_TOOLCHAIN_FILE=Controllers/cmake/arm-none-eabi.cmake
+#                     -DCMAKE_TOOLCHAIN_FILE="$PWD/Controllers/cmake/arm-none-eabi.cmake"
 #             A CubeMX / Pico SDK / ESP-IDF project add_subdirectory()s this
 #             directory with TT_TARGET=embedded and links `opuslib` (the
 #             vehicle controller) and/or `foclib` (a wheel's FOC driver).
