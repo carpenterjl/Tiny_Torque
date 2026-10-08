@@ -2,7 +2,7 @@
 #include "tt_params.h"
 
 const TtParams tt_params_opus_vector = {
-    .version = 1u,
+    .version = 2u,
     .wheel_radius_m = 0.033f,
     .wheelbase_m = 0.3f,
     .track_front_m = 0.172f,
@@ -29,5 +29,14 @@ const TtParams tt_params_opus_vector = {
     .drag_c2 = 0.015f,
     .cal_scale = 0.0f,
     .cal_brake = 1.0f,
-    .odo_lead_comp = 1u,
+    .track_rear_m = 0.172f,
+    .cg_height_m = 0.045f,
+    .front_weight_frac = 0.5f,
+    .wheel_drive_max_nm = 0.0f,
+    .wheel_regen_max_nm = 0.0f,
+    .slip_max = 0.0f,
+    .slip_v_min = 0.3f,
+    .slip_gain = 4.0f,
+    .slip_recover_s = 0.05f,
+    .slip_stiffness = 0.0f,
 };

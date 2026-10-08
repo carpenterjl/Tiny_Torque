@@ -53,7 +53,8 @@ tt_core_warnings(pidlib)
 # The portable core's shared pieces: TtMeas/TtCmd types, the parameter store
 # and its generated defaults (Tools/gen_params.js), the log schema, and the
 # board interface every non-sim target implements (hal/tt_hal.h).
-add_library(ttcore STATIC core/tt_params.c core/params_opus_vector.c)
+add_library(ttcore STATIC core/tt_params.c core/tt_alloc.c
+            core/params_opus_vector.c core/params_opus_vector_foc.c)
 target_include_directories(ttcore PUBLIC core hal)
 tt_core_warnings(ttcore)
 
@@ -66,6 +67,7 @@ target_link_libraries(opuslib PUBLIC pidlib ttcore)
 tt_core_warnings(opuslib)
 if(NOT MSVC)
     target_link_libraries(opuslib PUBLIC m)
+    target_link_libraries(ttcore PUBLIC m)
 endif()
 
 # Field-oriented current control for one wheel motor (FW-10): what runs in
@@ -123,6 +125,13 @@ add_controller(car_controller targets/sim/car_main.c carlib)
 
 # Opus Vector autonomous mission       -> opus_controller.dll
 add_controller(opus_controller targets/sim/opus_main.c opuslib)
+
+# The same mission on the four-motor FOC twin -> opus_foc_controller.dll.
+# Same source; only the parameter set differs, as a board config would.
+add_controller(opus_foc_controller targets/sim/opus_main.c opuslib)
+if(TARGET opus_foc_controller)
+    target_compile_definitions(opus_foc_controller PRIVATE OPUS_PARAMS=tt_params_opus_vector_foc)
+endif()
 
 # ABI v2 configurable-sensor demo      -> car_sensors_controller.dll
 # Standalone (only needs controller_api.h) so it doubles as a v2 reference.

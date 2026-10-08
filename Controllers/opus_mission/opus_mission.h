@@ -17,6 +17,7 @@
 #include "pid.h"
 #include "tt_types.h"
 #include "tt_params.h"
+#include "tt_alloc.h"
 
 /* Mission phases. The numeric values are published as log channel `state` and
  * are matched by the game's MissionHud, so they are part of the interface —
@@ -80,7 +81,6 @@ typedef struct {
     float  psi_ref;        /* heading the straight-line loops hold */
     float  turn_t;         /* s into the turn profile */
     float  turn_cmd_rad;   /* integral of the COMMANDED yaw rate */
-    float  v_leg_start;    /* speed at the last leg boundary (trapezoid correction) */
     tt_us_t prev_us;
     int    has_prev_us;
 
@@ -94,10 +94,15 @@ typedef struct {
     /* Loops */
     Pid spd_pid;
     Pid yaw_pid;
+    TtAlloc alloc;         /* force -> wheel torques (FW-06) */
+    float  wheel_omega[TT_MAX_WHEELS];   /* rad/s at the wheel, from the drives */
+    uint8_t wheel_omega_ok[TT_MAX_WHEELS];
 
     /* Last command, mirrored for telemetry and for the brake-slip correction */
     TtCmd  cmd;
     float  t_cmd_nm;       /* torque asked of each driven wheel */
+    float  a_cmd;          /* last commanded acceleration, m/s^2 (load transfer) */
+    float  kappa_odo;      /* estimated drive slip of the odometry pair (mean) */
     float  slip_pct;
     float  v_ref;
     float  leg_rem;        /* signed distance left in the current measured leg */

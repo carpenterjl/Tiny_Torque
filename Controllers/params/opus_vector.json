@@ -1,7 +1,7 @@
 {
   "_about": "Opus Vector firmware parameters (TtParams, Controllers/core/tt_params.h). The source of record: Tools/gen_params.js turns this into Controllers/core/params_opus_vector.c. Keys starting with _ are notes and are ignored. Values come from Opus_Car_Spec/sim_mapping.md and calibration.md.",
   "name": "opus_vector",
-  "version": 1,
+  "version": 2,
 
   "wheel_radius_m": 0.033,
   "wheelbase_m": 0.300,
@@ -44,6 +44,16 @@
   "cal_brake": 1.0,
   "_cal": "MEASURED runs R1/R2, see mission_cfg.h history and Opus_Car_Spec/calibration.md",
 
-  "odo_lead_comp": 1,
-  "_odo_lead_comp": "sim only: corrects WheelEncoderSensor's left-endpoint integration bias. 0 on the real car; delete with SEN-02."
+  "track_rear_m": 0.172,
+  "cg_height_m": 0.045,
+  "front_weight_frac": 0.5,
+  "_alloc": "One motor behind a differential (two simulated): equal split, no per-wheel limits, slip limiter off - the Opus has no per-wheel drive to allocate with.",
+  "wheel_drive_max_nm": 0.0,
+  "wheel_regen_max_nm": 0.0,
+  "slip_max": 0.0,
+  "slip_v_min": 0.3,
+  "slip_gain": 4.0,
+  "slip_recover_s": 0.05,
+  "slip_stiffness": 0.0,
+  "_slip_stiffness": "the odometry wheels are not driven, so they carry no drive slip"
 }

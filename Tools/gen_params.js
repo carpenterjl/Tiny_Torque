@@ -31,7 +31,10 @@ const FIELDS = [
     ['max_steer_rad', 'f'], ['servo_slew_rad_s', 'f'], ['brake_max_nm', 'f'],
     ['drag_c0', 'f'], ['drag_c1', 'f'], ['drag_c2', 'f'],
     ['cal_scale', 'f'], ['cal_brake', 'f'],
-    ['odo_lead_comp', 'u'],
+    ['track_rear_m', 'f'], ['cg_height_m', 'f'], ['front_weight_frac', 'f'],
+    ['wheel_drive_max_nm', 'f'], ['wheel_regen_max_nm', 'f'],
+    ['slip_max', 'f'], ['slip_v_min', 'f'], ['slip_gain', 'f'], ['slip_recover_s', 'f'],
+    ['slip_stiffness', 'f'],
 ];
 const WHEELS = { FL: 0, FR: 1, RL: 2, RR: 3 };
 

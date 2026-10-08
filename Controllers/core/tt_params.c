@@ -43,7 +43,15 @@ int tt_params_validate(const TtParams *p)
 
     if (!(p->cal_scale > -0.5f && p->cal_scale < 0.5f)) bad++;
     if (!(p->cal_brake >= 0.0f && p->cal_brake < 10.0f)) bad++;
-    if (p->odo_lead_comp > 1u) bad++;
+
+    if (!(p->track_rear_m > 0.0f && p->track_rear_m < 10.0f)) bad++;
+    if (!(p->cg_height_m >= 0.0f && p->cg_height_m < 2.0f)) bad++;
+    bad += bad_frac(p->front_weight_frac);
+    if (p->wheel_drive_max_nm < 0.0f || p->wheel_regen_max_nm < 0.0f) bad++;
+    if (!(p->slip_max >= 0.0f && p->slip_max < 1.0f)) bad++;
+    if (p->slip_max > 0.0f)
+        bad += bad_pos(p->slip_v_min) + bad_pos(p->slip_gain) + bad_pos(p->slip_recover_s);
+    if (!(p->slip_stiffness >= 0.0f && p->slip_stiffness < 1000.0f)) bad++;
 
     return bad;
 }

@@ -88,22 +88,13 @@ float opus_odo_m(const OpusState *st)
                    (float)st->odo_cnt_r * tt_m_per_count(p, st->odo_r)) + st->odo_corr_m;
 }
 
-/* Effective odometer: the raw odometer plus, in the sim only, the
- * integration-bias correction (TtParams.odo_lead_comp).
- *
- * The sim's encoder integrates with a left-endpoint sum (angle += omega*dt
- * sampled before the step), so over a leg it over-reads by
- * (dt/2)*(v_start - v_now). On the constant-speed legs that is sub-millimetre;
- * across the 4.5 -> 0 braking leg it is 22.5 mm, all of it in the direction of
- * stopping SHORT. A real encoder has no such bias, hence the parameter; it
- * goes away entirely when SEN-02 fixes the sim encoder.
- */
-static float odo_effective(const OpusState *st, float dt)
+/* The odometer the mission measures legs with. (Until SEN-02 this added a
+ * correction for the sim encoder's integration bias — 22.5 mm over the
+ * braking leg. The sim now counts the angle the physics integrated, as a
+ * real encoder does, so there is nothing left to correct.) */
+static float odo_effective(const OpusState *st)
 {
-    float odo = opus_odo_m(st);
-    if (st->p->odo_lead_comp)
-        odo += 0.5f * dt * (st->v_meas - st->v_leg_start);
-    return odo;
+    return opus_odo_m(st);
 }
 
 /* -------------------------------------------------------------- lifecycle --*/
@@ -135,6 +126,7 @@ void opus_reset(OpusState *st)
 
     pid_init(&st->spd_pid, GA_SPD_KP, GA_SPD_KI, 0.0f, -GA_SPD_TRIM, GA_SPD_TRIM);
     pid_init(&st->yaw_pid, GA_YAW_KP, GA_YAW_KI, 0.0f, -GA_YAW_TRIM, GA_YAW_TRIM);
+    tt_alloc_reset(&st->alloc);
 }
 
 static void enter(OpusState *st, OpusPhase ph)
@@ -145,18 +137,10 @@ static void enter(OpusState *st, OpusPhase ph)
     pid_reset(&st->spd_pid);
 }
 
-/* Latch the datum for a newly-started measured leg.
- *
- * The start is the RAW odometer, not the corrected one. The integration-bias
- * correction is defined relative to this leg's own starting speed, so at the
- * boundary itself it is zero by construction; taking odo_effective() here would
- * apply the PREVIOUS leg's correction to the new leg's datum and bake a fixed
- * offset into every subsequent measurement (worth 22 mm at a 0 -> 4.5 m/s
- * boundary, which is most of a leg's error budget). */
+/* Latch the datum for a newly-started measured leg. */
 static void begin_leg(OpusState *st)
 {
-    st->leg_start_m = opus_odo_m(st);
-    st->v_leg_start = st->v_meas;
+    st->leg_start_m = odo_effective(st);
 }
 
 /* ---------------------------------------------------------------- arming ---
@@ -241,17 +225,32 @@ static void longitudinal(OpusState *st, const TtMeas *m,
         f_fric  = allow_brake ? (need + f_motor) : 0.0f;
     }
 
-    /* Equal split across the driven wheels: an open differential. Torque
-     * vectoring (FW-06) replaces this line. */
+    /* The allocator turns the force into wheel torques: front/rear by load,
+     * left/right as an open differential, per-wheel limits, and traction
+     * control / ABS where the parameters enable them (FW-06). */
+    {
+        TtVehReq req;
+        TtAllocIn ain;
+        req.fx_n = f_motor;
+        req.mz_nm = 0.0f;
+        req.steer_rad = 0.0f;
+        ain.v_mps = st->v_meas;
+        ain.yaw_rate = st->psi_dot_f;
+        ain.ax_mps2 = a_cmd;
+        for (w = 0; w < TT_MAX_WHEELS; w++) {
+            ain.wheel_omega[w] = st->wheel_omega[w];
+            ain.omega_valid[w] = st->wheel_omega_ok[w];
+        }
+        tt_alloc_step(&st->alloc, p, &req, &ain, m->dt_s, out);
+    }
     t_each = n_driven > 0 ? f_motor * p->wheel_radius_m / (float)n_driven : 0.0f;
-    for (w = 0; w < TT_MAX_WHEELS; w++)
-        out->wheel_torque_nm[w] = (p->driven_mask & (1u << w)) ? t_each : 0.0f;
 
     /* The friction brake acts on all four wheels. */
     out->brake_01 = p->brake_max_nm > 0.0f
         ? clampf(f_fric * p->wheel_radius_m / (4.0f * p->brake_max_nm), 0.0f, 1.0f) : 0.0f;
 
     st->t_cmd_nm = t_each;
+    st->a_cmd = a_cmd;
     st->v_ref = v_ref;
 }
 
@@ -359,6 +358,42 @@ void opus_step(OpusState *st, const TtMeas *m, TtCmd *out)
     ds_l = (float)dl * mpc_l;
     ds_r = (float)dr * mpc_r;
 
+    /* A DRIVEN odometry wheel slips by its own tyre force: kappa = F / (C_k/F_z
+     * * F_z), so the encoder reads (1 + kappa) of the ground. Undo it with the
+     * torque this firmware commanded last tick and the wheel's load from the
+     * weight split plus longitudinal and lateral transfer. The tyre carries
+     * the torque LESS what the wheel itself loses (rolling resistance,
+     * bearings, motor friction — the c0 + c1*v of the drag model, shared by
+     * four wheels); only aero is the body's. At cruise that leaves almost
+     * nothing, which is why this matters under braking and launch. (A
+     * friction-braked wheel is the separate cal_brake term below.) */
+    if (p->slip_stiffness > 0.0f) {
+        const float g = 9.80665f;
+        float tr = (st->odo_l < 2) ? p->track_front_m : p->track_rear_m;
+        float shf = p->front_weight_frac - (p->wheelbase_m > 0.0f ? p->cg_height_m / p->wheelbase_m : 0.0f) * st->a_cmd / g;
+        float sh = (st->odo_l < 2) ? shf : 1.0f - shf;
+        float ay = st->v_meas * st->psi_dot_f;                 /* + = left */
+        float dz = tr > 0.0f ? ay * p->cg_height_m / tr : 0.0f; /* per g-scaled mass */
+        float fz_l = p->mass_kg * sh * (0.5f * g - dz);
+        float fz_r = p->mass_kg * sh * (0.5f * g + dz);
+        float va = st->v_meas < 0.0f ? -st->v_meas : st->v_meas;
+        float own = (p->drag_c0 + p->drag_c1 * va) / (float)TT_MAX_WHEELS;
+        float k_l = 0.0f, k_r = 0.0f, c_l, c_r;
+        if (st->v_meas < 0.0f) own = -own;
+        if ((p->driven_mask & (1u << st->odo_l)) && fz_l > 0.1f && va > 0.05f)
+            k_l = (st->cmd.wheel_torque_nm[st->odo_l] / p->wheel_radius_m - own) / (p->slip_stiffness * fz_l);
+        if ((p->driven_mask & (1u << st->odo_r)) && fz_r > 0.1f && va > 0.05f)
+            k_r = (st->cmd.wheel_torque_nm[st->odo_r] / p->wheel_radius_m - own) / (p->slip_stiffness * fz_r);
+        k_l = clampf(k_l, -0.3f, 0.3f);
+        k_r = clampf(k_r, -0.3f, 0.3f);
+        c_l = -ds_l * k_l / (1.0f + k_l);
+        c_r = -ds_r * k_r / (1.0f + k_r);
+        st->kappa_odo = 0.5f * (k_l + k_r);
+        ds_l += c_l;
+        ds_r += c_r;
+        st->odo_corr_m += 0.5f * (c_l + c_r);
+    }
+
     /* Averaging the two odometry wheels cancels the track-width term exactly,
      * so no steering-angle compensation is needed on the measured legs. */
     ds = 0.5f * (ds_l + ds_r);
@@ -414,7 +449,15 @@ void opus_step(OpusState *st, const TtMeas *m, TtCmd *out)
      * loops on the filtered one. */
     st->psi_dot_f += (st->psi_dot - st->psi_dot_f) * lp_alpha(dt, GA_YAW_TAU_S);
 
-    odo_eff = odo_effective(st, dt);
+    odo_eff = odo_effective(st);
+
+    /* Wheel speeds for the slip limiter, from the drives' own speed
+     * estimate (an FOC driver's PLL; the sim adapter's encoder rate). */
+    for (w = 0; w < TT_MAX_WHEELS; w++) {
+        float g = p->gear[w];
+        st->wheel_omega_ok[w] = (uint8_t)(m->drv[w].st.valid && g > 0.0f);
+        st->wheel_omega[w] = st->wheel_omega_ok[w] ? m->drv[w].omega_m / g : 0.0f;
+    }
 
     /* ---- standing faults ----------------------------------------------- */
 
@@ -568,7 +611,6 @@ void opus_step(OpusState *st, const TtMeas *m, TtCmd *out)
         psi_dot_ref = heading_hold(st);
         if (odo_eff - st->leg_start_m + 0.5f * st->v_meas * dt >= MI_LEG_B_M) {
             st->leg_b_actual = odo_eff - st->leg_start_m;
-            st->v_leg_start = st->v_meas;    /* datum for the trapezoid correction */
             enter(st, OPUS_BRAKE);
         }
         break;
@@ -659,6 +701,7 @@ void opus_step(OpusState *st, const TtMeas *m, TtCmd *out)
     } else {
         st->v_ref = 0.0f;
         st->t_cmd_nm = 0.0f;
+        st->a_cmd = 0.0f;
         pid_reset(&st->spd_pid);
         pid_reset(&st->yaw_pid);
         out->arm = (st->phase == OPUS_ARMED || st->phase == OPUS_HOLD) ? 1 : 0;

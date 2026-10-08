@@ -14,13 +14,19 @@
  * encoder, a different wheel radius or CPR), the controller refuses to arm
  * with FA_PARAMS instead of driving on numbers that disagree.
  *
- * The motor slots of this car carry VOLTS (a brushed motor behind a hobby
- * ESC). The core asks for wheel torque; tt_torque_to_iq() turns that into the
- * current the firmware believes it needs — the same conversion an FOC car
- * runs — and the virtual driver below turns current into the ESC's volts
- * using the motor's TRUE constants from the manifest, as a real current loop
- * would. When the sim gains an Iq drive (ACT-01) the slot reports
- * CTRL_UNITS_AMPS_IQ and the current goes through unchanged.
+ * The core asks for wheel torque; tt_torque_to_iq() turns that into the
+ * current the firmware believes it needs — the same conversion the car runs.
+ * What happens next depends on the drive the manifest describes:
+ *   - an FOC drive (SENSOR_FOC_FB, slot units CTRL_UNITS_AMPS_IQ) takes that
+ *     current unchanged, and reports Iq and its own speed estimate back;
+ *   - a brushed motor behind a hobby ESC (SENSOR_MOTOR, VOLTS) gets the
+ *     virtual driver below, which turns current into the ESC's volts using
+ *     the motor's TRUE constants from the manifest, as a real current loop
+ *     would.
+ *
+ * One source, two cars: OPUS_PARAMS picks the parameter set at build time
+ * (opus_controller.dll = the brushed Opus Vector, opus_foc_controller.dll =
+ * the four-motor FOC twin), as a board config would on the MCU.
  */
 #include "controller_api.h"
 #include "opus_mission.h"
@@ -28,6 +34,10 @@
 
 #include <math.h>
 #include <string.h>
+
+#ifndef OPUS_PARAMS
+#define OPUS_PARAMS tt_params_opus_vector
+#endif
 
 static OpusState g_st;
 static TtParams  g_params;
@@ -52,7 +62,9 @@ typedef struct {
 
 typedef struct {
     int   bound;
-    int   idx, off;       /* [V, I, torque] */
+    int   idx, off;       /* SENSOR_MOTOR [V, I, torque] or
+                             SENSOR_FOC_FB [Iq, Id, w_m, Vbus, T, faults] */
+    int   foc;
     int   slot;           /* actuator index */
     int   units;
     float kt, r, gear, vmax;
@@ -93,7 +105,7 @@ static void build_debug_names(void)
 
 CTRL_EXPORT int ctrl_init(float control_rate_hz)
 {
-    g_params = tt_params_opus_vector;
+    g_params = OPUS_PARAMS;
     g_rate_hz = control_rate_hz;
     opus_init(&g_st, &g_params, control_rate_hz);
     build_debug_names();
@@ -168,11 +180,13 @@ CTRL_EXPORT void ctrl_configure2(const SensorInfo2 *sensors, int count)
             break;
 
         case SENSOR_MOTOR:
+        case SENSOR_FOC_FB:
             if (w >= 0 && w < TT_MAX_WHEELS && s->base.actuator_index >= 0 &&
                 s->base.actuator_index < CTRL_STEER_ACTUATOR && !g_mot[w].bound) {
                 g_mot[w].bound = 1;
                 g_mot[w].idx = i;
                 g_mot[w].off = s->base.data_offset;
+                g_mot[w].foc = s->base.type == SENSOR_FOC_FB;
                 g_mot[w].slot = s->base.actuator_index;
                 g_mot[w].units = s->units;
                 g_mot[w].kt = s->kt;
@@ -287,9 +301,18 @@ static void read_meas(const CtrlInputs *in, TtMeas *m)
     for (w = 0; w < TT_MAX_WHEELS; w++) {
         MotBind *mt = &g_mot[w];
         if (!mt->bound) continue;
-        m->drv[w].iq_a = slice(in, mt->off + 1, 0.0f);
-        m->drv[w].vbus_v = m->batt.v;
-        m->drv[w].omega_m = g_enc[w].bound ? g_enc[w].omega_wheel * mt->gear : 0.0f;
+        if (mt->foc) {
+            /* What an FOC driver reports, as it reports it. */
+            m->drv[w].iq_a    = slice(in, mt->off + 0, 0.0f);
+            m->drv[w].omega_m = slice(in, mt->off + 2, 0.0f);
+            m->drv[w].vbus_v  = slice(in, mt->off + 3, m->batt.v);
+            m->drv[w].temp_c  = slice(in, mt->off + 4, 0.0f);
+            m->drv[w].fault   = (uint16_t)slice(in, mt->off + 5, 0.0f);
+        } else {
+            m->drv[w].iq_a = slice(in, mt->off + 1, 0.0f);
+            m->drv[w].vbus_v = m->batt.v;
+            m->drv[w].omega_m = g_enc[w].bound ? g_enc[w].omega_wheel * mt->gear : 0.0f;
+        }
         stamp(&m->drv[w].st, in, mt->idx);
     }
 

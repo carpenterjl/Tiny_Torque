@@ -252,12 +252,17 @@ namespace AIHWSim.Core
             {
                 _nextTrace = _elapsed + 0.05f;
                 if (_trace.Length == 0)
-                    _trace.Append("t,phase,fault,v_true,v_meas,v_ref,odo,truth,motor_v,brake,steer,yaw_true,yaw_ctrl,tof\n");
+                    _trace.Append("t,phase,fault,v_true,v_meas,v_ref,odo,truth,motor_v,brake,steer,yaw_true,yaw_ctrl,tof,slip_front,slip_rear\n");
+                // True slip ratios (front pair = the odometry wheels, rear pair):
+                // ground truth for what an encoder-based odometer cannot see.
+                float slipF = 0.5f * (_car.WheelSlipRatio(0) + _car.WheelSlipRatio(1));
+                float slipR = 0.5f * (_car.WheelSlipRatio(2) + _car.WheelSlipRatio(3));
                 _trace.AppendFormat(System.Globalization.CultureInfo.InvariantCulture,
-                    "{0:0.00},{1},{2},{3:0.000},{4:0.000},{5:0.000},{6:0.000},{7:0.000},{8:0.000},{9:0.000},{10:0.000},{11:0.00},{12:0.00},{13:0.00}\n",
+                    "{0:0.00},{1},{2},{3:0.000},{4:0.000},{5:0.000},{6:0.000},{7:0.000},{8:0.000},{9:0.000},{10:0.000},{11:0.00},{12:0.00},{13:0.00},{14:0.00000},{15:0.00000}\n",
                     _elapsed, phase, Dbg("dbg/fault", 0), spd, DbgF("dbg/v_meas"), DbgF("dbg/target_speed"),
                     DbgF("dbg/odo_m"), _truth, DbgF("dbg/motor_v"), DbgF("dbg/brake_cmd"),
-                    DbgF("dbg/steer_cmd"), yaw, DbgF("dbg/yaw_deg"), DbgF("sens/tof_front/dist"));
+                    DbgF("dbg/steer_cmd"), yaw, DbgF("dbg/yaw_deg"), DbgF("sens/tof_front/dist"),
+                    slipF, slipR);
             }
 
             if (phase != _prevPhase)

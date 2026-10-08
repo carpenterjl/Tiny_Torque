@@ -29,6 +29,7 @@ namespace AIHWSim.Garage
             ("TT Highwing", Keyed(TTHighwing)),
             ("TT Autopia",  Keyed(TTAutopia)),
             ("Opus Vector", Keyed(OpusVector)),
+            ("Opus Vector FOC", Keyed(OpusVectorFoc)),
         };
 
         /// <summary>
@@ -642,6 +643,88 @@ namespace AIHWSim.Garage
             d.antennas.Add(new AntennaSpec { name = "ant_l", localPos = new Vector3(-0.055f, 0.090f, -0.140f), tiltDeg = 14f, massKg = 0.008f, mirrorGroup = 1 });
             d.antennas.Add(new AntennaSpec { name = "ant_r", localPos = new Vector3(0.055f, 0.090f, -0.140f), tiltDeg = 14f, massKg = 0.008f, mirrorGroup = 1 });
 
+            return d;
+        }
+
+        /// <summary>
+        /// Opus Vector FOC — the powertrain twin of the car being built (sim-to-
+        /// real Phase 2): the Opus chassis, sensors and pack, with one geared
+        /// outrunner per wheel on its own FOC driver (DEC-02 option B) and no
+        /// friction brake. It stops and holds on motor current, its tyres hold
+        /// statically on their own, and it runs the same mission firmware with
+        /// a different parameter set (Controllers/params/opus_vector_foc.json,
+        /// built as opus_foc_controller.dll).
+        ///
+        /// The motor is a stand-in until the V2 bench measures the real one:
+        /// a 1400 Kv 12N14P outrunner through 5:1, 0.12 Ω, 30 µH, 15 A
+        /// (12 A regen), 2 kHz current loop, commands at 1 kHz with 1 ms of
+        /// transport delay. Tagged DERIVED in the parameter file; every number
+        /// here must move with it.
+        /// </summary>
+        private static VehicleDesign OpusVectorFoc()
+        {
+            var d = OpusVector();
+            d.name = "Opus Vector FOC";
+            d.bodyColor = new Color(0.10f, 0.45f, 0.85f);
+            d.controllerDll = "opus_foc_controller.dll";
+            d.hasFrictionBrake = false;   // ACT-08: no brake to lean on
+            d.linearDamping = 0f;         // drag is modelled (aero, rolling, bearings)
+
+            var motor = MotorParams.Default();
+            motor.driveMode = (int)MotorDriveMode.CurrentFoc;
+            motor.maxVoltage = 7.4f;
+            motor.kt = 0.006820926f;          // 60/(2π·1400 Kv)
+            motor.resistance = 0.12f;
+            motor.inductance = 30e-6f;
+            motor.polePairs = 7;
+            motor.gearRatio = 5f;
+            motor.noLoadCurrent = 0.2f;
+            motor.coulombScale = 1f;
+            motor.viscousDamping = 1e-6f;
+            motor.efficiency = 0.90f;
+            motor.etaBack = 0.90f;            // ACT-04: back-driven divides
+            motor.rotorInertia = 2e-6f;
+            motor.maxCurrent = 15f;
+            motor.maxRegenCurrent = 12f;
+            motor.currentLoopHz = 2000f;
+            motor.cmdPeriodMs = 1f;           // 1 kHz command frames
+            motor.cmdLatencyMs = 1f;
+            motor.modulationMax = 0.95f;
+            motor.busOvTripV = 8.7f;          // 4.35 V/cell
+            motor.busOvDerateV = 8.5f;
+            motor.thermalRwcKPerW = 2f;
+            motor.thermalCwJPerK = 15f;
+            motor.thermalRcaKPerW = 6f;
+            motor.thermalCcJPerK = 40f;
+            motor.tempDerateStartC = 100f;
+            motor.tempLimitC = 130f;
+            motor.coggingNm = 0.002f;
+            motor.coggingPerRev = 84;         // LCM(12 slots, 14 poles)
+            motor.rippleFrac = 0.02f;
+            motor.lashRad = 0.01f;            // 0.6° at the wheel
+            // The ESC fields are unused by an FOC drive.
+            motor.escPwmSteps = 0;
+            motor.escDeadbandV = 0f;
+            motor.escTimeConstMs = 0f;
+
+            foreach (var w in d.wheels)
+            {
+                w.powered = true;
+                w.motor = motor;
+                w.relaxLenM = 0.02f;          // PHY-01: ~0.6 r for a foam-insert RC tyre
+                w.rollCrr = 0.015f;           // PHY-02
+                w.bearingNm = 0.002f;
+                w.bearingNmsPerRad = 1e-5f;
+                // The PhysX wheel's leftover friction, spun by the phantom
+                // torque that keeps its park constraint released, pushes the
+                // car forward by ~0.04 N per wheel at the legacy 0.01 — 10 % of
+                // this car's coast-down losses (measured, RC suite R0). A
+                // twentieth of it is noise.
+                w.brushEps = 0.0005f;
+            }
+
+            // Pi 5 + sensors + servo idle, from the pack whatever the motors do.
+            d.batteries[0].auxLoadA = 0.7f;
             return d;
         }
     }

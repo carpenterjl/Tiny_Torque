@@ -28,7 +28,7 @@
 extern "C" {
 #endif
 
-#define TT_PARAMS_VERSION 1u
+#define TT_PARAMS_VERSION 2u   /* 2: odo_lead_comp gone (SEN-02); allocator block (FW-06) */
 
 typedef struct {
     uint32_t version;              /* TT_PARAMS_VERSION                       */
@@ -68,13 +68,24 @@ typedef struct {
     float    cal_scale;            /* v_ground = v_enc * (1 + cal_scale)     */
     float    cal_brake;            /* extra fractional slip per unit brake    */
 
-    /* sim artefacts, each to be deleted with the sim fix named beside it */
-    uint32_t odo_lead_comp;        /* 1 = correct the sim encoder's
-                                      left-endpoint integration bias (SEN-02) */
+    /* torque allocation (FW-06, core/tt_alloc.h) */
+    float    track_rear_m;
+    float    cg_height_m;          /* for the front/rear split under accel    */
+    float    front_weight_frac;    /* static front-axle share of the weight   */
+    float    wheel_drive_max_nm;   /* per wheel, motoring; 0 = unlimited      */
+    float    wheel_regen_max_nm;   /* per wheel, braking;  0 = unlimited      */
+    float    slip_max;             /* TC/ABS slip threshold; 0 = limiter off  */
+    float    slip_v_min;           /* m/s: below, slip is an absolute speed   */
+    float    slip_gain;            /* torque cut per unit of excess slip      */
+    float    slip_recover_s;       /* time constant of the cut's recovery     */
+    float    slip_stiffness;       /* tyre C_kappa / F_z (1/unit slip): how far a
+                                      DRIVEN odometry wheel slips under its own
+                                      torque, for the odometer; 0 = ignore     */
 } TtParams;
 
-/* Defaults generated from Controllers/params/opus_vector.json. */
-extern const TtParams tt_params_opus_vector;
+/* Defaults generated from Controllers/params/<car>.json. */
+extern const TtParams tt_params_opus_vector;       /* brushed motor, hobby ESC */
+extern const TtParams tt_params_opus_vector_foc;   /* four FOC wheel motors    */
 
 /* Range checks. Returns 0 when the set is usable, else the number of fields
  * that are not; a target must refuse to arm on a non-zero result. */
