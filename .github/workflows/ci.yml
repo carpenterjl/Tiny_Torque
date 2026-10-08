@@ -82,3 +82,5 @@ jobs:
         run: node Tools/verify.js
       - name: Generated parameters are up to date
         run: node Tools/gen_params.js --check
+      - name: Log decoder self-test
+        run: node Tools/tt_log_decode.js --selftest

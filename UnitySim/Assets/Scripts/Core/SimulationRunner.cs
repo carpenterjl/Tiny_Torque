@@ -75,6 +75,16 @@ namespace AIHWSim.Core
         private CsvLogger _csv;
 
         private const int CarSteerSlot = 6;   // CTRL_STEER_ACTUATOR
+
+        private static readonly string[] InChannels =
+        {
+            "in/gyro_x", "in/gyro_y", "in/gyro_z",
+            "in/accel_x", "in/accel_y", "in/accel_z",
+            "in/wheel_vel_0", "in/wheel_vel_1", "in/wheel_vel_2", "in/wheel_vel_3",
+            "in/setpoint_0", "in/setpoint_1", "in/setpoint_2", "in/setpoint_3",
+            "out/act_0", "out/act_1", "out/act_2", "out/act_3",
+            "out/act_4", "out/act_5", "out/act_6", "out/act_7",
+        };
         private int _decimation = 1;
         private int _physCounter;
 
@@ -94,6 +104,14 @@ namespace AIHWSim.Core
         private readonly float[] _gyro = new float[3];
         private readonly float[] _accel = new float[3];
         private readonly float[] _actuators = new float[8];
+
+        // VAL-04: the frame the controller actually received this tick (FLU for
+        // a v7 controller, native otherwise) and the actuator vector it
+        // returned, before any host-side conversion. Logged as in/* and out/*,
+        // so a run can be replayed against the firmware offline.
+        private readonly float[] _inGyro = new float[3];
+        private readonly float[] _inAccel = new float[3];
+        private readonly float[] _rawOut = new float[8];
 
         private string[] _debugNames = Array.Empty<string>();
 
@@ -346,7 +364,54 @@ namespace AIHWSim.Core
             };
             if (_loader != null && !string.IsNullOrEmpty(_loader.SourcePath) && File.Exists(_loader.SourcePath))
                 md["dll_write_utc"] = File.GetLastWriteTimeUtc(_loader.SourcePath).ToString("o");
+            AddIdentity(md);
             return md;
+        }
+
+        /// <summary>
+        /// VAL-04: everything needed to say which firmware, ABI, car, sensors
+        /// and simulator produced a log, so two sidecars can be compared and a
+        /// run reproduced. Hashes rather than timestamps: a rebuild that changed
+        /// nothing keeps its hash.
+        /// </summary>
+        private void AddIdentity(Dictionary<string, string> md)
+        {
+            md["unity_version"] = Application.unityVersion;
+            md["scene"] = UnityEngine.SceneManagement.SceneManager.GetActiveScene().name;
+            md["time_base"] = "integer_us";
+            if (_loader != null && _loader.IsLoaded)
+            {
+                md["abi_version"] = _loader.AbiVersion.ToString();
+                md["frame"] = _loader.IsV7 ? "FLU" : "unity";
+                try { md["dll_sha256"] = Sha256(File.ReadAllBytes(_loader.SourcePath)); }
+                catch (Exception) { /* the file may be mid-rebuild; leave it out */ }
+            }
+            var design = GameFlow.ActiveDesign;
+            if (design != null)
+            {
+                md["design_name"] = design.name;
+                md["design_sha256"] = Sha256(System.Text.Encoding.UTF8.GetBytes(JsonUtility.ToJson(design)));
+            }
+            if (sensorRig != null)
+            {
+                var sb = new System.Text.StringBuilder();
+                var sensors = sensorRig.Sensors;
+                for (int i = 0; i < sensors.Count; i++)
+                {
+                    var sc = sensors[i];
+                    if (i > 0) sb.Append("; ");
+                    sb.Append(sc.sensorName).Append(':').Append(sc.Type)
+                      .Append(" rate=").Append(sc.updateRateHz.ToString("0.###"))
+                      .Append("Hz lat=").Append(sc.latencyMs.ToString("0.###")).Append("ms");
+                }
+                md["sensors"] = sb.ToString();
+            }
+        }
+
+        private static string Sha256(byte[] data)
+        {
+            using (var h = System.Security.Cryptography.SHA256.Create())
+                return BitConverter.ToString(h.ComputeHash(data)).Replace("-", "").ToLowerInvariant();
         }
 
         private string AbsoluteDllPath() =>
@@ -364,6 +429,14 @@ namespace AIHWSim.Core
                     Debug.LogWarning($"[SimRunner] ctrl_init returned {rc}");
                 _debugNames = _loader.ReadDebugNames();
                 ConfigureControllerSensors();
+                if (_csv != null)
+                {
+                    // A reload mid-session: the sidecar names what is running now.
+                    var md = new Dictionary<string, string>();
+                    AddIdentity(md);
+                    foreach (var kv in md) _csv.SetMetadata(kv.Key, kv.Value);
+                    _csv.SetMetadata("control_hz", controlRateHz.ToString());
+                }
             }
             else
             {
@@ -503,6 +576,7 @@ namespace AIHWSim.Core
             Hub.RegisterChannel("cmd/left");
             Hub.RegisterChannel("cmd/right");
             Hub.RegisterChannel("imu/gyro_z");
+            foreach (string n in InChannels) Hub.RegisterChannel(n);
             Hub.RegisterChannel("cmd/steer_deg");
             Hub.RegisterChannel("cmd/brake");
             Hub.RegisterChannel("veh/speed");
@@ -619,6 +693,21 @@ namespace AIHWSim.Core
             // 2. Operator setpoints.
             float[] sp = _setpointSource != null ? _setpointSource.Setpoints : null;
 
+            // The IMU in the frame this controller is owed (ABI-04: FLU for v7).
+            if (_loader != null && _loader.IsV7)
+            {
+                Vector3 g = FluFrame.Rate(new Vector3(_gyro[0], _gyro[1], _gyro[2]));
+                Vector3 a = FluFrame.Vector(new Vector3(_accel[0], _accel[1], _accel[2]));
+                _inGyro[0] = g.x; _inGyro[1] = g.y; _inGyro[2] = g.z;
+                _inAccel[0] = a.x; _inAccel[1] = a.y; _inAccel[2] = a.z;
+            }
+            else
+            {
+                Array.Copy(_gyro, _inGyro, 3);
+                Array.Copy(_accel, _inAccel, 3);
+            }
+            Array.Clear(_rawOut, 0, _rawOut.Length);
+
             // 3. Commands: Manual reads human input directly; Autonomous calls the DLL.
             Array.Clear(_actuators, 0, _actuators.Length);
             CtrlOutputs outputs = default;
@@ -633,16 +722,7 @@ namespace AIHWSim.Core
                 CtrlInputs inputs = default;
                 inputs.time_s = _simTime;
                 inputs.dt_s = controlDt;
-                if (v7)
-                {
-                    // ABI-04: FLU for a v7 controller (see FluFrame).
-                    Vector3 g = FluFrame.Rate(new Vector3(_gyro[0], _gyro[1], _gyro[2]));
-                    Vector3 a = FluFrame.Vector(new Vector3(_accel[0], _accel[1], _accel[2]));
-                    inputs.gyro[0] = g.x; inputs.gyro[1] = g.y; inputs.gyro[2] = g.z;
-                    inputs.accel[0] = a.x; inputs.accel[1] = a.y; inputs.accel[2] = a.z;
-                }
-                else
-                    for (int i = 0; i < 3; i++) { inputs.gyro[i] = _gyro[i]; inputs.accel[i] = _accel[i]; }
+                for (int i = 0; i < 3; i++) { inputs.gyro[i] = _inGyro[i]; inputs.accel[i] = _inAccel[i]; }
                 for (int i = 0; i < 4; i++) inputs.wheel_vel[i] = _wheelVel[i];
                 if (sp != null) for (int i = 0; i < 4; i++) inputs.setpoint[i] = sp[i];
 
@@ -681,7 +761,7 @@ namespace AIHWSim.Core
                     }
                 }
 
-                for (int i = 0; i < 8; i++) _actuators[i] = outputs.actuator[i];
+                for (int i = 0; i < 8; i++) _actuators[i] = _rawOut[i] = outputs.actuator[i];
 
                 // v7 steers in road-wheel radians, + = left; the car takes a
                 // servo fraction, + = right.
@@ -739,6 +819,16 @@ namespace AIHWSim.Core
             Hub.SetValue("cmd/left", _actuators[0]);
             Hub.SetValue("cmd/right", _actuators[1]);
             Hub.SetValue("imu/gyro_z", _gyro[2]);
+            // VAL-04: the full input frame the controller saw, and its raw output.
+            Hub.SetValue(InChannels[0], _inGyro[0]);
+            Hub.SetValue(InChannels[1], _inGyro[1]);
+            Hub.SetValue(InChannels[2], _inGyro[2]);
+            Hub.SetValue(InChannels[3], _inAccel[0]);
+            Hub.SetValue(InChannels[4], _inAccel[1]);
+            Hub.SetValue(InChannels[5], _inAccel[2]);
+            for (int i = 0; i < 4; i++) Hub.SetValue(InChannels[6 + i], _wheelVel[i]);
+            for (int i = 0; i < 4; i++) Hub.SetValue(InChannels[10 + i], sp != null ? sp[i] : 0f);
+            for (int i = 0; i < 8; i++) Hub.SetValue(InChannels[14 + i], _rawOut[i]);
             Hub.SetValue("mode", Mode == DriveMode.Manual ? 0f : 1f);
 
             // Car command channels (cmd/steer_deg, cmd/brake, cmd/<motor>/volt) are

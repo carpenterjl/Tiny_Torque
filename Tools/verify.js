@@ -6,8 +6,10 @@
  * It checks the browser-side copies against the actual repo: a real vehicle
  * JSON round-trips without losing a field, the stock design matches
  * VehicleDesign.Default(), the motor maths reproduces MotorModel's closed
- * forms, and the derived plant constants land on the values written into
- * Controllers/opus_mission/mission_cfg.h. Exit code 0 = everything agrees.
+ * forms, and — read from the SOURCES, not retyped here (VAL-10) — the Opus
+ * firmware's parameters (Controllers/params/opus_vector.json) agree with the
+ * Opus preset the sim builds (UnitySim/.../Garage/VehiclePresets.cs).
+ * Exit code 0 = everything agrees.
  */
 const fs = require('fs');
 const path = require('path');
@@ -128,21 +130,66 @@ ok('split: kt and gear unchanged', split.kt === real.kt && split.gearRatio === r
 const rejoined = M.combineFromMotors(split, 2);
 ok('combine undoes split', near(rejoined.resistance, 0.030, 1e-12) && near(rejoined.noLoadCurrent, 1.8, 1e-12));
 
-console.log('\n=== 5. Plant constants vs mission_cfg.h =======================');
-// mission_cfg.h: VE_KT 0.0025130, VE_GEAR 11.2, VE_WHEEL_R 0.033, VE_ETA 0.85,
-//   VE_BEMF_V_PER_MS = 0.8529, VE_FORCE_PER_AMP = 0.7250, VE_MASS_EFF 2.873 (m 2.1315)
-// J is the Opus preset's per-motor rotorInertia, 3.22e-6 (half the real 6.44e-6):
-//   m_rot = 2 * 3.22e-6 * 11.2^2 / 0.033^2 = 0.742 kg
+console.log('\n=== 5. Firmware parameters vs the Opus preset (read from source) =');
+// VAL-10: both sides are PARSED — the C# preset and the firmware's JSON — so a
+// value edited on one side and not the other fails here. (The old version of
+// this section compared the JS against numbers typed into this file, which is
+// how the mission's rotor inertia once drifted from the preset: BUG-12.)
+const presetSrc = fs.readFileSync(path.join(REPO, 'UnitySim', 'Assets', 'Scripts', 'Garage', 'VehiclePresets.cs'), 'utf8');
+const opusStart = presetSrc.indexOf('private static VehicleDesign OpusVector()');
+const opusEnd = presetSrc.indexOf('private static', opusStart + 10);
+const opusSrc = opusStart >= 0 ? presetSrc.slice(opusStart, opusEnd > 0 ? opusEnd : undefined) : '';
+function csField(re, what) {
+    const m = opusSrc.match(re);
+    ok('preset: found ' + what, !!m);
+    return m ? parseFloat(m[1]) : NaN;
+}
+const pre = {
+    kt: csField(/motor\.kt\s*=\s*([-0-9.eE]+)f/, 'motor.kt'),
+    resistance: csField(/motor\.resistance\s*=\s*([-0-9.eE]+)f/, 'motor.resistance'),
+    gearRatio: csField(/motor\.gearRatio\s*=\s*([-0-9.eE]+)f/, 'motor.gearRatio'),
+    rotorInertia: csField(/motor\.rotorInertia\s*=\s*([-0-9.eE]+)f/, 'motor.rotorInertia'),
+    efficiency: csField(/motor\.efficiency\s*=\s*([-0-9.eE]+)f/, 'motor.efficiency'),
+    maxVoltage: csField(/motor\.maxVoltage\s*=\s*([-0-9.eE]+)f/, 'motor.maxVoltage'),
+    maxCurrent: csField(/motor\.maxCurrent\s*=\s*([-0-9.eE]+)f/, 'motor.maxCurrent'),
+    wheelRadius: csField(/w\.radius\s*=\s*([-0-9.eE]+)f/, 'w.radius'),
+    steerDeg: csField(/w\.steerAngle\s*=\s*([-0-9.eE]+)f/, 'w.steerAngle'),
+};
+const fw = JSON.parse(fs.readFileSync(path.join(REPO, 'Controllers', 'params', 'opus_vector.json'), 'utf8'));
+const RL = 2;
+console.log('    preset: kt=' + pre.kt + ' R=' + pre.resistance + ' gear=' + pre.gearRatio + ' J=' + pre.rotorInertia +
+    ' eta=' + pre.efficiency + ' r=' + pre.wheelRadius + ' steer=' + pre.steerDeg + ' deg');
+ok('firmware kt = preset motor.kt', near(fw.kt[RL], pre.kt, 1e-9), fw.kt[RL] + ' vs ' + pre.kt);
+ok('firmware gear = preset gearRatio', near(fw.gear[RL], pre.gearRatio, 1e-9));
+ok('firmware wheel radius = preset wheel radius', near(fw.wheel_radius_m, pre.wheelRadius, 1e-9));
+ok('firmware eta_drive = preset efficiency', near(fw.eta_drive, pre.efficiency, 1e-9));
+// eta_back mirrors the sim multiplying by eta when back-driven (BUG-05) until ACT-04.
+ok('firmware eta_back = 1/efficiency (sim BUG-05 mirror)', near(fw.eta_back, 1 / pre.efficiency, 1e-6),
+    fw.eta_back + ' vs ' + (1 / pre.efficiency).toFixed(7));
+ok('firmware full lock = preset steerAngle', near(fw.max_steer_rad, pre.steerDeg * Math.PI / 180, 1e-6));
+ok('firmware v_rail_nom = preset motor.maxVoltage', near(fw.v_rail_nom, pre.maxVoltage, 1e-9));
+const nDriven = fw.driven_mask.length;
+const mEffExpect = fw.mass_kg + nDriven * pre.rotorInertia * pre.gearRatio * pre.gearRatio /
+    (pre.wheelRadius * pre.wheelRadius);
+ok('firmware mass_eff = m + N*J*gear^2/r^2 from the preset J', near(fw.mass_eff_kg, mEffExpect, 5e-3),
+    fw.mass_eff_kg + ' vs ' + mEffExpect.toFixed(4));
+const regenExpect = nDriven * pre.kt * pre.kt * pre.gearRatio * pre.gearRatio * pre.efficiency /
+    (pre.resistance * pre.wheelRadius * pre.wheelRadius);
+ok('firmware regen_n_per_ms = N*kt^2*gear^2*eta/(R*r^2) (ESC short brake)',
+    near(fw.regen_n_per_ms, regenExpect, 0.05), fw.regen_n_per_ms + ' vs ' + regenExpect.toFixed(3));
+ok('mission_cfg.h no longer duplicates vehicle constants (FW-07)',
+    !/#define\s+VE_/.test(fs.readFileSync(path.join(REPO, 'Controllers', 'opus_mission', 'mission_cfg.h'), 'utf8')));
+
 const p = M.plant({
-    kt: 0.0025130, gearRatio: 11.2, wheelRadius: 0.033, resistance: 0.060,
-    efficiency: 0.85, motorCount: 2, rotorInertia: split.rotorInertia, mass: 2.1315,
-    maxVoltage: 7.4, maxCurrent: 30
+    kt: pre.kt, gearRatio: pre.gearRatio, wheelRadius: pre.wheelRadius, resistance: pre.resistance,
+    efficiency: pre.efficiency, motorCount: nDriven, rotorInertia: pre.rotorInertia, mass: fw.mass_kg,
+    maxVoltage: pre.maxVoltage, maxCurrent: pre.maxCurrent
 });
 console.log('    bemf=' + p.bemfVPerMs.toFixed(4) + ' V/(m/s)  forcePerAmp=' + p.forcePerAmp.toFixed(4) +
     ' N/A  massEff=' + p.massEff.toFixed(4) + ' kg  tauMech=' + p.tauMech.toFixed(3) + ' s');
-ok('VE_BEMF_V_PER_MS = 0.8529', near(p.bemfVPerMs, 0.8529, 5e-4), p.bemfVPerMs.toFixed(4));
-ok('VE_FORCE_PER_AMP = 0.7250', near(p.forcePerAmp, 0.7250, 5e-4), p.forcePerAmp.toFixed(4));
-ok('VE_MASS_EFF = 2.873', near(p.massEff, 2.873, 5e-3), p.massEff.toFixed(4));
+ok('back-EMF 0.8529 V per m/s (derived_parameters.md)', near(p.bemfVPerMs, 0.8529, 5e-4), p.bemfVPerMs.toFixed(4));
+ok('0.7250 N per motor-amp (derived_parameters.md)', near(p.forcePerAmp, 0.7250, 5e-4), p.forcePerAmp.toFixed(4));
+ok('plant mass_eff = firmware mass_eff_kg', near(p.massEff, fw.mass_eff_kg, 5e-3), p.massEff.toFixed(4));
 
 // Inverse model: at 4.5 m/s cruise the feed-forward should dominate.
 const inv = M.voltageForForce(p, 4.5, 2.9);   // 2.9 N ≈ i22 coast drag
@@ -171,13 +218,13 @@ ok('anti-windup keeps the integrator bounded', wound < 1.2 && pidW.integrator > 
 ok('dt<=0 returns the last clamped output', near(new Sim.Pid(1,0,0,-1,1).update(1,0,0), 0, 1e-9));
 
 console.log('\n=== 7. Closed-loop sim sanity =================================');
-// Reference car with its shipped gains (GA_SPD_KP 12, GA_SPD_KI 30) and the
-// measured drag polynomial (VE_DRAG_C0/C1/C2).
+// Reference car with its shipped gains (GA_SPD_KP 12, GA_SPD_KI 30), the
+// preset's motor and the firmware's measured drag polynomial.
 const refPlant = {
-    kt: 0.0025130, gearRatio: 11.2, wheelRadius: 0.033, resistance: 0.060,
-    efficiency: 0.85, motorCount: 2, rotorInertia: 3.22e-6, mass: 2.1315,
-    maxVoltage: 7.4, maxCurrent: 30,
-    dragC0: 0.90, dragC1: 0.38, dragC2: 0.015, tractionEff: 0.99
+    kt: pre.kt, gearRatio: pre.gearRatio, wheelRadius: pre.wheelRadius, resistance: pre.resistance,
+    efficiency: pre.efficiency, motorCount: nDriven, rotorInertia: pre.rotorInertia, mass: fw.mass_kg,
+    maxVoltage: pre.maxVoltage, maxCurrent: pre.maxCurrent,
+    dragC0: fw.drag_c0, dragC1: fw.drag_c1, dragC2: fw.drag_c2, tractionEff: fw.traction_eff
 };
 const run = Sim.runSpeedStep({ duration: 4, stepTime: 0.5, vTarget: 4.5, plant: refPlant });
 const vEnd = run.v[run.v.length - 1];
@@ -235,7 +282,26 @@ bad5.controllerDll = '../evil.dll';
 ok('flags a controllerDll with path separators',
     S.validate(bad5).some(v => v.level === 'error' && /SafeDllName/.test(v.msg)));
 
-console.log('\n=== 10. Filename sanitization =================================');
+console.log('\n=== 10. Generated firmware sources ============================');
+// "Compile and run the generated C" (VAL-10) is CTest's job (tt_core_unit,
+// opus_mission_bench); here: the generated defaults are current, and the log
+// schema the decoder reads is the one the firmware was built with.
+const gen = require(path.join(REPO, 'Tools', 'gen_params.js'));
+const genText = gen.generate(path.join(REPO, 'Controllers', 'params', 'opus_vector.json'));
+const genFile = fs.readFileSync(path.join(REPO, 'Controllers', 'core', 'params_opus_vector.c'), 'utf8').replace(/\r\n/g, '\n');
+ok('core/params_opus_vector.c is up to date with its JSON', genText === genFile);
+const hdr = fs.readFileSync(path.join(REPO, 'Controllers', 'core', 'tt_params.h'), 'utf8');
+const structBody = hdr.slice(hdr.indexOf('typedef struct {'), hdr.indexOf('} TtParams;'));
+const hdrFields = [...structBody.matchAll(/^\s*(?:float|uint32_t)\s+([^;]+);/gm)]
+    .flatMap(m => m[1].split(',').map(x => x.trim().replace(/\[.*\]$/, '')));
+ok('gen_params.js FIELDS match the TtParams struct, in order',
+    JSON.stringify(hdrFields) === JSON.stringify(gen.FIELDS.map(f => f[0])), hdrFields.length + ' fields');
+const dec = require(path.join(REPO, 'Tools', 'tt_log_decode.js'));
+const logNames = dec.readDef(fs.readFileSync(path.join(REPO, 'Controllers', 'opus_mission', 'opus_log.def'), 'utf8'));
+ok('opus_log.def: <= 16 channels, starting with state', logNames.length <= 16 && logNames[0] === 'state',
+    logNames.length + ' channels');
+
+console.log('\n=== 11. Filename sanitization =================================');
 ok('name → file name', S.fileNameFor({ name: 'My Car' }) === 'My Car.json');
 ok('invalid chars replaced', S.fileNameFor({ name: 'a/b:c' }) === 'a_b_c.json');
 ok('empty name falls back', S.fileNameFor({ name: '   ' }) === 'vehicle.json');
