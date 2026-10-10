@@ -10,6 +10,10 @@
  *      transfer of the current acceleration), when both axles are driven.
  *   2. Left/right split per axle: equal halves (an open differential) plus
  *      the yaw moment as a force couple across the track.
+ *   2b. A grip budget (FW-13): no wheel is asked for more than
+ *      TT_ALLOC_GRIP_USE of tyre_mu times its load, estimated from the
+ *      acceleration the car HAS (load moves with the body, a command later);
+ *      what one wheel cannot carry goes to the wheels that can.
  *   3. Per-wheel limits, motoring and regen separately.
  *   4. A slip limiter (traction control driving, ABS braking) against each
  *      wheel's kinematic speed reference from the vehicle speed and yaw rate.
@@ -42,6 +46,8 @@ typedef struct {
     float v_mps;                   /* vehicle speed at the rear-axle centre  */
     float yaw_rate;                /* rad/s, FLU (+ = left)                  */
     float ax_mps2;                 /* longitudinal acceleration estimate     */
+    float ax_meas_mps2;            /* ... measured (accelerometer), for loads */
+    float ay_meas_mps2;            /* lateral, measured, FLU (+ = left)      */
     float wheel_omega[TT_MAX_WHEELS]; /* rad/s at the wheel, + = forward      */
     uint8_t omega_valid[TT_MAX_WHEELS];
 } TtAllocIn;
@@ -58,6 +64,13 @@ void tt_alloc_step(TtAlloc *a, const TtParams *p, const TtVehReq *req,
  * gearbox has been measured (ACT-07). */
 #define TT_ALLOC_LASH_BAND_NM   0.02f
 #define TT_ALLOC_LASH_SLEW_NMS  4.0f
+
+/* Share of tyre_mu * Fz a wheel may be asked for: the rest is margin for the
+ * load estimate, the surface and the tyre's own spread. Past its peak a tyre
+ * falls to its sliding force and stays there under a fraction of the torque
+ * that put it there, so the margin is not generous: it is the difference
+ * between a stop and a slide. */
+#define TT_ALLOC_GRIP_USE       0.90f
 
 #ifdef __cplusplus
 }

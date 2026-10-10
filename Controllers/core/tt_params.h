@@ -28,7 +28,8 @@
 extern "C" {
 #endif
 
-#define TT_PARAMS_VERSION 2u   /* 2: odo_lead_comp gone (SEN-02); allocator block (FW-06) */
+#define TT_PARAMS_VERSION 3u   /* 2: odo_lead_comp gone (SEN-02); allocator block (FW-06)
+                                  3: cmd_delay_s, tyre_mu, steer_lag_s (FW-13) */
 
 typedef struct {
     uint32_t version;              /* TT_PARAMS_VERSION                       */
@@ -81,6 +82,17 @@ typedef struct {
     float    slip_stiffness;       /* tyre C_kappa / F_z (1/unit slip): how far a
                                       DRIVEN odometry wheel slips under its own
                                       torque, for the odometer; 0 = ignore     */
+
+    /* timing (FW-13) */
+    float    cmd_delay_s;          /* from a tick's measurements to its command
+                                      acting, beyond the drive's own lag: one
+                                      period on a timer-latched output        */
+    float    tyre_mu;              /* peak tyre-road friction; the allocator
+                                      asks no wheel for more than a share of
+                                      mu * its load (tt_alloc.h); 0 = no budget */
+    float    steer_lag_s;          /* yaw response lag behind the steering
+                                      command (servo + tyres), as a first-order
+                                      time constant: the heading still to come */
 } TtParams;
 
 /* Defaults generated from Controllers/params/<car>.json. */

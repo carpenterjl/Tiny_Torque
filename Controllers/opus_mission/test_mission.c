@@ -21,6 +21,11 @@
  * core takes dt from timestamps and states every threshold as a time, so its
  * loop rate is the scheduler's business (FW-05, TIM-06).
  *
+ * It then runs at 100 Hz with every command acting one and two periods late
+ * (a timer-latched output, FW-13), with the delay in the parameters, and
+ * every leg must land within TOL_DELAY_MM of the run without it: the core
+ * predicts over the commands in flight, so a known delay costs nothing.
+ *
  * Build:
  *   gcc -std=c11 -O2 -I opus_mission -I common -I core -o test_mission \
  *       opus_mission/test_mission.c opus_mission/opus_mission.c common/pid.c \
@@ -48,6 +53,11 @@
 #define TOL_STOP_ERR_MM    5.0   /* the controller's own stop estimate   */
 #define TOL_ODO_DRIFT_MM  60.0   /* odometer vs true path, whole mission */
 #define PLANT_I_MAX_A     30.0   /* per motor, the ESC's limit           */
+#define TOL_DELAY_MM       2.0   /* a delayed run vs the undelayed one (FW-13) */
+#define TOL_DELAY_DEG      0.15  /* the bench's gyro already lags a tick */
+
+/* What one run measured, for comparing runs. */
+typedef struct { double leg_a, turn, leg_b, brake, total; } Legs;
 
 typedef struct {
     double x, z, psi;               /* world pose, psi positive = left */
@@ -63,8 +73,10 @@ static int32_t counts(const TtParams *p, int w, double accum)
 
 /* glitch: from 1 s into the first measured leg, the left odometry encoder
  * reads 5000 counts ahead (one miscount that stays in the counter, VAL-11).
- * The mission must reject it without losing distance or heading. */
-static int run(double rate_hz, int glitch)
+ * The mission must reject it without losing distance or heading.
+ * delay: each command acts this many ticks after the one it was computed on,
+ * and the parameters say so (FW-13). */
+static int run(double rate_hz, int glitch, int delay, Legs *out_legs)
 {
     TtParams bench = tt_params_opus_vector;
     const TtParams *pp = &bench;
@@ -79,12 +91,16 @@ static int run(double rate_hz, int glitch)
     double psi_dot_prev = 0.0;      /* last step's yaw rate, for the gyro */
     uint32_t tick = 0;
     int32_t glitch_off = 0;
+    double a_prev = 0.0;            /* last step's acceleration, for the accelerometer */
+    TtCmd  fly[16];                 /* commands in flight, oldest first */
+    int    n_fly = 0;
 
     /* Calibration is measured against a plant, and this plant has no tyre
      * slip: the sim's measured brake-slip term would make the odometer
      * over-read here by exactly the slip the bench does not model. */
     bench.cal_scale = 0.0f;
     bench.cal_brake = 0.0f;
+    bench.cmd_delay_s = (float)(delay / rate_hz);
 
     memset(&p, 0, sizeof(p));
     opus_init(&st, pp, (float)rate_hz);
@@ -110,6 +126,7 @@ static int run(double rate_hz, int glitch)
          * positive, no sign to learn. */
         m.imu.st.valid = 1;
         m.imu.gyro[2] = (float)psi_dot_prev;
+        m.imu.accel[0] = (float)a_prev;
         m.imu.accel[2] = 9.81f;
         m.batt.st.valid = 1;
         m.batt.v = 7.4f;
@@ -117,6 +134,15 @@ static int run(double rate_hz, int glitch)
 
         opus_step(&st, &m, &c);
         tick++;
+        /* The plant gets the command from `delay` ticks ago (zeros until the
+         * first one arrives); the marks below still follow the firmware. */
+        fly[n_fly++] = c;
+        if (n_fly > delay) {
+            c = fly[0];
+            memmove(fly, fly + 1, sizeof(fly[0]) * (size_t)(--n_fly));
+        } else {
+            memset(&c, 0, sizeof(c));
+        }
         if (glitch && glitch_off == 0 && st.phase == OPUS_CRUISE_A && st.phase_t > 1.0f)
             glitch_off = 5000;
 
@@ -179,6 +205,7 @@ static int run(double rate_hz, int glitch)
             p.path += 0.5 * (fabs(p.v) + fabs(v_next)) * dt;
         }
         p.v += a * dt;
+        a_prev = a;
         /* Static friction: below a few mm/s, a drive force smaller than the
          * Coulomb breakaway cannot keep the car moving. Without this the plant
          * glides forever at millimetres per second and nothing ever stops. */
@@ -196,7 +223,8 @@ static int run(double rate_hz, int glitch)
         if (st.phase == OPUS_DONE || st.phase == OPUS_FAULT) break;
     }
 
-    printf("=== Opus mission bench @ %.0f Hz ===\n", rate_hz);
+    printf("=== Opus mission bench @ %.0f Hz%s ===\n", rate_hz,
+           delay ? (delay == 1 ? ", commands one period late" : ", commands two periods late") : "");
     printf("terminated in phase %d after %.2f s, fault=0x%04X\n\n", st.phase, t, st.fault);
 
     if (st.phase != OPUS_DONE) {
@@ -213,6 +241,10 @@ static int run(double rate_hz, int glitch)
         double total  = (mark_stop - mark_turn_exit - MI_STOP_FROM_EXIT) * 1000.0;
         double drift  = (opus_odo_m(&st) - p.path) * 1000.0;
         int failures = 0;
+        if (out_legs) {
+            out_legs->leg_a = leg_a; out_legs->turn = turn; out_legs->leg_b = leg_b;
+            out_legs->brake = brake; out_legs->total = total;
+        }
 
 #define CHECK(name, cond) do { if (!(cond)) { printf("FAIL: %s\n", name); failures++; } } while (0)
 
@@ -248,11 +280,35 @@ static int run(double rate_hz, int glitch)
     }
 }
 
+/* FW-13: the same mission with a known command delay must land where the
+ * undelayed one does. */
+static int compare(const char *what, const Legs *a, const Legs *b)
+{
+    int f = 0;
+#define NEAR(name, x, y, tol) do { \
+        double d_ = (x) - (y); \
+        if (d_ > (tol) || d_ < -(tol)) { printf("FAIL: %s, %s %+.2f vs %+.2f\n", what, name, x, y); f++; } \
+    } while (0)
+    NEAR("constant-velocity leg mm", a->leg_a, b->leg_a, TOL_DELAY_MM);
+    NEAR("turn deg",                 a->turn,  b->turn,  TOL_DELAY_DEG);
+    NEAR("post-turn leg mm",         a->leg_b, b->leg_b, TOL_DELAY_MM);
+    NEAR("braking distance mm",      a->brake, b->brake, TOL_DELAY_MM);
+    NEAR("total from turn exit mm",  a->total, b->total, TOL_DELAY_MM);
+#undef NEAR
+    printf("%s: %s\n\n", what, f ? "differs" : "within tolerance of the undelayed run");
+    return f;
+}
+
 int main(void)
 {
     int fails = 0;
-    fails += run(100.0, 0);
-    fails += run(500.0, 0);
-    fails += run(100.0, 1);
+    Legs base, late1, late2;
+    fails += run(100.0, 0, 0, &base);
+    fails += run(500.0, 0, 0, NULL);
+    fails += run(100.0, 1, 0, NULL);
+    fails += run(100.0, 0, 1, &late1);
+    fails += run(100.0, 0, 2, &late2);
+    fails += compare("one period late", &late1, &base);
+    fails += compare("two periods late", &late2, &base);
     return fails ? 1 : 0;
 }

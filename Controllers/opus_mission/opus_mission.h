@@ -19,6 +19,16 @@
 #include "tt_params.h"
 #include "tt_alloc.h"
 
+/* Longest command delay the prediction carries, in ticks (FW-13). */
+#define OPUS_PRED_SLOTS 16
+
+/* One tick's command, as far as the estimators need it back. */
+typedef struct {
+    float a;               /* acceleration asked for, m/s^2 */
+    float r;               /* yaw rate asked for, rad/s, + = left */
+    float t_odo[2];        /* torque on the odometry pair (left, right), N*m */
+} OpusSent;
+
 /* Mission phases. The numeric values are published as log channel `state` and
  * are matched by the game's MissionHud, so they are part of the interface —
  * append only. */
@@ -65,6 +75,17 @@ typedef struct {
     float  v_meas;         /* m/s from the tick delta */
     float  v_rear;         /* m/s from the driven wheels — slip diagnostic only */
     float  v_filt;         /* lightly filtered, for the creep loop */
+    float  v_est;          /* m/s, car speed: accelerometer + odometer (FW-13) */
+    float  ax_prev;        /* last tick's forward acceleration, m/s^2 */
+    float  pitch;          /* rad, nose down +, from the gyro (FW-13) */
+    float  ax_load;        /* m/s^2, ax as the axle loads have followed it */
+    int    odo_slip;       /* the odometry pair disagrees with v_est this tick */
+    float  v_pred;         /* v_est carried over the commands in flight */
+    float  s_pred;         /* metres the car covers while they land */
+    float  psi_fly;        /* rad the car turns while they land */
+    float  r_cmd;          /* yaw rate this tick asked for */
+    OpusSent sent[OPUS_PRED_SLOTS];  /* what was asked for, newest last */
+    int    sent_n;         /* ticks of it held */
     float  psi;            /* rad, heading since arm; POSITIVE = LEFT */
     float  psi_dot;        /* rad/s, fused */
     float  psi_dot_f;      /* low-passed — what the loops and exit tests use */

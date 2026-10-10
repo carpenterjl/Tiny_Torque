@@ -31,3 +31,5 @@ TT_LOG(nav_ok,       "",      "navigation EKF initialised (1) or still waiting (
 TT_LOG(nav_x,        "m",     "EKF position x, UWB site frame")
 TT_LOG(nav_y,        "m",     "EKF position y, UWB site frame")
 TT_LOG(nav_psi_deg,  "deg",   "EKF heading, site frame, + = left")
+TT_LOG(v_est,        "m/s",   "car speed estimate the loops close on (accelerometer + odometer)")
+TT_LOG(v_pred,       "m/s",   "v_est predicted over the command delay")

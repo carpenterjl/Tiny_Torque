@@ -35,6 +35,7 @@ const FIELDS = [
     ['wheel_drive_max_nm', 'f'], ['wheel_regen_max_nm', 'f'],
     ['slip_max', 'f'], ['slip_v_min', 'f'], ['slip_gain', 'f'], ['slip_recover_s', 'f'],
     ['slip_stiffness', 'f'],
+    ['cmd_delay_s', 'f'], ['tyre_mu', 'f'], ['steer_lag_s', 'f'],
 ];
 const WHEELS = { FL: 0, FR: 1, RL: 2, RR: 3 };
 

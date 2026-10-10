@@ -1,7 +1,7 @@
 {
   "_about": "Opus Vector FOC twin firmware parameters (TtParams). The same chassis as opus_vector.json with one geared FOC outrunner per wheel (DEC-02 option B) and no friction brake. Mirrors the 'Opus Vector FOC' preset (VehiclePresets.cs). Motor and drag numbers are DERIVED from that design, not measured: replace them from the V2 motor bench and the R0/R2 coast-downs.",
   "name": "opus_vector_foc",
-  "version": 2,
+  "version": 3,
 
   "wheel_radius_m": 0.033,
   "wheelbase_m": 0.300,
@@ -52,8 +52,16 @@
   "_wheel_regen_max_nm": "kt * gear * 12 A / eta_back",
   "slip_max": 0.08,
   "slip_v_min": 0.3,
-  "slip_gain": 5.0,
+  "slip_gain": 20.0,
+  "_slip_gain": "FW-13: a wheel 5 % past slip_max gets no torque at all. Past its peak this tyre falls to ~0.3 of it and holds a slide under a fifth of the torque that started it: a gentle cut (5 was 1 - 5 * excess) leaves it sliding.",
   "slip_recover_s": 0.05,
   "slip_stiffness": 17.0,
-  "_slip_stiffness": "C_kappa/F_z, MEASURED in the sim (RC suite ID, front tyre tug of war): 19 at 1 % slip falling to 15 at 5 %; 17 is the secant at the ~3 % the mission brakes at (traced: -3 to -3.5 % after a short onset transient). On the car: S7/S10, encoder speed vs ground truth under a known torque."
+  "_slip_stiffness": "C_kappa/F_z, MEASURED in the sim (RC suite ID, front tyre tug of war): 19 at 1 % slip falling to 15 at 5 %; 17 is the secant at the ~3 % the mission brakes at (traced: -3 to -3.5 % after a short onset transient). On the car: S7/S10, encoder speed vs ground truth under a known torque.",
+
+  "cmd_delay_s": 0.010,
+  "_cmd_delay_s": "FW-13: one 100 Hz period. The MCU latches each tick's command out on the next tick's timer edge, so the delay is the same every tick; the twin's design says the same (computeLatencyUs 10000). On the car: VAL-07.",
+  "tyre_mu": 0.9,
+  "_tyre_mu": "FW-13, MEASURED in the sim from the mission's braking traces: a front tyre held -5 % slip at ~0.9 * Fz once the load had moved, and slid at ~0.85 at the onset of braking (before it had). On the car: S7/S10, a braked-wheel pull to the slide.",
+  "steer_lag_s": 0.04,
+  "_steer_lag_s": "FW-13, MEASURED in the sim: the turn's heading lands on its mark with the lag at 40 ms (0 overshoots by 3 deg at 0.89 rad/s, 60 ms falls 1.6 deg short). The servo's 6 Hz / zeta 0.6 loop is ~32 ms of it. On the car: R6 steering step + a yaw step."
 }

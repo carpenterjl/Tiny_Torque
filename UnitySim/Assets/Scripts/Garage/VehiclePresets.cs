@@ -671,6 +671,11 @@ namespace AIHWSim.Garage
             d.linearDamping = 0f;         // drag is modelled (aero, rolling, bearings)
             d.angularDamping = 0f;        // PHY-04: no fake yaw/roll damper; tyres and
                                           // suspension damp the real car
+            // TIM-02/FW-13: the MCU latches each tick's command out on the
+            // next tick's timer edge, so it acts one 100 Hz period after the
+            // measurements it was computed from, every tick the same. The
+            // firmware knows (cmd_delay_s in opus_vector_foc.json).
+            d.computeLatencyUs = 10000;
 
             var motor = MotorParams.Default();
             motor.driveMode = (int)MotorDriveMode.CurrentFoc;

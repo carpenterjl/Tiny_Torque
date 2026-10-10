@@ -101,6 +101,8 @@
 #define GA_TURN_MAX_TRIM   0.30f     /* rad/s, ceiling on that correction */
 #define GA_TURN_CLOSE_RAD  0.010f    /* heading error that counts as "arrived" */
 #define GA_TURN_MAX_EXTRA  1.50f     /* s past the profile before giving up */
+#define GA_TURN_SETTLE_S   0.50f     /* s past the profile: the looser mark applies */
+#define GA_TURN_LOOSE_RAD  0.030f    /* 1.7 deg */
 
 #define GA_HEAD_KP         2.0f      /* 1/s — heading hold on the straights */
 #define GA_HEAD_MAX_RATE   0.30f     /* rad/s, clamp on the heading loop's output */
@@ -117,6 +119,35 @@
 /* Speed low-pass for the creep loop and the stop tests: 23.2 ms is the old
  * per-tick 0.35 blend at 100 Hz (FW-05). */
 #define EN_VFILT_TAU_S     0.023214f
+
+/* ------------------------------------------------- speed and delay (FW-13) --
+ * The loops close on the car's speed, not on its wheels'. Every wheel of the
+ * FOC car is driven, the odometry pair included, and a driven wheel answers
+ * its own torque within a tick: closed on the wheel, a brake demand near the
+ * grip limit slows the front pair, the loop reads the car as slowing and
+ * backs off, the wheels spin up, and it brakes again — a 14 Hz cycle that
+ * locked the fronts once the command came a period late (TIM-02). So the
+ * speed is the accelerometer's integral, pulled toward the odometer with a
+ * time constant; while the two disagree by more than tyre slip can explain,
+ * the odometer is the one that is wrong, and the pull goes slack. */
+#define EN_VOBS_TAU_S      0.10f     /* s, odometer correction of the speed estimate */
+#define EN_VOBS_SLIP_TAU_S 2.0f      /* s, the same while the wheels disagree        */
+#define EN_VOBS_BAND_MPS   0.15f     /* m/s, + EN_VOBS_BAND_FRAC of speed: tyre slip */
+#define EN_VOBS_BAND_FRAC  0.05f
+/* The accelerometer reads gravity as well as the car's acceleration: braking
+ * pitches the nose down ~1.5 deg, which reads as 0.25 m/s^2 of extra decel —
+ * enough to drag the estimate onto the very wheels it should be judging. The
+ * pitch is the gyro's integral, leaking away so a gyro bias cannot build up
+ * (a steady slope is the odometer correction's business). */
+#define EN_PITCH_TAU_S     2.0f
+/* Load moves onto the front axle as the body pitches, not when the brake
+ * goes on: the allocator's grip budget sees the measured acceleration
+ * through this lag. */
+#define EN_LOAD_TAU_S      0.05f
+/* (Commands still in flight: each acts cmd_delay_s, a TtParams field, after
+ * its tick. The speed loop, the stop profile and the heading loops work on
+ * the state predicted that far ahead from what was already asked for; see
+ * predict() in opus_mission.c.) */
 /* (EN_REGEN_CAP_N is gone: how hard the motors can brake is the regen_*
  * capability in TtParams — for this car's ESC strong at speed and fading to
  * nothing at rest, which is exactly why the friction brake still finishes

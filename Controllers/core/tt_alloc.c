@@ -65,6 +65,42 @@ void tt_alloc_step(TtAlloc *a, const TtParams *p, const TtVehReq *req,
         force[driven(p, TT_RL) ? TT_RL : TT_RR] = fx_r;
     }
 
+    /* 2b. Grip budget. Loads from the static split and the transfer the
+     * accelerometer says has happened; lateral transfer by axle share. */
+    if (p->tyre_mu > 0.0f) {
+        float m = p->mass_kg, h = p->cg_height_m, L = p->wheelbase_m;
+        float ff = p->front_weight_frac, cap[TT_MAX_WHEELS], need = 0.0f, room = 0.0f;
+        float dlong = L > 0.0f ? m * in->ax_meas_mps2 * h / L * 0.5f : 0.0f;
+        for (w = 0; w < TT_MAX_WHEELS; w++) {
+            int front = w < 2;
+            float axle = front ? ff : 1.0f - ff;
+            float tr = front ? p->track_front_m : p->track_rear_m;
+            float side = (w == TT_FL || w == TT_RL) ? -1.0f : 1.0f;   /* a left turn loads the right */
+            float fz = 0.5f * m * G_MPS2 * axle + (front ? -dlong : dlong)
+                     + (tr > 0.0f ? side * m * axle * in->ay_meas_mps2 * h / tr * 0.5f : 0.0f);
+            cap[w] = TT_ALLOC_GRIP_USE * p->tyre_mu * (fz > 0.0f ? fz : 0.0f);
+            if (!driven(p, w)) continue;
+            if (fabsf(force[w]) > cap[w]) {
+                need += fabsf(force[w]) - cap[w];
+                force[w] = force[w] > 0.0f ? cap[w] : -cap[w];
+            }
+        }
+        /* Hand the excess to wheels pulling the same way with room left,
+         * in proportion to their room. Same direction only: this moves
+         * force, it never invents a couple. */
+        if (need > 0.0f) {
+            float dir = req->fx_n >= 0.0f ? 1.0f : -1.0f;
+            for (w = 0; w < TT_MAX_WHEELS; w++)
+                if (driven(p, w) && force[w] * dir >= 0.0f) room += cap[w] - fabsf(force[w]);
+            if (room > 0.0f) {
+                float k = need < room ? need / room : 1.0f;
+                for (w = 0; w < TT_MAX_WHEELS; w++)
+                    if (driven(p, w) && force[w] * dir >= 0.0f)
+                        force[w] += dir * k * (cap[w] - fabsf(force[w]));
+            }
+        }
+    }
+
     a->limiting = 0;
     for (w = 0; w < TT_MAX_WHEELS; w++) {
         float t, side, v_ref, slip, lim;

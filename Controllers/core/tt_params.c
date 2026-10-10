@@ -52,6 +52,9 @@ int tt_params_validate(const TtParams *p)
     if (p->slip_max > 0.0f)
         bad += bad_pos(p->slip_v_min) + bad_pos(p->slip_gain) + bad_pos(p->slip_recover_s);
     if (!(p->slip_stiffness >= 0.0f && p->slip_stiffness < 1000.0f)) bad++;
+    if (!(p->cmd_delay_s >= 0.0f && p->cmd_delay_s <= 0.1f)) bad++;
+    if (!(p->tyre_mu >= 0.0f && p->tyre_mu < 3.0f)) bad++;
+    if (!(p->steer_lag_s >= 0.0f && p->steer_lag_s <= 0.5f)) bad++;
 
     return bad;
 }

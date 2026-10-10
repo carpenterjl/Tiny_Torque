@@ -131,11 +131,54 @@ int main(void)
                    0.2, 1e-4));
         req.mz_nm = 0.0f;
 
-        /* Per-wheel limit. */
-        req.fx_n = 200.0f;
-        tt_alloc_step(&a, fp, &req, &in, 0.01f, &c);
-        CHECK("per-wheel drive limit holds",
-              near(c.wheel_torque_nm[TT_RL], fp->wheel_drive_max_nm, 1e-6));
+        /* Per-wheel limit (grip budget off: the motor's limit is what binds). */
+        {
+            TtParams q = *fp;
+            q.tyre_mu = 0.0f;
+            req.fx_n = 200.0f;
+            tt_alloc_step(&a, &q, &req, &in, 0.01f, &c);
+            CHECK("per-wheel drive limit holds",
+                  near(c.wheel_torque_nm[TT_RL], fp->wheel_drive_max_nm, 1e-6));
+        }
+
+        /* Grip budget (FW-13). Braking hard before the load has moved (the
+         * accelerometer still reads ~0): the fronts' load-transfer share is
+         * more than their static load can carry, so the excess goes rear. */
+        {
+            const float g = 9.80665f;
+            float fz_f = 0.5f * fp->mass_kg * g * fp->front_weight_frac;
+            float fz_r = 0.5f * fp->mass_kg * g * (1.0f - fp->front_weight_frac);
+            float cap_f = TT_ALLOC_GRIP_USE * fp->tyre_mu * fz_f;
+            float cap_r = TT_ALLOC_GRIP_USE * fp->tyre_mu * fz_r;
+            float sum;
+            CHECK("grip budget on for the FOC twin", fp->tyre_mu > 0.0f);
+            tt_alloc_reset(&a);
+            in.ax_mps2 = -6.0f;
+            in.ax_meas_mps2 = 0.0f;
+            req.fx_n = -15.0f;
+            for (k = 0; k < 20; k++) tt_alloc_step(&a, fp, &req, &in, 0.01f, &c);
+            sum = 0.0f;
+            for (w = 0; w < TT_MAX_WHEELS; w++) sum += c.wheel_torque_nm[w] / r;
+            CHECK("grip budget: a front wheel stays inside its cap",
+                  fabsf(c.wheel_torque_nm[TT_FL]) / r <= cap_f + 1e-4f &&
+                  near(fabsf(c.wheel_torque_nm[TT_FL]) / r, cap_f, 1e-3));
+            CHECK("grip budget: what the fronts cannot carry goes rear",
+                  near(sum, -15.0, 1e-3) && fabsf(c.wheel_torque_nm[TT_RL]) / r <= cap_r + 1e-4f);
+            /* Once the load has moved, the fronts carry more. */
+            in.ax_meas_mps2 = -6.0f;
+            for (k = 0; k < 20; k++) tt_alloc_step(&a, fp, &req, &in, 0.01f, &c);
+            CHECK("grip budget: transferred load raises the front cap",
+                  fabsf(c.wheel_torque_nm[TT_FL]) / r > cap_f + 0.1f);
+            /* Asking for the impossible gets every wheel at its cap, no more. */
+            in.ax_meas_mps2 = 0.0f;
+            req.fx_n = -40.0f;
+            for (k = 0; k < 20; k++) tt_alloc_step(&a, fp, &req, &in, 0.01f, &c);
+            CHECK("grip budget: never past any wheel's cap",
+                  fabsf(c.wheel_torque_nm[TT_FL]) / r <= cap_f + 1e-4f &&
+                  fabsf(c.wheel_torque_nm[TT_RR]) / r <= cap_r + 1e-4f &&
+                  near(fabsf(c.wheel_torque_nm[TT_RR]) / r, cap_r, 1e-3));
+            in.ax_mps2 = 0.0f;
+        }
 
         /* Traction control: a spinning rear-left wheel is cut, the others not. */
         tt_alloc_reset(&a);
