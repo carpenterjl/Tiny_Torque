@@ -4,8 +4,9 @@
  * This is the ONLY file in the mission firmware that includes controller_api.h.
  * It plays the part the HAL plays on the car (hal/tt_hal.h): it turns the
  * host's manifest-described sensor block into a TtMeas, runs the portable
- * core, and turns the TtCmd back into actuator slots. Everything else —
- * estimation, sequencing, control — is host-agnostic.
+ * firmware loop (opus_fw.h: mission, navigation, safety layer), and turns the
+ * TtCmd back into actuator slots. Everything else — estimation, sequencing,
+ * control, safety — is host-agnostic.
  *
  * Binding is by TYPE and WHEEL INDEX from the extended manifest (ABI-02), not
  * by name: encoders and motors by wheel_index, the ToF by being the one that
@@ -29,7 +30,7 @@
  * the four-motor FOC twin), as a board config would on the MCU.
  */
 #include "controller_api.h"
-#include "opus_mission.h"
+#include "opus_fw.h"
 #include "mission_cfg.h"
 
 #include <math.h>
@@ -39,7 +40,8 @@
 #define OPUS_PARAMS tt_params_opus_vector
 #endif
 
-static OpusState g_st;
+static OpusFw    g_fw;
+#define g_st (g_fw.mission)
 static TtParams  g_params;
 static int       g_ready = 0;
 static float     g_rate_hz = 0.0f;
@@ -48,6 +50,11 @@ static float     g_rate_hz = 0.0f;
  * pushes small genuine requests up to it rather than letting them vanish. */
 #define ESC_DEADBAND_V   0.10f
 #define DRIVE_IQ_EPS_A   0.035f   /* ~0.05 N of road force on this car */
+
+/* The UWB tag's height above the floor. The manifest gives the mount relative
+ * to the body origin, whose own height it does not state; this is the twin's
+ * tag (0.095 m above an origin 0.095 m up), as the replay used. */
+#define UWB_TAG_Z_M      0.19f
 
 typedef struct {
     int   bound;
@@ -75,10 +82,12 @@ static MotBind g_mot[TT_MAX_WHEELS];
 static int   g_tof_idx = -1, g_tof_off = -1;
 static float g_tof_max = 0.0f;
 static int   g_batt_idx = -1, g_batt_off = -1;
+static int   g_rc_idx = -1, g_rc_off = -1;
+static int   g_uwb_idx = -1, g_uwb_off = -1;
 static int   g_cfg_fault = 0;
 static uint32_t g_prev_us = 0;
 static int   g_has_prev_us = 0;
-static char  g_debug_names[512];
+static char  g_debug_names[1024];
 
 /* ------------------------------------------------------------- lifecycle --*/
 
@@ -93,7 +102,7 @@ static void build_debug_names(void)
     };
     size_t i, n = sizeof(names) / sizeof(names[0]), len = 0;
     g_debug_names[0] = '\0';
-    for (i = 0; i < n && i < 16; i++) {
+    for (i = 0; i < n; i++) {
         size_t k = strlen(names[i]);
         if (len + k + 2 >= sizeof(g_debug_names)) break;
         if (i > 0) g_debug_names[len++] = ',';
@@ -105,9 +114,12 @@ static void build_debug_names(void)
 
 CTRL_EXPORT int ctrl_init(float control_rate_hz)
 {
+    TtNavCfg nav;
     g_params = OPUS_PARAMS;
     g_rate_hz = control_rate_hz;
-    opus_init(&g_st, &g_params, control_rate_hz);
+    tt_nav_default_cfg(&nav);
+    nav.tag_z = UWB_TAG_Z_M;
+    opus_fw_init(&g_fw, &g_params, control_rate_hz, &nav, 0);
     build_debug_names();
     g_has_prev_us = 0;
     g_ready = 1;
@@ -116,7 +128,7 @@ CTRL_EXPORT int ctrl_init(float control_rate_hz)
 
 CTRL_EXPORT void ctrl_reset(void)
 {
-    opus_reset(&g_st);
+    opus_fw_reset(&g_fw);
     g_has_prev_us = 0;
 }
 
@@ -151,6 +163,7 @@ CTRL_EXPORT void ctrl_configure2(const SensorInfo2 *sensors, int count)
     memset(g_enc, 0, sizeof(g_enc));
     memset(g_mot, 0, sizeof(g_mot));
     g_tof_idx = g_tof_off = g_batt_idx = g_batt_off = -1;
+    g_rc_idx = g_rc_off = g_uwb_idx = g_uwb_off = -1;
     g_tof_max = 0.0f;
     g_cfg_fault = 0;
 
@@ -211,6 +224,23 @@ CTRL_EXPORT void ctrl_configure2(const SensorInfo2 *sensors, int count)
             if (g_batt_idx < 0 && s->base.data_count >= 2) {
                 g_batt_idx = i;
                 g_batt_off = s->base.data_offset;
+            }
+            break;
+
+        case SENSOR_RC:
+            if (g_rc_idx < 0 && s->base.data_count >= 10) {
+                g_rc_idx = i;
+                g_rc_off = s->base.data_offset;
+            }
+            break;
+
+        case SENSOR_UWB:
+            /* The tag's lever arm from the body origin, for the EKF. */
+            if (g_uwb_idx < 0 && s->base.data_count >= 6) {
+                g_uwb_idx = i;
+                g_uwb_off = s->base.data_offset;
+                g_fw.nav.cfg.lever[0] = s->pos_m[0];
+                g_fw.nav.cfg.lever[1] = s->pos_m[1];
             }
             break;
 
@@ -316,6 +346,24 @@ static void read_meas(const CtrlInputs *in, TtMeas *m)
         stamp(&m->drv[w].st, in, mt->idx);
     }
 
+    if (g_rc_off >= 0) {
+        for (k = 0; k < 8; k++) m->rc.ch[k] = slice(in, g_rc_off + k, 0.0f);
+        m->rc.failsafe = (uint8_t)((slice(in, g_rc_off + 8, 0.0f) > 0.5f ? TT_RC_FRAME_LOST : 0) |
+                                   (slice(in, g_rc_off + 9, 0.0f) > 0.5f ? TT_RC_FAILSAFE : 0));
+        stamp(&m->rc.st, in, g_rc_idx);
+    }
+
+    if (g_uwb_off >= 0) {
+        float id = slice(in, g_uwb_off, -1.0f);
+        TtUwb *u = &m->uwb[0];
+        stamp(&u->st, in, g_uwb_idx);
+        u->anchor = id >= 0.0f && id < 255.0f ? (uint8_t)lroundf(id) : 255u;
+        u->range_m = slice(in, g_uwb_off + 1, 0.0f);
+        u->quality = slice(in, g_uwb_off + 2, 0.0f);
+        for (k = 0; k < 3; k++) u->pos_m[k] = slice(in, g_uwb_off + 3 + k, 0.0f);
+        m->uwb_n = 1;
+    }
+
     if (g_tof_off >= 0) {
         float r = slice(in, g_tof_off, 0.0f);
         m->tof.zones = 1;
@@ -404,9 +452,19 @@ CTRL_EXPORT void ctrl_step(const CtrlInputs *in, CtrlOutputs *out)
 
     read_meas(in, &meas);
     g_st.fault |= g_cfg_fault;
-    opus_step(&g_st, &meas, &cmd);
+    opus_fw_step(&g_fw, &meas, &cmd);
     write_cmd(&cmd, &meas, out);
 
     n = OPUS_LOG_N < 16u ? OPUS_LOG_N : 16u;
     for (i = 0; i < n; i++) out->debug[i] = ((const float *)&g_st.log)[i];
+}
+
+/* The log channels after the first 16 (the safety layer and the EKF). */
+CTRL_EXPORT int ctrl_get_debug_ext(float *dst, int max)
+{
+    int i, n = (int)OPUS_LOG_N - 16;
+    if (dst == 0 || n <= 0) return 0;
+    if (n > max) n = max;
+    for (i = 0; i < n; i++) dst[i] = ((const float *)&g_st.log)[16 + i];
+    return n;
 }

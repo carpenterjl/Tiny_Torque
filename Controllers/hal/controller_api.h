@@ -104,11 +104,20 @@ enum {
                                PLL), Vbus V, T_winding C, fault bits]; its slot
                                carries Iq (CTRL_UNITS_AMPS_IQ). Faults: 1 over-
                                voltage, 2 over-temp derate, 4 current-limited,
-                               8 voltage-limited                              */
+                               8 voltage-limited, 16 command timeout (no frame
+                               in the driver's window: bridge off), 32 rotor
+                               sensor lost, 64 over-current trip; 1, 16, 32
+                               and 64 switch the bridge off                   */
     SENSOR_STEER_FB   = 18, /* the steering servo: describes actuator[6]       */
-    SENSOR_STEER_ANGLE = 19 /* measured road-wheel angle: [angle_rad], + = LEFT
+    SENSOR_STEER_ANGLE = 19,/* measured road-wheel angle: [angle_rad], + = LEFT
                                (bicycle model; a pot or encoder on the knuckle,
                                after the servo lag and the linkage backlash)  */
+    SENSOR_RC         = 20  /* RC receiver (SBUS/CRSF class): [ch1..ch8 in -1..1,
+                               frame_lost 0/1, failsafe 0/1]. A lost frame
+                               repeats the last channels; after the receiver's
+                               hold time it declares failsafe. Convention: ch5
+                               (index 4) = arm switch, ch6 (index 5) = kill
+                               switch, on/kill = > 0.5                        */
 };
 
 /*
@@ -341,6 +350,14 @@ CTRL_EXPORT int         ctrl_abi_version(int* sizeof_inputs, int* sizeof_outputs
 CTRL_EXPORT void        ctrl_configure2(const SensorInfo2* sensors, int count);
 CTRL_EXPORT void        ctrl_reset(void);
 CTRL_EXPORT float       ctrl_get_control_rate(void);
+
+/*
+ * OPTIONAL v7 export: debug channels beyond the 16 of CtrlOutputs.debug.
+ * ctrl_get_debug_names() then names every channel, debug[0..15] first; after
+ * each ctrl_step the host calls this with room for `max` floats and reads the
+ * channels from the 17th on, in name order. Returns how many it wrote.
+ */
+CTRL_EXPORT int         ctrl_get_debug_ext(float* dst, int max);
 
 #define CTRL_DEFINE_ABI_VERSION()                                             \
     CTRL_EXPORT int ctrl_abi_version(int* sizeof_inputs, int* sizeof_outputs) \

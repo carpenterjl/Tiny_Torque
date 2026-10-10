@@ -30,6 +30,10 @@ namespace AIHWSim.Sensors
         private string[][] _channelNames = System.Array.Empty<string[]>();
         private Transform _root;
 
+        /// <summary>VAL-11: faults applied to what the firmware reads (set by
+        /// the SimulationRunner; null = none).</summary>
+        public FaultInjector Faults;
+
         public SensorInfo[] Manifest => _manifest;
         public float[] FlatData => _flat;
         public int SensorCount => _manifest.Length;
@@ -187,11 +191,20 @@ namespace AIHWSim.Sensors
                     _stamps[i].seq = s.StampSeq;
                     // Low 32 bits of the µs clock: firmware compares by difference.
                     _stamps[i].t_sample_us = unchecked((uint)s.StampUs);
+                    Faults?.ApplySensor(s, _flat, _manifest[i].data_offset, ref _stamps[i]);
                 }
             }
             float simTime = (float)(timeUs * 1e-6);
             for (int c = 0; c < _cameras.Count; c++)
                 _cameras[c].CaptureIfDue(simTime);
+        }
+
+        /// <summary>Restart every part's sample clock (the sim clock was
+        /// rebased to 0 by a run restart; the old schedules would wait for
+        /// their next instant on the previous run's time).</summary>
+        public void ResetSampling()
+        {
+            for (int i = 0; i < _sensors.Count; i++) _sensors[i].ResetSampling();
         }
 
         /// <summary>

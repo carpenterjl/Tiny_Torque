@@ -168,5 +168,6 @@
 #define FA_OBSTACLE        0x0800
 #define FA_TICK_GLITCH     0x1000
 #define FA_PARAMS          0x2000    /* parameter set invalid, or contradicts the manifest */
+#define FA_SAFETY          0x4000    /* the safety layer (FW-08) stopped the car */
 
 #endif /* OPUS_MISSION_CFG_H */

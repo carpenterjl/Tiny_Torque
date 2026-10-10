@@ -47,9 +47,15 @@ namespace AIHWSim.EditorTools
             // -opusTelemetry 1 also writes <result>.telemetry.csv (every channel).
             int lat = int.TryParse(ArgValue("-opusComputeLatencyUs"), out int l) ? l : -1;
             bool tel = ArgValue("-opusTelemetry") == "1";
+            // -opusFaults "spec;spec" injects faults into the run (VAL-11);
+            // -opusFaultSuite 1 runs the whole fault suite instead, on the
+            // FOC twin unless -opusVehicle says otherwise.
+            bool suite = ArgValue("-opusFaultSuite") == "1";
+            string vehicle = ArgValue("-opusVehicle") ?? (suite ? "Opus Vector FOC" : null);
             Begin(result, timeout, ArgValue("-opusController") ?? "",
                   ArgValue("-opusTrack"), ArgValue("-opusCam"), seed, hz,
-                  ArgValue("-opusVehicle"), lat, tel);
+                  vehicle, lat, tel, ArgValue("-opusFaults") ?? "", suite,
+                  ArgValue("-opusFaultOnly") ?? "");
         }
 
         private static string DefaultResultPath() =>
@@ -68,7 +74,8 @@ namespace AIHWSim.EditorTools
                                   string controllerDll = "", string track = null,
                                   string cam = null, int noiseSeed = 0, int controlHz = 0,
                                   string vehicle = null, int computeLatencyUs = -1,
-                                  bool saveTelemetry = false)
+                                  bool saveTelemetry = false, string faults = "",
+                                  bool faultSuite = false, string faultOnly = "")
         {
             var req = new MissionAutorun.Request
             {
@@ -79,6 +86,9 @@ namespace AIHWSim.EditorTools
                 controlHz = controlHz,
                 computeLatencyUs = computeLatencyUs,
                 saveTelemetry = saveTelemetry,
+                faults = faults ?? "",
+                faultSuite = faultSuite,
+                faultOnly = faultOnly ?? "",
             };
             if (!string.IsNullOrEmpty(track)) req.track = track;
             if (!string.IsNullOrEmpty(vehicle)) req.vehicle = vehicle;

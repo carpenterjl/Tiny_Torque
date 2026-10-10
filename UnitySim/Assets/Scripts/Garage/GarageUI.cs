@@ -109,6 +109,7 @@ namespace AIHWSim.Garage
                 ("tofmz", "Multizone ToF", "VL53L5CX-class 8×8 (or 4×4) depth grid — distance + status per zone."),
                 ("flow", "Optical flow", "Downward flow sensor — ground motion counts; aim it at the floor."),
                 ("uwb", "UWB tag", "Two-way ranging to the track's UWB anchors, one anchor per slot."),
+                ("rc", "RC receiver", "The safety pilot's radio: arm and kill switches, failsafe on link loss."),
                 ("bump", "Bump", "Contact switch — fires when the car touches something near its mount."),
                 ("rf", "RF antenna", "Hears beacon pings (RSSI + bearing, strongest 3); can also emit."),
                 ("led", "LED", "Firmware-driven indicator — set colour/blink from your controller."),
@@ -707,6 +708,7 @@ namespace AIHWSim.Garage
                                 : key == "tofmz" ? SensorType.TofMz
                                 : key == "flow" ? SensorType.Flow
                                 : key == "uwb" ? SensorType.Uwb
+                                : key == "rc" ? SensorType.Rc
                                 : key == "bump" ? SensorType.Bump
                                 : key == "rf" ? SensorType.Rf
                                 : key == "led" ? SensorType.Led : SensorType.Tof;
@@ -719,6 +721,7 @@ namespace AIHWSim.Garage
                 if (kind == SensorType.TofMz) _pendingSensor.updateRateHz = 15f;   // 8×8 frame rate
                 if (kind == SensorType.Flow) { _pendingSensor.updateRateHz = 100f; _pendingSensor.aimEuler = new Vector3(90f, 0f, 0f); }
                 if (kind == SensorType.Uwb) _pendingSensor.updateRateHz = 40f;     // TDMA slot rate
+                if (kind == SensorType.Rc) { _pendingSensor.updateRateHz = 50f; _pendingSensor.latencyMs = 10f; }
                 _ghost = PartGhost.ForSensor(kind, 0f);
                 if (_mirrorMode) _ghostTwin = PartGhost.ForSensor(kind, 0f);
             }

@@ -2083,10 +2083,14 @@ namespace AIHWSim.TrackEd
 
             // SEN-05: four UWB anchors at the corners of the field, far from
             // the driven path; ids 0-3 counter-clockwise from the start end.
-            d.items.Add(It("uwb_anchor", -18.5f, -9.0f));
-            d.items.Add(It("uwb_anchor",  18.5f, -9.0f));
-            d.items.Add(It("uwb_anchor",  18.5f,  9.0f));
-            d.items.Add(It("uwb_anchor", -18.5f,  9.0f));
+            // They also bound the firmware's geofence (FW-08: their box less
+            // 0.5 m), so they stand beyond the run-off, where a car that
+            // overshoots its stop (a turn that ends on its timeout carries it
+            // ~3.6 m further) still has room before the fence.
+            d.items.Add(It("uwb_anchor", -19.5f, -9.5f));
+            d.items.Add(It("uwb_anchor",  19.5f, -9.5f));
+            d.items.Add(It("uwb_anchor",  19.5f,  9.5f));
+            d.items.Add(It("uwb_anchor", -19.5f,  9.5f));
             return d;
         }
     }

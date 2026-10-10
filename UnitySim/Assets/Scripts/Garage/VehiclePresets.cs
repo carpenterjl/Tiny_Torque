@@ -694,6 +694,8 @@ namespace AIHWSim.Garage
             motor.modulationMax = 0.95f;
             motor.busOvTripV = 8.7f;          // 4.35 V/cell
             motor.busOvDerateV = 8.5f;
+            motor.cmdTimeoutMs = 50f;         // FW-08: no command frame in 50 ms
+                                              // (5 ticks at 100 Hz) = bridge off
             motor.thermalRwcKPerW = 2f;
             motor.thermalCwJPerK = 15f;
             motor.thermalRcaKPerW = 6f;
@@ -774,6 +776,16 @@ namespace AIHWSim.Garage
                 name = "uwb", kind = SensorType.Uwb,
                 localPos = new Vector3(0f, 0.095f, -0.060f),
                 updateRateHz = 40f, massKg = 0.005f,
+            });
+
+            // FW-08: the safety pilot's RC receiver (CRSF/SBUS class, 50 Hz
+            // frames, ~10 ms through the receiver): ch5 arms, ch6 kills, and
+            // the firmware stops the car when the link goes.
+            d.sensors.Add(new SensorSpec
+            {
+                name = "rc", kind = SensorType.Rc,
+                localPos = new Vector3(0f, 0.060f, -0.120f),
+                updateRateHz = 50f, latencyMs = 10f, massKg = 0.004f,
             });
 
             // SEN-06/09: the pack, the drivers and any compass report what the

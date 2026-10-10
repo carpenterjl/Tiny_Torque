@@ -53,7 +53,7 @@ tt_core_warnings(pidlib)
 # The portable core's shared pieces: TtMeas/TtCmd types, the parameter store
 # and its generated defaults (Tools/gen_params.js), the log schema, and the
 # board interface every non-sim target implements (hal/tt_hal.h).
-add_library(ttcore STATIC core/tt_params.c core/tt_alloc.c core/tt_nav.c
+add_library(ttcore STATIC core/tt_params.c core/tt_alloc.c core/tt_nav.c core/tt_safety.c
             core/params_opus_vector.c core/params_opus_vector_foc.c)
 target_include_directories(ttcore PUBLIC core hal)
 tt_core_warnings(ttcore)
@@ -61,7 +61,7 @@ tt_core_warnings(ttcore)
 # Opus Vector mission controller: dead-reckoned multi-phase manoeuvre on
 # TtMeas/TtCmd. Portable (math.h, pid.h and the core), so the same sources
 # build for a real MCU target.
-add_library(opuslib STATIC opus_mission/opus_mission.c)
+add_library(opuslib STATIC opus_mission/opus_mission.c opus_mission/opus_fw.c)
 target_include_directories(opuslib PUBLIC opus_mission)
 target_link_libraries(opuslib PUBLIC pidlib ttcore)
 tt_core_warnings(opuslib)
@@ -160,6 +160,14 @@ add_test(NAME tt_core_unit COMMAND test_core)
 add_executable(test_nav tests/test_nav.c)
 target_link_libraries(test_nav PRIVATE ttcore)
 add_test(NAME tt_nav_unit COMMAND test_nav)
+
+# The safety layer (FW-08) against injected faults (VAL-11): every fault the
+# sim's FaultInjector can inject, on a synthetic car, with the expected
+# response, plus no false trips on a clean drive.
+add_executable(test_safety tests/test_safety.c tests/tt_fault.c)
+target_include_directories(test_safety PRIVATE tests)
+target_link_libraries(test_safety PRIVATE opuslib)
+add_test(NAME tt_safety_faults COMMAND test_safety)
 
 # Offline replay of a sim run's telemetry through the navigation EKF (VAL-03).
 add_executable(nav_replay tools/nav_replay.c)

@@ -73,10 +73,23 @@ typedef struct {
 
 typedef struct { TtStamp st; float flow_x, flow_y, quality, height_m; } TtFlow;
 
+/* One UWB two-way range. quality is the first-path-to-total power gap in dB
+ * (~2 in line of sight, > 6 suggests NLOS); pos_m is the anchor's surveyed
+ * position in the site frame (from the survey file on the car; the sim
+ * delivers it with the read). */
 #define TT_MAX_UWB 4
-typedef struct { TtStamp st; uint8_t anchor; uint8_t pad_[3]; float range_m, quality; } TtUwb;
+typedef struct {
+    TtStamp st;
+    uint8_t anchor;
+    uint8_t pad_[3];
+    float   range_m, quality;
+    float   pos_m[3];
+} TtUwb;
 
 typedef struct { TtStamp st; float v, i; } TtBatt;                 /* pack V, A */
+
+/* RC receiver: channels normalised to -1..1; failsafe carries the
+ * receiver's flags (TT_RC_FAILSAFE, TT_RC_FRAME_LOST in tt_safety.h). */
 typedef struct { TtStamp st; float ch[8]; uint8_t failsafe; uint8_t pad_[3]; } TtRc;
 typedef struct { TtStamp st; float rad; } TtSteerFb;              /* + = left */
 

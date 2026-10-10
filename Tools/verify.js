@@ -306,7 +306,7 @@ ok('gen_params.js FIELDS match the TtParams struct, in order',
     JSON.stringify(hdrFields) === JSON.stringify(gen.FIELDS.map(f => f[0])), hdrFields.length + ' fields');
 const dec = require(path.join(REPO, 'Tools', 'tt_log_decode.js'));
 const logNames = dec.readDef(fs.readFileSync(path.join(REPO, 'Controllers', 'opus_mission', 'opus_log.def'), 'utf8'));
-ok('opus_log.def: <= 16 channels, starting with state', logNames.length <= 16 && logNames[0] === 'state',
+ok('opus_log.def: <= 32 channels (TT_LOG_MAX), starting with state', logNames.length <= 32 && logNames[0] === 'state',
     logNames.length + ' channels');
 
 console.log('\n=== 11. Filename sanitization =================================');

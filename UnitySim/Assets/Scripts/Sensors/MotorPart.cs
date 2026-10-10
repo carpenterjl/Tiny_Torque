@@ -35,9 +35,24 @@ namespace AIHWSim.Sensors
         private static readonly string[] Fields = { "voltage", "current", "torque" };
         private static readonly string[] FocFields = { "iq", "id", "omega_m", "vbus", "temp_c", "fault" };
 
-        /// <summary>SENSOR_FOC_FB fault bits (field 5).</summary>
+        /// <summary>SENSOR_FOC_FB fault bits (field 5). The trips (over-voltage,
+        /// command timeout, rotor sensor, over-current) switch the bridge off.</summary>
         public const int FaultOverVoltage = 1, FaultOverTemp = 2,
-                         FaultCurrentLimit = 4, FaultVoltageLimit = 8;
+                         FaultCurrentLimit = 4, FaultVoltageLimit = 8,
+                         FaultCmdTimeout = 16, FaultRotorSensor = 32, FaultOverCurrent = 64;
+        private const int BridgeOffFaults = FaultOverVoltage | FaultCmdTimeout |
+                                            FaultRotorSensor | FaultOverCurrent;
+
+        /// <summary>Time since the firmware's last command frame (s), set by the
+        /// car each physics step; the driver's watchdog compares it with
+        /// <c>cmdTimeoutMs</c>.</summary>
+        public float CommandAgeS { get; set; }
+
+        /// <summary>VAL-11: driver trips forced on (the <c>Fault*</c> trip bits;
+        /// they act as the real trip would), and an offset on the reported
+        /// winding temperature (°C). Set by the FaultInjector.</summary>
+        public int InjectedFaults { get; set; }
+        public float InjectedTempOffsetC { get; set; }
 
         private const float AmbientC = 25f;
         private const float CopperTempco = 0.0039f;   // 1/K
@@ -449,7 +464,19 @@ namespace AIHWSim.Sensors
                 if (vBus >= ovTrip) _fault |= FaultOverVoltage;
                 else if (vBus < ovStart) _fault &= ~FaultOverVoltage;
             }
-            _fault &= ~(FaultCurrentLimit | FaultVoltageLimit | FaultOverTemp);
+            _fault &= ~(FaultCurrentLimit | FaultVoltageLimit | FaultOverTemp |
+                        FaultCmdTimeout | FaultRotorSensor | FaultOverCurrent);
+            // Command watchdog: no frame from the MCU inside the window and
+            // the bridge goes off until one arrives (CAN-timeout behaviour).
+            if (motor.cmdTimeoutMs > 0f && CommandAgeS * 1000f > motor.cmdTimeoutMs)
+            {
+                // ...and forgets the setpoint it held, so the first frame
+                // after the gap is obeyed rather than the last one before it.
+                _fault |= FaultCmdTimeout;
+                _held = 0f;
+                System.Array.Clear(_delay, 0, _delay.Length);
+            }
+            _fault |= InjectedFaults & BridgeOffFaults;
 
             // Limits: motoring and regen separately, both derated by temperature;
             // regen also fades as the bus approaches the over-voltage trip.
@@ -470,7 +497,7 @@ namespace AIHWSim.Sensors
             bool regen = iqT * omegaM < 0f;
             float lim = regen ? iRegen : iMot;
             if (Mathf.Abs(iqT) > lim) { iqT = Mathf.Sign(iqT) * lim; _fault |= FaultCurrentLimit; }
-            if ((_fault & FaultOverVoltage) != 0) iqT = 0f;
+            if ((_fault & BridgeOffFaults) != 0) iqT = 0f;
 
             // Voltage ceiling, then the current loop, then the ceiling again
             // (the speed may have moved the window under the lagged current).
@@ -481,7 +508,7 @@ namespace AIHWSim.Sensors
             if (iqT < lo || iqT > hi) { iqT = Mathf.Clamp(iqT, lo, hi); _fault |= FaultVoltageLimit; }
             float a = motor.currentLoopHz > 0f ? 1f - Mathf.Exp(-dt * 2f * Mathf.PI * motor.currentLoopHz) : 1f;
             _iq += (iqT - _iq) * a;
-            if ((_fault & FaultOverVoltage) != 0) _iq = 0f;   // bridge off: no current at all
+            if ((_fault & BridgeOffFaults) != 0) _iq = 0f;    // bridge off: no current at all
             _iq = Mathf.Clamp(_iq, lo, hi);
 
             // Torque: electromagnetic (with 6th-harmonic ripple), then friction,
@@ -661,7 +688,7 @@ namespace AIHWSim.Sensors
             dest[offset + 1] = noise.Apply(0f, dt, 1);
             dest[offset + 2] = _omegaPll;
             dest[offset + 3] = noise.Apply(vBus, dt, 2);
-            dest[offset + 4] = _tWinding;
+            dest[offset + 4] = _tWinding + InjectedTempOffsetC;
             dest[offset + 5] = _fault;
             if (Realistic)
             {

@@ -57,6 +57,14 @@ namespace AIHWSim.Core
             /// to &lt;result&gt;.telemetry.csv — the input to an offline replay
             /// (Tools/nav_replay).</summary>
             public bool saveTelemetry;
+            /// <summary>VAL-11: faults to inject, ';'-separated FaultSpec strings
+            /// (e.g. "RcKill@p4+1"). Empty = none.</summary>
+            public string faults = "";
+            /// <summary>Run the whole fault-injection suite (FaultSuiteWatcher)
+            /// instead of one scored mission.</summary>
+            public bool faultSuite;
+            /// <summary>Comma-separated suite scenarios to run; empty = all.</summary>
+            public string faultOnly = "";
         }
 
         [Serializable]
@@ -78,6 +86,7 @@ namespace AIHWSim.Core
             public float cruiseSpeedMean, cruiseSpeedMin, turnSpeedMin;
             public int noiseSeed;
             public int controlHz;
+            public int safeFault, safeState;
             public string note = "";
         }
 
@@ -192,7 +201,8 @@ namespace AIHWSim.Core
 
             var go = new GameObject("MissionWatcher");
             UnityEngine.Object.DontDestroyOnLoad(go);
-            go.AddComponent<MissionWatcher>().Configure(_req);
+            if (_req.faultSuite) go.AddComponent<FaultSuiteWatcher>().Configure(_req);
+            else go.AddComponent<MissionWatcher>().Configure(_req);
         }
     }
 
@@ -241,6 +251,14 @@ namespace AIHWSim.Core
                     return;
                 }
                 _hub = _runner.Hub;
+                if (!string.IsNullOrEmpty(_req.faults))
+                {
+                    var specs = new System.Collections.Generic.List<Sensors.FaultSpec>();
+                    foreach (var f in _req.faults.Split(';'))
+                        if (f.Trim().Length > 0) specs.Add(Sensors.FaultSpec.Parse(f));
+                    _runner.Faults.Set(specs);
+                    Debug.Log("[MissionAutorun] faults: " + string.Join("; ", specs));
+                }
                 if (_req.saveTelemetry)
                 {
                     _telemetry = new Telemetry.CsvLogger(_hub);
@@ -322,6 +340,8 @@ namespace AIHWSim.Core
             _res.controlHz = _runner != null ? _runner.controlRateHz : 0;
             _res.phase = _prevPhase;
             _res.fault = Dbg("dbg/fault", 0);
+            _res.safeFault = Dbg("dbg/safe_fault", 0);
+            _res.safeState = Dbg("dbg/safe_state", 0);
             _res.elapsedSec = _elapsed;
             _res.odo_final = DbgF("dbg/odo_m");
             _res.truth_final = (float)_truth;

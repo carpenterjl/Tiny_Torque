@@ -61,7 +61,10 @@ static int32_t counts(const TtParams *p, int w, double accum)
     return (int32_t)floor(accum / (2.0 * OPUS_PI / (p->enc_cpr[w] * p->enc_ratio[w])));
 }
 
-static int run(double rate_hz)
+/* glitch: from 1 s into the first measured leg, the left odometry encoder
+ * reads 5000 counts ahead (one miscount that stays in the counter, VAL-11).
+ * The mission must reject it without losing distance or heading. */
+static int run(double rate_hz, int glitch)
 {
     TtParams bench = tt_params_opus_vector;
     const TtParams *pp = &bench;
@@ -75,6 +78,7 @@ static int run(double rate_hz)
     int prev_phase = -99, steps = 0, w;
     double psi_dot_prev = 0.0;      /* last step's yaw rate, for the gyro */
     uint32_t tick = 0;
+    int32_t glitch_off = 0;
 
     /* Calibration is measured against a plant, and this plant has no tyre
      * slip: the sim's measured brake-slip term would make the odometer
@@ -96,7 +100,7 @@ static int run(double rate_hz)
         m.now_us = (tt_us_t)llround(t * 1e6);
         m.dt_s = (float)dt;
         for (w = 0; w < TT_MAX_WHEELS; w++) {
-            m.enc[w].count = counts(pp, w, p.acc[w]);
+            m.enc[w].count = counts(pp, w, p.acc[w]) + (w == st.odo_l ? glitch_off : 0);
             m.enc[w].st.valid = 1;
             m.enc[w].st.seq = tick;
             m.enc[w].st.t_us = m.now_us;
@@ -113,6 +117,8 @@ static int run(double rate_hz)
 
         opus_step(&st, &m, &c);
         tick++;
+        if (glitch && glitch_off == 0 && st.phase == OPUS_CRUISE_A && st.phase_t > 1.0f)
+            glitch_off = 5000;
 
         /* Mark phase transitions BEFORE advancing the plant. Taking them after
          * would fold one whole tick of travel (45 mm at cruise) into every
@@ -210,6 +216,7 @@ static int run(double rate_hz)
 
 #define CHECK(name, cond) do { if (!(cond)) { printf("FAIL: %s\n", name); failures++; } } while (0)
 
+        printf("%.0f Hz%s\n", rate_hz, glitch ? ", one encoder glitch in leg A" : "");
         printf("%-26s %10s %10s %9s\n", "leg", "target", "actual", "error");
         printf("%-26s %10.3f %10.3f %+9.1f mm\n", "constant-velocity leg",
                (double)MI_LEG_A_M, mark_turn_entry - mark_leg_a, leg_a);
@@ -244,7 +251,8 @@ static int run(double rate_hz)
 int main(void)
 {
     int fails = 0;
-    fails += run(100.0);
-    fails += run(500.0);
+    fails += run(100.0, 0);
+    fails += run(500.0, 0);
+    fails += run(100.0, 1);
     return fails ? 1 : 0;
 }

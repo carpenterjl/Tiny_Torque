@@ -5,7 +5,8 @@
  * channel names (dbg/<name>), the MCU's binary TtLogFrame, and the CSV header
  * the host decoder (Tools/tt_log_decode.js) writes for a car log. Append only:
  * debug[0] = state is matched by the game's MissionHud, and the order is the
- * binary frame's layout. The sim carries at most 16 of these (CtrlOutputs).
+ * binary frame's layout. The first 16 ride in CtrlOutputs.debug; the rest
+ * reach the sim through ctrl_get_debug_ext() (at most TT_LOG_MAX in all).
  */
 TT_LOG(state,        "",      "mission phase (OpusPhase)")
 TT_LOG(fault,        "",      "FA_* fault bits")
@@ -23,3 +24,10 @@ TT_LOG(brake_cmd,    "",      "friction brake 0..1")
 TT_LOG(batt_v,       "V",     "pack voltage")
 TT_LOG(slip_pct,     "%",     "driven vs odometry wheel speed")
 TT_LOG(stop_err_mm,  "mm",    "controller's own stop error")
+TT_LOG(safe_state,   "",      "safety layer state (TtSafeState: 0 disarmed, 1 armed, 2 driving, 3 fault)")
+TT_LOG(safe_fault,   "",      "safety layer TT_SF_* fault bits, active or latched")
+TT_LOG(safe_v,       "m/s",   "the safety layer's own speed estimate")
+TT_LOG(nav_ok,       "",      "navigation EKF initialised (1) or still waiting (0)")
+TT_LOG(nav_x,        "m",     "EKF position x, UWB site frame")
+TT_LOG(nav_y,        "m",     "EKF position y, UWB site frame")
+TT_LOG(nav_psi_deg,  "deg",   "EKF heading, site frame, + = left")

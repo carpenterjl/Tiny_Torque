@@ -75,6 +75,9 @@ namespace AIHWSim.Core
         public TelemetryHub Hub { get; private set; }
         public bool ControllerReady => _loader != null && _loader.IsLoaded;
 
+        /// <summary>VAL-11 fault injection for this run (inert while empty).</summary>
+        public Sensors.FaultInjector Faults { get; } = new Sensors.FaultInjector();
+
         private IControlledVehicle _vehicle;
         private IManualDriver _manualDriver;
         private ISetpointSource _setpointSource;
@@ -121,6 +124,13 @@ namespace AIHWSim.Core
         private readonly float[] _rawOut = new float[8];
 
         private string[] _debugNames = Array.Empty<string>();
+        // Debug channels past the 16 of CtrlOutputs (ctrl_get_debug_ext).
+        private readonly float[] _debugExt = new float[32];
+        private int _debugExtN;
+        // What the firmware reported last, held while it does not run (a
+        // core stall or an MCU reset) — the drivers hold its last frame too.
+        private CtrlOutputs _lastOutputs;
+        private int _lastPhase = -99;
 
         // Actuation transport delay ring (actuationDelayTicks control ticks).
         private float[][] _cmdRing;
@@ -800,8 +810,21 @@ namespace AIHWSim.Core
         {
             float controlDt = _decimation / (float)physicsRateHz;
 
+            // 0. Faults due this tick (VAL-11): parts, pack and scheduler.
+            bool stalled = false;
+            if (Faults.Any)
+            {
+                Faults.Bind(sensorRig, Car);
+                Faults.Tick(TimeUs * 1e-6, _lastPhase);
+                stalled = Faults.CoreStalled;
+                if (sensorRig != null) sensorRig.Faults = Faults;
+                if (Faults.TakeMcuReset()) PowerCycleController();
+            }
+
             // 1. Sensors — built-in (wheel vel + IMU) and the configurable rig.
             _vehicle.SampleSensors(controlDt, _wheelVel, _gyro, _accel);
+            if (Faults.ImuNan)
+                for (int i = 0; i < 3; i++) { _gyro[i] = float.NaN; _accel[i] = float.NaN; }
             sensorRig?.Sample(controlDt, TimeUs);
 
             // The clock as the firmware reads it (TIM-03 jitter), and the dt
@@ -836,6 +859,13 @@ namespace AIHWSim.Core
             if (Mode == DriveMode.Manual)
             {
                 _manualDriver?.ReadManualCommands(_actuators);
+            }
+            else if (ControllerReady && stalled)
+            {
+                // The firmware is not running: no step and no command frame.
+                // The drivers hold the last one until their watchdog acts.
+                outputs = _lastOutputs;
+                _debugExtN = 0;
             }
             else if (ControllerReady)
             {
@@ -874,6 +904,13 @@ namespace AIHWSim.Core
                     try
                     {
                         _loader.Step(&inputs, &outputs);
+                        _debugExtN = 0;
+                        if (_loader.GetDebugExt != null)
+                            fixed (float* ext = _debugExt)
+                                _debugExtN = Math.Max(0, Math.Min(_debugExt.Length,
+                                    _loader.GetDebugExt(ext, _debugExt.Length)));
+                        _lastOutputs = outputs;
+                        _lastPhase = (int)Math.Round(outputs.debug[0]);
                     }
                     catch (Exception e)
                     {
@@ -898,7 +935,11 @@ namespace AIHWSim.Core
             // Actuation transport delay: hold N control ticks of commands in a
             // ring and apply the oldest (zero commands until the pipe fills) —
             // models the controller→ESC link latency of the real vehicle.
-            if (actuationDelayTicks > 0)
+            if (stalled && Mode != DriveMode.Manual)
+            {
+                // No frame leaves a stalled MCU.
+            }
+            else if (actuationDelayTicks > 0)
             {
                 int n = Mathf.Min(actuationDelayTicks, 32);
                 if (_cmdRing == null || _cmdRing.Length != n + 1)
@@ -957,6 +998,8 @@ namespace AIHWSim.Core
 
             for (int i = 0; i < _debugNames.Length && i < 16; i++)
                 Hub.SetValue("dbg/" + _debugNames[i].Trim(), outputs.debug[i]);
+            for (int i = 16; i < _debugNames.Length; i++)
+                Hub.SetValue("dbg/" + _debugNames[i].Trim(), i - 16 < _debugExtN ? _debugExt[i - 16] : float.NaN);
 
             Hub.Commit(_simTime);
         }
@@ -1016,10 +1059,36 @@ namespace AIHWSim.Core
             _simTime = (float)(us * 1e-6);
         }
 
+        /// <summary>
+        /// VAL-11 MCU reset: the firmware boots again from power-on (shutdown,
+        /// init, configure), its RAM gone, while the car carries on moving.
+        /// </summary>
+        private void PowerCycleController()
+        {
+            if (!ControllerReady) return;
+            try
+            {
+                _loader.Shutdown?.Invoke();
+                int rc = _loader.Init(controlRateHz);
+                if (rc != 0) Debug.LogWarning($"[SimRunner] ctrl_init returned {rc} after an MCU reset");
+                ConfigureControllerSensors();
+                _lastReportedUs = long.MinValue;
+                _lastOutputs = default;
+            }
+            catch (Exception e)
+            {
+                Debug.LogError($"[SimRunner] Controller reset faulted: {e.Message}");
+                SafeShutdown();
+            }
+        }
+
         /// <summary>Reset the run in place: respawn the vehicle and clear telemetry history.</summary>
         public void RestartRun()
         {
             _vehicle?.ResetVehicle();
+            sensorRig?.ResetSampling();
+            _lastOutputs = default;
+            _lastPhase = -99;
             Hub?.Clear();
             RebaseClock(0);
             _controlTick = 0;

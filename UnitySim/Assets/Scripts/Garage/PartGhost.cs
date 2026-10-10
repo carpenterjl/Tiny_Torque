@@ -93,6 +93,7 @@ namespace AIHWSim.Garage
                 case SensorType.TofMz:      PartVisualFactory.BuildTofViz(g.Root.transform); break;
                 case SensorType.Flow:       PartVisualFactory.BuildColorViz(g.Root.transform); break;
                 case SensorType.Uwb:        PartVisualFactory.BuildRfViz(g.Root.transform); break;
+                case SensorType.Rc:         PartVisualFactory.BuildRfViz(g.Root.transform); break;
                 default:                    PartVisualFactory.BuildTofViz(g.Root.transform); break;
             }
             g.Finish();

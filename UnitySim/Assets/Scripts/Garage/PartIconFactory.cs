@@ -44,6 +44,7 @@ namespace AIHWSim.Garage
                 "tofmz"         => p => PartVisualFactory.BuildTofViz(p),
                 "flow"          => p => PartVisualFactory.BuildColorViz(p),
                 "uwb"           => p => PartVisualFactory.BuildRfViz(p),
+                "rc"            => p => PartVisualFactory.BuildRfViz(p),
                 "bump"          => p => PartVisualFactory.BuildBumpViz(p),
                 "rf"            => p => PartVisualFactory.BuildRfViz(p),
                 // The LED's dome deliberately lives on the DEFAULT layer (the

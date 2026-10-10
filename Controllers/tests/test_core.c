@@ -70,11 +70,12 @@ int main(void)
         TtLogFrame f;
         size_t n = sizeof(names) / sizeof(names[0]);
         CHECK("OpusLog has one float per table row", OPUS_LOG_N == n);
-        CHECK("the sim's 16 debug slots hold the whole log", n <= 16);
+        CHECK("the log fits a TtLogFrame (16 in CtrlOutputs.debug, the rest via ctrl_get_debug_ext)",
+              n <= TT_LOG_MAX);
         CHECK("row 0 is `state` (MissionHud matches it)", strcmp(names[0], "state") == 0);
         memset(&lg, 0, sizeof(lg));
         lg.state = 7.0f;
-        lg.stop_err_mm = -1.5f;
+        ((float *)&lg)[OPUS_LOG_N - 1] = -1.5f;
         tt_log_pack(&f, &lg, OPUS_LOG_N, 42u, 123456u, tt_params_hash(p));
         CHECK("frame carries magic, seq and count",
               f.magic == TT_LOG_MAGIC && f.seq == 42u && f.n == OPUS_LOG_N);

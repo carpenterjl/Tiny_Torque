@@ -52,6 +52,8 @@ typedef struct {
 
     OpusPhase phase;
     int   fault;           /* FA_* bitmask */
+    int   drive_ok;        /* the safety layer has armed the drives (1 when
+                              there is none); ARMED waits for it to launch */
 
     /* Estimator state. Odometry is kept in whole encoder counts (exact at any
      * distance) plus a small float correction, and turned into metres only

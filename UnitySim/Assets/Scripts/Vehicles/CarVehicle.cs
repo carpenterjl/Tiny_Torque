@@ -1644,6 +1644,7 @@ namespace AIHWSim.Vehicles
         public void ResetVehicleTo(Vector3 pos, Quaternion rot)
         {
             System.Array.Clear(_cmd, 0, _cmd.Length);
+            _cmdAgeS = 0f;
             _handbrake = false;
             foreach (var m in _motors) m?.ResetMotor();
             BatteryCurrent = 0f;
@@ -1784,6 +1785,29 @@ namespace AIHWSim.Vehicles
         {
             int n = Mathf.Min(actuatorCommands.Length, _cmd.Length);
             for (int i = 0; i < n; i++) _cmd[i] = actuatorCommands[i];
+            _cmdAgeS = 0f;
+        }
+
+        // Time since the last command frame (SetCommands): what a driver's
+        // command watchdog times (MotorParams.cmdTimeoutMs). The motors are
+        // handed the latched command every physics step regardless.
+        private float _cmdAgeS;
+
+        /// <summary>VAL-11 brownout: the pack's terminal voltage is held at or
+        /// below this (V) for the drivers and the pack sense alike. 0 = none.</summary>
+        public float FaultPackVolts;
+
+        /// <summary>VAL-11 tip-over: roll the body <paramref name="deg"/> about
+        /// its own forward axis, lifted clear of the floor, keeping its
+        /// velocity — it lands on its side.</summary>
+        public void FaultRoll(float deg)
+        {
+            if (_body == null) return;
+            Quaternion q = Quaternion.AngleAxis(deg, _body.rotation * Vector3.forward) * _body.rotation;
+            Vector3 p = _body.position + Vector3.up * 0.15f;
+            _body.position = p;
+            _body.rotation = q;
+            transform.SetPositionAndRotation(p, q);
         }
 
         public void SetHandbrake(bool on) => _handbrake = on;
@@ -1869,8 +1893,10 @@ namespace AIHWSim.Vehicles
                     v0 = cells * CellOcv(BatterySoc);
                 }
                 vTerm = Mathf.Max(0f, v0 - batteryInternalR * BatteryCurrent);
+                if (FaultPackVolts > 0f) vTerm = Mathf.Min(vTerm, FaultPackVolts);
             }
             BatteryTerminalV = batteryNominalV > 0f ? vTerm : 0f;
+            _cmdAgeS += dt;
 
             // Drive: each motor turns its latched command into wheel torque through
             // its drive (DC model behind an ESC, or a current-controlled FOC
@@ -1890,6 +1916,7 @@ namespace AIHWSim.Vehicles
                 // a fresh pack above nominal must not be clamped down to it (BUG-07).
                 // (An FOC command is amps; its driver applies the rail itself.)
                 m.BusVoltage = batteryNominalV > 0f ? Mathf.Max(0.01f, vTerm) : 0f;
+                m.CommandAgeS = _cmdAgeS;
                 m.SetCommand(volts);
                 m.StepDrive(dt);
                 // Signed pack draw from each motor's power balance — a shorted-

@@ -54,7 +54,10 @@ namespace AIHWSim.EditorTools
             CheckContract<MultizoneTofSensor>();
             CheckContract<FlowSensor>();
             CheckContract<UwbSensor>();
+            CheckContract<RcReceiverSensor>();
             CheckAbiTags();
+            CheckRcReceiver();
+            CheckFaultSpecs();
             CheckRealismProfile();
             CheckSoundField();
             CheckRfField();
@@ -137,6 +140,54 @@ namespace AIHWSim.EditorTools
             True("SensorType.TofMz == 14", (int)SensorType.TofMz == 14);
             True("SensorType.Flow == 15", (int)SensorType.Flow == 15);
             True("SensorType.Uwb == 16", (int)SensorType.Uwb == 16);
+            True("SensorType.Rc == 20", (int)SensorType.Rc == 20);
+        }
+
+        // ---- FW-08: the RC receiver's link-loss behaviour -------------------
+
+        private static void CheckRcReceiver()
+        {
+            var go = new GameObject("rc_probe");
+            try
+            {
+                var rc = go.AddComponent<RcReceiverSensor>();
+                rc.Bind(null, go.transform);
+                var d = new float[10];
+                rc.Sample(0.02f, d, 0);
+                True("RC: arm switch on reads +1 on ch5, kill off -1 on ch6", d[4] == 1f && d[5] == -1f && d[8] == 0f && d[9] == 0f);
+                rc.killSwitch = true;
+                rc.Sample(0.02f, d, 0);
+                True("RC: kill switch reads +1 on ch6", d[5] == 1f);
+                rc.killSwitch = false;
+                rc.Sample(0.02f, d, 0);
+                rc.linkLost = true;
+                rc.armSwitch = false;               // not received: the last frame repeats
+                rc.Sample(0.02f, d, 0);
+                True("RC: link lost: frame_lost, last channels repeated, no failsafe yet",
+                     d[8] == 1f && d[9] == 0f && d[4] == 1f);
+                for (int i = 0; i < 50; i++) rc.Sample(0.02f, d, 0);
+                True("RC: failsafe after the receiver's 1 s hold", d[8] == 1f && d[9] == 1f);
+                rc.linkLost = false;
+                rc.Sample(0.02f, d, 0);
+                True("RC: link back: fresh channels, flags clear", d[8] == 0f && d[9] == 0f && d[4] == -1f);
+            }
+            finally { Object.DestroyImmediate(go); }
+        }
+
+        // ---- VAL-11: fault specs parse as written ---------------------------
+
+        private static void CheckFaultSpecs()
+        {
+            var a = FaultSpec.Parse("DrvTrip:motor_wheel_rl@p4+1.5/2 64");
+            True("FaultSpec: kind, target, phase, start, duration, magnitude",
+                 a.kind == FaultKind.DrvTrip && a.target == "motor_wheel_rl" && a.afterPhase == 4 &&
+                 Mathf.Abs(a.startS - 1.5f) < 1e-6f && Mathf.Abs(a.durS - 2f) < 1e-6f && a.mag == 64f);
+            var b = FaultSpec.Parse("EncGlitch:enc_fl@3 5000 every 0.2");
+            True("FaultSpec: absolute start, repeat period", b.kind == FaultKind.EncGlitch &&
+                 b.afterPhase == -99 && b.startS == 3f && b.mag == 5000f && Mathf.Abs(b.periodS - 0.2f) < 1e-6f);
+            var c = FaultSpec.Parse("rckill@p4");
+            True("FaultSpec: case-insensitive kind, phase start with no offset",
+                 c.kind == FaultKind.RcKill && c.afterPhase == 4 && c.startS == 0f);
         }
 
         // ---- SEN-06/09: the realistic profile -------------------------------

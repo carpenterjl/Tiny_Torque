@@ -61,6 +61,7 @@ namespace AIHWSim.Garage
                 Bridge.SensorType.TofMz => TofMass,
                 Bridge.SensorType.Flow => ColorSensorMass,
                 Bridge.SensorType.Uwb => RfSensorMass,
+                Bridge.SensorType.Rc => RfSensorMass,
                 _ => TofMass,
             };
         }

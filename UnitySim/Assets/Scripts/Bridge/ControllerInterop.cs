@@ -46,6 +46,7 @@ namespace AIHWSim.Bridge
         FocFb      = 17,  // v7 (reserved): FOC driver feedback
         SteerFb    = 18,  // v7: the steering servo; describes actuator[6]
         SteerAngle = 19,  // v7: measured road-wheel angle [rad, + left] (SteerAngleSensor)
+        Rc         = 20,  // v7: RC receiver [ch1..ch8, frame_lost, failsafe] (RcReceiverSensor)
     }
 
     // One manifest entry per configured sensor. char name[32] is an inline
@@ -182,6 +183,10 @@ namespace AIHWSim.Bridge
 
     [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
     public delegate float CtrlGetControlRateDelegate();
+
+    /// <summary>Optional v7: debug channels past the 16 of CtrlOutputs.debug.</summary>
+    [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+    public unsafe delegate int CtrlGetDebugExtDelegate(float* dst, int max);
 
     /// <summary>
     /// Mirror of the CTRL_VEHICLE_* enum in controller_api.h — the cars a

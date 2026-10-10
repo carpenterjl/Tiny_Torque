@@ -76,6 +76,8 @@ namespace AIHWSim.Vehicles
         public float modulationMax;      // usable fraction of V_bus; 0 → 0.95
         public float busOvTripV;         // over-voltage fault (V); 0 = none
         public float busOvDerateV;       // regen fades from here to the trip; 0 = trip − 0.3 V
+        public float cmdTimeoutMs;       // driver watchdog: no command frame this long
+                                         // = bridge off (fault 16); 0 = none
 
         // Thermal (ACT-05): winding ↔ case ↔ ambient. R_wc = 0 = model off.
         public float thermalRwcKPerW;    // winding → case

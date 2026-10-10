@@ -113,9 +113,12 @@ name these. A wheel with no motor free-rolls. Manual mode drives the same slots
 | `ctrl_configure2`       | `void (const SensorInfo2*, int count)`       | **Optional** (ABI v7). Extended manifest; replaces `ctrl_configure` when exported. |
 | `ctrl_reset`            | `void (void)`                                | **Optional** (ABI v7). Respawn: drop mission state, keep one-time init. |
 | `ctrl_get_control_rate` | `float (void)`                               | **Optional** (ABI v7). Wanted tick rate in Hz; 0 = host default. Asked before `ctrl_init`. |
+| `ctrl_get_debug_ext`    | `int (float* dst, int max)`                  | **Optional** (ABI v7). Debug channels past the 16 of `debug[]`; called after each `ctrl_step`, returns how many it wrote. |
 
 `debug[i]` is graphed/logged as `dbg/<name_i>`, where names come from
-`ctrl_get_debug_names()` in order.
+`ctrl_get_debug_names()` in order. A v7 controller may name more than 16: the
+host then calls `ctrl_get_debug_ext()` after every step and logs its values as
+the 17th name on (up to 32 more).
 
 ### Choosing a vehicle (ABI v5)
 
@@ -197,7 +200,10 @@ For a v7 controller the host:
   its six channels are what a real driver can measure: `[Iq A, Id A, ω_m rad/s
   (the driver's PLL), V_bus V, T_winding °C, fault bits]` — fault 1 =
   over-voltage (latched, bridge off), 2 = thermal derate, 4 = current-limited,
-  8 = voltage-limited. There is no torque channel: torque is not measurable.
+  8 = voltage-limited, 16 = command timeout (no frame inside the driver's
+  `cmdTimeoutMs`: bridge off until one arrives), 32 = rotor sensor lost, 64 =
+  over-current trip; 1, 16, 32 and 64 switch the bridge off. There is no
+  torque channel: torque is not measurable.
   The design picks the drive per motor (`MotorParams.driveMode`); a v6
   controller sees the same tag and slot units it would not understand, so FOC
   designs are for v7 controllers.
@@ -224,6 +230,12 @@ For a v7 controller the host:
     anchor_z]`. The anchor position is in the world frame x = Unity +z, y =
     −x, z = up. Errors: antenna-delay bias, LOS σ, NLOS bias and dropouts,
     rare outliers.
+- **Reports an RC receiver as `SENSOR_RC`** (tag 20, FW-08), SBUS/CRSF
+  class: `[ch1..ch8 in −1..1, frame_lost 0/1, failsafe 0/1]`, one frame per
+  sample (50 Hz on the FOC twin). By convention ch5 (index 4) is the arm
+  switch and ch6 (index 5) the kill switch, +1 = on / kill. With the link down
+  the receiver keeps sending, each frame flagged lost and repeating the last
+  channels, and declares failsafe after its hold time (1 s).
 - **Reports a steering-angle sensor as `SENSOR_STEER_ANGLE`** (tag 19):
   `[angle_rad]`, the bicycle-model road-wheel angle, + = left, after the
   servo's lag and the linkage backlash. It's an optional part (a pot or
@@ -238,8 +250,22 @@ For a v7 controller the host:
 
 `Controllers/targets/sim/opus_main.c` is the reference v7 controller. It turns
 `CtrlInputs` into the portable `TtMeas` (`Controllers/core/tt_types.h`), runs
-the mission core, and turns the `TtCmd` (wheel torque per wheel, steer in
-radians) back into actuator slots.
+the firmware loop (`opus_mission/opus_fw.h`: the mission, the navigation EKF
+and the safety layer `core/tt_safety.h`), and turns the `TtCmd` (wheel torque
+per wheel, steer in radians) back into actuator slots.
+
+### Fault injection (VAL-11)
+
+The simulator can inject faults at their physical source
+(`Scripts/Sensors/FaultInjector.cs`): a part that goes stale (value and stamp
+held, as an I²C NACK), sticks (value frozen, stamps fresh) or reads NaN; an
+encoder glitch; a driver trip or a hot winding; a pack brownout; UWB anchors
+that stop replying; RC link loss, kill or disarm; a stalled or resetting MCU
+(no step and no command frame, so the drivers' own watchdogs act); a car
+rolled onto its side. Headless: `OpusMissionRunner.RunHeadless -opusFaults
+"RcKill@p4+1;Stale:imu@3/0.5"` for one run, `-opusFaultSuite 1` for the
+graded suite. The same catalogue on `TtMeas`/`TtCmd` is `Controllers/tests/
+tt_fault.h`, used by CTest's `tt_safety_faults`.
 
 ## Per-vehicle conventions
 

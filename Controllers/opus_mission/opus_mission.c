@@ -123,6 +123,7 @@ void opus_reset(OpusState *st)
     st->odo_l = l;
     st->odo_r = r;
     st->phase = OPUS_BOOT;
+    st->drive_ok = 1;
 
     pid_init(&st->spd_pid, GA_SPD_KP, GA_SPD_KI, 0.0f, -GA_SPD_TRIM, GA_SPD_TRIM);
     pid_init(&st->yaw_pid, GA_YAW_KP, GA_YAW_KI, 0.0f, -GA_YAW_TRIM, GA_YAW_TRIM);
@@ -352,8 +353,18 @@ void opus_step(OpusState *st, const TtMeas *m, TtCmd *out)
 
     mpc_l = tt_m_per_count(p, st->odo_l);
     mpc_r = tt_m_per_count(p, st->odo_r);
-    dl = enc_delta(st, m, st->odo_l, dt, &glitch);
-    dr = enc_delta(st, m, st->odo_r, dt, &glitch);
+    {
+        int gl = 0, gr = 0;
+        dl = enc_delta(st, m, st->odo_l, dt, &gl);
+        dr = enc_delta(st, m, st->odo_r, dt, &gr);
+        glitch = gl || gr;
+        /* A rejected delta is a MISSING one, not a zero: a zero beside the
+         * other wheel's real travel reads as a sharp yaw (a 4.5 cm step
+         * turned the heading 3.6 deg, VAL-11). Take the other wheel's travel
+         * for it; the heading below then leans on the gyro for this tick. */
+        if (gl && !gr && mpc_l > 0.0f) dl = (int32_t)lroundf((float)dr * mpc_r / mpc_l);
+        else if (gr && !gl && mpc_r > 0.0f) dr = (int32_t)lroundf((float)dl * mpc_l / mpc_r);
+    }
     if (glitch) st->fault |= FA_TICK_GLITCH;
     ds_l = (float)dl * mpc_l;
     ds_r = (float)dr * mpc_r;
@@ -439,7 +450,9 @@ void opus_step(OpusState *st, const TtMeas *m, TtCmd *out)
      * is 0.02 degrees over this turn. The gyro is fused for its high-rate
      * content; in FLU a left turn is positive, so there is no sign to learn. */
     psi_dot_enc = (ds_r - ds_l) / (p->track_front_m * dt);
-    if (m->imu.st.valid && finitef_(m->imu.gyro[2]))
+    if (glitch && m->imu.st.valid && finitef_(m->imu.gyro[2]))
+        st->psi_dot = m->imu.gyro[2];   /* no encoder differential this tick */
+    else if (m->imu.st.valid && finitef_(m->imu.gyro[2]))
         st->psi_dot = GA_GYRO_ALPHA * m->imu.gyro[2] + (1.0f - GA_GYRO_ALPHA) * psi_dot_enc;
     else
         st->psi_dot = psi_dot_enc;   /* adequate on its own; just noisier */
@@ -484,7 +497,7 @@ void opus_step(OpusState *st, const TtMeas *m, TtCmd *out)
     }
 
     if (st->fault & (FA_IMPACT | FA_OBSTACLE | FA_ENC_DEAD | FA_NO_ENCODERS |
-                     FA_NO_MOTORS | FA_NAN | FA_PARAMS))
+                     FA_NO_MOTORS | FA_NAN | FA_PARAMS | FA_SAFETY))
         st->phase = OPUS_FAULT;
 
     st->phase_t += dt;
@@ -516,7 +529,8 @@ void opus_step(OpusState *st, const TtMeas *m, TtCmd *out)
 
     case OPUS_ARMED:
         out->brake_01 = 1.0f;
-        if (st->phase_t > SQ_ARM_DWELL_S) {
+        /* Launch only once the safety layer has armed the drives. */
+        if (st->phase_t > SQ_ARM_DWELL_S && st->drive_ok) {
             st->v_ref = 0.0f;
             begin_leg(st);
             enter(st, OPUS_LAUNCH);

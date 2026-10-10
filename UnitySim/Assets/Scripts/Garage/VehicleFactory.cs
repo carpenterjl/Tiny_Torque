@@ -444,6 +444,13 @@ namespace AIHWSim.Garage
                     PartVisualFactory.BuildRfViz(go.transform);
                     break;
                 }
+                case SensorType.Rc:
+                {
+                    var rc = go.AddComponent<RcReceiverSensor>();
+                    sc = rc;
+                    PartVisualFactory.BuildRfViz(go.transform);
+                    break;
+                }
                 case SensorType.SteerAngle:
                 {
                     var s = go.AddComponent<SteerAngleSensor>();

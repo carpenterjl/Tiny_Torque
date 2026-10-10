@@ -41,6 +41,7 @@ namespace AIHWSim.Bridge
         public CtrlConfigure2Delegate Configure2 { get; private set; }
         public CtrlResetDelegate Reset { get; private set; }
         public CtrlGetControlRateDelegate GetControlRate { get; private set; }
+        public CtrlGetDebugExtDelegate GetDebugExt { get; private set; }
 
         /// <summary>
         /// The ABI the loaded DLL was built against: what ctrl_abi_version()
@@ -149,6 +150,7 @@ namespace AIHWSim.Bridge
                 Configure2 = BindOptional<CtrlConfigure2Delegate>("ctrl_configure2");
                 Reset = BindOptional<CtrlResetDelegate>("ctrl_reset");
                 GetControlRate = BindOptional<CtrlGetControlRateDelegate>("ctrl_get_control_rate");
+                GetDebugExt = BindOptional<CtrlGetDebugExtDelegate>("ctrl_get_debug_ext");
             }
             return true;
         }
@@ -182,6 +184,7 @@ namespace AIHWSim.Bridge
             Configure2 = null;
             Reset = null;
             GetControlRate = null;
+            GetDebugExt = null;
             AbiVersion = 0;
 
             if (_module != IntPtr.Zero)

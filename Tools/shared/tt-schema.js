@@ -78,6 +78,7 @@
         modulationMax: 0,
         busOvTripV: 0,
         busOvDerateV: 0,
+        cmdTimeoutMs: 0,
         thermalRwcKPerW: 0,
         thermalCwJPerK: 0,
         thermalRcaKPerW: 0,
@@ -96,7 +97,7 @@
         'rotorInertia', 'escPwmSteps', 'escDeadbandV', 'escTimeConstMs',
         'escSlewVPerS', 'escMovingOmega', 'escDragBrakePct', 'escBrakeStrengthPct', 'escReverseLockMs',
         'driveMode', 'etaBack', 'polePairs', 'inductance', 'currentLoopHz', 'cmdPeriodMs',
-        'cmdLatencyMs', 'maxRegenCurrent', 'modulationMax', 'busOvTripV', 'busOvDerateV', 'thermalRwcKPerW',
+        'cmdLatencyMs', 'maxRegenCurrent', 'modulationMax', 'busOvTripV', 'busOvDerateV', 'cmdTimeoutMs', 'thermalRwcKPerW',
         'thermalCwJPerK', 'thermalRcaKPerW', 'thermalCcJPerK', 'tempDerateStartC', 'tempLimitC', 'coggingNm',
         'coggingPerRev', 'rippleFrac', 'lashRad'
     ];
