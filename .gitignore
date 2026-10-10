@@ -87,6 +87,9 @@ UnitySim/Installer/Output/
 
 # ---- Native controller build ----
 Controllers/build/
+# The lockstep bridge and host-built firmware images (Controllers/CMakeLists.txt
+# TT_LINK_DIR), rebuilt with the DLLs.
+UnitySim/Native/
 
 # A compiler unpacked beside the game (see build.ps1). Redistributable, but a
 # gigabyte of it, and never a source file in this repo.

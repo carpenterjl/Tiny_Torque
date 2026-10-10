@@ -56,6 +56,7 @@ namespace AIHWSim.EditorTools
             CheckFrameLayout();
             CheckDocInventory();
             CheckPipeLifecycle();
+            CheckTickKeyedRaw();
 
             foreach (string f in Fails) Debug.LogError($"{Tag} FAIL {f}");
             string line = Fails.Count == 0
@@ -77,6 +78,55 @@ namespace AIHWSim.EditorTools
         {
             _checks++;
             if (!cond) Fails.Add(what);
+        }
+
+        // ---- HIL-05 ----------------------------------------------------------
+
+        /// <summary>
+        /// Tick-keyed raw commands take effect AT their tick, in tick order, the
+        /// last one due winning; early ones wait, late ones apply at once and are
+        /// counted; an untagged one applies on arrival; a full queue drops the
+        /// oldest.
+        /// </summary>
+        private static void CheckTickKeyedRaw()
+        {
+            var go = new GameObject("ipc_tick_check");
+            try
+            {
+                var d = go.AddComponent<IpcActuatorDriver>();
+                d.Configure(null, -1f);                      // no dead-man: Live always
+                var o = new float[8];
+                ActuateMsg At(long tick, float v) =>
+                    new ActuateMsg { t = "actuate", tick = tick, actuators = new[] { v } };
+
+                d.Receive(At(12, 12f));
+                d.Receive(At(10, 10f));
+                d.Receive(At(11, 11f));
+                d.ApplyDue(9);
+                d.ReadManualCommands(o);
+                Eq("tick-keyed: nothing applies before its tick", 0f, o[0]);
+                d.ApplyDue(10);
+                d.ReadManualCommands(o);
+                Eq("tick-keyed: tick 10's vector on tick 10", 10f, o[0]);
+                Eq("tick-keyed: applied tick", 10L, d.AppliedTick);
+                d.ApplyDue(12);                              // 11 was missed: applied, counted late
+                d.ReadManualCommands(o);
+                Eq("tick-keyed: the latest due wins", 12f, o[0]);
+                Eq("tick-keyed: one applied late", 1, d.Late);
+                Eq("tick-keyed: two on time", 2, d.OnTime);
+                d.Receive(At(20, 20f));
+                d.Receive(At(20, 21f));                      // same tick: replaces
+                d.ApplyDue(20);
+                d.ReadManualCommands(o);
+                Eq("tick-keyed: a second vector for a tick replaces the first", 21f, o[0]);
+                d.Receive(new ActuateMsg { t = "actuate", actuators = new[] { 5f } });
+                d.ReadManualCommands(o);
+                Eq("untagged: applies on arrival", 5f, o[0]);
+                Eq("untagged: applied tick -1", -1L, d.AppliedTick);
+                for (int i = 0; i < IpcActuatorDriver.MaxQueued + 3; i++) d.Receive(At(100 + i, i));
+                Eq("tick-keyed: a full queue drops the oldest", 3, d.Dropped);
+            }
+            finally { UnityEngine.Object.DestroyImmediate(go); }
         }
 
         // ---- constants -------------------------------------------------------
@@ -181,8 +231,10 @@ namespace AIHWSim.EditorTools
             {
                 t = "actuate", id = 0, vehicleId = 3,
                 actuators = new[] { 1f, 2f, 3f, 4f, 5f, 6f, 7f, 8f },
-                setpoints = new[] { 1.5f, 2.5f, 0f, 0f }, handbrake = true,
+                setpoints = new[] { 1.5f, 2.5f, 0f, 0f }, handbrake = true, tick = 4242,
             });
+            Eq("actuate without a tick reads -1 (apply on arrival)", -1L,
+               JsonUtility.FromJson<ActuateMsg>("{\"t\":\"actuate\",\"vehicleId\":1}").tick);
             RoundTrip(new TeleportMsg
             {
                 t = "teleport", id = 10, vehicleId = 3,

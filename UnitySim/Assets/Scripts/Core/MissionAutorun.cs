@@ -65,6 +65,14 @@ namespace AIHWSim.Core
             public bool faultSuite;
             /// <summary>Comma-separated suite scenarios to run; empty = all.</summary>
             public string faultOnly = "";
+            /// <summary>HIL-01/04: run the firmware through the lockstep bridge —
+            /// "dll", "exe", "serial:COM5" (ControllerLinkOptions.Parse). Empty =
+            /// in-process, the default.</summary>
+            public string link = "";
+            /// <summary>The bridge's per-tick wait for the firmware, ms; 0 = its default.</summary>
+            public int linkTimeoutMs;
+            /// <summary>Wire capture of the linked run (tools/tt_replay).</summary>
+            public string linkRecord = "";
         }
 
         [Serializable]
@@ -88,6 +96,8 @@ namespace AIHWSim.Core
             public int controlHz;
             public int safeFault, safeState;
             public string note = "";
+            /// <summary>The lockstep link's statistics; "" in-process.</summary>
+            public string link = "";
         }
 
         public static string RequestPath =>
@@ -160,6 +170,24 @@ namespace AIHWSim.Core
             }
             SimulationRunner.NoiseSeedOverride = _req.noiseSeed;
             SimulationRunner.ControlRateOverride = _req.controlHz;
+            SimulationRunner.LinkOverride = null;
+            if (!string.IsNullOrEmpty(_req.link))
+            {
+                try
+                {
+                    var lo = ControllerLinkOptions.Parse(_req.link);
+                    if (_req.linkTimeoutMs > 0) lo.timeoutMs = _req.linkTimeoutMs;
+                    lo.record = _req.linkRecord ?? "";
+                    SimulationRunner.LinkOverride = lo;
+                    Debug.Log($"[MissionAutorun] firmware through the lockstep link: {lo}");
+                }
+                catch (ArgumentException e)
+                {
+                    Debug.LogError($"[MissionAutorun] {e.Message}");
+                    _req = null;
+                    return;
+                }
+            }
             GameFlow.ActiveDesign = design;
             if (track != null)
             {
@@ -342,6 +370,7 @@ namespace AIHWSim.Core
             _res.fault = Dbg("dbg/fault", 0);
             _res.safeFault = Dbg("dbg/safe_fault", 0);
             _res.safeState = Dbg("dbg/safe_state", 0);
+            _res.link = _runner != null ? _runner.LinkStats : "";
             _res.elapsedSec = _elapsed;
             _res.odo_final = DbgF("dbg/odo_m");
             _res.truth_final = (float)_truth;

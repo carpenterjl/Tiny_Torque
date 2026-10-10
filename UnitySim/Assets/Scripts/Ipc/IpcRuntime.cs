@@ -25,6 +25,7 @@ namespace AIHWSim.Ipc
     /// <c>DontDestroyOnLoad</c> so a client can hold a connection across
     /// <c>load_track</c>. That is the same idiom <c>NetSession.Create</c> uses.
     /// </summary>
+    [DefaultExecutionOrder(-100)]
     public sealed partial class IpcRuntime : MonoBehaviour
     {
         private const int MaxMessagesPerFrame = 256;
@@ -180,14 +181,35 @@ namespace AIHWSim.Ipc
                 Debug.Log("[IPC] client disconnected");
             }
 
-            int n = 0;
-            while (n++ < MaxMessagesPerFrame && _service.TryDequeueInbound(out var line))
-                Dispatch(line);
+            Drain();
 
             _registry.Refresh();
             _streamer.Tick();
 
             ReportDrops();
+        }
+
+        private void Drain()
+        {
+            int n = 0;
+            while (n++ < MaxMessagesPerFrame && _service.TryDequeueInbound(out var line))
+                Dispatch(line);
+        }
+
+        /// <summary>
+        /// HIL-05: read what has arrived before every physics step too, not only
+        /// once per rendered frame — several control ticks can run between two
+        /// frames, and a command keyed to one of them has to be in the queue
+        /// before that tick runs. Ordered before the runners (DefaultExecutionOrder).
+        /// </summary>
+        private void FixedUpdate()
+        {
+            // Only for the client Update has already seen: a reconnect is
+            // Update's to handle first (it resets the old client's state, and
+            // must not reset what the new one has just acquired).
+            if (_service == null || !_handshaken || !_service.ControlConnected ||
+                _service.ConnectEpoch != _seenEpoch) return;
+            Drain();
         }
 
         /// <summary>Surface dropped telemetry frames rather than letting a client

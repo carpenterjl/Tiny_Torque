@@ -166,6 +166,15 @@ namespace AIHWSim.Core
         /// request. Set by the headless harness (<c>-opusControlHz</c>) to show a
         /// firmware is rate-independent (TIM-06).</summary>
         public static int ControlRateOverride;
+
+        /// <summary>HIL-01/04: run the firmware through the lockstep bridge
+        /// (out of process, a host-built image, or a board) instead of loading
+        /// its DLL here. Null = in-process, as always.</summary>
+        public static ControllerLinkOptions LinkOverride;
+
+        /// <summary>The link's statistics (round trips, misses, wire errors),
+        /// or "" when the firmware runs in-process.</summary>
+        public string LinkStats => _loader?.Link != null ? _loader.Link.Stats() : "";
         private static void ApplyNoiseSeed()
         {
             if (_ordinalsResetFrame != Time.frameCount)
@@ -419,6 +428,11 @@ namespace AIHWSim.Core
             {
                 md["abi_version"] = _loader.AbiVersion.ToString();
                 md["frame"] = _loader.IsV7 ? "FLU" : "unity";
+                if (_loader.Link != null)
+                {
+                    md["link"] = LinkOverride != null ? LinkOverride.ToString() : _loader.Link.Mode;
+                    md["link_firmware"] = _loader.Link.Firmware;
+                }
                 try { md["dll_sha256"] = Sha256(File.ReadAllBytes(_loader.SourcePath)); }
                 catch (Exception) { /* the file may be mid-rebuild; leave it out */ }
             }
@@ -459,7 +473,10 @@ namespace AIHWSim.Core
         {
             _loader ??= new NativeControllerLoader();
             string path = AbsoluteDllPath();
-            if (_loader.Load(path))
+            bool loaded = LinkOverride != null
+                ? _loader.LoadLinked(path, LinkOverride, Path.GetFullPath(Path.Combine(Application.dataPath, "..")))
+                : _loader.Load(path);
+            if (loaded)
             {
                 ApplyRequestedControlRate();
                 int rc = _loader.Init(controlRateHz);
@@ -621,6 +638,7 @@ namespace AIHWSim.Core
             foreach (string n in InChannels) Hub.RegisterChannel(n);
             Hub.RegisterChannel("cmd/steer_deg");
             Hub.RegisterChannel("cmd/brake");
+            Hub.RegisterChannel("ctl/tick");
             Hub.RegisterChannel("veh/speed");
             Hub.RegisterChannel("veh/speed_kmh");
             Hub.RegisterChannel("veh/steer_deg");
@@ -811,7 +829,7 @@ namespace AIHWSim.Core
             float controlDt = _decimation / (float)physicsRateHz;
 
             // 0. Faults due this tick (VAL-11): parts, pack and scheduler.
-            bool stalled = false;
+            bool stalled = false, linkMissed = false;
             if (Faults.Any)
             {
                 Faults.Bind(sensorRig, Car);
@@ -904,13 +922,25 @@ namespace AIHWSim.Core
                     try
                     {
                         _loader.Step(&inputs, &outputs);
-                        _debugExtN = 0;
-                        if (_loader.GetDebugExt != null)
-                            fixed (float* ext = _debugExt)
-                                _debugExtN = Math.Max(0, Math.Min(_debugExt.Length,
-                                    _loader.GetDebugExt(ext, _debugExt.Length)));
-                        _lastOutputs = outputs;
-                        _lastPhase = (int)Math.Round(outputs.debug[0]);
+                        if (_loader.Link != null && _loader.Link.LastStepMissed)
+                        {
+                            // HIL-01: the firmware did not answer in time, so no
+                            // command frame left it this tick — the same as a
+                            // stalled MCU: the drives hold the last one until
+                            // their watchdog acts, and the log holds too.
+                            outputs = _lastOutputs;
+                            linkMissed = true;
+                        }
+                        else
+                        {
+                            _debugExtN = 0;
+                            if (_loader.GetDebugExt != null)
+                                fixed (float* ext = _debugExt)
+                                    _debugExtN = Math.Max(0, Math.Min(_debugExt.Length,
+                                        _loader.GetDebugExt(ext, _debugExt.Length)));
+                            _lastOutputs = outputs;
+                            _lastPhase = (int)Math.Round(outputs.debug[0]);
+                        }
                     }
                     catch (Exception e)
                     {
@@ -935,7 +965,7 @@ namespace AIHWSim.Core
             // Actuation transport delay: hold N control ticks of commands in a
             // ring and apply the oldest (zero commands until the pipe fills) —
             // models the controller→ESC link latency of the real vehicle.
-            if (stalled && Mode != DriveMode.Manual)
+            if ((stalled || linkMissed) && Mode != DriveMode.Manual)
             {
                 // No frame leaves a stalled MCU.
             }
@@ -990,6 +1020,9 @@ namespace AIHWSim.Core
             for (int i = 0; i < 4; i++) Hub.SetValue(InChannels[10 + i], sp != null ? sp[i] : 0f);
             for (int i = 0; i < 8; i++) Hub.SetValue(InChannels[14 + i], _rawOut[i]);
             Hub.SetValue("mode", Mode == DriveMode.Manual ? 0f : 1f);
+            // HIL-05: the control tick this frame is, for IPC clients that key
+            // their raw commands to ticks (exact as a float for 2^24 ticks).
+            Hub.SetValue("ctl/tick", _controlTick);
 
             // Car command channels (cmd/steer_deg, cmd/brake, cmd/<motor>/volt) are
             // published by CarVehicle.PublishTelemetry now that drive = voltage.

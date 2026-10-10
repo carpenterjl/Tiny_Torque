@@ -25,6 +25,11 @@
     .metrics { display: flex; gap: 18px; flex-wrap: wrap; font-family: var(--mono); font-size: 12.5px; margin-top: 6px; }
     .metrics b { color: var(--fg-bright); }
     .metrics span { color: var(--fg-dim); }
+    .alignrow { display: flex; gap: 8px; align-items: end; flex-wrap: wrap; margin: 6px 0; }
+    .alignrow label { font-size: 11.5px; color: var(--fg-dim); display: flex; flex-direction: column; gap: 2px; }
+    .alignrow input[type=number] { width: 90px; }
+    .alignrow select { max-width: 220px; }
+    table.gap td.num, table.gap th.num { font-family: var(--mono); font-size: 12px; }
 </style>
 </head>
 <body>
@@ -93,6 +98,11 @@
                 <li><b>Two runs at once.</b> Load a second CSV and both are drawn together. This is the
                     view for comparing a sim run against a real one, or a gain change against the run
                     before it.</li>
+                <li><b>The reality gap, in numbers.</b> With two runs loaded, line them up — on an event
+                    both share (the first non-zero command, the mission entering a phase) or on the best
+                    fit of one trace — map the channels whose names differ, and get RMSE, bias, worst
+                    error, R² and the difference in each channel's integral, plus the path error, on a
+                    common time base.</li>
                 <li><b>Ground truth versus the controller's own belief.</b> Plot
                     <code>veh/pos_x</code> and <code>veh/pos_z</code> against whatever your firmware
                     reports as distance. Agreement between them proves the loop closed; agreement with
@@ -106,6 +116,7 @@
 
 <script src="shared/tt-schema.js"></script>
 <script src="shared/tt-sim.js"></script>
+<script src="shared/tt-align.js"></script>
 <script src="shared/tt-plot.js"></script>
 <script src="shared/tt-ui.js"></script>
 <script src="shared/tt-export.js"></script>
@@ -113,7 +124,7 @@
 <script>
 (function () {
 'use strict';
-const Sim = TT.Sim, U = TT.UI, X = TT.Export, JG = TT.JGraph;
+const Sim = TT.Sim, U = TT.UI, X = TT.Export, JG = TT.JGraph, A = TT.Align;
 const el = U.el, $ = U.$;
 
 // runs[0] is the primary; runs[1] is the comparison.
@@ -121,6 +132,23 @@ let runs = [];
 let selected = [];            // channel names being plotted
 let filterText = '';
 let spChannel = '', msChannel = '';
+
+// VAL-06: how run 2 lines up with run 1. offset is ADDED to run 2's time;
+// map[c] names the run-2 column that stands for run 1's column c.
+const align = { offset: 0, eventCh: '', mode: 'abs_gt', thr: 0, fitCh: '', range: 10, rate: 0,
+                map: {}, note: '' };
+
+function ch2(c) { return align.map[c] !== undefined ? align.map[c] : c; }
+
+/* A run's time axis, run 2's shifted by the alignment offset. */
+function timeOf(ri) {
+    const t = runs[ri].data.byName['time'] || [];
+    if (ri === 0 || !align.offset) return t;
+    return t.map(function (x) { return x + align.offset; });
+}
+
+/* Run ri's samples of run-1 channel c (mapped for run 2). */
+function colOf(ri, c) { return runs[ri].data.byName[ri === 0 ? c : ch2(c)]; }
 
 const COLORS = TT.PlotColors;
 
@@ -141,6 +169,9 @@ function addFiles(files) {
             if (runs.length >= 2) runs.shift();      // keep at most two
             runs.push(r);
         });
+        align.offset = 0;
+        align.map = {};
+        align.note = '';
         return Promise.all(jsons.map(function (f) {
             return X.readTextFile(f).then(function (t) {
                 try { return { name: f.name, obj: JSON.parse(t) }; } catch (e) { return null; }
@@ -314,12 +345,12 @@ function renderPlots() {
 
     const series = [];
     runs.forEach(function (r, ri) {
-        const t = r.data.byName['time'] || [];
+        const t = timeOf(ri);
         selected.forEach(function (c, ci) {
-            const y = r.data.byName[c];
+            const y = colOf(ri, c);
             if (!y) return;
             series.push({
-                name: (runs.length > 1 ? 'run' + (ri + 1) + ' ' : '') + c,
+                name: (runs.length > 1 ? 'run' + (ri + 1) + ' ' : '') + (ri === 1 && ch2(c) !== c ? ch2(c) : c),
                 x: t, y: y,
                 color: COLORS[ci % COLORS.length],
                 style: ri === 1 ? 'dashed' : 'line',
@@ -337,6 +368,8 @@ function renderPlots() {
             selected.map(function (c) { return { name: c, data: r.data.byName[c] || [] }; }),
             { xLabel: 'time (s)', yLabel: 'value' });
     }));
+
+    if (runs.length === 2) col.appendChild(renderAlign());
 
     // --- step metrics ---
     const p2 = el('div', { class: 'panel' });
@@ -364,9 +397,9 @@ function renderPlots() {
 
     if (spChannel && msChannel) {
         runs.forEach(function (r, ri) {
-            const t = r.data.byName['time'] || [];
-            const sp = r.data.byName[spChannel];
-            const ms = r.data.byName[msChannel];
+            const t = timeOf(ri);
+            const sp = colOf(ri, spChannel);
+            const ms = colOf(ri, msChannel);
             if (!sp || !ms) {
                 p2.appendChild(el('div', { class: 'callout warn small', text:
                     'Run ' + (ri + 1) + ' does not have both of those channels.' }));
@@ -423,8 +456,8 @@ function renderPlots() {
         });
 
         if (runs.length === 2) {
-            const a = Sim.stepMetrics(runs[0].data.byName['time'], runs[0].data.byName[spChannel], runs[0].data.byName[msChannel]);
-            const b = Sim.stepMetrics(runs[1].data.byName['time'], runs[1].data.byName[spChannel], runs[1].data.byName[msChannel]);
+            const a = Sim.stepMetrics(timeOf(0), colOf(0, spChannel), colOf(0, msChannel));
+            const b = Sim.stepMetrics(timeOf(1), colOf(1, spChannel), colOf(1, msChannel));
             if (a.found && b.found) {
                 p2.appendChild(el('h4', { text: 'Side by side' }));
                 const t2 = el('table', { class: 'compact' });
@@ -465,16 +498,18 @@ function renderPlots() {
         p3.appendChild(lg3);
 
         const pathPlot = new TT.Plot(c3, { height: 300, xLabel: 'x (m)', yLabel: 'z (m)' });
-        pathPlot.setSeries(runs.map(function (r, i) {
+        pathPlot.setSeries(runs.filter(function (r, i) { return colOf(i, 'veh/pos_x') && colOf(i, 'veh/pos_z'); })
+            .map(function (r, i) {
             return {
-                name: 'run ' + (i + 1) + ' path', x: r.data.byName['veh/pos_x'], y: r.data.byName['veh/pos_z'],
+                name: 'run ' + (i + 1) + ' path', x: colOf(i, 'veh/pos_x'), y: colOf(i, 'veh/pos_z'),
                 color: COLORS[i === 0 ? 0 : 3], style: i === 1 ? 'dashed' : 'line'
             };
         })).draw();
         pathPlot.renderLegend(lg3);
 
         const distRows = runs.map(function (r, i) {
-            const xs = r.data.byName['veh/pos_x'], zs = r.data.byName['veh/pos_z'];
+            const xs = colOf(i, 'veh/pos_x'), zs = colOf(i, 'veh/pos_z');
+            if (!xs || !zs) return { run: i + 1, truth: NaN, odo: null };
             let d = 0;
             for (let k = 1; k < xs.length; k++) {
                 const dx = xs[k] - xs[k - 1], dz = zs[k] - zs[k - 1];
@@ -491,7 +526,7 @@ function renderPlots() {
             const err = (r.odo !== null && isFinite(r.odo)) ? (r.truth - r.odo) : null;
             t3.appendChild(el('tr', {}, [
                 el('td', { text: String(r.run) }),
-                el('td', { class: 'num', text: r.truth.toFixed(3) + ' m' }),
+                el('td', { class: 'num', text: isFinite(r.truth) ? r.truth.toFixed(3) + ' m' : '—' }),
                 el('td', { class: 'num', text: r.odo !== null && isFinite(r.odo) ? r.odo.toFixed(3) + ' m' : '—' }),
                 el('td', { class: 'num', text: err !== null ? (err * 1000).toFixed(0) + ' mm' : '—' })
             ]));
@@ -508,6 +543,149 @@ function renderPlots() {
         }
         col.appendChild(p3);
     }
+}
+
+// ------------------------------------------------------- align (VAL-06) ----
+
+function renderAlign() {
+    const p = el('div', { class: 'panel' });
+    p.appendChild(el('h2', { text: 'Align & compare' }));
+    p.appendChild(el('p', { class: 'small muted', html:
+        'Two runs never start at the same instant. Shift run 2 so they line up — on an event both ' +
+        'share, or on the best fit of one trace — then every number below is computed on a common ' +
+        'time base: run 2 interpolated onto run 1\'s samples (or a fixed rate) over the span both cover. ' +
+        'Error = run 2 − run 1.' }));
+
+    const cols1 = runs[0].data.columns.filter(function (c) { return c !== 'time'; });
+    const cols2 = runs[1].data.columns.filter(function (c) { return c !== 'time'; });
+    const opt = function (cs) { return cs.map(function (c) { return el('option', { value: c, text: c }); }); };
+    if (!align.eventCh) align.eventCh = cols1.filter(function (c) { return /^out\/act_|^cmd\//.test(c); })[0] || cols1[0];
+    if (!align.fitCh) align.fitCh = msChannel || selected[0] || cols1[0];
+
+    // offset
+    const r1 = el('div', { class: 'alignrow' });
+    const offIn = el('input', { type: 'number', step: '0.001', value: String(+align.offset.toFixed(6)) });
+    offIn.addEventListener('change', function () { align.offset = parseFloat(this.value) || 0; align.note = 'offset set by hand'; render(); });
+    r1.appendChild(el('label', {}, ['run 2 offset (s)', offIn]));
+    const zero = el('button', { class: 'small ghost', text: 'Zero' });
+    zero.addEventListener('click', function () { align.offset = 0; align.note = ''; render(); });
+    r1.appendChild(zero);
+    const rateIn = el('input', { type: 'number', step: '1', min: '0', value: String(align.rate) });
+    rateIn.addEventListener('change', function () { align.rate = Math.max(0, parseFloat(this.value) || 0); render(); });
+    r1.appendChild(el('label', {}, ['resample (Hz, 0 = run 1\'s samples)', rateIn]));
+    p.appendChild(r1);
+
+    // event
+    const r2 = el('div', { class: 'alignrow' });
+    const evSel = el('select', {}, opt(cols1));
+    evSel.value = align.eventCh;
+    evSel.addEventListener('change', function () { align.eventCh = this.value; });
+    const modeSel = el('select', {}, [
+        el('option', { value: 'abs_gt', text: '|x| > thr' }), el('option', { value: 'ge', text: 'x ≥ thr' }),
+        el('option', { value: 'le', text: 'x ≤ thr' }), el('option', { value: 'change', text: 'moves > thr' })]);
+    modeSel.value = align.mode;
+    modeSel.addEventListener('change', function () { align.mode = this.value; });
+    const thrIn = el('input', { type: 'number', step: 'any', value: String(align.thr) });
+    thrIn.addEventListener('change', function () { align.thr = parseFloat(this.value) || 0; });
+    const evBtn = el('button', { class: 'small', text: 'Align on event' });
+    evBtn.addEventListener('click', function () {
+        const t1 = runs[0].data.byName['time'], t2 = runs[1].data.byName['time'];
+        const y1 = runs[0].data.byName[align.eventCh], y2 = runs[1].data.byName[ch2(align.eventCh)];
+        if (!y1 || !y2) { align.note = 'run 2 has no ' + ch2(align.eventCh) + ' — map it below'; render(); return; }
+        const e1 = A.firstEvent(t1, y1, align.mode, align.thr), e2 = A.firstEvent(t2, y2, align.mode, align.thr);
+        if (!isFinite(e1) || !isFinite(e2)) { align.note = 'the event never happens in ' + (isFinite(e1) ? 'run 2' : 'run 1'); render(); return; }
+        align.offset = e1 - e2;
+        align.note = 'event at ' + e1.toFixed(3) + ' s in run 1, ' + e2.toFixed(3) + ' s in run 2';
+        render();
+    });
+    r2.appendChild(el('label', {}, ['event channel', evSel]));
+    r2.appendChild(el('label', {}, ['when', modeSel]));
+    r2.appendChild(el('label', {}, ['thr', thrIn]));
+    r2.appendChild(evBtn);
+    p.appendChild(r2);
+
+    // best fit
+    const r3 = el('div', { class: 'alignrow' });
+    const fitSel = el('select', {}, opt(cols1));
+    fitSel.value = align.fitCh;
+    fitSel.addEventListener('change', function () { align.fitCh = this.value; });
+    const rngIn = el('input', { type: 'number', step: 'any', min: '0', value: String(align.range) });
+    rngIn.addEventListener('change', function () { align.range = Math.max(0.01, parseFloat(this.value) || 10); });
+    const fitBtn = el('button', { class: 'small', text: 'Best fit' });
+    fitBtn.addEventListener('click', function () {
+        const t1 = runs[0].data.byName['time'], t2 = runs[1].data.byName['time'];
+        const y1 = runs[0].data.byName[align.fitCh], y2 = runs[1].data.byName[ch2(align.fitCh)];
+        if (!y1 || !y2) { align.note = 'run 2 has no ' + ch2(align.fitCh) + ' — map it below'; render(); return; }
+        const b = A.bestOffset(t1, y1, t2, y2, align.range, 0.3);
+        if (!isFinite(b.off)) { align.note = 'no offset in ±' + align.range + ' s gives enough overlap'; render(); return; }
+        align.offset = b.off;
+        align.note = 'best fit of ' + align.fitCh + ': RMSE ' + b.rmse.toPrecision(3);
+        render();
+    });
+    r3.appendChild(el('label', {}, ['fit channel', fitSel]));
+    r3.appendChild(el('label', {}, ['search ± (s, around start-aligned)', rngIn]));
+    r3.appendChild(fitBtn);
+    p.appendChild(r3);
+    if (align.note) p.appendChild(el('div', { class: 'tiny muted', text: align.note }));
+
+    if (!selected.length) return p;
+
+    // mapping + metrics
+    const t = el('table', { class: 'compact gap' });
+    t.appendChild(el('tr', {}, ['Run 1 channel', 'Run 2 channel', 'n', 'RMSE', 'bias', 'worst (at s)', 'R²',
+        '∫ run 1', '∫ run 2', 'Δ∫ %'].map(function (h, i) {
+        return el('th', { class: i >= 2 ? 'num' : '', text: h });
+    })));
+    const diffs = [];
+    selected.forEach(function (c, ci) {
+        const sel = el('select', {}, [el('option', { value: '', text: '— none —' })].concat(opt(cols2)));
+        sel.value = cols2.indexOf(ch2(c)) >= 0 ? ch2(c) : '';
+        sel.addEventListener('change', function () { align.map[c] = this.value; render(); });
+        const cells = [el('td', { text: c }), el('td', {}, [sel])];
+        const y1 = runs[0].data.byName[c], y2 = runs[1].data.byName[ch2(c)];
+        if (y1 && y2) {
+            const pr = A.pair(runs[0].data.byName['time'], y1, runs[1].data.byName['time'], y2, align.offset, align.rate);
+            const m = A.metrics(pr);
+            if (m.n) {
+                const f = function (v) { return isFinite(v) ? v.toPrecision(4) : '—'; };
+                [String(m.n), f(m.rmse), f(m.bias), f(m.worst) + ' (' + m.worstAt.toFixed(2) + ')', f(m.r2),
+                 f(m.intA), f(m.intB), isFinite(m.intDiffPct) ? m.intDiffPct.toFixed(2) : '—'].forEach(function (v) {
+                    cells.push(el('td', { class: 'num', text: v }));
+                });
+                diffs.push({ name: c, x: pr.t, y: pr.b.map(function (b, k) { return b - pr.a[k]; }),
+                             color: COLORS[ci % COLORS.length] });
+            } else {
+                cells.push(el('td', { class: 'num muted', colspan: 8, text: 'no overlap at this offset' }));
+            }
+        } else {
+            cells.push(el('td', { class: 'num muted', colspan: 8, text: 'not in run 2' }));
+        }
+        t.appendChild(el('tr', {}, cells));
+    });
+    p.appendChild(t);
+
+    // trajectory
+    const px1 = runs[0].data.byName['veh/pos_x'], pz1 = runs[0].data.byName['veh/pos_z'];
+    const px2 = runs[1].data.byName[ch2('veh/pos_x')], pz2 = runs[1].data.byName[ch2('veh/pos_z')];
+    if (px1 && pz1 && px2 && pz2) {
+        const te = A.trajectoryError(runs[0].data.byName['time'], px1, pz1, runs[1].data.byName['time'], px2, pz2, align.offset);
+        if (te.n) p.appendChild(el('div', { class: 'metrics', html:
+            '<span>path error after alignment: RMSE <b>' + (te.rmse * 1000).toFixed(0) + ' mm</b></span>' +
+            '<span>worst <b>' + (te.max * 1000).toFixed(0) + ' mm</b></span>' +
+            '<span>at the end <b>' + (te.final * 1000).toFixed(0) + ' mm</b></span>' }));
+    }
+
+    if (diffs.length) {
+        const c = el('canvas', { class: 'tt-plot' });
+        p.appendChild(el('h4', { text: 'Difference (run 2 − run 1)' }));
+        p.appendChild(el('div', { class: 'plotwrap' }, [c]));
+        const lg = el('div', {});
+        p.appendChild(lg);
+        const dp = new TT.Plot(c, { height: 220, xLabel: 'time (s)', yLabel: 'run 2 − run 1' });
+        dp.setSeries(diffs).draw();
+        dp.renderLegend(lg);
+    }
+    return p;
 }
 
 // ----------------------------------------------------------------- boot ----

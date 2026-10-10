@@ -248,11 +248,23 @@ For a v7 controller the host:
   at the nearest whole divisor of the physics rate (which can be the physics
   rate itself). `ctrl_init` receives the rate actually used.
 
-`Controllers/targets/sim/opus_main.c` is the reference v7 controller. It turns
-`CtrlInputs` into the portable `TtMeas` (`Controllers/core/tt_types.h`), runs
-the firmware loop (`opus_mission/opus_fw.h`: the mission, the navigation EKF
-and the safety layer `core/tt_safety.h`), and turns the `TtCmd` (wheel torque
-per wheel, steer in radians) back into actuator slots.
+`Controllers/targets/sim/opus_main.c` is the reference v7 controller, and it
+is three calls deep:
+
+1. `sim_hal_read` (`targets/sim/sim_hal.c`) turns `CtrlInputs` into the
+   portable `TtMeas` (`Controllers/core/tt_types.h`). The adapter binds the
+   manifest by type and wheel index and describes the car to the firmware as
+   a `TtCarDesc` (`core/tt_board.h`).
+2. `opus_app_step` (`opus_mission/opus_app.h`) is the whole firmware:
+   - the loop body `opus_fw.h` runs the mission, the navigation EKF and the
+     safety layer (`core/tt_safety.h`);
+   - then it does what the car's `tt_hal_write()` does: wheel torque → Iq,
+     and, for a brushed drive, Iq → ESC volts.
+   - The result is a `TtAct`: actuator writes in each drive's own unit.
+3. `sim_hal_write` puts the `TtAct` into actuator slots.
+
+The adapter knows no firmware and the firmware knows no ABI. The same two
+halves run apart in lockstep HIL, below.
 
 ### Fault injection (VAL-11)
 
@@ -266,6 +278,83 @@ rolled onto its side. Headless: `OpusMissionRunner.RunHeadless -opusFaults
 "RcKill@p4+1;Stale:imu@3/0.5"` for one run, `-opusFaultSuite 1` for the
 graded suite. The same catalogue on `TtMeas`/`TtCmd` is `Controllers/tests/
 tt_fault.h`, used by CTest's `tt_safety_faults`.
+
+### Running the firmware outside Unity: lockstep and HIL (HIL-01…05)
+
+The firmware can run in a separate process, as a host-built image, or on a
+board, with the sim waiting for it every tick:
+
+```
+Unity ──host link (pipes)──▶ tt_bridge ──┬─ --dll  controller DLL, out of process
+ (ControllerLink:                        ├─ --exe  opus_foc_pil.exe   ┐ wire protocol
+  blocks in ControlStep                  └─ --serial COM5 (a board)   ┘ (core/tt_wire.h)
+  for the same tick)
+```
+
+**Unity side.** `Scripts/Bridge/ControllerLink.cs` starts
+`UnitySim/Native/tt_bridge.exe`, which the controller build puts there.
+- `NativeControllerLoader.LoadLinked` binds the link's calls to the same
+  delegates a DLL's exports fill, so the runner is unchanged.
+- In `ControlStep` the input block goes out and the runner **blocks** until
+  the outputs of the same tick come back. The sim waits for the firmware,
+  however far away it is.
+- A tick the firmware misses sends no command, as with a stalled MCU: the
+  drives hold the last one until their own watchdog acts, and the log holds
+  its last values. The late reply is dropped by its tick number.
+- After 20 misses in a row, or if the bridge exits, the runner goes open-loop,
+  as for a DLL that faults.
+- Headless: `OpusMissionRunner.RunHeadless … -opusLink exe` (or `dll`, or
+  `serial:COM5`).
+  - `-opusLinkTimeoutMs N` sets the per-tick wait (default 250 ms).
+  - `-opusLinkRecord <file.ttw>` captures the wire.
+  - The result JSON's `link` field holds the round trip (p50 / p99 / max) and
+    the counters.
+
+**Bridge** (`Controllers/tools/tt_bridge.c`, Windows). It speaks a small
+length-prefixed host link to Unity (documented in its header) and runs the
+firmware in one of three ways:
+- `--dll` loads the controller DLL in its own process.
+- `--exe` and `--serial` play the board's HAL with the same `sim_hal`
+  adapter the DLL uses, and talk the wire protocol to the firmware.
+  - Only the wire is between the two, so a lockstep run through `--exe`
+    reproduces the in-process run exactly.
+- `--bench N` pings the firmware and prints its round trip.
+- `--record` writes a capture.
+
+**Wire protocol** (`core/tt_wire.h`, HIL-02):
+- **Framing:** COBS with a 0x00 delimiter, then a CRC-16/CCITT-FALSE, then a
+  16-byte header: type, flags, seq, u32 tick, u64 time_us.
+- **Handshake:** `INIT` gets `INFO` back: version, log names, parameter hash.
+  `CONFIG` sends the `TtCarDesc`; `RESET` and `SHUTDOWN` get an `ACK`.
+- **Every tick:** `MEAS` (the `TtMeas`) goes out and `ACT` (the `TtAct` plus
+  the log frame) comes back.
+- **Payloads** are packed field by field, little-endian, with floats bit for
+  bit. A source whose stamp is invalid isn't sent. A ToF sends only its zones.
+- **Sizes:** MEAS is about 350 bytes for the twin (at most ~710), ACT ~150.
+- **USB:** frames are bigger than one full-speed USB packet, so the board's
+  CDC stack must end a transfer of a multiple of 64 bytes with a zero-length
+  packet.
+
+**Firmware side, "external tick" mode** (`targets/hil/`, HIL-03). It is
+portable and cross-compiled with the core:
+- `hil_dev.c` takes the received bytes and runs one firmware tick per `MEAS`.
+- `opus_hil.c` puts the Opus firmware (`opus_app`) behind it.
+- On a board the USB CDC callback feeds `hil_dev_feed()`.
+- `pil_main.c` is the same thing on the PC over stdin/stdout. It builds as
+  `opus_pil.exe` (brushed) and `opus_foc_pil.exe` (FOC twin), which `--exe`
+  runs.
+
+**Replay** (`Controllers/tools/tt_replay.c`, VAL-03) runs the current firmware
+on a capture's `MEAS` frames and diffs every tick's `TtAct` and log frame
+against the recorded `ACT`:
+- The firmware that made the capture replays bit-identically.
+- A changed firmware or parameter set shows where, when and by how much it
+  differs (`--csv` writes the per-tick diff; the Telemetry Analyzer plots it).
+- A car whose firmware logs the same frames (VAL-05) replays the same way.
+
+**Raw IPC control on ticks** (HIL-05): an `actuate` message may carry a
+`tick`. It is then applied at that control tick rather than whenever it
+arrives; see `Docs/ipc-protocol.md`.
 
 ## Per-vehicle conventions
 

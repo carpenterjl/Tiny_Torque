@@ -20,10 +20,10 @@ const TOOLS = path.join(REPO, 'Tools', 'shared');
 const ctx = { console, window: undefined };
 ctx.globalThis = ctx;
 vm.createContext(ctx);
-['tt-schema.js', 'tt-motor.js', 'tt-sim.js'].forEach(f => {
+['tt-schema.js', 'tt-motor.js', 'tt-sim.js', 'tt-align.js'].forEach(f => {
     vm.runInContext(fs.readFileSync(path.join(TOOLS, f), 'utf8'), ctx, { filename: f });
 });
-const S = ctx.TT.Schema, M = ctx.TT.Motor, Sim = ctx.TT.Sim;
+const S = ctx.TT.Schema, M = ctx.TT.Motor, Sim = ctx.TT.Sim, A = ctx.TT.Align;
 
 let fails = 0, checks = 0;
 function ok(name, cond, detail) {
@@ -313,6 +313,46 @@ console.log('\n=== 11. Filename sanitization =================================')
 ok('name → file name', S.fileNameFor({ name: 'My Car' }) === 'My Car.json');
 ok('invalid chars replaced', S.fileNameFor({ name: 'a/b:c' }) === 'a_b_c.json');
 ok('empty name falls back', S.fileNameFor({ name: '   ' }) === 'vehicle.json');
+
+console.log('\n=== 12. Run alignment (VAL-06) ================================');
+{
+    // Run 1: the sim, 100 Hz from t = 0. Run 2: "the car", 50 Hz with clock
+    // jitter, its clock started 100 s earlier and its launch 1.3 s later in
+    // the log. Both: a first-order speed response to a launch, plus a turn.
+    const launch1 = 2.0, launch2 = 100 + 3.3, truth = launch1 - launch2;
+    const sig = (tl) => tl < 0 ? 0 : 2 * (1 - Math.exp(-tl / 0.4)) + 0.3 * Math.sin(1.7 * tl);
+    const t1 = [], v1 = [], c1 = [], t2 = [], v2 = [], c2 = [];
+    for (let i = 0; i <= 1000; i++) { const t = i * 0.01; t1.push(t); v1.push(sig(t - launch1)); c1.push(t >= launch1 ? 1.5 : 0); }
+    for (let i = 0; i <= 600; i++) {
+        const t = 100 + i * 0.02 + ((i * 7919) % 13 - 6) * 1e-4;
+        t2.push(t); v2.push(sig(t - launch2)); c2.push(t >= launch2 ? 1.5 : 0);
+    }
+    ok('interp: linear inside, NaN outside', near(A.interp([0, 1], [0, 10], 0.25), 2.5) &&
+        isNaN(A.interp([0, 1], [0, 10], 1.5)));
+    const eo = A.eventOffset(t1, c1, t2, c2, 'abs_gt', 0);
+    ok('event alignment (first non-zero command) finds the offset within a sample',
+        near(eo, truth, 0.021), 'got ' + eo.toFixed(4) + ', truth ' + truth.toFixed(4));
+    const bo = A.bestOffset(t1, v1, t2, v2, 110, 0.4);
+    ok('best-fit alignment of the speed trace finds the offset within 5 ms',
+        near(bo.off, truth, 0.005), 'got ' + bo.off.toFixed(4) + ', rmse ' + bo.rmse.toExponential(2));
+    const m = A.metrics(A.pair(t1, v1, t2, v2, truth, 0));
+    ok('aligned identical signals: RMSE ~ 0, R^2 ~ 1', m.n > 300 && m.rmse < 2e-3 && m.r2 > 0.9999,
+        'n ' + m.n + ', rmse ' + m.rmse.toExponential(2));
+    const v2b = v2.map(x => 1.1 * x + 0.05);
+    const mb = A.metrics(A.pair(t1, v1, t2, v2b, truth, 100));
+    const mean1 = A.integral(A.pair(t1, v1, t2, v2b, truth, 100).t, A.pair(t1, v1, t2, v2b, truth, 100).a) / mb.span;
+    ok('a 10 % gain + 0.05 offset shows as bias and integral difference',
+        near(mb.bias, 0.1 * mean1 + 0.05, 2e-3) && near(mb.intDiffPct, (0.1 + 0.05 / mean1) * 100, 0.2),
+        'bias ' + mb.bias.toFixed(4) + ', integral ' + mb.intDiffPct.toFixed(2) + ' %');
+    ok('integral of a ramp', near(A.integral([0, 1, 2], [0, 1, 2]), 2));
+    const px1 = t1.map(t => Math.cos(t)), py1 = t1.map(t => Math.sin(t));
+    const px2 = t2.map(t => Math.cos(t + truth)), py2 = t2.map(t => Math.sin(t + truth));
+    const te = A.trajectoryError(t1, px1, py1, t2, px2, py2, truth);
+    ok('trajectory error of the same path after alignment ~ 0', te.n > 300 && te.rmse < 1e-3 && te.final < 1e-3,
+        'rmse ' + te.rmse.toExponential(2));
+    const tw = A.trajectoryError(t1, px1, py1, t2, px2, py2, truth + 0.1);
+    ok('a 0.1 s misalignment on a 1 m/s circle shows as ~0.1 m', near(tw.rmse, 0.1, 0.01), tw.rmse.toFixed(3) + ' m');
+}
 
 console.log('\n===============================================================');
 console.log(fails === 0 ? 'ALL ' + checks + ' CHECKS PASSED' : fails + ' of ' + checks + ' CHECKS FAILED');

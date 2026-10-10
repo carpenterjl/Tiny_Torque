@@ -1,3 +1,5 @@
+using System.Collections.Generic;
+using AIHWSim.Core;
 using AIHWSim.Vehicles;
 using UnityEngine;
 
@@ -24,12 +26,39 @@ namespace AIHWSim.Ipc
     ///
     /// Being an <see cref="IRawActuatorDriver"/> is what switches the car's
     /// arcade assists off while the client holds it (BUG-17).
+    ///
+    /// HIL-05: a vector that names a control <c>tick</c> waits in a queue and
+    /// takes effect AT that tick — not when the message happened to be read —
+    /// so a client that sends tick N+2's command while the sim computes N gets
+    /// it applied on exactly N+2, every run. One that arrives after its tick
+    /// is applied at once and counted late (<c>ipc/raw_late</c>);
+    /// <c>ipc/raw_tick</c> is the tick of the vector in force.
     /// </summary>
     public sealed class IpcActuatorDriver : MonoBehaviour, IRawActuatorDriver, ISetpointSource
     {
         /// <summary>The runner's actuator buffer is float[8]; a client that sends
         /// more is telling us something we cannot act on.</summary>
         public const int ActuatorCount = 8;
+
+        /// <summary>Tick-keyed vectors held at most; past it the oldest go.</summary>
+        public const int MaxQueued = 64;
+
+        private struct Pending
+        {
+            public long tick;
+            public float[] actuators, setpoints;
+            public bool handbrake;
+        }
+        private readonly List<Pending> _queue = new List<Pending>();
+        private SimulationRunner _runner;
+
+        /// <summary>The tick of the vector in force; -1 = an untagged one.</summary>
+        public long AppliedTick { get; private set; } = -1;
+        /// <summary>Tick-keyed vectors applied on their tick, after it, and
+        /// dropped from a full queue.</summary>
+        public int OnTime { get; private set; }
+        public int Late { get; private set; }
+        public int Dropped { get; private set; }
 
         private readonly float[] _actuators = new float[ActuatorCount];
         private readonly float[] _setpoints = new float[4];
@@ -43,6 +72,10 @@ namespace AIHWSim.Ipc
         public void Configure(CarVehicle car, float staleAfterSeconds)
         {
             _car = car;
+            _runner = GetComponent<SimulationRunner>();
+            _queue.Clear();
+            AppliedTick = -1;
+            OnTime = Late = Dropped = 0;
             _staleAfter = staleAfterSeconds == 0f ? IpcDriverSource.DefaultStaleAfter : staleAfterSeconds;
             // A freshly installed driver has been sent nothing yet. Starting stale
             // means the car brakes until the first command rather than coasting on
@@ -56,22 +89,55 @@ namespace AIHWSim.Ipc
 
         public void Receive(ActuateMsg m)
         {
-            System.Array.Clear(_actuators, 0, _actuators.Length);
-            if (m.actuators != null)
+            _receivedAt = Time.unscaledTime;
+            if (m.tick >= 0)
             {
-                int n = Mathf.Min(m.actuators.Length, ActuatorCount);
-                for (int i = 0; i < n; i++) _actuators[i] = m.actuators[i];
+                // Keep the queue ordered by tick; a second vector for the same
+                // tick replaces the first.
+                var p = new Pending { tick = m.tick, actuators = m.actuators, setpoints = m.setpoints,
+                                      handbrake = m.handbrake };
+                int at = _queue.Count;
+                while (at > 0 && _queue[at - 1].tick > m.tick) at--;
+                if (at > 0 && _queue[at - 1].tick == m.tick) _queue[at - 1] = p;
+                else _queue.Insert(at, p);
+                while (_queue.Count > MaxQueued) { _queue.RemoveAt(0); Dropped++; }
+                return;
+            }
+            Apply(m.actuators, m.setpoints, m.handbrake);
+            AppliedTick = -1;
+        }
+
+        private void Apply(float[] actuators, float[] setpoints, bool handbrake)
+        {
+            System.Array.Clear(_actuators, 0, _actuators.Length);
+            if (actuators != null)
+            {
+                int n = Mathf.Min(actuators.Length, ActuatorCount);
+                for (int i = 0; i < n; i++) _actuators[i] = actuators[i];
             }
 
             System.Array.Clear(_setpoints, 0, _setpoints.Length);
-            if (m.setpoints != null)
+            if (setpoints != null)
             {
-                int n = Mathf.Min(m.setpoints.Length, _setpoints.Length);
-                for (int i = 0; i < n; i++) _setpoints[i] = m.setpoints[i];
+                int n = Mathf.Min(setpoints.Length, _setpoints.Length);
+                for (int i = 0; i < n; i++) _setpoints[i] = setpoints[i];
             }
 
-            _handbrake = m.handbrake;
-            _receivedAt = Time.unscaledTime;
+            _handbrake = handbrake;
+        }
+
+        /// <summary>Everything due by <paramref name="now"/>, in tick order: the
+        /// last of them is the vector in force.</summary>
+        public void ApplyDue(long now)
+        {
+            while (_queue.Count > 0 && _queue[0].tick <= now)
+            {
+                var p = _queue[0];
+                _queue.RemoveAt(0);
+                if (p.tick < now) Late++; else OnTime++;
+                Apply(p.actuators, p.setpoints, p.handbrake);
+                AppliedTick = p.tick;
+            }
         }
 
         /// <summary>
@@ -86,6 +152,13 @@ namespace AIHWSim.Ipc
         public void ReadManualCommands(float[] actuatorOut)
         {
             if (actuatorOut == null) return;
+
+            if (_runner != null)
+            {
+                ApplyDue(_runner.ControlTick);
+                _runner.Hub.SetValue("ipc/raw_tick", AppliedTick);
+                _runner.Hub.SetValue("ipc/raw_late", Late);
+            }
 
             if (!Live)
             {

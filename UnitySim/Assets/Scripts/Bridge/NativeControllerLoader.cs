@@ -13,6 +13,12 @@ namespace AIHWSim.Bridge
     /// The DLL is loaded from a per-load *shadow copy* in a temp folder; that
     /// leaves the original file writable, so build.ps1 can overwrite it while
     /// the editor holds a handle to the shadow.
+    ///
+    /// <see cref="LoadLinked"/> runs the firmware outside Unity instead —
+    /// out of process, as a host-built image, or on a board — through the
+    /// lockstep bridge (<see cref="ControllerLink"/>, HIL-01/04). The same
+    /// delegates are bound to the link's calls, so the runner cannot tell
+    /// the difference except by <see cref="Link"/>.
     /// </summary>
     public sealed class NativeControllerLoader : IDisposable
     {
@@ -28,6 +34,10 @@ namespace AIHWSim.Bridge
 
         private IntPtr _module = IntPtr.Zero;
         private string _shadowPath;
+        private ControllerLink _link;
+
+        /// <summary>The lockstep link, when the firmware runs outside Unity.</summary>
+        public ControllerLink Link => _link;
 
         public CtrlInitDelegate Init { get; private set; }
         public CtrlStepDelegate Step { get; private set; }
@@ -52,7 +62,7 @@ namespace AIHWSim.Bridge
         public int AbiVersion { get; private set; }
         public bool IsV7 => AbiVersion >= 7;
 
-        public bool IsLoaded => _module != IntPtr.Zero;
+        public bool IsLoaded => _module != IntPtr.Zero || _link != null;
 
         /// <summary>Source path of the real DLL (in Assets/Plugins/x86_64).</summary>
         public string SourcePath { get; private set; }
@@ -155,6 +165,35 @@ namespace AIHWSim.Bridge
             return true;
         }
 
+        /// <summary>
+        /// Run the firmware that <paramref name="dllPath"/> names through the
+        /// lockstep bridge instead of loading it here. <paramref name="projectRoot"/>
+        /// is where the default tool folder (Native/) lives.
+        /// </summary>
+        public unsafe bool LoadLinked(string dllPath, ControllerLinkOptions options, string projectRoot)
+        {
+            Unload();
+            var link = ControllerLink.Start(options, dllPath, projectRoot, out string error);
+            if (link == null)
+            {
+                Debug.LogError($"[ControllerLoader] link {options}: {error}");
+                return false;
+            }
+            _link = link;
+            SourcePath = link.TargetPath;
+            LoadedStamp = File.Exists(SourcePath) ? File.GetLastWriteTimeUtc(SourcePath) : DateTime.UtcNow;
+            AbiVersion = ControllerAbi.Version;
+            Init = link.Init;
+            Step = link.Step;
+            Shutdown = link.Shutdown;
+            GetDebugNames = link.GetDebugNames;
+            Configure2 = link.Configure2;
+            Reset = link.Reset;
+            GetControlRate = link.GetControlRate;
+            GetDebugExt = link.GetDebugExt;
+            return true;
+        }
+
         /// <summary>True if the source DLL on disk is newer than what we loaded.</summary>
         public bool SourceIsNewer()
         {
@@ -186,6 +225,12 @@ namespace AIHWSim.Bridge
             GetControlRate = null;
             GetDebugExt = null;
             AbiVersion = 0;
+
+            if (_link != null)
+            {
+                _link.Dispose();
+                _link = null;
+            }
 
             if (_module != IntPtr.Zero)
             {

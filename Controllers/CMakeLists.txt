@@ -54,14 +54,15 @@ tt_core_warnings(pidlib)
 # and its generated defaults (Tools/gen_params.js), the log schema, and the
 # board interface every non-sim target implements (hal/tt_hal.h).
 add_library(ttcore STATIC core/tt_params.c core/tt_alloc.c core/tt_nav.c core/tt_safety.c
-            core/params_opus_vector.c core/params_opus_vector_foc.c)
+            core/tt_wire.c core/params_opus_vector.c core/params_opus_vector_foc.c)
 target_include_directories(ttcore PUBLIC core hal)
 tt_core_warnings(ttcore)
 
 # Opus Vector mission controller: dead-reckoned multi-phase manoeuvre on
 # TtMeas/TtCmd. Portable (math.h, pid.h and the core), so the same sources
 # build for a real MCU target.
-add_library(opuslib STATIC opus_mission/opus_mission.c opus_mission/opus_fw.c)
+add_library(opuslib STATIC opus_mission/opus_mission.c opus_mission/opus_fw.c
+            opus_mission/opus_app.c)
 target_include_directories(opuslib PUBLIC opus_mission)
 target_link_libraries(opuslib PUBLIC pidlib ttcore)
 tt_core_warnings(opuslib)
@@ -81,9 +82,30 @@ if(NOT MSVC)
     target_link_libraries(foclib PUBLIC m)
 endif()
 
+# The firmware's end of the lockstep HIL link (HIL-03): the external-tick
+# device loop and the Opus firmware behind it. Portable: an MCU image in HIL
+# mode links this and feeds it its USB CDC bytes (targets/hil/opus_hil.h).
+add_library(hillib STATIC targets/hil/hil_dev.c targets/hil/opus_hil.c)
+target_include_directories(hillib PUBLIC targets/hil)
+target_link_libraries(hillib PUBLIC opuslib)
+tt_core_warnings(hillib)
+
 if(TT_TARGET STREQUAL "embedded")
     return()   # libraries only; the MCU project supplies main(), HAL and startup
 endif()
+
+# The Unity host's ABI frames as a board: binds the manifest, builds TtMeas,
+# writes TtAct into actuator slots. Shared by the controller DLLs and the
+# lockstep bridge, so both feed the firmware identically.
+add_library(simhal STATIC targets/sim/sim_hal.c)
+target_include_directories(simhal PUBLIC targets/sim hal)
+target_link_libraries(simhal PUBLIC ttcore)
+tt_core_warnings(simhal)
+
+# Where the lockstep bridge and the host-built firmware images go (HIL-01/04).
+# Outside Assets/ so Unity does not import them; gitignored.
+set(TT_LINK_DIR "${CMAKE_SOURCE_DIR}/../UnitySim/Native"
+    CACHE PATH "Destination for tt_bridge.exe and the PIL firmware images")
 
 # Per-vehicle portable control logic.
 add_library(controllib STATIC diffdrive_pid/diffdrive_control.c)
@@ -124,13 +146,43 @@ add_controller(controller     targets/sim/sim_main.c controllib)
 add_controller(car_controller targets/sim/car_main.c carlib)
 
 # Opus Vector autonomous mission       -> opus_controller.dll
-add_controller(opus_controller targets/sim/opus_main.c opuslib)
+add_controller(opus_controller targets/sim/opus_main.c opuslib simhal)
 
 # The same mission on the four-motor FOC twin -> opus_foc_controller.dll.
 # Same source; only the parameter set differs, as a board config would.
-add_controller(opus_foc_controller targets/sim/opus_main.c opuslib)
+add_controller(opus_foc_controller targets/sim/opus_main.c opuslib simhal)
 if(TARGET opus_foc_controller)
     target_compile_definitions(opus_foc_controller PRIVATE OPUS_PARAMS=tt_params_opus_vector_foc)
+endif()
+
+# The same firmware as host processes in external-tick mode (HIL-03 without a
+# board): the wire protocol over stdin/stdout. tt_bridge --exe runs them in
+# lockstep with the sim; a run must reproduce the DLL's exactly.
+function(add_pil name params)
+    add_executable(${name} targets/hil/pil_main.c)
+    target_link_libraries(${name} PRIVATE hillib)
+    target_compile_definitions(${name} PRIVATE OPUS_PARAMS=${params} OPUS_PIL_NAME="${name}")
+    if(TT_TARGET STREQUAL "sim")
+        add_custom_command(TARGET ${name} POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E make_directory "${TT_LINK_DIR}"
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different "$<TARGET_FILE:${name}>" "${TT_LINK_DIR}"
+            COMMENT "Copying ${name} -> ${TT_LINK_DIR}")
+    endif()
+endfunction()
+add_pil(opus_pil tt_params_opus_vector)
+add_pil(opus_foc_pil tt_params_opus_vector_foc)
+
+# The lockstep bridge (HIL-01/04): Unity <-> a DLL out of process, a PIL
+# image, or a board on a serial port. Windows only for now.
+if(WIN32)
+    add_executable(tt_bridge tools/tt_bridge.c)
+    target_link_libraries(tt_bridge PRIVATE simhal)
+    if(TT_TARGET STREQUAL "sim")
+        add_custom_command(TARGET tt_bridge POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E make_directory "${TT_LINK_DIR}"
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different "$<TARGET_FILE:tt_bridge>" "${TT_LINK_DIR}"
+            COMMENT "Copying tt_bridge -> ${TT_LINK_DIR}")
+    endif()
 endif()
 
 # ABI v2 configurable-sensor demo      -> car_sensors_controller.dll
@@ -172,6 +224,27 @@ add_test(NAME tt_safety_faults COMMAND test_safety)
 # Offline replay of a sim run's telemetry through the navigation EKF (VAL-03).
 add_executable(nav_replay tools/nav_replay.c)
 target_link_libraries(nav_replay PRIVATE ttcore)
+
+# Replay a wire capture through the firmware and diff its commands (VAL-03).
+add_executable(tt_replay tools/tt_replay.c)
+target_link_libraries(tt_replay PRIVATE opuslib)
+
+# The wire protocol and the firmware's end of the link (HIL-02/03): vectors,
+# damaged frames, payload round trips, and a whole drive in lockstep through
+# the wire, bit-identical to calling the firmware directly. Its wire stream
+# is then replayed by tt_replay: identical with the same firmware, and the
+# brushed parameter set on the FOC car's recording must show a difference.
+add_executable(test_hil tests/test_hil.c)
+target_link_libraries(test_hil PRIVATE hillib)
+add_test(NAME hil_wire COMMAND test_hil "${CMAKE_CURRENT_BINARY_DIR}/hil_capture.ttw")
+set_tests_properties(hil_wire PROPERTIES FIXTURES_SETUP hil_capture)
+add_test(NAME hil_replay COMMAND tt_replay "${CMAKE_CURRENT_BINARY_DIR}/hil_capture.ttw")
+set_tests_properties(hil_replay PROPERTIES FIXTURES_REQUIRED hil_capture
+                     PASS_REGULAR_EXPRESSION "IDENTICAL")
+add_test(NAME hil_replay_sees_change
+         COMMAND tt_replay "${CMAKE_CURRENT_BINARY_DIR}/hil_capture.ttw" --params opus_vector --quiet)
+set_tests_properties(hil_replay_sees_change PROPERTIES FIXTURES_REQUIRED hil_capture
+                     PASS_REGULAR_EXPRESSION "DIFFERENT")
 
 # Host-only dq PMSM + inverter model: the plant the FOC is tested against.
 add_library(pmsmlib STATIC plant/pmsm_model.c)

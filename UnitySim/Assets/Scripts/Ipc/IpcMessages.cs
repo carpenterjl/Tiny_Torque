@@ -103,6 +103,12 @@ namespace AIHWSim.Ipc
         /// [0] linear m/s, [1] yaw. Matches <c>ISetpointSource</c>.</summary>
         public float[] setpoints;
         public bool handbrake;
+        /// <summary>HIL-05: the control tick this vector is for (the
+        /// <c>ctl/tick</c> telemetry channel counts them). It is applied AT that
+        /// tick, however early it arrives; one that arrives after its tick is
+        /// applied at once and counted late. -1 (absent) = apply on arrival, as
+        /// before.</summary>
+        public long tick = -1;
     }
 
     [Serializable]

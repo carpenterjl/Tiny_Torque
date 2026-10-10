@@ -52,10 +52,15 @@ namespace AIHWSim.EditorTools
             // FOC twin unless -opusVehicle says otherwise.
             bool suite = ArgValue("-opusFaultSuite") == "1";
             string vehicle = ArgValue("-opusVehicle") ?? (suite ? "Opus Vector FOC" : null);
+            // -opusLink dll|exe|serial:COM5 runs the firmware through the lockstep
+            // bridge (HIL-01/04); -opusLinkTimeoutMs N is its per-tick wait and
+            // -opusLinkRecord <file.ttw> captures the wire for tools/tt_replay.
+            int linkMs = int.TryParse(ArgValue("-opusLinkTimeoutMs"), out int lm) ? lm : 0;
             Begin(result, timeout, ArgValue("-opusController") ?? "",
                   ArgValue("-opusTrack"), ArgValue("-opusCam"), seed, hz,
                   vehicle, lat, tel, ArgValue("-opusFaults") ?? "", suite,
-                  ArgValue("-opusFaultOnly") ?? "");
+                  ArgValue("-opusFaultOnly") ?? "", ArgValue("-opusLink") ?? "", linkMs,
+                  ArgValue("-opusLinkRecord") ?? "");
         }
 
         private static string DefaultResultPath() =>
@@ -75,7 +80,8 @@ namespace AIHWSim.EditorTools
                                   string cam = null, int noiseSeed = 0, int controlHz = 0,
                                   string vehicle = null, int computeLatencyUs = -1,
                                   bool saveTelemetry = false, string faults = "",
-                                  bool faultSuite = false, string faultOnly = "")
+                                  bool faultSuite = false, string faultOnly = "",
+                                  string link = "", int linkTimeoutMs = 0, string linkRecord = "")
         {
             var req = new MissionAutorun.Request
             {
@@ -89,6 +95,9 @@ namespace AIHWSim.EditorTools
                 faults = faults ?? "",
                 faultSuite = faultSuite,
                 faultOnly = faultOnly ?? "",
+                link = link ?? "",
+                linkTimeoutMs = linkTimeoutMs,
+                linkRecord = linkRecord ?? "",
             };
             if (!string.IsNullOrEmpty(track)) req.track = track;
             if (!string.IsNullOrEmpty(vehicle)) req.vehicle = vehicle;

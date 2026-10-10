@@ -154,7 +154,7 @@ and a car left latched at full throttle keeps going.
 |---|---|
 | `release` | `vehicleId` |
 | `drive` | `vehicleId`, `throttle` 0–1, `steer` −1–1, `brake` 0–1, `handbrake`, `respawn`, `useItem`, `jump`, `horn`, `boost` |
-| `actuate` | `vehicleId`, `actuators[]` (≤8 floats), `setpoints[]` (≤4, logged only), `handbrake` |
+| `actuate` | `vehicleId`, `actuators[]` (≤8 floats), `setpoints[]` (≤4, logged only), `handbrake`, `tick` (optional: the control tick to apply it at) |
 | `reset_vehicle` | `vehicleId` — back to the spawn point |
 | `teleport` | `vehicleId`, `pos`, `euler`, `vel`, `angVel`, `keepMomentum` |
 | `set_mode` | `vehicleId`, `mode`: `manual` or `autonomous` |
@@ -165,6 +165,27 @@ message produces exactly one respawn.
 Actuator vector layout: index `0..N-1` are motor volts at each motor's
 `actuatorIndex` (from `list_vehicles`), `[6]` is steer −1..1, `[7]` is brake
 0..1. Handbrake is not in the vector — it is a field on the message.
+
+**Tick-keyed raw control.** Without `tick`, an `actuate` vector takes effect
+at the first control tick after Unity reads it. Unity reads messages once
+per rendered frame and before every physics step, so the tick a vector lands
+on still depends on timing.
+
+With `tick`, it takes effect **at that control tick**, however early it
+arrived:
+- The telemetry channel `ctl/tick` counts the ticks: a frame carrying
+  `ctl/tick` = N was computed at tick N.
+- A loop that has read tick N's frame sends its answer for N + 1 (or N + 2,
+  to leave room for its own latency). Every run then applies the same
+  commands on the same ticks.
+- Vectors wait in tick order, and a second one for the same tick replaces the
+  first.
+- One that arrives after its tick is applied at once and counted late.
+- The vehicle publishes `ipc/raw_tick` (the tick of the vector in force; −1
+  for an untagged one) and `ipc/raw_late` (the late count). Subscribe to
+  them to see whether your loop keeps up.
+- At most 64 vectors wait; past that the oldest are dropped.
+- The dead-man still counts from the last message received.
 
 Vectors are `{"x":0,"y":0,"z":0}`. `euler` is degrees. Omitting `euler` keeps the
 current rotation; omitting `vel`/`angVel` means zero unless `keepMomentum` is set.
