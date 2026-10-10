@@ -376,6 +376,8 @@ namespace AIHWSim.Vehicles
         public float batteryInternalR = 0f;
         // Capacity (mAh); 0 = infinite = the legacy pinned rail (SoC stays 1).
         public float batteryCapacitymAh = 0f;
+        /// <summary>State of charge every (re)spawn starts at (1 = full).</summary>
+        public float batteryStartSoc = 1f;
 
         /// <summary>Pack terminal voltage this step (0 when no battery part).</summary>
         public float BatteryTerminalV { get; private set; }
@@ -569,6 +571,12 @@ namespace AIHWSim.Vehicles
 
         /// <summary>The motors driving this vehicle (assigned by the SensorRig).</summary>
         public IReadOnlyList<MotorPart> Motors => _motors;
+
+        /// <summary>The radius the spec sheet states for wheel i — what the
+        /// firmware is told; the tyre may really roll on another.</summary>
+        public float SpecRadius(int i) =>
+            (i >= 0 && i < _wheels.Count)
+                ? (_wheels[i].cfg.specRadius > 0f ? _wheels[i].cfg.specRadius : _wheels[i].col.radius) : 0f;
 
         /// <summary>The WheelCollider at wheel-list index i, or null.</summary>
         public WheelCollider GetWheel(int i) =>
@@ -1648,8 +1656,11 @@ namespace AIHWSim.Vehicles
             _handbrake = false;
             foreach (var m in _motors) m?.ResetMotor();
             BatteryCurrent = 0f;
-            _battAhUsed = 0f;    // respawn = fresh pack (run-to-run determinism)
+            // Respawn = the same pack every time (run-to-run determinism): full,
+            // unless the design starts it part used.
+            _battAhUsed = 0f;
             BatterySoc = 1f;
+            if (batteryStartSoc < 1f) SetBatterySoc(batteryStartSoc);
 
             // Teleport the physics body. ContinuousDynamic collision detection
             // sweeps away a plain transform move, so switch to Discrete for it.

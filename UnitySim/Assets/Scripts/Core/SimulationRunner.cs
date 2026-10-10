@@ -175,6 +175,10 @@ namespace AIHWSim.Core
         /// <summary>The link's statistics (round trips, misses, wire errors),
         /// or "" when the firmware runs in-process.</summary>
         public string LinkStats => _loader?.Link != null ? _loader.Link.Stats() : "";
+        /// <summary>Make the next session take its noise seed afresh (from
+        /// <see cref="NoiseSeedOverride"/>): a campaign gives every run its own.</summary>
+        public static void ReseedNextSession() => _seedApplied = false;
+
         private static void ApplyNoiseSeed()
         {
             if (_ordinalsResetFrame != Time.frameCount)

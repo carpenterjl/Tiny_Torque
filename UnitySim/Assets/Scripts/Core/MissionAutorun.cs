@@ -73,6 +73,19 @@ namespace AIHWSim.Core
             public int linkTimeoutMs;
             /// <summary>Wire capture of the linked run (tools/tt_replay).</summary>
             public string linkRecord = "";
+            /// <summary>§9.2 domain randomization (<see cref="Campaign"/>): this
+            /// many Monte-Carlo runs; 0 = a single mission.</summary>
+            public int campaignRuns;
+            /// <summary>The campaign's seed: every run's draws and noise seed.</summary>
+            public int campaignSeed = 1;
+            /// <summary>Also run each parameter alone at both ends of its range.</summary>
+            public bool campaignCorners;
+            /// <summary>Comma-separated run indices to run; empty = all.</summary>
+            public string campaignOnly = "";
+            /// <summary>Range width: 1 = the §9.2 ranges, 0.5 = half as wide.</summary>
+            public float campaignWidth = 1f;
+            /// <summary>Gate overrides, "total=50,stop=10,leg=60,turn=1,complete=1,safety=0".</summary>
+            public string campaignGate = "";
         }
 
         [Serializable]
@@ -104,6 +117,7 @@ namespace AIHWSim.Core
             Path.Combine(Path.GetTempPath(), "opus_mission_request.json");
 
         private static Request _req;
+        private static System.Collections.Generic.List<Campaign.RunSpec> _plan;
 
         /// <summary>True when this process was launched to run a mission.</summary>
         public static bool Active => _req != null;
@@ -132,8 +146,23 @@ namespace AIHWSim.Core
             if (_req == null) return;
 
             // Configure the session before any scene Awake runs, which is the
-            // whole reason this hooks BeforeSceneLoad.
-            var design = VehiclePresets.Resolve(_req.vehicle);
+            // whole reason this hooks BeforeSceneLoad. A campaign starts on
+            // its first run's car.
+            _plan = null;
+            VehicleDesign design;
+            if (_req.campaignRuns > 0 || _req.campaignCorners)
+            {
+                _plan = Campaign.Plan(_req.campaignRuns, _req.campaignSeed, _req.campaignCorners, _req.campaignOnly,
+                                      _req.noiseSeed);   // -opusSeed: the corners' noise
+                if (_plan.Count == 0) { Debug.LogError("[MissionAutorun] the campaign plan is empty"); _req = null; return; }
+                design = Campaign.DesignFor(_req.vehicle, _plan[0], _req.campaignWidth);
+                _req.noiseSeed = _plan[0].noiseSeed;
+                Debug.Log($"[MissionAutorun] campaign: {_plan.Count} runs, seed {_req.campaignSeed}, width {_req.campaignWidth}");
+            }
+            else
+            {
+                design = VehiclePresets.Resolve(_req.vehicle);
+            }
             // Two track sources, the same two the menu offers: a tile-map preset
             // and a hand-authored scene. They are mutually exclusive on GameFlow
             // by construction, so this picks one and assigns only that one.
@@ -146,29 +175,8 @@ namespace AIHWSim.Core
                 return;
             }
 
-            // Resolve hands back a freshly built design every call, so overwriting
-            // these cannot leak into anything else.
-            if (!string.IsNullOrEmpty(_req.controllerDll))
-                design.controllerDll = _req.controllerDll;
-            // 0 leaves the design's own camera alone, which is what every mission
-            // run does. Set both to run the same car at a different resolution —
-            // a perception loop is judged on the frame it is given, so the frame
-            // has to be something the harness can vary. CameraSensor clamps to
-            // 8..128 on both axes whatever arrives here.
-            if (_req.camWidth > 0 && _req.camHeight > 0)
-                foreach (var s in design.sensors)
-                    if (s.kind == SensorType.Camera)
-                    {
-                        s.camWidth = _req.camWidth;
-                        s.camHeight = _req.camHeight;
-                    }
-
-            if (_req.computeLatencyUs >= 0)
-            {
-                design.computeLatencyUs = _req.computeLatencyUs;
-                Debug.Log($"[MissionAutorun] compute latency {_req.computeLatencyUs} us");
-            }
             SimulationRunner.NoiseSeedOverride = _req.noiseSeed;
+            PinFrameStep();
             SimulationRunner.ControlRateOverride = _req.controlHz;
             SimulationRunner.LinkOverride = null;
             if (!string.IsNullOrEmpty(_req.link))
@@ -188,15 +196,64 @@ namespace AIHWSim.Core
                     return;
                 }
             }
-            GameFlow.ActiveDesign = design;
             if (track != null)
             {
                 GameFlow.ActiveTrack = track;
             }
             else
             {
+                if (_plan != null) { Debug.LogError("[MissionAutorun] a campaign needs a tile-map track"); _req = null; return; }
                 GameFlow.ActiveSceneTrack = sceneTrack;
             }
+            ApplyDesign(_req, design);
+
+            Debug.Log($"[MissionAutorun] armed: {_req.vehicle} on {_req.track}");
+        }
+
+        /// <summary>
+        /// Every rendered frame advances the game clock by exactly one physics
+        /// step, however long it really took. Something in the scene still
+        /// reads frame-interpolated poses, so with wall-clock frames a slow
+        /// frame (a GC pause, a scene load) shifted a run by a few mm — and a
+        /// campaign's later runs differed from the same runs alone. Called at
+        /// boot and every step (the physics rate is set after boot).
+        /// </summary>
+        public static void PinFrameStep()
+        {
+            float step = Time.fixedDeltaTime > 0f ? Time.fixedDeltaTime : 1f / 400f;
+            if (Time.captureDeltaTime != step) Time.captureDeltaTime = step;
+        }
+
+        /// <summary>
+        /// Put <paramref name="design"/> into the session as the one firmware-
+        /// driven player, with the request's overrides applied. Used for the
+        /// first load and, by a campaign, before each reload.
+        /// </summary>
+        public static void ApplyDesign(Request req, VehicleDesign design)
+        {
+            // Resolve hands back a freshly built design every call, so overwriting
+            // these cannot leak into anything else.
+            if (!string.IsNullOrEmpty(req.controllerDll))
+                design.controllerDll = req.controllerDll;
+            // 0 leaves the design's own camera alone, which is what every mission
+            // run does. Set both to run the same car at a different resolution —
+            // a perception loop is judged on the frame it is given, so the frame
+            // has to be something the harness can vary. CameraSensor clamps to
+            // 8..128 on both axes whatever arrives here.
+            if (req.camWidth > 0 && req.camHeight > 0)
+                foreach (var s in design.sensors)
+                    if (s.kind == SensorType.Camera)
+                    {
+                        s.camWidth = req.camWidth;
+                        s.camHeight = req.camHeight;
+                    }
+
+            if (req.computeLatencyUs >= 0)
+            {
+                design.computeLatencyUs = req.computeLatencyUs;
+                Debug.Log($"[MissionAutorun] compute latency {req.computeLatencyUs} us");
+            }
+            GameFlow.ActiveDesign = design;
             SessionConfig.Mode = SessionMode.SinglePlayer;
             SessionConfig.TargetLaps = 0;
             SessionConfig.Players.Clear();
@@ -208,8 +265,6 @@ namespace AIHWSim.Core
                 isLocal = true,
                 isBot = false,
             });
-
-            Debug.Log($"[MissionAutorun] armed: {_req.vehicle} on {_req.track}");
         }
 
         [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.AfterSceneLoad)]
@@ -229,7 +284,8 @@ namespace AIHWSim.Core
 
             var go = new GameObject("MissionWatcher");
             UnityEngine.Object.DontDestroyOnLoad(go);
-            if (_req.faultSuite) go.AddComponent<FaultSuiteWatcher>().Configure(_req);
+            if (_plan != null) go.AddComponent<CampaignWatcher>().Configure(_req, _plan);
+            else if (_req.faultSuite) go.AddComponent<FaultSuiteWatcher>().Configure(_req);
             else go.AddComponent<MissionWatcher>().Configure(_req);
         }
     }
@@ -244,29 +300,17 @@ namespace AIHWSim.Core
         private Telemetry.CsvLogger _telemetry;
         private CarVehicle _car;
         private TelemetryHub _hub;
+        private MissionScorer _score;
 
-        private Vector3 _prevPos;
-        private bool _hasPrev;
-        private double _truth;              // ground-truth path length, integrated at physics rate
         private float _elapsed;
-        private int _prevPhase = -99;
         private bool _finished;
-
-        // Ground-truth path length at each phase entry.
-        private double _mCruiseA = -1, _mTurn = -1, _mCruiseB = -1, _mBrake = -1, _mDone = -1;
-        private float _yawTurnEntry, _yawTurnExit;
-        private double _spdSum; private int _spdN;
-        private float _spdMin = float.MaxValue, _turnSpdMin = float.MaxValue;
-
-        // Coarse trace so a failed run can be diagnosed without a second launch.
-        private readonly System.Text.StringBuilder _trace = new System.Text.StringBuilder();
-        private float _nextTrace;
 
         public void Configure(MissionAutorun.Request req) { _req = req; }
 
         private void FixedUpdate()
         {
             if (_finished) return;
+            MissionAutorun.PinFrameStep();
             _elapsed += Time.fixedDeltaTime;
 
             if (_runner == null)
@@ -279,6 +323,7 @@ namespace AIHWSim.Core
                     return;
                 }
                 _hub = _runner.Hub;
+                _score = new MissionScorer(_car, _hub);
                 if (!string.IsNullOrEmpty(_req.faults))
                 {
                     var specs = new System.Collections.Generic.List<Sensors.FaultSpec>();
@@ -294,69 +339,10 @@ namespace AIHWSim.Core
                 }
             }
 
-            // Ground truth: chord-sum of the actual pose at 400 Hz. Unlike the
-            // encoder this has no integration bias to correct — the positions are
-            // exact samples, not a velocity integral.
-            var p = _car.transform.position;
-            if (_hasPrev) _truth += Vector3.Distance(_prevPos, p);
-            _prevPos = p; _hasPrev = true;
-
-            int phase = Dbg("dbg/state", -99);
-            float yaw = _car.transform.eulerAngles.y;
-            float spd = _car.ForwardSpeed;
-
-            if (phase == 4 || phase == 5 || phase == 6)
-            {
-                _spdSum += spd; _spdN++;
-                if (spd < _spdMin) _spdMin = spd;
-                if (phase == 5 && spd < _turnSpdMin) _turnSpdMin = spd;
-            }
-
-            if (_elapsed >= _nextTrace)
-            {
-                _nextTrace = _elapsed + 0.05f;
-                if (_trace.Length == 0)
-                    _trace.Append("t,phase,fault,v_true,v_meas,v_ref,odo,truth,motor_v,brake,steer,yaw_true,yaw_ctrl,tof,slip_front,slip_rear\n");
-                // True slip ratios (front pair = the odometry wheels, rear pair):
-                // ground truth for what an encoder-based odometer cannot see.
-                float slipF = 0.5f * (_car.WheelSlipRatio(0) + _car.WheelSlipRatio(1));
-                float slipR = 0.5f * (_car.WheelSlipRatio(2) + _car.WheelSlipRatio(3));
-                _trace.AppendFormat(System.Globalization.CultureInfo.InvariantCulture,
-                    "{0:0.00},{1},{2},{3:0.000},{4:0.000},{5:0.000},{6:0.000},{7:0.000},{8:0.000},{9:0.000},{10:0.000},{11:0.00},{12:0.00},{13:0.00},{14:0.00000},{15:0.00000}\n",
-                    _elapsed, phase, Dbg("dbg/fault", 0), spd, DbgF("dbg/v_meas"), DbgF("dbg/target_speed"),
-                    DbgF("dbg/odo_m"), _truth, DbgF("dbg/motor_v"), DbgF("dbg/brake_cmd"),
-                    DbgF("dbg/steer_cmd"), yaw, DbgF("dbg/yaw_deg"), DbgF("sens/tof_front/dist"),
-                    slipF, slipR);
-            }
-
-            if (phase != _prevPhase)
-            {
-                switch (phase)
-                {
-                    case 4: _mCruiseA = _truth; break;
-                    case 5: _mTurn = _truth; _yawTurnEntry = yaw; break;
-                    case 6: _mCruiseB = _truth; _yawTurnExit = yaw; break;
-                    case 7: _mBrake = _truth; break;
-                    case 10: _mDone = _truth; break;
-                }
-                _prevPhase = phase;
-            }
-
+            int phase = _score.Step(_elapsed);
             if (phase == 10) { Finish(true, ""); return; }
             if (phase == -1) { Finish(false, "controller reported FAULT"); return; }
             if (_elapsed > _req.timeoutSec) { Finish(false, "timeout"); return; }
-        }
-
-        private int Dbg(string ch, int fallback) =>
-            _hub != null && _hub.TryGetChannel(ch, out var c) ? Mathf.RoundToInt(c.Latest) : fallback;
-
-        private float DbgF(string ch) =>
-            _hub != null && _hub.TryGetChannel(ch, out var c) ? c.Latest : 0f;
-
-        private static float AngleDelta(float from, float to)
-        {
-            float d = Mathf.DeltaAngle(from, to);
-            return d;
         }
 
         private void Finish(bool ok, string note)
@@ -366,53 +352,10 @@ namespace AIHWSim.Core
             _res.note = note;
             _res.noiseSeed = Sensors.NoiseModel.GlobalSeed;
             _res.controlHz = _runner != null ? _runner.controlRateHz : 0;
-            _res.phase = _prevPhase;
-            _res.fault = Dbg("dbg/fault", 0);
-            _res.safeFault = Dbg("dbg/safe_fault", 0);
-            _res.safeState = Dbg("dbg/safe_state", 0);
             _res.link = _runner != null ? _runner.LinkStats : "";
             _res.elapsedSec = _elapsed;
-            _res.odo_final = DbgF("dbg/odo_m");
-            _res.truth_final = (float)_truth;
-            _res.controllerStopErr_mm = DbgF("dbg/stop_err_mm");
-            _res.cruiseSpeedMean = _spdN > 0 ? (float)(_spdSum / _spdN) : 0f;
-            _res.cruiseSpeedMin = _spdMin == float.MaxValue ? 0f : _spdMin;
-            _res.turnSpeedMin = _turnSpdMin == float.MaxValue ? 0f : _turnSpdMin;
-
-            _res.legA_target = 14.5f;
-            _res.turn_target_deg = 45f;
-            _res.legB_target = 7.5f;
-            _res.brake_target = 1.5f;
-            _res.total_target = 9.0f;
-
-            if (_mCruiseA >= 0 && _mTurn >= 0)
-            {
-                _res.legA_actual = (float)(_mTurn - _mCruiseA);
-                _res.legA_err_mm = (_res.legA_actual - _res.legA_target) * 1000f;
-            }
-            if (_mTurn >= 0 && _mCruiseB >= 0)
-            {
-                // Left turn: Unity yaw DECREASES, so negate to report a positive
-                // 45 for a correct run.
-                _res.turn_actual_deg = -AngleDelta(_yawTurnEntry, _yawTurnExit);
-                _res.turn_err_deg = _res.turn_actual_deg - _res.turn_target_deg;
-            }
-            if (_mCruiseB >= 0 && _mBrake >= 0)
-            {
-                _res.legB_actual = (float)(_mBrake - _mCruiseB);
-                _res.legB_err_mm = (_res.legB_actual - _res.legB_target) * 1000f;
-            }
-            if (_mBrake >= 0 && _mDone >= 0)
-            {
-                _res.brake_actual = (float)(_mDone - _mBrake);
-                _res.brake_err_mm = (_res.brake_actual - _res.brake_target) * 1000f;
-            }
-            if (_mCruiseB >= 0 && _mDone >= 0)
-            {
-                _res.total_actual = (float)(_mDone - _mCruiseB);
-                _res.total_err_mm = (_res.total_actual - _res.total_target) * 1000f;
-            }
-            _res.drift_mm = (_res.odo_final - _res.truth_final) * 1000f;
+            if (_score != null) _score.Fill(_res);
+            else _res.phase = -99;
 
             try
             {
@@ -421,7 +364,7 @@ namespace AIHWSim.Core
                 {
                     Directory.CreateDirectory(Path.GetDirectoryName(_req.resultPath));
                     File.WriteAllText(_req.resultPath, json);
-                    File.WriteAllText(Path.ChangeExtension(_req.resultPath, ".trace.csv"), _trace.ToString());
+                    File.WriteAllText(Path.ChangeExtension(_req.resultPath, ".trace.csv"), _score != null ? _score.Trace : "");
                     if (_telemetry != null)
                     {
                         _telemetry.Flush();

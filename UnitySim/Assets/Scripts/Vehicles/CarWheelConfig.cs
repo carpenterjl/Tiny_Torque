@@ -17,6 +17,7 @@ namespace AIHWSim.Vehicles
         public Vector3 localPos;        // relative to the chassis centre
         public float yaw;               // heading of the wheel (deg about up)
         public float radius;
+        public float specRadius;        // radius reported to the firmware; 0 = radius
         public bool allowsSteering;
         public bool reverseSteering;    // invert the steer command for this wheel
         public float steerAngle;        // this wheel's max steer angle (deg)

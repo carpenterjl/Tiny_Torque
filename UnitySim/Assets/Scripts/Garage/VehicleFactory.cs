@@ -95,6 +95,7 @@ namespace AIHWSim.Garage
             car.wheelVelNoiseStd = design.wheelVelNoiseStd;
             car.wheelVelQuantCpr = design.wheelVelQuantCpr;
             car.computeLatencyUs = Mathf.Max(0, design.computeLatencyUs);
+            car.imu.gyroNoise.bias = design.gyroBias;
             car.controlJitterUs = Mathf.Max(0f, design.controlJitterUs);
 
             // Scale-dependent constants the design now authors. The first three
@@ -142,6 +143,7 @@ namespace AIHWSim.Garage
                     localPos = w.localPos,
                     yaw = w.yaw,
                     radius = w.radius,
+                    specRadius = w.specRadius,
                     allowsSteering = w.allowsSteering,
                     reverseSteering = w.reverseSteering,
                     steerAngle = w.steerAngle,
@@ -220,6 +222,7 @@ namespace AIHWSim.Garage
                     car.batteryInternalR = Mathf.Max(0f, b.internalR);
                     car.batteryCapacitymAh = Mathf.Max(0f, b.capacitymAh); // 0 = ∞
                     car.batteryAuxA = Mathf.Max(0f, b.auxLoadA);
+                    car.batteryStartSoc = b.startSoc > 0f && b.startSoc < 1f ? b.startSoc : 1f;
                 }
                 batteryVisuals[i] = CreateBatteryVisual(root.transform, b, withSensor: true);
             }
@@ -440,6 +443,9 @@ namespace AIHWSim.Garage
                 case SensorType.Uwb:
                 {
                     var u = go.AddComponent<UwbSensor>();
+                    u.losDropout = Mathf.Clamp01(u.losDropout + spec.uwbExtraDropout);
+                    u.nlosDropout = Mathf.Clamp01(u.nlosDropout + spec.uwbExtraDropout);
+                    u.outlierProb = Mathf.Clamp01(u.outlierProb + spec.uwbExtraOutlier);
                     sc = u;
                     PartVisualFactory.BuildRfViz(go.transform);
                     break;

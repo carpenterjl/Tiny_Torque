@@ -271,7 +271,7 @@ namespace AIHWSim.Sensors
                 {
                     e.wheel_index = wheel;
                     var wc = _vehicle != null ? _vehicle.GetWheel(wheel) : null;
-                    e.wheel_radius_m = wc != null ? wc.radius : 0f;
+                    e.wheel_radius_m = wc != null ? _vehicle.SpecRadius(wheel) : 0f;   // what the spec sheet says
                 }
                 m2[i] = e;
             }

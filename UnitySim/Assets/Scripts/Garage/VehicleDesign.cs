@@ -73,6 +73,10 @@ namespace AIHWSim.Garage
         // 1 = PMW3901 (≥ 80 mm).
         public int flowPart = 0;
 
+        // UWB (§9.2 randomization): added to the part's own rates. 0 = as built.
+        public float uwbExtraDropout = 0f;        // fraction of reads lost, LOS and NLOS alike
+        public float uwbExtraOutlier = 0f;        // fraction of reads that are outliers
+
         // Raw MEMS IMU (kind Imu6): datasheet parameters, ICM-42688-P defaults.
         public Sensors.ImuSpec imu = new Sensors.ImuSpec();
 
@@ -96,6 +100,11 @@ namespace AIHWSim.Garage
         public Vector3 localPos = new Vector3(0.083f, -0.045f, 0.152f);
         public float yaw = 0f;                // heading (deg about up)
         public float radius = 0.033f;         // 66 mm RC tire
+        /// <summary>The radius the car's spec sheet states — what the sensor
+        /// manifest tells the firmware — when the tyre really rolls on
+        /// <see cref="radius"/> (a worn or mis-measured tyre; §9.2
+        /// randomization). 0 = they are the same.</summary>
+        public float specRadius = 0f;
         public int wheelStyle = 0;            // cosmetic tyre mesh: 0 slick / 1 knobby / 2 rally
 
         /// <summary>The <see cref="WheelCatalog"/> key this wheel wears, and the
@@ -342,6 +351,7 @@ namespace AIHWSim.Garage
         public float internalR = 0.03f;       // pack + leads + connector (Ω)
         public float capacitymAh = 0f;        // 0 = infinite supply (no SoC); > 0 enables SoC + OCV sag
         public float auxLoadA = 0f;           // MCU, sensors, servo idle: drawn whatever the motors do (A)
+        public float startSoc = 0f;           // state of charge at every (re)spawn, 0..1; 0 = full (legacy)
 
         public BatterySpec Clone() => (BatterySpec)MemberwiseClone();
     }
@@ -422,6 +432,9 @@ namespace AIHWSim.Garage
         // one whole period for a timer-latched output). controlJitterUs: σ of
         // the jitter on the time stamp (and so dt) the firmware is handed.
         public int computeLatencyUs = 0;
+        /// <summary>Constant bias on the built-in IMU's gyro, rad/s, every
+        /// axis (§9.2 randomization). 0 = none.</summary>
+        public float gyroBias = 0f;
         public float controlJitterUs = 0f;
         // SEN-06/09 sensor realism profile. 0 = legacy (clean channels; SoC and
         // brushed-motor torque reported as truth). 1 = realistic: pack, driver

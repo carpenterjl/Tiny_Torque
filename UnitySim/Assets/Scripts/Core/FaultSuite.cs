@@ -129,6 +129,7 @@ namespace AIHWSim.Core
         private void FixedUpdate()
         {
             if (_finished) return;
+            MissionAutorun.PinFrameStep();
             if (_runner == null)
             {
                 _wait += Time.fixedDeltaTime;

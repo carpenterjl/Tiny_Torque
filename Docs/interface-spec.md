@@ -258,6 +258,9 @@ is three calls deep:
 2. `opus_app_step` (`opus_mission/opus_app.h`) is the whole firmware:
    - the loop body `opus_fw.h` runs the mission, the navigation EKF and the
      safety layer (`core/tt_safety.h`);
+   - the FOC twin applies each command one period after its tick (design
+     `computeLatencyUs` 10000, as a timer-latched MCU output does), and the
+     firmware predicts over it (`cmd_delay_s` in its parameters, FW-13);
    - then it does what the car's `tt_hal_write()` does: wheel torque → Iq,
      and, for a brushed drive, Iq → ESC volts.
    - The result is a `TtAct`: actuator writes in each drive's own unit.
@@ -278,6 +281,55 @@ rolled onto its side. Headless: `OpusMissionRunner.RunHeadless -opusFaults
 "RcKill@p4+1;Stale:imu@3/0.5"` for one run, `-opusFaultSuite 1` for the
 graded suite. The same catalogue on `TtMeas`/`TtCmd` is `Controllers/tests/
 tt_fault.h`, used by CTest's `tt_safety_faults`.
+
+### Randomized campaigns (domain randomization)
+
+The same firmware drives the Opus mission many times, each run on a car whose
+physical parameters are drawn around the nominal design. The firmware's own
+parameter file stays nominal, as it will on the real car. The campaign is
+judged on percentiles and worst cases, not on one run
+(`Scripts/Core/Campaign.cs`, `CampaignWatcher.cs`).
+
+- **Headless:** `OpusMissionRunner.RunHeadless -opusCampaign 100` (FOC twin
+  unless `-opusVehicle` says otherwise).
+  - `-opusCampaignSeed S`: every run's draws and noise seed come from
+    (S, run index) alone.
+  - `-opusCampaignCorners 1`: the nominal car, then each parameter alone at
+    each end of its range (per-wheel ones also left-low / right-high).
+    With `-opusSeed N` the nominal corner is the plain mission run, bit for bit.
+  - `-opusCampaignOnly 3,7`: rerun those runs; they come out identical to
+    their runs inside the campaign. Repeats are allowed (`0,0`).
+  - `-opusCampaignWidth 0.5`: half-width ranges.
+  - `-opusCampaignGate "total=50,stop=10,leg=60,turn=1,complete=1,safety=0"`
+    overrides the gate (p95 of each |error|, the fraction that must finish,
+    and how many runs may raise a safety fault).
+  - `-opusTelemetry 1` also writes each run's coarse trace.
+- **Outputs** next to the result path:
+  - `.json`: everything.
+  - `.csv`: one row per run, with the draws, the physical values and the
+    metrics. Metrics include the true brake slip, the lowest pack voltage and
+    the EKF error against truth.
+  - `.txt`: percentiles, the gate, the worst runs, and which parameters go
+    with failing.
+  - The process exits 0 when the gate passes.
+- **Parameters:**
+  - Grip: floor and per tyre.
+  - Lateral grip.
+  - Mass, CoM, yaw inertia.
+  - kt per motor, current-loop bandwidth.
+  - Rolling radius per wheel against the spec-sheet radius the firmware is
+    told (`WheelSpec.specRadius`).
+  - Steering gain and trim offset, servo bandwidth.
+  - Unannounced extra compute delay.
+  - Starting state of charge (`BatterySpec.startSoc`).
+  - Gyro bias (`VehicleDesign.gyroBias`).
+  - UWB dropout and outlier rates (`SensorSpec.uwbExtra*`).
+  - The report lists the ranges and the rows not sampled yet.
+- **Each run rebuilds the car.** The next design goes into the session and
+  the track scene reloads. Headless runs pin every frame to one physics step
+  (`MissionAutorun.PinFrameStep`). Without that, a slow frame after a scene
+  load shifted a run by a few millimetres: something in the scene still reads
+  frame-interpolated poses.
 
 ### Running the firmware outside Unity: lockstep and HIL (HIL-01…05)
 

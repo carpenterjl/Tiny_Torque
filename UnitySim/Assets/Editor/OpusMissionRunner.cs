@@ -56,11 +56,35 @@ namespace AIHWSim.EditorTools
             // bridge (HIL-01/04); -opusLinkTimeoutMs N is its per-tick wait and
             // -opusLinkRecord <file.ttw> captures the wire for tools/tt_replay.
             int linkMs = int.TryParse(ArgValue("-opusLinkTimeoutMs"), out int lm) ? lm : 0;
+            // -opusCampaign N runs N randomized missions (§9.2, Campaign.cs) on
+            // the FOC twin unless -opusVehicle says otherwise; -opusCampaignSeed S,
+            // -opusCampaignCorners 1 (each parameter alone at both ends),
+            // -opusCampaignOnly 3,7 (rerun those runs), -opusCampaignWidth 0.5
+            // (narrower ranges), -opusCampaignGate "total=50,stop=10".
+            var camp = new CampaignArgs
+            {
+                runs = int.TryParse(ArgValue("-opusCampaign"), out int cr) ? cr : 0,
+                seed = int.TryParse(ArgValue("-opusCampaignSeed"), out int cs) ? cs : 1,
+                corners = ArgValue("-opusCampaignCorners") == "1",
+                only = ArgValue("-opusCampaignOnly") ?? "",
+                width = float.TryParse(ArgValue("-opusCampaignWidth"), System.Globalization.NumberStyles.Float,
+                                       System.Globalization.CultureInfo.InvariantCulture, out float cw) ? cw : 1f,
+                gate = ArgValue("-opusCampaignGate") ?? "",
+            };
+            if ((camp.runs > 0 || camp.corners) && vehicle == null) vehicle = "Opus Vector FOC";
             Begin(result, timeout, ArgValue("-opusController") ?? "",
                   ArgValue("-opusTrack"), ArgValue("-opusCam"), seed, hz,
                   vehicle, lat, tel, ArgValue("-opusFaults") ?? "", suite,
                   ArgValue("-opusFaultOnly") ?? "", ArgValue("-opusLink") ?? "", linkMs,
-                  ArgValue("-opusLinkRecord") ?? "");
+                  ArgValue("-opusLinkRecord") ?? "", camp);
+        }
+
+        private sealed class CampaignArgs
+        {
+            public int runs, seed = 1;
+            public bool corners;
+            public string only = "", gate = "";
+            public float width = 1f;
         }
 
         private static string DefaultResultPath() =>
@@ -81,7 +105,8 @@ namespace AIHWSim.EditorTools
                                   string vehicle = null, int computeLatencyUs = -1,
                                   bool saveTelemetry = false, string faults = "",
                                   bool faultSuite = false, string faultOnly = "",
-                                  string link = "", int linkTimeoutMs = 0, string linkRecord = "")
+                                  string link = "", int linkTimeoutMs = 0, string linkRecord = "",
+                                  CampaignArgs camp = null)
         {
             var req = new MissionAutorun.Request
             {
@@ -99,6 +124,15 @@ namespace AIHWSim.EditorTools
                 linkTimeoutMs = linkTimeoutMs,
                 linkRecord = linkRecord ?? "",
             };
+            if (camp != null)
+            {
+                req.campaignRuns = camp.runs;
+                req.campaignSeed = camp.seed;
+                req.campaignCorners = camp.corners;
+                req.campaignOnly = camp.only;
+                req.campaignWidth = camp.width;
+                req.campaignGate = camp.gate;
+            }
             if (!string.IsNullOrEmpty(track)) req.track = track;
             if (!string.IsNullOrEmpty(vehicle)) req.vehicle = vehicle;
             // "128x128". Both halves or neither — a half-parsed size would run at
