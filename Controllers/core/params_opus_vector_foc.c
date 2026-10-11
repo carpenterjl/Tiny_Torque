@@ -2,7 +2,7 @@
 #include "tt_params.h"
 
 const TtParams tt_params_opus_vector_foc = {
-    .version = 3u,
+    .version = 4u,
     .wheel_radius_m = 0.033f,
     .wheelbase_m = 0.3f,
     .track_front_m = 0.172f,
@@ -42,4 +42,5 @@ const TtParams tt_params_opus_vector_foc = {
     .cmd_delay_s = 0.01f,
     .tyre_mu = 0.9f,
     .steer_lag_s = 0.04f,
+    .steer_backlash_rad = 0.008727f,
 };

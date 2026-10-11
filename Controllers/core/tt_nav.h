@@ -1,19 +1,20 @@
 /*
  * tt_nav.h — planar navigation filter: UWB + odometry + gyro (+ flow) EKF.
  *
- * The L3 estimator of the plan's control stack (§7.1): a 6-state EKF
+ * The L3 estimator of the plan's control stack (§7.1): a 7-state EKF
  *
- *     s = [x, y, psi, v, b_g, k_w]
+ *     s = [x, y, psi, v, b_g, k_w, b_r]
  *
  * in the UWB anchors' world frame (x, y metres, psi = heading of the body x
  * axis, + = left/CCW), with the forward speed v, the gyro's yaw-rate bias
- * b_g and the odometer's scale k_w (true speed = k_w * odometer speed).
+ * b_g, the odometer's scale k_w (true speed = k_w * odometer speed) and the
+ * tag's range bias b_r (its antenna delay: every range reads b_r long).
  *
  *   predict  x += v cos(psi) dt, y += v sin(psi) dt,
  *            psi += (gyro_z - b_g) dt, v += a_x dt
  *   updates  odometer speed  z = v / k_w
  *            optical flow    z = v           (when the flow sensor tracks)
- *            UWB range       z = |tag - anchor|, tightly coupled, gated
+ *            UWB range       z = |tag - anchor| + b_r, tightly coupled, gated
  *                            by its Mahalanobis distance; the tag sits at a
  *                            lever arm from the body origin
  *            zero velocity   at rest: v = 0 and gyro_z = b_g
@@ -37,7 +38,7 @@
 extern "C" {
 #endif
 
-enum { TT_NAV_X = 0, TT_NAV_Y, TT_NAV_PSI, TT_NAV_V, TT_NAV_BG, TT_NAV_KW, TT_NAV_N };
+enum { TT_NAV_X = 0, TT_NAV_Y, TT_NAV_PSI, TT_NAV_V, TT_NAV_BG, TT_NAV_KW, TT_NAV_BR, TT_NAV_N };
 enum { TT_NAV_WAIT_INIT = 0, TT_NAV_RUN = 1 };
 #define TT_NAV_MAX_REC 96
 
@@ -49,6 +50,7 @@ typedef struct {
     float r_speed;        /* odometer speed sigma, m/s                      */
     float r_flow;         /* flow speed sigma, m/s                          */
     float r_range;        /* UWB line-of-sight sigma, m                     */
+    float r_bias0;        /* UWB range bias sigma before it is learned, m   */
     float r_gyro_rest;    /* gyro sigma for the at-rest bias update, rad/s  */
     float nlos_db;        /* power gap above which a range is likely NLOS   */
     float nlos_scale;     /* sigma multiplier for a likely-NLOS range       */

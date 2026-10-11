@@ -106,7 +106,110 @@
 
 #define GA_HEAD_KP         2.0f      /* 1/s — heading hold on the straights */
 #define GA_HEAD_MAX_RATE   0.30f     /* rad/s, clamp on the heading loop's output */
-#define GA_GYRO_ALPHA      0.75f     /* complementary blend toward the gyro */
+
+/* ------------------------------------------- the car's own errors (FW-15) --
+ * Heading is the gyro less the bias it read while the car stood still to
+ * arm. (It used to be 75 % gyro + 25 % front-encoder differential: a 2 %
+ * left/right radius mismatch reads as 30 deg/s of yaw at cruise, and the
+ * heading loop steered the car round to cancel it. The differential is now
+ * only the fallback while the IMU is out, corrected by the left/right scale
+ * learned against the gyro below.) */
+#define GA_GB_SETTLE_S     0.20f     /* s into the standing check before the bias sum starts */
+#define GA_LR_TAU_S        1.0f      /* s, learning the odometry pair's left/right scale */
+#define GA_LR_MIN_V        1.0f      /* m/s, below this the differential is too coarse */
+#define GA_LR_MAX          0.05f     /* clamp: a bigger mismatch is a fault, not a scale */
+/* Steering trim: on a straight the steering that is ACTING (the command a
+ * delay ago, through the steering's lag) should give the kinematic yaw rate
+ * v*tan(delta)/L. What it gives instead is the servo's centre error, learned
+ * here and taken off every command. A +2 deg trim otherwise swings the car
+ * 7 deg off line during the launch, faster than the yaw loop's integral can
+ * follow, and into the marker cones at the turn. */
+#define GA_TRIM_TAU_S      0.25f     /* s */
+#define GA_TRIM_MIN_V      0.8f      /* m/s */
+#define GA_TRIM_MAX_AY     1.0f      /* m/s^2: above this tyre slip angles count */
+#define GA_TRIM_MAX_RAD    0.07f     /* 4 deg */
+/* ...but only what lies beyond the servo's own play. Inside its deadband and
+ * backlash (R6: ~0.3 deg) the angle acting depends on the way it was last
+ * moved, so a small offset is noise to this estimate; the yaw loop's integral
+ * already takes care of it. Learning it anyway left a 0.23 deg trim that held
+ * the steering inside the deadband after the turn, and the car swung back
+ * 1.8 deg. */
+#define GA_TRIM_DEADZONE   0.008f    /* rad, 0.46 deg */
+/* Steering backlash (steer_backlash_rad, TtParams): the wheels stay put
+ * while the horn crosses the play, so a reversal is commanded straight across
+ * it. A correction smaller than this holds the horn instead, so noise in the
+ * yaw loop cannot flick it from side to side. */
+#define GA_LASH_HYST       0.001f    /* rad, 0.06 deg */
+#define GA_TRIM_LAG_S      0.05f     /* steering lag to assume when steer_lag_s is 0 */
+/* Distance scale: the navigation filter's odometer scale k_w (true metres per
+ * odometer metre) is taken once it is known this well, and only in this band.
+ * A uniform 2 % radius error is otherwise 290 mm on leg A. */
+#define NV_KW_SIGMA_MAX    0.004f
+#define NV_KW_MIN          0.90f
+#define NV_KW_MAX          1.10f
+
+/* ------------------------------------------ force gain and grip (FW-16) --
+ * Force gain: how much acceleration a newton of commanded wheel force
+ * actually buys, against what the parameters promise. Motor constant, mass
+ * and wheel radius errors all land here (kt 7.5 % low, the car 10 % heavy:
+ * the stop overran by 51 / 26 mm on a speed loop held back by the grip
+ * budget). Least squares over the launch, on ticks where no wheel is
+ * slip-limited and the force is not stepping; then held. (Measured over the
+ * stop as well it reads 2-3 % low on every car, nominal included: the
+ * pitching body and the braked wheels' slip are not in the model, and a
+ * gain that low over-brakes.) */
+#define GA_FG_MIN_N        5.0f      /* N of force acting before a tick counts      */
+#define GA_FG_STEP_FRAC    0.15f     /* ...and within this of the tick before's     */
+#define GA_FG_MIN_W        50.0f     /* N^2*s of evidence before the gain is used:
+                                        ~0.25 s of the launch's 14 N              */
+#define GA_FG_MIN          0.75f     /* outside this band the measurement is broken,
+                                        not the car: the gain stays 1. On a floor
+                                        measured slippery it is set aside too:
+                                        the shortfall it saw was grip.       */
+#define GA_FG_MAX          1.33f
+/* Grip: the floor's friction is only seen at the limit. The driven wheels'
+ * slip (the way their torque pushes) is averaged over the launch above
+ * GA_MU_MIN_V, and each wheel's slip at cruise (GA_MU_CAL_T0..T1 into leg A,
+ * where the drive force is almost nothing) is taken off it: that is the
+ * wheel's own radius error, not slip. One second into leg A, if the mean
+ * corrected launch slip passes GA_MU_SLIP_FRAC of slip_max, the car was at
+ * the friction the floor has: the launch's mean acceleration, over g, over
+ * the share of the peak a tyre gives there. Judged once, ~5 s before the
+ * stop. (Judged during the launch on the raw slip, per-wheel radius and
+ * motor errors raised false alarms on 11 of 74 good floors.)
+ *
+ * The launch (0.72 g of tyre
+ * force) asks about as much as the stop (0.75 g), so a floor too slippery to
+ * stop on shows up before the stop; a nominal launch slips 3.5 %. (Under the
+ * stop a nominal car's rear pair, unloaded, already runs at -7.5 %: the car
+ * is nowhere near its limit there.) The evidence is the wheels' slip, never
+ * the limiter's cut: once the estimate is down, the limiter and the budget
+ * hold the car back by design, and reading that as the floor spirals the
+ * estimate to nothing. */
+/* Measured on the FOC twin's launches above 3 m/s: the largest wheel's
+ * slip ~4.5 % on a nominal floor (the mean ~4 %), 5-6 % at 0.84x grip,
+ * 5-9 % at 0.62-0.75x. A false alarm costs only an early stop that still
+ * lands on the mark. */
+#define GA_MU_SLIP_FRAC    0.65f
+/* A wheel slipping past this share of slip_max keeps its tick out of the
+ * force-gain fit: the force it carried is the floor's, not the motor's. */
+#define GA_FG_SLIP_FRAC    0.75f
+/* Above this speed only: the firmware's slip is the wheel against v_est,
+ * which trails a hard launch (the odometer's slip model over-corrects there)
+ * and inflates slip most at low speed. At 1 m/s a nominal launch read past
+ * the threshold. */
+#define GA_MU_MIN_V        3.0f      /* m/s */
+#define GA_MU_CAL_T0       0.5f      /* s into leg A: the launch's transient gone */
+#define GA_MU_CAL_T1       1.5f      /* s into leg A: offsets taken, floor judged  */
+#define GA_MU_SAT          0.93f     /* force at the limiter's slip / peak          */
+#define GA_MU_MIN          0.15f
+/* What the stop plans on, of the measured friction: below the peak with a
+ * margin for the load estimate (the tyre past its peak falls to a slide). */
+#define GA_MU_USE          0.85f
+/* The slip limiter's threshold on a slippery floor: this share of the slip
+ * at which the tyre peaks (2 mu / C for the brush tyre), never above
+ * slip_max. 8 % is past the peak below mu = 0.68. */
+#define GA_SLIP_PEAK_FRAC  0.70f
 
 /* --------------------------------------------------------------- endgame --*/
 #define EN_CREEP_M         0.040f    /* below this remaining distance, switch to creep */
@@ -115,6 +218,11 @@
 #define EN_DONE_M          0.001f    /* stop tolerance against our own odometer */
 #define EN_DONE_V          0.02f     /* m/s */
 #define EN_HOLD_S          1.0f      /* zero motion for this long before declaring DONE */
+/* A creep this close that has stopped moving is done: inside a few mm the
+ * position loop asks for less speed than it takes to break the car free
+ * (7 mm/s at 1 mm), and it would wait there for ever. The miss is reported. */
+#define EN_STALL_M         0.005f
+#define EN_STALL_S         0.5f
 #define EN_DEAD_TIME_S     0.020f    /* loop dead time, led out of the braking profile */
 /* Speed low-pass for the creep loop and the stop tests: 23.2 ms is the old
  * per-tick 0.35 blend at 100 Hz (FW-05). */
@@ -200,5 +308,7 @@
 #define FA_TICK_GLITCH     0x1000
 #define FA_PARAMS          0x2000    /* parameter set invalid, or contradicts the manifest */
 #define FA_SAFETY          0x4000    /* the safety layer (FW-08) stopped the car */
+#define FA_GRIP_LOW        0x8000    /* warning: the floor cannot stop the car in
+                                        MI_BRAKE_M; the stop starts early (FW-16) */
 
 #endif /* OPUS_MISSION_CFG_H */

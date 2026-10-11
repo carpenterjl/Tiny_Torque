@@ -83,6 +83,10 @@ void opus_fw_step(OpusFw *fw, const TtMeas *m, TtCmd *out)
         tt_nav_step(&fw->nav, dt, m->imu.gyro[2], m->imu.accel[0], st->v_meas,
                     0.0f, 0, r, nr);
     if (fw->nav.stage == TT_NAV_RUN) {
+        /* The odometer's scale, once the ranges have pinned it (FW-15). */
+        float var = fw->nav.P[TT_NAV_KW * TT_NAV_N + TT_NAV_KW];
+        if (var < NV_KW_SIGMA_MAX * NV_KW_SIGMA_MAX)
+            opus_set_odo_scale(st, fw->nav.s[TT_NAV_KW]);
         fw->pose.valid = 1u;
         fw->pose.x = fw->nav.s[TT_NAV_X];
         fw->pose.y = fw->nav.s[TT_NAV_Y];

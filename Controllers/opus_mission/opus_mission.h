@@ -26,7 +26,10 @@
 typedef struct {
     float a;               /* acceleration asked for, m/s^2 */
     float r;               /* yaw rate asked for, rad/s, + = left */
+    float steer;           /* road-wheel angle asked for, rad, + = left */
     float t_odo[2];        /* torque on the odometry pair (left, right), N*m */
+    float f;               /* wheel force the allocator commanded, N    */
+    int   lim;             /* wheels slipping near the limit (bit mask) */
 } OpusSent;
 
 /* Mission phases. The numeric values are published as log channel `state` and
@@ -87,13 +90,43 @@ typedef struct {
     OpusSent sent[OPUS_PRED_SLOTS];  /* what was asked for, newest last */
     int    sent_n;         /* ticks of it held */
     float  psi;            /* rad, heading since arm; POSITIVE = LEFT */
-    float  psi_dot;        /* rad/s, fused */
+    float  psi_dot;        /* rad/s: the gyro less its bias (encoders without one) */
     float  psi_dot_f;      /* low-passed — what the loops and exit tests use */
     float  steer_obs_rad;  /* modelled servo position, positive = left */
+
+    /* The car's own errors, learned on the way (FW-15). */
+    float  gyro_bias;      /* rad/s, the gyro's reading at rest while arming */
+    float  gb_sum;         /* ...summed over the standing check */
+    int    gb_n;
+    float  lr_eps;         /* right-minus-left odometry wheel scale: the
+                              encoder differential's yaw is off by eps*v/track */
+    float  steer_act_f;    /* steering acting on the car, through its lag */
+    float  steer_trim;     /* rad the steering is off centre: taken off every
+                              command */
+    float  horn;           /* rad, the servo command last sent (the horn)   */
+    float  wheel_est;      /* rad, where the road wheels sit in the play    */
+    float  odo_scale;      /* true metres per odometer metre (the EKF's k_w),
+                              applied to the measured legs; 1 until known */
+
+    /* Force gain and grip (FW-16). */
+    float  ax_corr;        /* m/s^2, forward acceleration, pitch removed  */
+    float  fg_num, fg_den; /* least-squares sums for the force gain       */
+    float  f_gain;         /* acceleration got / promised per newton; 1 until known */
+    float  mu_nom;         /* tyre_mu, or 1 for a car that states none    */
+    float  mu_est;         /* floor friction; mu_nom until measured lower */
+    float  mu_ls[TT_MAX_WHEELS];   /* launch slip, summed (torque's way)  */
+    float  mu_cs[TT_MAX_WHEELS];   /* cruise slip, summed: radius offset   */
+    float  mu_ax;          /* launch |ax|, summed                         */
+    int    mu_ln, mu_cn;   /* ticks in each sum                           */
+    int    mu_judged;      /* the floor has been judged this run          */
+    float  launch_slip;    /* what it was judged on                       */
+    float  a_brake;        /* m/s^2 the stop is planned on                */
+    float  drive_slip;     /* largest driven-wheel slip, torque's way      */
 
     /* Sequencing */
     float  phase_t;        /* s in the current phase */
     float  hold_t;
+    float  stall_t;        /* s the creep has been at rest short of the mark */
     float  settle_t;
     float  live_l, live_r;  /* accumulated odometry-wheel travel, for liveness */
     int    live_checked;
@@ -144,5 +177,9 @@ void opus_step(OpusState *st, const TtMeas *m, TtCmd *out);
 
 /* Odometer, metres since arm. */
 float opus_odo_m(const OpusState *st);
+
+/* The navigation filter's odometer scale (true / odometer). Taken until the
+ * car brakes; the stop is flown on the scale it had then. */
+void opus_set_odo_scale(OpusState *st, float k);
 
 #endif /* OPUS_MISSION_H */

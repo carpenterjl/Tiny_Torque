@@ -1,7 +1,7 @@
 {
   "_about": "Opus Vector FOC twin firmware parameters (TtParams). The same chassis as opus_vector.json with one geared FOC outrunner per wheel (DEC-02 option B) and no friction brake. Mirrors the 'Opus Vector FOC' preset (VehiclePresets.cs). Motor and drag numbers are DERIVED from that design, not measured: replace them from the V2 motor bench and the R0/R2 coast-downs.",
   "name": "opus_vector_foc",
-  "version": 3,
+  "version": 4,
 
   "wheel_radius_m": 0.033,
   "wheelbase_m": 0.300,
@@ -63,5 +63,7 @@
   "tyre_mu": 0.9,
   "_tyre_mu": "FW-13, MEASURED in the sim from the mission's braking traces: a front tyre held -5 % slip at ~0.9 * Fz once the load had moved, and slid at ~0.85 at the onset of braking (before it had). On the car: S7/S10, a braked-wheel pull to the slide.",
   "steer_lag_s": 0.04,
-  "_steer_lag_s": "FW-13, MEASURED in the sim: the turn's heading lands on its mark with the lag at 40 ms (0 overshoots by 3 deg at 0.89 rad/s, 60 ms falls 1.6 deg short). The servo's 6 Hz / zeta 0.6 loop is ~32 ms of it. On the car: R6 steering step + a yaw step."
+  "_steer_lag_s": "FW-13, MEASURED in the sim: the turn's heading lands on its mark with the lag at 40 ms (0 overshoots by 3 deg at 0.89 rad/s, 60 ms falls 1.6 deg short). The servo's 6 Hz / zeta 0.6 loop is ~32 ms of it. On the car: R6 steering step + a yaw step.",
+  "steer_backlash_rad": 0.008727,
+  "_steer_backlash_rad": "FW-15: 0.5 deg of road-wheel lost motion, MEASURED in the sim by R6 (the twin's servoBacklashDeg). Uncompensated, a steering reversal after the turn left the wheels 0.3 deg the wrong side of the command and the car swung 1.5 deg off. On the car: R6, a slow steering sweep each way with the steering encoder."
 }

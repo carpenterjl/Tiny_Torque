@@ -28,8 +28,9 @@
 extern "C" {
 #endif
 
-#define TT_PARAMS_VERSION 3u   /* 2: odo_lead_comp gone (SEN-02); allocator block (FW-06)
-                                  3: cmd_delay_s, tyre_mu, steer_lag_s (FW-13) */
+#define TT_PARAMS_VERSION 4u   /* 2: odo_lead_comp gone (SEN-02); allocator block (FW-06)
+                                  3: cmd_delay_s, tyre_mu, steer_lag_s (FW-13)
+                                  4: steer_backlash_rad (FW-15) */
 
 typedef struct {
     uint32_t version;              /* TT_PARAMS_VERSION                       */
@@ -93,6 +94,9 @@ typedef struct {
     float    steer_lag_s;          /* yaw response lag behind the steering
                                       command (servo + tyres), as a first-order
                                       time constant: the heading still to come */
+    float    steer_backlash_rad;   /* lost motion between servo horn and road
+                                      wheels (R6); the command is stepped
+                                      across it on a reversal; 0 = none      */
 } TtParams;
 
 /* Defaults generated from Controllers/params/<car>.json. */

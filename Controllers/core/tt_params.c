@@ -55,6 +55,7 @@ int tt_params_validate(const TtParams *p)
     if (!(p->cmd_delay_s >= 0.0f && p->cmd_delay_s <= 0.1f)) bad++;
     if (!(p->tyre_mu >= 0.0f && p->tyre_mu < 3.0f)) bad++;
     if (!(p->steer_lag_s >= 0.0f && p->steer_lag_s <= 0.5f)) bad++;
+    if (!(p->steer_backlash_rad >= 0.0f && p->steer_backlash_rad < 0.05f)) bad++;
 
     return bad;
 }

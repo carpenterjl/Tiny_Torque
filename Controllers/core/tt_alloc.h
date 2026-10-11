@@ -50,6 +50,10 @@ typedef struct {
     float ay_meas_mps2;            /* lateral, measured, FLU (+ = left)      */
     float wheel_omega[TT_MAX_WHEELS]; /* rad/s at the wheel, + = forward      */
     uint8_t omega_valid[TT_MAX_WHEELS];
+    float mu;                      /* friction the caller has measured, for
+                                      the grip budget; 0 = p->tyre_mu (FW-16) */
+    float slip_max;                /* slip-limiter threshold, if below
+                                      p->slip_max; 0 = p->slip_max (FW-16)  */
 } TtAllocIn;
 
 void tt_alloc_reset(TtAlloc *a);

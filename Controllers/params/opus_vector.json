@@ -1,7 +1,7 @@
 {
   "_about": "Opus Vector firmware parameters (TtParams, Controllers/core/tt_params.h). The source of record: Tools/gen_params.js turns this into Controllers/core/params_opus_vector.c. Keys starting with _ are notes and are ignored. Values come from Opus_Car_Spec/sim_mapping.md and calibration.md.",
   "name": "opus_vector",
-  "version": 3,
+  "version": 4,
 
   "wheel_radius_m": 0.033,
   "wheelbase_m": 0.300,
@@ -62,5 +62,7 @@
   "tyre_mu": 0.0,
   "_tyre_mu": "no grip budget: one rear motor behind a differential, and the friction brake is not allocated",
   "steer_lag_s": 0.0,
-  "_steer_lag_s": "not identified for the slew-limited legacy servo: the heading loops see the measured heading only"
+  "_steer_lag_s": "not identified for the slew-limited legacy servo: the heading loops see the measured heading only",
+  "steer_backlash_rad": 0.0,
+  "_steer_backlash_rad": "FW-15: the legacy car's servo is modelled without play"
 }

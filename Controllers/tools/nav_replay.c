@@ -112,7 +112,7 @@ int main(int argc, char **argv)
     cfg.lever[1] = (float)lever_y;
     cfg.tag_z = (float)tag_z;
     tt_nav_reset(&nav, &cfg);
-    if (out) { fo = fopen(out, "w"); if (fo) fprintf(fo, "t,x,y,psi,x_true,y_true,psi_true,err\n"); }
+    if (out) { fo = fopen(out, "w"); if (fo) fprintf(fo, "t,x,y,psi,x_true,y_true,psi_true,err,k_w,k_w_sd,b_r\n"); }
 
     while (fgets(g_line, sizeof(g_line), fp)) {
         int nf = split(g_line, f, MAXCOL);
@@ -166,8 +166,10 @@ int main(int argc, char **argv)
                 if (e > emax) emax = e;
                 if (fabs(v) > 0.1) { se_mov += e * e; n_mov++; }
             }
-            if (fo) fprintf(fo, "%.4f,%.4f,%.4f,%.5f,%.4f,%.4f,%.5f,%.4f\n", t,
-                            nav.s[TT_NAV_X], nav.s[TT_NAV_Y], nav.s[TT_NAV_PSI], xt, yt, pt, e);
+            if (fo) fprintf(fo, "%.4f,%.4f,%.4f,%.5f,%.4f,%.4f,%.5f,%.4f,%.5f,%.5f,%.4f\n", t,
+                            nav.s[TT_NAV_X], nav.s[TT_NAV_Y], nav.s[TT_NAV_PSI], xt, yt, pt, e,
+                            nav.s[TT_NAV_KW], sqrt(nav.P[TT_NAV_KW * TT_NAV_N + TT_NAV_KW]),
+                            nav.s[TT_NAV_BR]);
         }
     }
     fclose(fp);

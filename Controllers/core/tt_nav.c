@@ -22,10 +22,17 @@ void tt_nav_default_cfg(TtNavCfg *c)
     c->q_accel = 0.5f;
     c->q_gyro = 0.002f;
     c->q_bias = 0.0005f;
-    c->q_scale = 0.002f;
+    /* The odometer's scale is the tyres' rolling radius: it moves with wear
+     * and load, not within a run. 0.002 let it wander 0.6 % in 10 s, and the
+     * mission measures its legs on it (FW-15): 0.0003 averages over the run. */
+    c->q_scale = 0.0003f;
     c->r_speed = 0.05f;
     c->r_flow = 0.05f;
     c->r_range = 0.08f;
+    /* An uncalibrated antenna delay is a few cm on every range. Left out, it
+     * reads as an odometer scale error of ~0.3 % as the geometry turns
+     * under the car (FW-15). */
+    c->r_bias0 = 0.10f;
     c->r_gyro_rest = 0.005f;
     c->nlos_db = 6.0f;
     c->nlos_scale = 4.0f;
@@ -112,6 +119,7 @@ static void predict(TtNav *n, float dt, float gyro_z, float accel_x)
     n->P[TT_NAV_V * N + TT_NAV_V] += g->q_accel * g->q_accel * dt;
     n->P[TT_NAV_BG * N + TT_NAV_BG] += g->q_bias * g->q_bias * dt;
     n->P[TT_NAV_KW * N + TT_NAV_KW] += g->q_scale * g->q_scale * dt;
+    /* b_r: a constant (the antenna delay drifts with temperature, slowly) */
 }
 
 /* Tag position in the world and the range Jacobian. */
@@ -130,7 +138,8 @@ static float range_h(const TtNav *n, const float a[3], float H[N])
     H[TT_NAV_X] = dx / rho;
     H[TT_NAV_Y] = dy / rho;
     H[TT_NAV_PSI] = (dx * (-sn * lx - c * ly) + dy * (c * lx - sn * ly)) / rho;
-    return rho;
+    H[TT_NAV_BR] = 1.0f;
+    return rho + s[TT_NAV_BR];
 }
 
 /* ---- initialisation: heading search over the recorded track --------------- */
@@ -204,6 +213,7 @@ static int try_init(TtNav *n, float v_odo, float gyro_bias)
         s[TT_NAV_V] = v_odo;
         s[TT_NAV_BG] = gyro_bias;
         s[TT_NAV_KW] = 1.0f;
+        s[TT_NAV_BR] = 0.0f;
         memset(P, 0, sizeof(n->P));
         P[TT_NAV_X * N + TT_NAV_X] = 0.05f * 0.05f;
         P[TT_NAV_Y * N + TT_NAV_Y] = 0.05f * 0.05f;
@@ -211,6 +221,7 @@ static int try_init(TtNav *n, float v_odo, float gyro_bias)
         P[TT_NAV_V * N + TT_NAV_V] = 0.1f * 0.1f;
         P[TT_NAV_BG * N + TT_NAV_BG] = 0.005f * 0.005f;
         P[TT_NAV_KW * N + TT_NAV_KW] = 0.03f * 0.03f;
+        P[TT_NAV_BR * N + TT_NAV_BR] = n->cfg.r_bias0 * n->cfg.r_bias0;
     }
     n->stage = TT_NAV_RUN;
     return 1;

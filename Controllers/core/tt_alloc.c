@@ -31,6 +31,8 @@ void tt_alloc_step(TtAlloc *a, const TtParams *p, const TtVehReq *req,
     int nf = driven(p, TT_FL) + driven(p, TT_FR);
     int nr = driven(p, TT_RL) + driven(p, TT_RR);
     float share_f, fx_f, fx_r, mz_f, mz_r;
+    float mu = in->mu > 0.0f ? in->mu : p->tyre_mu;
+    float smax = (in->slip_max > 0.0f && in->slip_max < p->slip_max) ? in->slip_max : p->slip_max;
     int w;
 
     /* 1. Front/rear: by axle load when both are driven. Under acceleration
@@ -66,8 +68,9 @@ void tt_alloc_step(TtAlloc *a, const TtParams *p, const TtVehReq *req,
     }
 
     /* 2b. Grip budget. Loads from the static split and the transfer the
-     * accelerometer says has happened; lateral transfer by axle share. */
-    if (p->tyre_mu > 0.0f) {
+     * accelerometer says has happened; lateral transfer by axle share. The
+     * friction is the caller's measurement when it has one (FW-16). */
+    if (mu > 0.0f) {
         float m = p->mass_kg, h = p->cg_height_m, L = p->wheelbase_m;
         float ff = p->front_weight_frac, cap[TT_MAX_WHEELS], need = 0.0f, room = 0.0f;
         float dlong = L > 0.0f ? m * in->ax_meas_mps2 * h / L * 0.5f : 0.0f;
@@ -78,7 +81,7 @@ void tt_alloc_step(TtAlloc *a, const TtParams *p, const TtVehReq *req,
             float side = (w == TT_FL || w == TT_RL) ? -1.0f : 1.0f;   /* a left turn loads the right */
             float fz = 0.5f * m * G_MPS2 * axle + (front ? -dlong : dlong)
                      + (tr > 0.0f ? side * m * axle * in->ay_meas_mps2 * h / tr * 0.5f : 0.0f);
-            cap[w] = TT_ALLOC_GRIP_USE * p->tyre_mu * (fz > 0.0f ? fz : 0.0f);
+            cap[w] = TT_ALLOC_GRIP_USE * mu * (fz > 0.0f ? fz : 0.0f);
             if (!driven(p, w)) continue;
             if (fabsf(force[w]) > cap[w]) {
                 need += fabsf(force[w]) - cap[w];
@@ -128,8 +131,8 @@ void tt_alloc_step(TtAlloc *a, const TtParams *p, const TtVehReq *req,
             slip = (in->wheel_omega[w] * r - v_ref) / den;
             /* Driving forward spins the wheel faster (+slip); braking locks it
              * (-slip). The excess is in the direction the torque pushes. */
-            if (t > 0.0f && slip > p->slip_max)  excess = slip - p->slip_max;
-            if (t < 0.0f && slip < -p->slip_max) excess = -slip - p->slip_max;
+            if (t > 0.0f && slip > smax)  excess = slip - smax;
+            if (t < 0.0f && slip < -smax) excess = -slip - smax;
             target = clampf(1.0f - p->slip_gain * excess, 0.0f, 1.0f);
             if (target < a->cut[w]) {
                 a->cut[w] = target;                 /* cut at once */
