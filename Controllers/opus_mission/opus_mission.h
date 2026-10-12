@@ -166,6 +166,7 @@ typedef struct {
     float  pr_af[OPUS_PR_SAMPLES];   /* front tyres' force / load, + = braking */
     float  pr_ar[OPUS_PR_SAMPLES];   /* rear tyres', + = driving              */
     float  pr_d[OPUS_PR_SAMPLES];    /* rear wheels' slip less the front's    */
+    int    route_bad;      /* the route cannot be driven (set with it)      */
     float  route_s;        /* where the car is on the route now, m         */
     float  v_plan;         /* the plan at the predicted place              */
 

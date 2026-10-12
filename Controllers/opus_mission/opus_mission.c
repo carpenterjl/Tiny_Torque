@@ -236,7 +236,7 @@ void opus_reset(OpusState *st)
     const TtParams *p = st->p;
     const TtRoute *route = st->route;
     float rate = st->rate_hz, vmax = st->route_vmax;
-    int l = st->odo_l, r = st->odo_r, iq = st->drive_iq;
+    int l = st->odo_l, r = st->odo_r, iq = st->drive_iq, bad = st->route_bad;
 
     memset(st, 0, sizeof(*st));
     st->p = p;
@@ -245,6 +245,7 @@ void opus_reset(OpusState *st)
     st->odo_r = r;
     st->route = route;
     st->route_vmax = vmax;
+    st->route_bad = bad;
     st->drive_iq = iq;
     st->dly_s = p->cmd_delay_s;
     st->phase = OPUS_BOOT;
@@ -275,7 +276,13 @@ void opus_set_route(OpusState *st, const TtRoute *r, float v_max)
 {
     st->route = r;
     st->route_vmax = v_max > 0.0f ? v_max : 0.0f;
+    st->route_bad = 0;
     opus_reset(st);
+    /* Checked here, once, not while arming: walking the route is the
+     * longest thing the firmware ever does in one call (HIL-06 timed it at
+     * the arming tick). */
+    st->route_bad = r && (!r->has_start ||
+                          tt_route_validate(r, st->trk.cfg.kappa_max) != TT_RTE_OK);
 }
 
 void opus_set_drive_feedback(OpusState *st, int iq)
@@ -577,8 +584,7 @@ static void arm_checks(OpusState *st, const TtMeas *m)
     if (tt_params_validate(p) != 0) f |= FA_PARAMS;
     /* A route must have a surveyed start, and the car must be able to
      * drive it: its tightest curve within the steering lock. */
-    if (st->route && (!st->route->has_start ||
-                      tt_route_validate(st->route, st->trk.cfg.kappa_max) != TT_RTE_OK))
+    if (st->route && st->route_bad)
         f |= FA_PARAMS;
 
     for (w = 0; w < TT_MAX_WHEELS; w++) {

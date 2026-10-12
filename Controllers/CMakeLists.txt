@@ -112,6 +112,14 @@ target_include_directories(hillib PUBLIC targets/hil)
 target_link_libraries(hillib PUBLIC opuslib)
 tt_core_warnings(hillib)
 
+# The on-target plant (HIL-06, "simulation in hardware"): a reduced car and
+# the timed loop a board runs it in instead of its drivers. Portable: an MCU
+# image built with it reports the firmware's CPU time per tick.
+add_library(sihlib STATIC plant/tt_sih.c targets/sih/tt_sih_run.c)
+target_include_directories(sihlib PUBLIC plant targets/sih)
+target_link_libraries(sihlib PUBLIC opuslib)
+tt_core_warnings(sihlib)
+
 if(TT_TARGET STREQUAL "embedded")
     return()   # libraries only; the MCU project supplies main(), HAL and startup
 endif()
@@ -288,6 +296,13 @@ endif()
 add_executable(test_foc_pmsm tests/test_foc_pmsm.c)
 target_link_libraries(test_foc_pmsm PRIVATE foclib pmsmlib)
 add_test(NAME foc_pmsm COMMAND test_foc_pmsm)
+
+# The firmware on the on-target plant, on the PC (HIL-06): it must drive the
+# manoeuvre and a route to their ends; the timing report is the board's job.
+add_executable(opus_sih targets/sih/sih_main.c)
+target_link_libraries(opus_sih PRIVATE sihlib)
+add_test(NAME sih_manoeuvre COMMAND opus_sih --expect-done)
+add_test(NAME sih_route_oval COMMAND opus_sih --route oval --expect-done)
 
 # The CAN-FD drive bus (SYS-03): frame vectors and round trips, the bus load
 # of the planned schedules, and MAIN's end (tt_drvbus: commands, STATUS ->
