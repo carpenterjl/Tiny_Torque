@@ -471,10 +471,61 @@ static int compare(const char *what, const Legs *a, const Legs *b)
     return f;
 }
 
+/* FW-18: the friction probe's fit, on the samples a tyre would give (the
+ * bench has no tyres to run the probe on). Two tyres: a brush tyre (its
+ * stiffness fixed, its peak slip moving with mu) and the sim's (its peak
+ * slip fixed at 10 %, so its stiffness moves with mu). The same force on
+ * both axles, the front the lighter; the probe's ramp stopped short of the
+ * peak; a little measurement noise, and one sample thrown off as the front
+ * motors cross their gear lash. */
+static float pr_slip(int sim_tyre, float a, float mu)
+{
+    float s = 1.0f - sqrtf(1.0f - a / mu);
+    return sim_tyre ? 0.1f * s : 2.0f * mu / 19.0f * s;
+}
+
+static int probe_fit_checks(void)
+{
+    static const float mus[] = { 0.60f, 0.75f, 0.90f, 1.15f, 1.60f };
+    int failures = 0, kind, i, j;
+    printf("=== friction probe fit (FW-18) ===\n");
+    for (kind = 0; kind < 2; kind++) {
+        for (i = 0; i < (int)(sizeof(mus) / sizeof(mus[0])); i++) {
+            float af[OPUS_PR_SAMPLES], ar[OPUS_PR_SAMPLES], d[OPUS_PR_SAMPLES];
+            float mu = mus[i], est;
+            uint32_t seed = 12345u + (uint32_t)i;
+            int n = 0, ok;
+            for (j = 0; j < 45; j++) {
+                float a_f = j < 5 ? 0.0f : GA_PR_A_MAX * (float)(j - 5) / 40.0f;
+                float a_r = a_f * 0.484f / 0.516f;
+                float noise;
+                if (a_f > 0.85f * mu) break;
+                seed = seed * 1664525u + 1013904223u;
+                noise = ((float)(seed >> 8) / 16777216.0f - 0.5f) * 0.0008f;   /* +-0.04 % */
+                af[n] = a_f;
+                ar[n] = a_r;
+                d[n] = pr_slip(kind, a_r, mu) + pr_slip(kind, a_f, mu) + 0.004f + noise;
+                if (j == 8) d[n] += 0.008f;     /* the gear lash crossed: a tick off */
+                n++;
+            }
+            est = opus_probe_mu(af, ar, d, n);
+            /* a floor well above what the probe asks reads as good, no more */
+            ok = mu > 1.5f ? est > 1.2f : fabsf(est - mu) < 0.05f * mu;
+            printf("  %-28s mu %.2f: the probe finds %.3f from %d samples%s\n",
+                   kind ? "sim tyre (peak slip 10 %)," : "brush tyre (C/Fz 19),", mu, est, n,
+                   ok ? "" : "  <-- FAIL");
+            if (!ok) failures++;
+        }
+    }
+    printf(failures ? "%d check(s) FAILED\n\n" : "all checks passed\n\n", failures);
+    return failures;
+}
+
 int main(void)
 {
     int fails = 0;
     Legs base, late1, late2;
+    fails += probe_fit_checks();
     fails += run(100.0, 0, 0, &base);
     fails += run(500.0, 0, 0, NULL);
     fails += run(100.0, 1, 0, NULL);

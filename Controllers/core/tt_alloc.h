@@ -14,6 +14,9 @@
  *      TT_ALLOC_GRIP_USE of tyre_mu times its load, estimated from the
  *      acceleration the car HAS (load moves with the body, a command later);
  *      what one wheel cannot carry goes to the wheels that can.
+ *   2c. A friction probe (FW-18): the front axle brakes against the rear,
+ *      which drives as hard, on top of the request and outside the budget
+ *      (the probe is how the budget gets measured).
  *   3. Per-wheel limits, motoring and regen separately.
  *   4. A slip limiter (traction control driving, ABS braking) against each
  *      wheel's kinematic speed reference from the vehicle speed and yaw rate.
@@ -54,6 +57,9 @@ typedef struct {
                                       the grip budget; 0 = p->tyre_mu (FW-16) */
     float slip_max;                /* slip-limiter threshold, if below
                                       p->slip_max; 0 = p->slip_max (FW-16)  */
+    float probe_n;                 /* friction probe, N per axle: the front
+                                      brakes and the rear drives by this
+                                      much, net zero; 0 = none (FW-18)      */
 } TtAllocIn;
 
 void tt_alloc_reset(TtAlloc *a);

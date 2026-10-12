@@ -104,6 +104,17 @@ void tt_alloc_step(TtAlloc *a, const TtParams *p, const TtVehReq *req,
         }
     }
 
+    /* 2c. The friction probe (FW-18): the front axle brakes against the
+     * rear, which drives as hard, so the car holds its speed while both
+     * axles' tyres are worked. Outside the budget on purpose (it is how the
+     * budget gets measured); the slip limiter below still guards it. */
+    if (in->probe_n > 0.0f && nf > 0 && nr > 0) {
+        for (w = 0; w < TT_MAX_WHEELS; w++) {
+            if (!driven(p, w)) continue;
+            force[w] += (w < 2) ? -in->probe_n / (float)nf : in->probe_n / (float)nr;
+        }
+    }
+
     a->limiting = 0;
     for (w = 0; w < TT_MAX_WHEELS; w++) {
         float t, side, v_ref, slip, lim;

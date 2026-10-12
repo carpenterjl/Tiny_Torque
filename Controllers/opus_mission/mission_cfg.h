@@ -225,6 +225,48 @@
 #define GA_DLY_FRAC        0.5f      /* the measured force must reach this share of the step */
 #define GA_DLY_PRE_FRAC    0.25f     /* ...from below this before it (the drives were idle) */
 
+/* ---------------------------------------------- the friction probe (FW-18) --
+ * The launch cannot judge every floor: it asks 0.61 g of tyres that the
+ * stop will ask 0.69 g of, a heavy car or weak motors ask less, and a tyre
+ * well below its peak slips about the same on any floor. So on leg A, once
+ * the floor's launch judge is done, a car that can asks the floor directly:
+ * the front axle brakes against the rear, which drives as hard (the car
+ * holds its speed), the pair ramping until the front tyres carry
+ * GA_PR_A_MAX of their load. Against that force the slip between the axles
+ * bends the way a tyre's does on its way to the peak, and how soon it bends
+ * says where the peak is: a brush tyre slips 2 mu / C (1 - sqrt(1 - a / mu))
+ * at a = force / load, and the fit finds mu and C both (opus_probe_mu).
+ * The rear-over-front slip needs no car speed (it cancels), and the forces
+ * come from the drives' measured current. The stop is then planned on the
+ * mu found, as on a launch judged slippery (FW-16), and the launch's own
+ * verdict is kept only for if the probe cannot judge. */
+#define GA_PR_T0           1.6f      /* s into leg A: after the launch judge (GA_MU_CAL_T1) */
+#define GA_PR_PRE_S        0.05f     /* s of samples before the ramp: its zero      */
+#define GA_PR_RAMP_S       0.40f     /* s to ramp the pair to its top               */
+#define GA_PR_A_MAX        0.65f     /* front tyres' force / load at the top: near
+                                        what the stop will ask (0.69)              */
+#define GA_PR_DT_S         0.0095f   /* at most one sample per this (any tick rate) */
+#define GA_PR_ABORT_FRAC   0.75f     /* stop the ramp when a wheel slips this share of
+                                        slip_max past its cruise offset           */
+#define GA_PR_BAD_SLIP     0.20f     /* a wheel this far off the car's speed is not measuring it */
+#define GA_PR_MIN_N        12        /* samples the fit needs                       */
+#define GA_PR_SETTLE_S     0.05f     /* s past the release (and the delay) the
+                                        odometer stays on v_est                    */
+/* A sample the fitted tyre misses by this many times the median miss is
+ * dropped and the fit run again: as the front axle's torque reverses, the
+ * motor crosses its gear lash and the motor-shaft speed the drive reports
+ * leaves the wheel's for a tick or two (1 % of slip, against 0.03 % noise). */
+#define GA_PR_OUTLIER      5.0f
+/* What the stop plans on, of the probe's mu, where FW-16's launch judge
+ * uses GA_MU_USE: the brush curve bends sooner than a tyre that holds its
+ * slope longer, so a brush fit short of the peak reads the peak high. The
+ * twin's tyre reads 7-10 % high at every grip (each axle fitted alone on
+ * its true slip: the front 1.35 against 1.15); real tyres are more linear
+ * than a brush too. */
+#define GA_PR_USE          0.78f
+#define GA_PR_MU_MIN       0.30f     /* the fit's range                             */
+#define GA_PR_MU_MAX       2.00f
+
 /* ------------------------------------------------- routes (NAV-02..04) --
  * A route's limits (a_lat_max, a_drive, a_brake) come with the route; these
  * are how the mission flies one. */

@@ -322,6 +322,225 @@ static void time_delay(OpusState *st, const TtMeas *m)
     }
 }
 
+/* ------------------------------------------------- friction probe (FW-18) --
+ * See mission_cfg.h. The car needs both axles driven, each drive's current
+ * (the force each wheel really carries) and its speed; not on a route, whose
+ * speeds are its own plan's. */
+static int probe_can(const OpusState *st)
+{
+    const TtParams *p = st->p;
+    return st->drive_iq && !st->route &&
+           (p->driven_mask & 0x3u) != 0u && (p->driven_mask & 0xCu) != 0u &&
+           p->slip_max > 0.0f && p->mass_kg > 0.0f && p->wheel_radius_m > 0.0f &&
+           p->eta_drive > 0.0f && p->eta_back > 0.0f &&
+           p->front_weight_frac > 0.05f && p->front_weight_frac < 0.95f;
+}
+
+/* The car's speed while probing: the mean of the driven wheels' speeds (the
+ * drives' own), each less its offset at cruise (FW-16's, taken against the
+ * odometry pair's: the radius it really has against the pair's), on the
+ * odometer's scale. 0 if a drive is not reporting. */
+static int probe_speed(const OpusState *st, const TtMeas *m, float *v)
+{
+    const TtParams *p = st->p;
+    float s = 0.0f, ref;
+    int w, n = 0;
+    if (st->mu_cn <= 0) return 0;
+    ref = 0.5f * (st->mu_cs[st->odo_l] + st->mu_cs[st->odo_r]) / (float)st->mu_cn;
+    for (w = 0; w < TT_MAX_WHEELS; w++) {
+        float off;
+        if (!(p->driven_mask & (1u << w))) continue;
+        if (!m->drv[w].st.valid || !(p->gear[w] > 0.0f) || !finitef_(m->drv[w].omega_m)) return 0;
+        off = st->mu_cs[w] / (float)st->mu_cn - ref;
+        s += m->drv[w].omega_m / p->gear[w] * p->wheel_radius_m / (1.0f + off);
+        n++;
+    }
+    if (n == 0) return 0;
+    *v = s / (float)n * (1.0f + p->cal_scale);
+    return 1;
+}
+
+/* A brush tyre's slip times its stiffness C/Fz at a = force / load: odd in a. */
+static float pr_g(float a, float mu)
+{
+    float r = (a < 0.0f ? -a : a) / mu, s;
+    if (r > 0.999f) r = 0.999f;
+    s = 2.0f * mu * (1.0f - sqrtf(1.0f - r));
+    return a < 0.0f ? -s : s;
+}
+
+/* For each mu the model is a straight line in g, so least squares gives the
+ * offset and 1/C at once; the mu with the smallest residual wins, searched
+ * coarse and then fine about the best (a few thousand square roots). */
+static float probe_grid(const float *af, const float *ar, const float *d, int n,
+                        float *slope_out, float *c_out)
+{
+    float best = -1.0f, best_mu = 0.0f, lo = 0.0f, step = 0.05f, from, to;
+    int i, k, pass;
+    if (n < 3 || n > OPUS_PR_SAMPLES) return 0.0f;
+    for (i = 0; i < n; i++) {
+        float a = fabsf(af[i]) > fabsf(ar[i]) ? fabsf(af[i]) : fabsf(ar[i]);
+        if (a > lo) lo = a;
+    }
+    lo /= 0.98f;                     /* the peak lies above every force seen */
+    if (lo < GA_PR_MU_MIN) lo = GA_PR_MU_MIN;
+    from = lo;
+    to = GA_PR_MU_MAX;
+    for (pass = 0; pass < 2; pass++) {
+        for (k = 0; ; k++) {
+            float x[OPUS_PR_SAMPLES], mx = 0.0f, md = 0.0f, sxx = 0.0f, sxd = 0.0f, sdd = 0.0f;
+            float mu = from + (float)k * step, slope, e;
+            if (mu > to + 1e-4f) break;
+            for (i = 0; i < n; i++) {
+                x[i] = pr_g(ar[i], mu) + pr_g(af[i], mu);
+                mx += x[i];
+                md += d[i];
+            }
+            mx /= (float)n;
+            md /= (float)n;
+            for (i = 0; i < n; i++) {
+                float dx = x[i] - mx, dd = d[i] - md;
+                sxx += dx * dx;
+                sxd += dx * dd;
+                sdd += dd * dd;
+            }
+            if (!(sxx > 0.0f)) continue;
+            slope = sxd / sxx;           /* 1 / C: a tyre's slip grows with force */
+            if (!(slope > 0.0f)) continue;
+            e = sdd - slope * sxd;
+            if (best < 0.0f || e < best) {
+                best = e;
+                best_mu = mu;
+                *slope_out = slope;
+                *c_out = md - slope * mx;
+            }
+        }
+        if (best < 0.0f) return 0.0f;
+        from = best_mu - step > lo ? best_mu - step : lo;
+        to = best_mu + step < GA_PR_MU_MAX ? best_mu + step : GA_PR_MU_MAX;
+        step = 0.005f;
+    }
+    return best_mu;
+}
+
+/* The fit, then again without the samples it misses by far (GA_PR_OUTLIER). */
+float opus_probe_mu(const float *af, const float *ar, const float *d, int n)
+{
+    float slope = 0.0f, c = 0.0f, res[OPUS_PR_SAMPLES], srt[OPUS_PR_SAMPLES], med, lim;
+    float af2[OPUS_PR_SAMPLES], ar2[OPUS_PR_SAMPLES], d2[OPUS_PR_SAMPLES];
+    float mu = probe_grid(af, ar, d, n, &slope, &c);
+    int i, j, n2 = 0;
+    if (!(mu > 0.0f)) return 0.0f;
+    for (i = 0; i < n; i++) {
+        float r = d[i] - c - slope * (pr_g(ar[i], mu) + pr_g(af[i], mu));
+        res[i] = r < 0.0f ? -r : r;
+        /* insertion into the sorted copy, for the median */
+        for (j = i; j > 0 && srt[j - 1] > res[i]; j--) srt[j] = srt[j - 1];
+        srt[j] = res[i];
+    }
+    med = srt[n / 2];
+    lim = GA_PR_OUTLIER * (med > 1e-5f ? med : 1e-5f);
+    for (i = 0; i < n; i++) {
+        if (res[i] > lim) continue;
+        af2[n2] = af[i];
+        ar2[n2] = ar[i];
+        d2[n2] = d[i];
+        n2++;
+    }
+    if (n2 < n && n2 >= GA_PR_MIN_N) {
+        float mu2 = probe_grid(af2, ar2, d2, n2, &slope, &c);
+        if (mu2 > 0.0f) mu = mu2;
+    }
+    return mu;
+}
+
+/* One sample: each axle's tyre force over its static load (no transfer at
+ * a steady speed), from the drives' measured current (a braking wheel takes
+ * 1/eta_back of the motor's torque, as tt_torque_to_iq has it) less the
+ * wheel's own losses (the c0 + c1 v of the drag model, a quarter each, as
+ * the odometer's slip model has it); and the rear wheels' slip over the
+ * front ones', side by side, where the car's own speed cancels. Also watches
+ * for a wheel slipping toward its limit, past its cruise offset (FW-16). */
+static void probe_sample(OpusState *st, const TtMeas *m)
+{
+    const TtParams *p = st->p;
+    const float g = 9.80665f;
+    float v = st->v_est, own, af = 0.0f, ar = 0.0f, d = 0.0f;
+    int w, nf = 0, nr = 0, ns = 0;
+    if (st->pr_cnt >= OPUS_PR_SAMPLES || st->phase_t - st->pr_last_t < GA_PR_DT_S) return;
+    if (!(v > GA_MU_MIN_V)) { st->pr_bad = 1; return; }
+    own = (p->drag_c0 + p->drag_c1 * v) / (float)TT_MAX_WHEELS;
+    for (w = 0; w < TT_MAX_WHEELS; w++) {
+        float t, slip, off, fz, a;
+        if (!(p->driven_mask & (1u << w))) continue;
+        if (!m->drv[w].st.valid || !st->wheel_omega_ok[w] || !finitef_(m->drv[w].iq_a)) { st->pr_bad = 1; return; }
+        slip = st->wheel_omega[w] * p->wheel_radius_m / v - 1.0f;
+        if (slip > GA_PR_BAD_SLIP || slip < -GA_PR_BAD_SLIP) { st->pr_bad = 1; return; }
+        off = st->mu_cn > 0 ? st->mu_cs[w] / (float)st->mu_cn : 0.0f;
+        t = m->drv[w].iq_a * p->kt[w] * p->gear[w];
+        t = t >= 0.0f ? t * p->eta_drive : t / p->eta_back;
+        fz = 0.5f * p->mass_kg * g * (w < 2 ? p->front_weight_frac : 1.0f - p->front_weight_frac);
+        /* over the force gain the launch measured (FW-16): a heavy car or a
+         * weak motor makes less acceleration of a newton of command, and
+         * this is the force the tyre really carries per newton of its load */
+        a = st->f_gain * (t / p->wheel_radius_m - own) / fz;
+        if (w < 2) {
+            af -= a;
+            nf++;
+            if (off - slip > GA_PR_ABORT_FRAC * p->slip_max) st->pr_abort = 1;
+        } else {
+            ar += a;
+            nr++;
+            if (slip - off > GA_PR_ABORT_FRAC * p->slip_max) st->pr_abort = 1;
+        }
+    }
+    if ((p->driven_mask & 0x5u) == 0x5u) { d += st->wheel_omega[TT_RL] - st->wheel_omega[TT_FL]; ns++; }
+    if ((p->driven_mask & 0xAu) == 0xAu) { d += st->wheel_omega[TT_RR] - st->wheel_omega[TT_FR]; ns++; }
+    if (nf == 0 || nr == 0 || ns == 0) { st->pr_bad = 1; return; }
+    af /= (float)nf;
+    ar /= (float)nr;
+    st->pr_af[st->pr_cnt] = af;
+    st->pr_ar[st->pr_cnt] = ar;
+    st->pr_d[st->pr_cnt] = d / (float)ns * p->wheel_radius_m / v;
+    st->pr_cnt++;
+    st->pr_last_t = st->phase_t;
+    if (af > st->pr_amax) st->pr_amax = af;
+}
+
+/* The probe's force pair this tick, on leg A: GA_PR_PRE_S of samples with
+ * none (the fit's zero), then the ramp, ended at its top or by a wheel
+ * slipping toward its limit; then the fit. The stop is planned on what it
+ * found (FW-16's machinery); if it could not judge, on the launch's verdict. */
+static void probe_run(OpusState *st)
+{
+    const TtParams *p = st->p;
+    float t = st->phase_t - GA_PR_T0;
+    if (st->pr_state == 0 && t >= -GA_PR_PRE_S) {
+        st->pr_state = probe_can(st) ? 1 : 3;
+        st->pr_last_t = -1.0f;
+    }
+    if (st->pr_state == 1 && (st->pr_bad || st->pr_abort || t >= GA_PR_RAMP_S)) {
+        float mu = (!st->pr_bad && st->pr_cnt >= GA_PR_MIN_N)
+                 ? opus_probe_mu(st->pr_af, st->pr_ar, st->pr_d, st->pr_cnt) : 0.0f;
+        st->pr_hold_t = GA_PR_SETTLE_S + st->dly_s;
+        if (mu > 0.0f) {
+            /* the stop and the budget take GA_PR_USE of it, not GA_MU_USE */
+            float mu_use = mu * GA_PR_USE / GA_MU_USE;
+            st->pr_mu = mu;
+            st->pr_state = 2;
+            if (mu_use < st->mu_est) st->mu_est = mu_use;
+        } else {
+            st->pr_state = 3;
+        }
+    }
+    if (st->pr_state == 3 && st->mu_launch > 0.0f) {
+        if (st->mu_launch < st->mu_est) st->mu_est = st->mu_launch;
+        st->mu_launch = 0.0f;
+    }
+    st->pr_n = (st->pr_state == 1 && t > 0.0f)
+             ? GA_PR_A_MAX * p->mass_kg * 9.80665f * p->front_weight_frac * t / GA_PR_RAMP_S : 0.0f;
+}
+
 void opus_set_pose(OpusState *st, float x, float y, float psi, int ok)
 {
     st->pose[0] = x;
@@ -465,6 +684,7 @@ static void longitudinal(OpusState *st, const TtMeas *m,
          * slip below where the tyre peaks. */
         ain.mu = p->tyre_mu > 0.0f ? st->mu_est / g : 0.0f;
         ain.slip_max = 0.0f;
+        ain.probe_n = st->phase == OPUS_CRUISE_A ? st->pr_n : 0.0f;
         if (st->mu_est < st->mu_nom && p->slip_stiffness > 0.0f)
             ain.slip_max = GA_SLIP_PEAK_FRAC * 2.0f * st->mu_est / p->slip_stiffness;
         tt_alloc_step(&st->alloc, p, &req, &ain, m->dt_s, out);
@@ -652,6 +872,7 @@ static void fill_log(OpusState *st, const TtMeas *m)
     g->trk_ld       = st->trk.ld;
     g->v_plan       = st->v_plan;
     g->cmd_delay_ms = st->dly_s * 1000.0f;
+    g->probe_mu     = st->pr_mu;
 }
 
 /* -------------------------------------------------------------------- step --*/
@@ -755,6 +976,20 @@ void opus_step(OpusState *st, const TtMeas *m, TtCmd *out)
     }
 
     st->v_meas = ds / dt;
+    /* While the friction probe slips the odometry pair on purpose (FW-18),
+     * the car's speed is all four driven wheels': the front pair brakes and
+     * the rear drives about as hard, so their slips nearly cancel. (Not the
+     * accelerometer's: its bias, a tenth of a m/s^2 at cruise, is held off
+     * only by the odometer it would be standing in for.) */
+    if (st->pr_state == 1 || st->pr_hold_t > 0.0f) {
+        float v4;
+        if (probe_speed(st, m, &v4)) {
+            float fix = (v4 - st->v_meas) * dt;
+            st->odo_corr_m += fix;
+            ds += fix;
+            st->v_meas = v4;
+        }
+    }
     st->v_filt += (st->v_meas - st->v_filt) * lp_alpha(dt, EN_VFILT_TAU_S);
 
     /* Car speed (FW-13): the accelerometer's integral, pulled toward the
@@ -787,6 +1022,7 @@ void opus_step(OpusState *st, const TtMeas *m, TtCmd *out)
         }
         st->ax_prev = ok ? ax : 0.0f;
         st->ax_load += (st->ax_prev - st->ax_load) * lp_alpha(dt, EN_LOAD_TAU_S);
+        if (st->pr_hold_t > 0.0f) st->pr_hold_t -= dt;
         /* While the odometry pair slips past what the slip model explains,
          * the odometer counts the car's speed, not theirs: a wheel cycling
          * in and out of lock under a late anti-lock reads metres short. */
@@ -851,7 +1087,10 @@ void opus_step(OpusState *st, const TtMeas *m, TtCmd *out)
                 float mu = p->mass_eff_kg * (st->mu_ax / (float)st->mu_ln) /
                            (p->mass_kg * 9.80665f) / GA_MU_SAT;
                 if (mu < GA_MU_MIN) mu = GA_MU_MIN;
-                if (mu < st->mu_est) st->mu_est = mu;
+                /* A car that probes the floor on leg A (FW-18) keeps this
+                 * for if the probe cannot judge. */
+                if (probe_can(st)) st->mu_launch = mu;
+                else if (mu < st->mu_est) st->mu_est = mu;
             }
         }
     }
@@ -904,7 +1143,7 @@ void opus_step(OpusState *st, const TtMeas *m, TtCmd *out)
         float gz = m->imu.gyro[2] - st->gyro_bias;
         float va = st->v_meas < 0.0f ? -st->v_meas : st->v_meas;
         psi_dot_enc = (ds_r - ds_l) / (p->track_front_m * dt);
-        if (gz_ok && !glitch && !st->odo_slip && va > GA_LR_MIN_V && straight(st)) {
+        if (gz_ok && !glitch && !st->odo_slip && st->pr_state != 1 && va > GA_LR_MIN_V && straight(st)) {
             float e = (psi_dot_enc - gz) * p->track_front_m / st->v_meas;
             st->lr_eps = clampf(st->lr_eps + (e - st->lr_eps) * lp_alpha(dt, GA_LR_TAU_S),
                                 -GA_LR_MAX, GA_LR_MAX);
@@ -946,6 +1185,7 @@ void opus_step(OpusState *st, const TtMeas *m, TtCmd *out)
         st->wheel_omega_ok[w] = (uint8_t)(m->drv[w].st.valid && g > 0.0f);
         st->wheel_omega[w] = st->wheel_omega_ok[w] ? m->drv[w].omega_m / g : 0.0f;
     }
+    if (st->pr_state == 1) probe_sample(st, m);
 
     /* ---- standing faults ----------------------------------------------- */
 
@@ -1093,6 +1333,7 @@ void opus_step(OpusState *st, const TtMeas *m, TtCmd *out)
     case OPUS_CRUISE_A:
         v_ref = MI_V_CRUISE;
         psi_dot_ref = heading_hold(st);
+        probe_run(st);
         /* Half-tick lead. A leg boundary can only ever land on a control tick,
          * and at 4.5 m/s a tick is 45 mm — so testing the bare threshold always
          * overshoots, by 22 mm on average. Testing the midpoint of the coming
@@ -1272,7 +1513,6 @@ void opus_step(OpusState *st, const TtMeas *m, TtCmd *out)
      * timed on, if the drives report current and were idle before it. */
     if (st->dly_state == 0 && st->phase == OPUS_LAUNCH && st->drive_iq) {
         float f = 0.0f, f_idle;
-        int w;
         for (w = 0; w < TT_MAX_WHEELS; w++) f += out->wheel_torque_nm[w];
         f = p->wheel_radius_m > 0.0f ? f / p->wheel_radius_m : 0.0f;
         if (f > GA_DLY_MIN_N) {

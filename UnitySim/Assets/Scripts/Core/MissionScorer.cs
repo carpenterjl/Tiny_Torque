@@ -223,6 +223,7 @@ namespace AIHWSim.Core
             }
             res.drift_mm = (res.odo_final - res.truth_final) * 1000f;
             res.cmd_delay_ms = DbgF("dbg/cmd_delay_ms");
+            res.probe_mu = DbgF("dbg/probe_mu");
 
             if (_route != null)
             {

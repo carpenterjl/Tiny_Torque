@@ -131,6 +131,9 @@ namespace AIHWSim.Core
             // FW-17: the command delay the firmware measured (or its
             // parameter's, unmeasured) against the design's computeLatencyUs.
             public float cmd_delay_ms, true_delay_ms;
+
+            // FW-18: the floor's peak friction leg A's probe found (0 = none)
+            public float probe_mu;
         }
 
         public static string RequestPath =>

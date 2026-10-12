@@ -25,6 +25,9 @@
 /* Longest command delay the prediction carries, in ticks (FW-13). */
 #define OPUS_PRED_SLOTS 16
 
+/* Friction probe samples kept (FW-18): its 0.45 s at <= 100 Hz. */
+#define OPUS_PR_SAMPLES 48
+
 /* One tick's command, as far as the estimators need it back. */
 typedef struct {
     float a;               /* acceleration asked for, m/s^2 */
@@ -148,6 +151,21 @@ typedef struct {
                               3 not measurable this run                     */
     uint32_t dly_k0;       /* tick of the launch's torque step              */
     float  dly_f0;         /* the force it asked for, N                     */
+
+    /* The friction probe on leg A (FW-18). */
+    int    pr_state;       /* 0 not yet, 1 probing, 2 judged, 3 not this car or run */
+    int    pr_abort;       /* a wheel slipped toward its limit: end the ramp */
+    int    pr_bad;         /* a drive's current or speed missing or wild     */
+    int    pr_cnt;         /* samples taken                                 */
+    float  pr_last_t;      /* phase_t of the last sample                    */
+    float  pr_n;           /* the force pair asked for, N per axle          */
+    float  pr_hold_t;      /* s more the odometer stays on v_est            */
+    float  pr_amax;        /* the front tyres' force / load reached          */
+    float  pr_mu;          /* the floor's peak friction found; 0 = none      */
+    float  mu_launch;      /* the launch's verdict (FW-16), for if the probe cannot judge */
+    float  pr_af[OPUS_PR_SAMPLES];   /* front tyres' force / load, + = braking */
+    float  pr_ar[OPUS_PR_SAMPLES];   /* rear tyres', + = driving              */
+    float  pr_d[OPUS_PR_SAMPLES];    /* rear wheels' slip less the front's    */
     float  route_s;        /* where the car is on the route now, m         */
     float  v_plan;         /* the plan at the predicted place              */
 
@@ -225,5 +243,11 @@ void opus_set_drive_feedback(OpusState *st, int iq);
  * frame); ok = 0 while it has none. The tracker carries it over this tick's
  * motion and the commands in flight. */
 void opus_set_pose(OpusState *st, float x, float y, float psi, int ok);
+
+/* The friction probe's fit (FW-18): the floor's peak mu from n samples of
+ * front and rear tyre force / load (af + = braking, ar + = driving) and the
+ * rear-less-front slip d, on the brush tyre d = c + (g(ar) + g(af)) / C,
+ * g(a) = 2 mu (1 - sqrt(1 - a / mu)). 0 if they do not fit. */
+float opus_probe_mu(const float *af, const float *ar, const float *d, int n);
 
 #endif /* OPUS_MISSION_H */
