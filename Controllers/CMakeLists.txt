@@ -54,7 +54,7 @@ tt_core_warnings(pidlib)
 # and its generated defaults (Tools/gen_params.js), the log schema, and the
 # board interface every non-sim target implements (hal/tt_hal.h).
 add_library(ttcore STATIC core/tt_params.c core/tt_alloc.c core/tt_nav.c core/tt_safety.c
-            core/tt_wire.c core/tt_can.c core/tt_drvbus.c
+            core/tt_wire.c core/tt_can.c core/tt_drvbus.c core/tt_soc.c
             core/params_opus_vector.c core/params_opus_vector_foc.c)
 target_include_directories(ttcore PUBLIC core hal)
 tt_core_warnings(ttcore)
@@ -91,6 +91,17 @@ add_library(nodelib STATIC node/tt_node.c)
 target_include_directories(nodelib PUBLIC node)
 target_link_libraries(nodelib PUBLIC foclib ttcore)
 tt_core_warnings(nodelib)
+
+# MAIN's sensor and radio drivers, the portable halves (HW_02/04/05): byte
+# streams and register bursts in, TtMeas fields out with the twin's units and
+# conventions — CRSF/SBUS -> TtRc, ICM-42688 FIFO -> TtImu, VL53L5CX results
+# -> TtTof, PAA5100 burst -> TtFlow, DW3000 timestamps -> TtUwb. The
+# register-level halves are the board's.
+add_library(drvlib STATIC drivers/tt_rc.c drivers/tt_icm42688.c drivers/tt_vl53l5.c
+            drivers/tt_paa5100.c drivers/tt_uwb.c)
+target_include_directories(drvlib PUBLIC drivers)
+target_link_libraries(drvlib PUBLIC ttcore)
+tt_core_warnings(drvlib)
 
 # The firmware's end of the lockstep HIL link (HIL-03): the external-tick
 # device loop and the Opus firmware behind it. Portable: an MCU image in HIL
@@ -283,6 +294,14 @@ add_test(NAME tt_can_bus COMMAND test_can)
 add_executable(test_node tests/test_node.c)
 target_link_libraries(test_node PRIVATE nodelib pmsmlib)
 add_test(NAME tt_node_plant COMMAND test_node)
+
+# The drivers against hand-built vectors and simulated physics (RC frames
+# split anywhere in the stream, IMU FIFO packets, ToF zone orientation, flow
+# scaling, DS-TWR with drifting clocks), and the pack SoC estimator against
+# the twin's battery model.
+add_executable(test_drivers tests/test_drivers.c)
+target_link_libraries(test_drivers PRIVATE drvlib)
+add_test(NAME tt_drivers COMMAND test_drivers)
 
 # The UserScripts helper header (PID clamps, wheel radius, manifest fallback).
 add_executable(test_tt_controller tests/test_tt_controller.c)

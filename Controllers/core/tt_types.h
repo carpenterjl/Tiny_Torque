@@ -71,6 +71,10 @@ typedef struct {
     float    range_m[TT_TOF_MAX_ZONES];
 } TtTof;
 
+/* Optical flow: image motion in rad/s, x forward and y left, with the
+ * vehicle-motion sign (driving forward reads +x); m = v / h + w x aim, so
+ * rotation reads as flow. quality 0..1 (0 = not tracking); height_m above
+ * the floor (drivers/tt_paa5100.h). */
 typedef struct { TtStamp st; float flow_x, flow_y, quality, height_m; } TtFlow;
 
 /* One UWB two-way range. quality is the first-path-to-total power gap in dB
@@ -86,7 +90,7 @@ typedef struct {
     float   pos_m[3];
 } TtUwb;
 
-typedef struct { TtStamp st; float v, i; } TtBatt;                 /* pack V, A */
+typedef struct { TtStamp st; float v, i; } TtBatt;  /* pack V, A; + = discharge */
 
 /* RC receiver: channels normalised to -1..1; failsafe carries the
  * receiver's flags (TT_RC_FAILSAFE, TT_RC_FRAME_LOST in tt_safety.h). */
