@@ -20,6 +20,7 @@
 typedef struct {
     OpusApp        *app;
     const TtParams *params;
+    const char     *route;   /* opus_app_set_route() spec; NULL = none */
 } OpusHilCtx;
 
 /* `ctx` must outlive `out`. */

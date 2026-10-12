@@ -9,7 +9,7 @@
  * The MCU writes one TtLogFrame per tick (Controllers/core/tt_log.h):
  *
  *   uint32 magic ("TLTG"), uint32 seq, uint32 t_us, uint32 n,
- *   uint32 params_hash, float32 v[32]                 little-endian, 148 bytes
+ *   uint32 params_hash, float32 v[48]                 little-endian, 212 bytes
  *
  * and the channel names come from the same X-macro table the firmware was
  * built with (e.g. Controllers/opus_mission/opus_log.def). The CSV gets the
@@ -22,7 +22,7 @@
 const fs = require('fs');
 
 const MAGIC = 0x47544C54;
-const LOG_MAX = 32;
+const LOG_MAX = 48;   // TT_LOG_MAX (32 until NAV-04)
 const FRAME_BYTES = 5 * 4 + LOG_MAX * 4;
 
 /** Channel names, in order, from TT_LOG(name, unit, desc) rows. */
@@ -99,4 +99,4 @@ function main() {
 }
 
 if (require.main === module) main();
-module.exports = { readDef, decode, toCsv, FRAME_BYTES, MAGIC };
+module.exports = { readDef, decode, toCsv, FRAME_BYTES, MAGIC, LOG_MAX };

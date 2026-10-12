@@ -19,11 +19,27 @@ void opus_fw_init(OpusFw *fw, const TtParams *p, float rate_hz,
     tt_safety_init(&fw->safe, &sc, p);
 }
 
+/* On a route with a surveyed start, the filter starts there. */
+static void seed(OpusFw *fw)
+{
+    const TtRoute *r = fw->mission.route;
+    if (r && r->has_start)
+        tt_nav_seed(&fw->nav, r->start[0], r->start[1], r->start[2],
+                    RT_SEED_POS_M, RT_SEED_PSI_RAD);
+}
+
+void opus_fw_set_route(OpusFw *fw, const TtRoute *r, float v_max)
+{
+    opus_set_route(&fw->mission, r, v_max);
+    opus_fw_reset(fw);
+}
+
 void opus_fw_reset(OpusFw *fw)
 {
     TtNavCfg nc = fw->nav.cfg;
     opus_reset(&fw->mission);
     tt_nav_reset(&fw->nav, &nc);
+    seed(fw);
     tt_safety_reset(&fw->safe);
     memset(&fw->pose, 0, sizeof(fw->pose));
     memset(fw->uwb_seen, 0, sizeof(fw->uwb_seen));
@@ -94,6 +110,11 @@ void opus_fw_step(OpusFw *fw, const TtMeas *m, TtCmd *out)
         else fw->pose.age_s += dt;
     }
     fw->nav_used_prev = fw->nav.n_used;
+    /* The mission steers from this pose next tick (NAV-04); a seeded start
+     * the heading search disagrees with stops the run. */
+    opus_set_pose(st, fw->nav.s[TT_NAV_X], fw->nav.s[TT_NAV_Y], fw->nav.s[TT_NAV_PSI],
+                  fw->nav.stage == TT_NAV_RUN);
+    if (st->route && fw->nav.check == TT_NAV_CHECK_BAD) st->fault |= FA_NAV;
 
     /* 3. Safety. */
     tt_safety_step(&fw->safe, m, &core, &fw->pose, out);
@@ -105,4 +126,5 @@ void opus_fw_step(OpusFw *fw, const TtMeas *m, TtCmd *out)
     st->log.nav_x      = fw->nav.s[TT_NAV_X];
     st->log.nav_y      = fw->nav.s[TT_NAV_Y];
     st->log.nav_psi_deg = fw->nav.s[TT_NAV_PSI] * OPUS_RAD2DEG;
+    st->log.nav_check  = (float)fw->nav.check;
 }

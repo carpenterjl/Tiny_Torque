@@ -1,0 +1,18 @@
+{
+  "_about": "The Opus manoeuvre as a route, on the Opus Proving Ground's ribbon: from the spawn, straight to the drawn corner, 45 deg left at the 5.06 m radius the mission flies (v^2 / a_lat = 4.5^2 / 4.0) with the mission's 0.15 s steering ramps as 0.675 m spirals, then 9.0 m to the stop. The turn starts 0.339 m before the drawn 19.5 m corner, so that with its spirals it leaves along the ribbon's exit centreline; the stop lands 0.339 m past the drawn target, 9.0 m after the exit spiral as the mission measures it. Site frame: x = Unity +z, y = Unity -x; the spawn is Unity (-15, -5) heading +X.",
+  "name": "opus",
+  "id": 1,
+  "track": "Opus Proving Ground",
+  "spacing_m": 0.1,
+  "start": { "x": -5.0, "y": 15.0, "psi_deg": -90.0 },
+  "v_max": 4.5,
+  "a_lat_max": 4.0,
+  "a_drive": 6.0,
+  "a_brake": 6.75,
+  "stop": true,
+  "segments": [
+    { "line": 19.161 },
+    { "turn_deg": 45, "radius": 5.0625, "spiral_m": 0.675 },
+    { "line": 9.0 }
+  ]
+}

@@ -6,6 +6,7 @@
  *   nav_replay <run.telemetry.csv> [--odo dbg/v_meas] [--imu imu] [--uwb uwb]
  *              [--flow flow] [--lever-x -0.06] [--lever-y 0] [--tag-z 0.19]
  *              [--flow-h 0.025] [--flow-k 47.7] [--out est.csv]
+ *              [--cfg name=value ...]   any TtNavCfg float by name (q_gyro, r_range, ...)
  *
  * Get the log with OpusMissionRunner ... -opusTelemetry 1 (one row per
  * control tick, every channel). Inputs, by channel name:
@@ -21,6 +22,7 @@
 #include "tt_nav.h"
 
 #include <math.h>
+#include <stddef.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -60,13 +62,15 @@ int main(int argc, char **argv)
     const char *path = NULL, *odo = "dbg/v_meas", *imu = "imu", *uwb = "uwb", *flow = "flow", *out = NULL;
     double lever_x = -0.06, lever_y = 0.0, tag_z = 0.19, flow_h = 0.025, flow_k = 47.7;
     char name[128], *f[MAXCOL];
-    int i, ct, cgz, cax, cgy, codo, cfx, cfq, cid, crg, cdb, cax_, cay_, caz_, cpx, cpz, cyaw;
+    int i, ct, cgz, cax, cgy, codo, cfx, cfq, cid, crg, cdb, cax_, cay_, caz_, cpx, cpz, cyaw, cvt;
     FILE *fp, *fo = NULL;
     TtNavCfg cfg;
     TtNav nav;
     double t_prev = NAN, last_id = NAN, last_rg = NAN, last_fx = NAN, t_flow = NAN;
     double se = 0.0, sp = 0.0, emax = 0.0, t_init = -1.0, se_mov = 0.0;
     long n = 0, n_mov = 0, rows = 0;
+    const char *cfg_set[16];
+    int n_set = 0;
 
     for (i = 1; i < argc; i++) {
         if (!strcmp(argv[i], "--odo") && i + 1 < argc) odo = argv[++i];
@@ -79,6 +83,7 @@ int main(int argc, char **argv)
         else if (!strcmp(argv[i], "--flow-h") && i + 1 < argc) flow_h = atof(argv[++i]);
         else if (!strcmp(argv[i], "--flow-k") && i + 1 < argc) flow_k = atof(argv[++i]);
         else if (!strcmp(argv[i], "--out") && i + 1 < argc) out = argv[++i];
+        else if (!strcmp(argv[i], "--cfg") && i + 1 < argc) { cfg_set[n_set++] = argv[++i]; if (n_set > 15) n_set = 15; }
         else path = argv[i];
     }
     if (!path) { fprintf(stderr, "usage: nav_replay <telemetry.csv> [options]\n"); return 2; }
@@ -100,7 +105,7 @@ int main(int argc, char **argv)
     COLF(cfx, "sens/%s/dx", flow); COLF(cfq, "sens/%s/squal", flow);
     COLF(cid, "sens/%s/id", uwb); COLF(crg, "sens/%s/range", uwb); COLF(cdb, "sens/%s/nlos_db", uwb);
     COLF(cax_, "sens/%s/ax", uwb); COLF(cay_, "sens/%s/ay", uwb); COLF(caz_, "sens/%s/az", uwb);
-    cpx = col("veh/pos_x"); cpz = col("veh/pos_z"); cyaw = col("veh/yaw_deg");
+    cpx = col("veh/pos_x"); cpz = col("veh/pos_z"); cyaw = col("veh/yaw_deg"); cvt = col("veh/speed");
     if (ct < 0 || cgz < 0 || codo < 0 || cid < 0 || crg < 0 || cpx < 0 || cpz < 0 || cyaw < 0) {
         fprintf(stderr, "missing channels (time %d, gz %d, odo %d, uwb %d/%d, truth %d/%d/%d)\n",
                 ct, cgz, codo, cid, crg, cpx, cpz, cyaw);
@@ -111,8 +116,25 @@ int main(int argc, char **argv)
     cfg.lever[0] = (float)lever_x;
     cfg.lever[1] = (float)lever_y;
     cfg.tag_z = (float)tag_z;
+    for (i = 0; i < n_set; i++) {
+        static const struct { const char *n; size_t off; } F[] = {
+#define F_(m) { #m, offsetof(TtNavCfg, m) }
+            F_(q_accel), F_(q_gyro), F_(q_bias), F_(q_scale), F_(r_speed), F_(r_flow), F_(r_range),
+            F_(r_bias0), F_(r_gyro_rest), F_(nlos_db), F_(nlos_scale), F_(gate), F_(init_travel_m),
+            F_(rear_axle_x), F_(corner_k), F_(odo_axle_x),
+#undef F_
+        };
+        const char *eq = strchr(cfg_set[i], '=');
+        size_t k, ln = eq ? (size_t)(eq - cfg_set[i]) : 0;
+        for (k = 0; eq && k < sizeof(F) / sizeof(F[0]); k++)
+            if (strlen(F[k].n) == ln && !strncmp(F[k].n, cfg_set[i], ln)) {
+                *(float *)((char *)&cfg + F[k].off) = (float)atof(eq + 1);
+                break;
+            }
+        if (!eq || k == sizeof(F) / sizeof(F[0])) { fprintf(stderr, "unknown --cfg %s\n", cfg_set[i]); return 2; }
+    }
     tt_nav_reset(&nav, &cfg);
-    if (out) { fo = fopen(out, "w"); if (fo) fprintf(fo, "t,x,y,psi,x_true,y_true,psi_true,err,k_w,k_w_sd,b_r\n"); }
+    if (out) { fo = fopen(out, "w"); if (fo) fprintf(fo, "t,x,y,psi,x_true,y_true,psi_true,err,k_w,k_w_sd,b_r,b_g,v,v_true\n"); }
 
     while (fgets(g_line, sizeof(g_line), fp)) {
         int nf = split(g_line, f, MAXCOL);
@@ -166,10 +188,10 @@ int main(int argc, char **argv)
                 if (e > emax) emax = e;
                 if (fabs(v) > 0.1) { se_mov += e * e; n_mov++; }
             }
-            if (fo) fprintf(fo, "%.4f,%.4f,%.4f,%.5f,%.4f,%.4f,%.5f,%.4f,%.5f,%.5f,%.4f\n", t,
+            if (fo) fprintf(fo, "%.4f,%.4f,%.4f,%.5f,%.4f,%.4f,%.5f,%.4f,%.5f,%.5f,%.4f,%.6f,%.4f,%.4f\n", t,
                             nav.s[TT_NAV_X], nav.s[TT_NAV_Y], nav.s[TT_NAV_PSI], xt, yt, pt, e,
                             nav.s[TT_NAV_KW], sqrt(nav.P[TT_NAV_KW * TT_NAV_N + TT_NAV_KW]),
-                            nav.s[TT_NAV_BR]);
+                            nav.s[TT_NAV_BR], nav.s[TT_NAV_BG], nav.s[TT_NAV_V], val(f, nf, cvt));
         }
     }
     fclose(fp);

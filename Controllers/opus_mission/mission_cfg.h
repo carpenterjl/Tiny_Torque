@@ -211,6 +211,22 @@
  * slip_max. 8 % is past the peak below mu = 0.68. */
 #define GA_SLIP_PEAK_FRAC  0.70f
 
+/* ------------------------------------------------- routes (NAV-02..04) --
+ * A route's limits (a_lat_max, a_drive, a_brake) come with the route; these
+ * are how the mission flies one. */
+#define RT_STRAIGHT_K      0.01f     /* 1/m: below this the route counts as straight
+                                        (the trim and left/right scale learn there) */
+#define RT_SEED_POS_M      0.10f     /* how well the car is put on a route's start  */
+#define RT_SEED_PSI_RAD    0.05f     /* ...and pointed along it (3 deg)             */
+#define RT_POSE_WAIT_S     2.0f      /* ARMED waits this long for a pose, then FA_NAV */
+#define RT_MU_REPLAN       0.03f     /* replan the speeds when mu_est moves this much */
+#define RT_V_MIN           0.3f      /* the plan never asks less (it would never get there) */
+/* The speed plan's lateral limit, of the route's a_lat_max: the tracker's
+ * yaw rate overshoots the route's curvature by a few per cent where a short
+ * spiral hands over (3.3 against 3.0 m/s^2 at the hairpin's 0.5 m spirals),
+ * and NAV-03 keeps the peak under the route's limit. */
+#define RT_LAT_USE         0.9f
+
 /* --------------------------------------------------------------- endgame --*/
 #define EN_CREEP_M         0.040f    /* below this remaining distance, switch to creep */
 #define EN_CREEP_V         0.30f     /* m/s ceiling while creeping */
@@ -312,5 +328,7 @@
 #define FA_SAFETY          0x4000    /* the safety layer (FW-08) stopped the car */
 #define FA_GRIP_LOW        0x8000    /* warning: the floor cannot stop the car in
                                         MI_BRAKE_M; the stop starts early (FW-16) */
+#define FA_NAV             0x10000   /* following a route without a pose, or
+                                        the seeded start failed its check (NAV-04) */
 
 #endif /* OPUS_MISSION_CFG_H */

@@ -41,6 +41,7 @@ namespace AIHWSim.Telemetry
         {
             "BOOT", "SELF-CHECK", "ARMED", "LAUNCH", "CRUISE 14.5 m",
             "TURN 45°", "CRUISE 7.5 m", "BRAKE 1.5 m", "CREEP", "HOLD", "DONE",
+            "FOLLOW ROUTE",   // 11: NAV-04 (BRAKE then stops at the route's end)
         };
 
         private void Update()

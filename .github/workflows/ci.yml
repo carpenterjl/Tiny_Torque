@@ -2,9 +2,9 @@
 # Opus mission bench with tolerance asserts at 100 and 500 Hz, the core's unit
 # test, the tt_controller helper unit test, the FOC current loop against a dq
 # PMSM plant, the CAN-FD drive bus, a wheel node on the PMSM plant over that
-# bus), the portable core cross-compiled for both of the car's MCUs and as a
-# 32-bit program, and the Tools/ checks (verify.js, the generated parameter
-# files).
+# bus, routes and the path tracker), the portable core cross-compiled for
+# both of the car's MCUs and as a 32-bit program, and the Tools/ checks
+# (verify.js, the generated parameter and route files).
 #
 # The Unity-side validators (OpusMissionRunner.RunHeadless etc.) need a
 # licensed editor and stay a local step for now — see SIM_TO_REAL_PLAN VAL-02.
@@ -95,5 +95,7 @@ jobs:
         run: node Tools/verify.js
       - name: Generated parameters are up to date
         run: node Tools/gen_params.js --check
+      - name: Generated routes are up to date (firmware tables and the sim's copies)
+        run: node Tools/gen_route.js --check
       - name: Log decoder self-test
         run: node Tools/tt_log_decode.js --selftest

@@ -1,0 +1,22 @@
+{
+  "_about": "A figure-8 on the Opus Test Pad: a 45 deg entry, then 270 deg right and 270 deg left around two 3.5 m circles whose strands cross at 90 deg, and out along the first strand again. Tests that the tracker never jumps to the other strand at the crossing.",
+  "name": "figure8",
+  "id": 3,
+  "track": "Opus Test Pad",
+  "spacing_m": 0.1,
+  "start": { "x": -5.0, "y": 15.0, "psi_deg": -90.0 },
+  "v_max": 3.0,
+  "a_lat_max": 3.0,
+  "a_drive": 2.0,
+  "a_brake": 2.5,
+  "stop": true,
+  "segments": [
+    { "line": 2.0 },
+    { "turn_deg": 45, "radius": 3.0, "spiral_m": 0.5 },
+    { "line": 6.0 },
+    { "turn_deg": -270, "radius": 3.5, "spiral_m": 1.0 },
+    { "line": 7.0 },
+    { "turn_deg": 270, "radius": 3.5, "spiral_m": 1.0 },
+    { "line": 7.0 }
+  ]
+}

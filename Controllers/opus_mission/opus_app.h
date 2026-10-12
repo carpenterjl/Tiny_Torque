@@ -37,6 +37,7 @@ typedef struct {
     TtParams  params;      /* the firmware's own copy; fw points into it */
     TtCarDesc car;
     int       cfg_fault;   /* FA_* from configure                         */
+    int       route_fault; /* FA_PARAMS: asked for a route it does not have */
     int       ready;
 } OpusApp;
 
@@ -48,6 +49,15 @@ void opus_app_configure(OpusApp *a, const TtCarDesc *car);
 
 /* The car was put back at the start (ctrl_reset). */
 void opus_app_reset(OpusApp *a);
+
+/* Follow a route instead of the fixed manoeuvre (NAV-04): its name as built
+ * into core/routes_gen.c, optionally "@<m/s>" for a lower top speed
+ * ("oval@2"). NULL or "" = the manoeuvre. Returns 0, or -1 for a name this
+ * firmware does not have (then the car refuses to arm, FA_PARAMS, rather than
+ * fly something else). Targets take the name from
+ * their own configuration: the host builds from the environment variable
+ * TT_ROUTE (targets/route_env.h). */
+int opus_app_set_route(OpusApp *a, const char *spec);
 
 /* One tick: TtMeas in, actuator writes out. */
 void opus_app_step(OpusApp *a, const TtMeas *m, TtAct *act);

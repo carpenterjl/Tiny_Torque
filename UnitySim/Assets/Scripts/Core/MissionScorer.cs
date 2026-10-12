@@ -10,6 +10,13 @@ namespace AIHWSim.Core
     /// the turn, cruise speeds, and a coarse trace. Fed once per physics step
     /// by whoever is watching the run (<see cref="MissionWatcher"/> for a single
     /// run, <see cref="CampaignWatcher"/> for each run of a campaign).
+    ///
+    /// Given a route (NAV-06) it also scores the run against the route: the
+    /// car's true position projected onto it every physics step — cross-track
+    /// error (RMS, p95, max) and heading error while the car drives, speed
+    /// against the firmware's plan while it follows, the peak lateral
+    /// acceleration, the lap time, and where it stopped along and across the
+    /// route against the route's end.
     /// </summary>
     public sealed class MissionScorer
     {
@@ -31,11 +38,25 @@ namespace AIHWSim.Core
         private readonly System.Text.StringBuilder _trace = new System.Text.StringBuilder();
         private float _nextTrace;
 
-        public MissionScorer(CarVehicle car, TelemetryHub hub)
+        // Route mode (NAV-06).
+        private readonly RouteTable _route;
+        private int _rIdx;
+        private RouteTable.Proj _rProj;
+        private readonly System.Collections.Generic.List<float> _xte = new System.Collections.Generic.List<float>();
+        private double _xteSq, _headSq, _vErrSq;
+        private int _headN, _vErrN;
+        private readonly System.Collections.Generic.List<float> _vErr = new System.Collections.Generic.List<float>();
+        private float _xteMax, _latMax, _rateF, _psiPrev = float.NaN, _tLaunch = -1f, _tDone = -1f, _elapsed;
+
+        public MissionScorer(CarVehicle car, TelemetryHub hub, RouteTable route = null)
         {
             _car = car;
             _hub = hub;
+            _route = route != null && route.Count >= 2 ? route : null;
         }
+
+        /// <summary>The route this run is scored against, or null.</summary>
+        public RouteTable Route => _route;
 
         /// <summary>The firmware's mission phase at the last step (-99 = none yet).</summary>
         public int Phase => _prevPhase;
@@ -55,6 +76,8 @@ namespace AIHWSim.Core
             int phase = Dbg("dbg/state", -99);
             float yaw = _car.transform.eulerAngles.y;
             float spd = _car.ForwardSpeed;
+            _elapsed = elapsed;
+            if (_route != null) RouteStep(phase, spd);
 
             if (phase == 4 || phase == 5 || phase == 6)
             {
@@ -63,7 +86,21 @@ namespace AIHWSim.Core
                 if (phase == 5 && spd < _turnSpdMin) _turnSpdMin = spd;
             }
 
-            if (elapsed >= _nextTrace)
+            if (_route != null && elapsed >= _nextTrace)
+            {
+                _nextTrace = elapsed + 0.05f;
+                var q = RouteTable.Site(_car.transform.position);
+                if (_trace.Length == 0)
+                    _trace.Append("t,phase,fault,v_true,v_meas,v_ref,v_plan,x,y,s_true,ey_true,head_err_deg,trk_s,trk_ey,trk_kappa,steer,nav_x,nav_y,odo,truth\n");
+                _trace.AppendFormat(System.Globalization.CultureInfo.InvariantCulture,
+                    "{0:0.00},{1},{2},{3:0.000},{4:0.000},{5:0.000},{6:0.000},{7:0.0000},{8:0.0000},{9:0.000},{10:0.0000},{11:0.000},{12:0.000},{13:0.0000},{14:0.0000},{15:0.0000},{16:0.0000},{17:0.0000},{18:0.000},{19:0.000}\n",
+                    elapsed, phase, Dbg("dbg/fault", 0), spd, DbgF("dbg/v_meas"), DbgF("dbg/target_speed"), DbgF("dbg/v_plan"),
+                    q.x, q.y, _rProj.s, _rProj.ey,
+                    RouteTable.Wrap(RouteTable.SiteHeading(_car.transform.forward) - _rProj.psi) * Mathf.Rad2Deg,
+                    DbgF("dbg/trk_s"), DbgF("dbg/trk_ey"), DbgF("dbg/trk_kappa"), DbgF("dbg/steer_cmd"),
+                    DbgF("dbg/nav_x"), DbgF("dbg/nav_y"), DbgF("dbg/odo_m"), _truth);
+            }
+            if (_route == null && elapsed >= _nextTrace)
             {
                 _nextTrace = elapsed + 0.05f;
                 if (_trace.Length == 0)
@@ -93,6 +130,47 @@ namespace AIHWSim.Core
                 _prevPhase = phase;
             }
             return phase;
+        }
+
+        /// <summary>The route part of one physics step: project the true pose
+        /// and keep the statistics, while the car drives (launch, follow, brake,
+        /// creep).</summary>
+        private void RouteStep(int phase, float spd)
+        {
+            var q = RouteTable.Site(_car.transform.position);
+            float psi = RouteTable.SiteHeading(_car.transform.forward);
+            _rProj = _route.Project(q.x, q.y, _rIdx);
+            _rIdx = _rProj.i;
+            float dt = Time.fixedDeltaTime;
+            bool drive = phase == 3 || phase == 11 || phase == 7 || phase == 8;
+            if (phase == 3 && _tLaunch < 0f) _tLaunch = _elapsed;
+            if (phase == 10 && _tDone < 0f) _tDone = _elapsed;
+            if (drive)
+            {
+                float e = Mathf.Abs(_rProj.ey);
+                _xte.Add(e);
+                _xteSq += e * e;
+                _xteMax = Mathf.Max(_xteMax, e);
+                float he = RouteTable.Wrap(psi - _rProj.psi);
+                _headSq += he * he;
+                _headN++;
+                // The heading differenced at the physics rate is noisy: the
+                // yaw rate through 50 ms first (the accelerometer's own
+                // bandwidth, near enough).
+                if (!float.IsNaN(_psiPrev) && dt > 0f)
+                {
+                    _rateF += (RouteTable.Wrap(psi - _psiPrev) / dt - _rateF) * (1f - Mathf.Exp(-dt / 0.05f));
+                    _latMax = Mathf.Max(_latMax, Mathf.Abs(spd * _rateF));
+                }
+            }
+            if (phase == 11)
+            {
+                float ev = spd - DbgF("dbg/target_speed");
+                _vErr.Add(Mathf.Abs(ev));
+                _vErrSq += ev * ev;
+                _vErrN++;
+            }
+            _psiPrev = psi;
         }
 
         /// <summary>Fill the scored fields of <paramref name="res"/> (everything
@@ -144,6 +222,26 @@ namespace AIHWSim.Core
                 res.total_err_mm = (res.total_actual - res.total_target) * 1000f;
             }
             res.drift_mm = (res.odo_final - res.truth_final) * 1000f;
+
+            if (_route != null)
+            {
+                var q = RouteTable.Site(_car.transform.position);
+                var pr = _route.Project(q.x, q.y, _rIdx);
+                res.route = _route.name;
+                res.route_id = _route.id;
+                res.xte_rms_mm = _xte.Count > 0 ? (float)System.Math.Sqrt(_xteSq / _xte.Count) * 1000f : -1f;
+                res.xte_p95_mm = _xte.Count > 0 ? CampaignWatcher.Pct(_xte, 95f) * 1000f : -1f;
+                res.xte_max_mm = _xteMax * 1000f;
+                res.head_rms_deg = _headN > 0 ? (float)System.Math.Sqrt(_headSq / _headN) * Mathf.Rad2Deg : -1f;
+                res.head_end_deg = RouteTable.Wrap(RouteTable.SiteHeading(_car.transform.forward) -
+                                                   _route.psi[_route.Count - 1]) * Mathf.Rad2Deg;
+                res.v_err_rms = _vErrN > 0 ? (float)System.Math.Sqrt(_vErrSq / _vErrN) : -1f;
+                res.v_err_p95 = _vErr.Count > 0 ? CampaignWatcher.Pct(_vErr, 95f) : -1f;
+                res.lat_acc_max = _latMax;
+                res.lap_s = _tLaunch >= 0f && _tDone >= 0f ? _tDone - _tLaunch : -1f;
+                res.route_stop_mm = (pr.s - _route.s[_route.Count - 1]) * 1000f;
+                res.route_stop_lat_mm = pr.ey * 1000f;
+            }
         }
 
         private int Dbg(string ch, int fallback) =>

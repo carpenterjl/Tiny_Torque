@@ -17,6 +17,8 @@
  *
  * Usage:
  *   tt_replay <capture.ttw> [--params auto|opus_vector|opus_vector_foc]
+ *             [--route <name>[@m/s]]   (default: the TT_ROUTE environment
+ *                                       variable, as the recording's run had)
  *             [--tol X] [--csv <diff.csv>] [--quiet]
  *
  * --params auto (default) picks the parameter set whose tt_params_hash()
@@ -30,6 +32,7 @@
  */
 #include "tt_wire.h"
 #include "opus_app.h"
+#include "../targets/route_env.h"
 
 #include <math.h>
 #include <stdio.h>
@@ -62,7 +65,8 @@ static uint32_t rd32(const uint8_t *p)
 
 int main(int argc, char **argv)
 {
-    const char *path = 0, *params_arg = "auto", *csv_path = 0;
+    const char *path = 0, *params_arg = "auto", *csv_path = 0, *route;
+    static char route_buf[64];
     float tol = 0.0f;
     int quiet = 0, i;
     FILE *f, *csv = 0;
@@ -91,11 +95,13 @@ int main(int argc, char **argv)
     int ch_diff_ticks[6 + MAX_CH];
     size_t n;
 
+    route = tt_route_env(route_buf, sizeof(route_buf));
     for (i = 1; i < argc; i++) {
         if (!strcmp(argv[i], "--params") && i + 1 < argc) params_arg = argv[++i];
         else if (!strcmp(argv[i], "--tol") && i + 1 < argc) tol = (float)atof(argv[++i]);
         else if (!strcmp(argv[i], "--csv") && i + 1 < argc) csv_path = argv[++i];
         else if (!strcmp(argv[i], "--quiet")) quiet = 1;
+        else if (!strcmp(argv[i], "--route") && i + 1 < argc) route = argv[++i];
         else if (!path && argv[i][0] != '-') path = argv[i];
         else { path = 0; break; }
     }
@@ -161,6 +167,10 @@ int main(int argc, char **argv)
                         return 2;
                     }
                     opus_app_init(&app, params, rate);
+                    if (route[0] && opus_app_set_route(&app, route) != 0) {
+                        fprintf(stderr, "tt_replay: no route '%s' in this firmware\n", route);
+                        return 2;
+                    }
                     if (have_car) opus_app_configure(&app, &car);
                     inited = 1;
                     inits++;

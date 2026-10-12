@@ -1,0 +1,22 @@
+{
+  "_about": "A slalom on the Opus Test Pad: curvature reversing between left and right four times with no straight between (4 m radius, 0.5 m spirals through zero).",
+  "name": "slalom",
+  "id": 4,
+  "track": "Opus Test Pad",
+  "spacing_m": 0.1,
+  "start": { "x": -5.0, "y": 15.0, "psi_deg": -90.0 },
+  "v_max": 3.0,
+  "a_lat_max": 3.0,
+  "a_drive": 2.0,
+  "a_brake": 2.5,
+  "stop": true,
+  "segments": [
+    { "line": 4.0 },
+    { "turn_deg": 30, "radius": 4.0, "spiral_m": 0.5 },
+    { "turn_deg": -60, "radius": 4.0, "spiral_m": 0.5 },
+    { "turn_deg": 60, "radius": 4.0, "spiral_m": 0.5 },
+    { "turn_deg": -60, "radius": 4.0, "spiral_m": 0.5 },
+    { "turn_deg": 30, "radius": 4.0, "spiral_m": 0.5 },
+    { "line": 6.0 }
+  ]
+}

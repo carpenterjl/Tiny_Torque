@@ -18,6 +18,9 @@
 #include "tt_types.h"
 #include "tt_params.h"
 #include "tt_alloc.h"
+#include "tt_route.h"
+#include "tt_track.h"
+#include "tt_vplan.h"
 
 /* Longest command delay the prediction carries, in ticks (FW-13). */
 #define OPUS_PRED_SLOTS 16
@@ -47,7 +50,9 @@ typedef enum {
     OPUS_BRAKE      = 7,   /* the measured 1.5 m                                 */
     OPUS_CREEP      = 8,   /* final millimetres, friction brake released         */
     OPUS_HOLD       = 9,   /* stationary, confirming                             */
-    OPUS_DONE       = 10
+    OPUS_DONE       = 10,
+    OPUS_FOLLOW     = 11   /* following a route (NAV-04): the tracker steers, the
+                              speed plan sets the speed, BRAKE stops at its end */
 } OpusPhase;
 
 /* The log frame: one float per opus_log.def entry, in table order. */
@@ -121,7 +126,20 @@ typedef struct {
     int    mu_judged;      /* the floor has been judged this run          */
     float  launch_slip;    /* what it was judged on                       */
     float  a_brake;        /* m/s^2 the stop is planned on                */
+    float  a_brake_nom;    /* ...on a floor as good as the parameters say  */
     float  drive_slip;     /* largest driven-wheel slip, torque's way      */
+
+    /* Route following (NAV-02..04). route NULL = the fixed manoeuvre. */
+    const TtRoute *route;
+    float  route_vmax;     /* speed the route was selected at (0 = its own) */
+    TtTrack trk;           /* L4: the car's place on the route, curvature  */
+    TtVPlan plan;          /* L5: speed along the route                    */
+    uint32_t plan_hint;
+    float  plan_mu;        /* mu_est the plan was built on                 */
+    float  pose[3];        /* the navigation filter's x, y, psi (last tick) */
+    int    pose_ok;
+    float  route_s;        /* where the car is on the route now, m         */
+    float  v_plan;         /* the plan at the predicted place              */
 
     /* Sequencing */
     float  phase_t;        /* s in the current phase */
@@ -181,5 +199,16 @@ float opus_odo_m(const OpusState *st);
 /* The navigation filter's odometer scale (true / odometer). Taken until the
  * car brakes; the stop is flown on the scale it had then. */
 void opus_set_odo_scale(OpusState *st, float k);
+
+/* Follow `r` instead of flying the fixed manoeuvre (NULL: the manoeuvre),
+ * at most at v_max (<= 0: the route's own). Set before arming; it survives
+ * opus_reset. A route the car cannot drive (tt_route_validate against its
+ * steering lock) refuses to arm with FA_PARAMS. */
+void opus_set_route(OpusState *st, const TtRoute *r, float v_max);
+
+/* The navigation filter's pose after its last step (x, y, psi in the site
+ * frame); ok = 0 while it has none. The tracker carries it over this tick's
+ * motion and the commands in flight. */
+void opus_set_pose(OpusState *st, float x, float y, float psi, int ok);
 
 #endif /* OPUS_MISSION_H */

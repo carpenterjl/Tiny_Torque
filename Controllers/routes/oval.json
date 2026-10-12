@@ -1,0 +1,20 @@
+{
+  "_about": "A lap of an oval on the Opus Test Pad and 10 m more: two 12 m straights joined by 180 deg turns of 4 m radius with 1 m entry and exit spirals. Starts at the pad's spawn heading -y (Unity +X).",
+  "name": "oval",
+  "id": 2,
+  "track": "Opus Test Pad",
+  "spacing_m": 0.1,
+  "start": { "x": -5.0, "y": 15.0, "psi_deg": -90.0 },
+  "v_max": 3.0,
+  "a_lat_max": 3.0,
+  "a_drive": 2.0,
+  "a_brake": 2.5,
+  "stop": true,
+  "segments": [
+    { "line": 16.0 },
+    { "turn_deg": 180, "radius": 4.0, "spiral_m": 1.0 },
+    { "line": 12.0 },
+    { "turn_deg": 180, "radius": 4.0, "spiral_m": 1.0 },
+    { "line": 10.0 }
+  ]
+}

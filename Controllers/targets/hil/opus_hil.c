@@ -9,6 +9,7 @@ static int h_init(void *ctx, float rate_hz)
 {
     OpusHilCtx *c = (OpusHilCtx *)ctx;
     opus_app_init(c->app, c->params, rate_hz);
+    if (c->route) (void)opus_app_set_route(c->app, c->route);
     return 0;
 }
 
@@ -48,6 +49,7 @@ void opus_hil_app(OpusHilCtx *ctx, OpusApp *app, const TtParams *params,
 {
     ctx->app = app;
     ctx->params = params;
+    ctx->route = 0;
     memset(out, 0, sizeof(*out));
     out->ctx = ctx;
     out->name = name;

@@ -18,6 +18,12 @@
  * The anchors' surveyed positions arrive with each range; the firmware keeps
  * them as its site survey, and the geofence is the box they span, shrunk by
  * OPUS_FW_FENCE_MARGIN_M.
+ *
+ * On a route (opus_fw_set_route, NAV-04) the filter starts at the route's
+ * surveyed start instead of searching for its pose, and the mission steers
+ * from the filter's pose each tick; the search still runs once over the
+ * first metres as a check, and a seed it disagrees with stops the run
+ * (FA_NAV).
  */
 #ifndef OPUS_FW_H
 #define OPUS_FW_H
@@ -48,6 +54,10 @@ void opus_fw_init(OpusFw *fw, const TtParams *p, float rate_hz,
 
 /* The car was put back at the start: a new run, every latch cleared. */
 void opus_fw_reset(OpusFw *fw);
+
+/* Follow route `r` (NULL: the fixed manoeuvre) at most at v_max (<= 0: the
+ * route's own); a new run on it. */
+void opus_fw_set_route(OpusFw *fw, const TtRoute *r, float v_max);
 
 /* One tick. */
 void opus_fw_step(OpusFw *fw, const TtMeas *m, TtCmd *out);

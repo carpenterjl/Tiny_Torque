@@ -72,11 +72,28 @@ namespace AIHWSim.EditorTools
                 gate = ArgValue("-opusCampaignGate") ?? "",
             };
             if ((camp.runs > 0 || camp.corners) && vehicle == null) vehicle = "Opus Vector FOC";
+            // -opusRoute oval[@2] follows a route (NAV-06) on the FOC twin unless
+            // -opusVehicle says otherwise, on the route's own track unless
+            // -opusTrack says otherwise.
+            string route = ArgValue("-opusRoute") ?? "";
+            string track = ArgValue("-opusTrack");
+            if (route.Length > 0)
+            {
+                var rt = RouteTable.Load(route);
+                if (rt == null)
+                {
+                    Debug.LogError($"[OpusMissionRunner] no route '{route}' (Resources/Routes; node Tools/gen_route.js)");
+                    EditorApplication.Exit(3);
+                    return;
+                }
+                if (vehicle == null) vehicle = "Opus Vector FOC";
+                if (track == null) track = rt.track;
+            }
             Begin(result, timeout, ArgValue("-opusController") ?? "",
-                  ArgValue("-opusTrack"), ArgValue("-opusCam"), seed, hz,
+                  track, ArgValue("-opusCam"), seed, hz,
                   vehicle, lat, tel, ArgValue("-opusFaults") ?? "", suite,
                   ArgValue("-opusFaultOnly") ?? "", ArgValue("-opusLink") ?? "", linkMs,
-                  ArgValue("-opusLinkRecord") ?? "", camp);
+                  ArgValue("-opusLinkRecord") ?? "", camp, route);
         }
 
         private sealed class CampaignArgs
@@ -106,7 +123,7 @@ namespace AIHWSim.EditorTools
                                   bool saveTelemetry = false, string faults = "",
                                   bool faultSuite = false, string faultOnly = "",
                                   string link = "", int linkTimeoutMs = 0, string linkRecord = "",
-                                  CampaignArgs camp = null)
+                                  CampaignArgs camp = null, string route = "")
         {
             var req = new MissionAutorun.Request
             {
@@ -123,6 +140,7 @@ namespace AIHWSim.EditorTools
                 link = link ?? "",
                 linkTimeoutMs = linkTimeoutMs,
                 linkRecord = linkRecord ?? "",
+                route = route ?? "",
             };
             if (camp != null)
             {

@@ -306,8 +306,11 @@ ok('gen_params.js FIELDS match the TtParams struct, in order',
     JSON.stringify(hdrFields) === JSON.stringify(gen.FIELDS.map(f => f[0])), hdrFields.length + ' fields');
 const dec = require(path.join(REPO, 'Tools', 'tt_log_decode.js'));
 const logNames = dec.readDef(fs.readFileSync(path.join(REPO, 'Controllers', 'opus_mission', 'opus_log.def'), 'utf8'));
-ok('opus_log.def: <= 32 channels (TT_LOG_MAX), starting with state', logNames.length <= 32 && logNames[0] === 'state',
-    logNames.length + ' channels');
+const logHdr = fs.readFileSync(path.join(REPO, 'Controllers', 'core', 'tt_log.h'), 'utf8');
+const logMax = +(/#define\s+TT_LOG_MAX\s+(\d+)/.exec(logHdr) || [0, 0])[1];
+ok('opus_log.def: <= TT_LOG_MAX channels, starting with state', logMax > 0 && logNames.length <= logMax &&
+    logNames[0] === 'state', logNames.length + ' of ' + logMax);
+ok('tt_log_decode.js reads frames of TT_LOG_MAX floats', dec.LOG_MAX === logMax, dec.LOG_MAX + ' vs ' + logMax);
 
 console.log('\n=== 11. Filename sanitization =================================');
 ok('name → file name', S.fileNameFor({ name: 'My Car' }) === 'My Car.json');

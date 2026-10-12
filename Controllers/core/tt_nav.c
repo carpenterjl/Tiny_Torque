@@ -81,11 +81,27 @@ static int update(TtNav *n, float innov, const float H[N], float r, float gate)
     return 1;
 }
 
+float tt_nav_sideslip(float rear_axle_x, float corner_k, float v, float rate)
+{
+    float b = 0.0f, va = fabsf(v);
+    if (va < 0.3f) return 0.0f;           /* the curvature is noise down here */
+    if (rear_axle_x < 0.0f) {
+        float k = rate / v;
+        if (k > 2.0f) k = 2.0f;
+        if (k < -2.0f) k = -2.0f;
+        b = atanf(-rear_axle_x * k);
+    }
+    if (corner_k > 0.0f) b -= v * rate / (9.80665f * corner_k);
+    return b;
+}
+
 static void predict(TtNav *n, float dt, float gyro_z, float accel_x)
 {
     float *s = n->s, F[N * N], FP[N * N];
-    float c = cosf(s[TT_NAV_PSI]), sn = sinf(s[TT_NAV_PSI]), v = s[TT_NAV_V];
     const TtNavCfg *g = &n->cfg;
+    float v = s[TT_NAV_V];
+    float course = s[TT_NAV_PSI] + tt_nav_sideslip(g->rear_axle_x, g->corner_k, v, gyro_z - s[TT_NAV_BG]);
+    float c = cosf(course), sn = sinf(course);
     int i, j, k;
 
     s[TT_NAV_X] += v * c * dt;
@@ -179,7 +195,10 @@ static float fit_start(const TtNav *n, float th, float *x0, float *y0)
     return cost;
 }
 
-static int try_init(TtNav *n, float v_odo, float gyro_bias)
+/* The heading search over the recorded track: the transform (th, x0, y0)
+ * from the local frame to the site frame that best explains the ranges.
+ * Returns 0 while the ranges are not explained yet. */
+static int search(TtNav *n, float *th_out, float *x_out, float *y_out)
 {
     float best = 1e30f, bth = 0.0f, bx = 0.0f, by = 0.0f, cx = 0.0f, cy = 0.0f;
     int i, k;
@@ -204,7 +223,16 @@ static int try_init(TtNav *n, float v_odo, float gyro_bias)
     }
     n->init_rms = sqrtf(best / (float)n->rec_n);
     if (n->init_rms > 0.25f) return 0;      /* not explained yet: keep driving */
+    *th_out = bth;
+    *x_out = bx;
+    *y_out = by;
+    return 1;
+}
 
+static int try_init(TtNav *n, float v_odo, float gyro_bias)
+{
+    float bth, bx, by;
+    if (!search(n, &bth, &bx, &by)) return 0;
     {
         float c = cosf(bth), sn = sinf(bth), *s = n->s, *P = n->P;
         s[TT_NAV_X] = bx + c * n->lx - sn * n->ly;
@@ -227,6 +255,72 @@ static int try_init(TtNav *n, float v_odo, float gyro_bias)
     return 1;
 }
 
+/* How much faster the odometry axle moves than the origin in a turn: both
+ * turn about a point on the rear axle's line (see tt_nav.h). */
+static float odo_axle_gain(const TtNavCfg *g, float v, float rate)
+{
+    float k, d, l;
+    if (!(g->rear_axle_x < 0.0f) || fabsf(v) < 0.3f) return 1.0f;
+    k = rate / v;
+    if (k > 2.0f) k = 2.0f;
+    if (k < -2.0f) k = -2.0f;
+    d = g->odo_axle_x - g->rear_axle_x;
+    l = -g->rear_axle_x;
+    return sqrtf(1.0f + (d * d - l * l) * k * k);
+}
+
+/* The dead-reckoned local track (start = origin, heading 0) and the ranges
+ * along it, for the heading search. */
+static void record(TtNav *n, float dt, float rate, float v_odo,
+                   const TtNavRange *ranges, int n_ranges)
+{
+    const TtNavCfg *g = &n->cfg;
+    int i;
+    n->lpsi = tt_nav_wrap(n->lpsi + rate * dt);
+    n->lx += v_odo * cosf(n->lpsi) * dt;
+    n->ly += v_odo * sinf(n->lpsi) * dt;
+    n->travel += fabsf(v_odo) * dt;
+    for (i = 0; i < n_ranges; i++) {
+        float c = cosf(n->lpsi), sn = sinf(n->lpsi);
+        int k = n->rec_n;
+        if (k == TT_NAV_MAX_REC) {      /* full: drop the oldest */
+            memmove(&n->rec_t[0], &n->rec_t[1], sizeof(n->rec_t[0]) * (TT_NAV_MAX_REC - 1));
+            memmove(&n->rec_a[0], &n->rec_a[1], sizeof(n->rec_a[0]) * (TT_NAV_MAX_REC - 1));
+            memmove(&n->rec_r[0], &n->rec_r[1], sizeof(n->rec_r[0]) * (TT_NAV_MAX_REC - 1));
+            k = TT_NAV_MAX_REC - 1;
+        } else n->rec_n++;
+        n->rec_t[k][0] = n->lx + c * g->lever[0] - sn * g->lever[1];
+        n->rec_t[k][1] = n->ly + sn * g->lever[0] + c * g->lever[1];
+        memcpy(n->rec_a[k], ranges[i].anchor, sizeof(n->rec_a[k]));
+        n->rec_r[k] = ranges[i].range_m;
+    }
+}
+
+void tt_nav_seed(TtNav *n, float x, float y, float psi, float sig_pos, float sig_psi)
+{
+    TtNavCfg c = n->cfg;
+    float *s, *P;
+    tt_nav_reset(n, &c);
+    s = n->s;
+    P = n->P;
+    s[TT_NAV_X] = x;
+    s[TT_NAV_Y] = y;
+    s[TT_NAV_PSI] = tt_nav_wrap(psi);
+    s[TT_NAV_V] = 0.0f;
+    s[TT_NAV_BG] = 0.0f;
+    s[TT_NAV_KW] = 1.0f;
+    s[TT_NAV_BR] = 0.0f;
+    P[TT_NAV_X * N + TT_NAV_X] = sig_pos * sig_pos;
+    P[TT_NAV_Y * N + TT_NAV_Y] = sig_pos * sig_pos;
+    P[TT_NAV_PSI * N + TT_NAV_PSI] = sig_psi * sig_psi;
+    P[TT_NAV_V * N + TT_NAV_V] = 0.1f * 0.1f;
+    P[TT_NAV_BG * N + TT_NAV_BG] = 0.005f * 0.005f;
+    P[TT_NAV_KW * N + TT_NAV_KW] = 0.03f * 0.03f;
+    P[TT_NAV_BR * N + TT_NAV_BR] = c.r_bias0 * c.r_bias0;
+    n->stage = TT_NAV_RUN;
+    n->check = TT_NAV_CHECK_WAIT;
+}
+
 /* ---- the tick ------------------------------------------------------------- */
 
 void tt_nav_step(TtNav *n, float dt, float gyro_z, float accel_x,
@@ -241,26 +335,27 @@ void tt_nav_step(TtNav *n, float dt, float gyro_z, float accel_x,
         /* At rest the gyro reads its own bias: learn it for the local track. */
         if (fabsf(v_odo) < g->rest_speed && n->travel < 0.05f)
             n->s[TT_NAV_BG] += 0.02f * (gyro_z - n->s[TT_NAV_BG]);
-        n->lpsi = tt_nav_wrap(n->lpsi + (gyro_z - n->s[TT_NAV_BG]) * dt);
-        n->lx += v_odo * cosf(n->lpsi) * dt;
-        n->ly += v_odo * sinf(n->lpsi) * dt;
-        n->travel += fabsf(v_odo) * dt;
-        for (i = 0; i < n_ranges; i++) {
-            float c = cosf(n->lpsi), sn = sinf(n->lpsi);
-            int k = n->rec_n;
-            if (k == TT_NAV_MAX_REC) {      /* full: drop the oldest */
-                memmove(&n->rec_t[0], &n->rec_t[1], sizeof(n->rec_t[0]) * (TT_NAV_MAX_REC - 1));
-                memmove(&n->rec_a[0], &n->rec_a[1], sizeof(n->rec_a[0]) * (TT_NAV_MAX_REC - 1));
-                memmove(&n->rec_r[0], &n->rec_r[1], sizeof(n->rec_r[0]) * (TT_NAV_MAX_REC - 1));
-                k = TT_NAV_MAX_REC - 1;
-            } else n->rec_n++;
-            n->rec_t[k][0] = n->lx + c * g->lever[0] - sn * g->lever[1];
-            n->rec_t[k][1] = n->ly + sn * g->lever[0] + c * g->lever[1];
-            memcpy(n->rec_a[k], ranges[i].anchor, sizeof(n->rec_a[k]));
-            n->rec_r[k] = ranges[i].range_m;
-        }
+        record(n, dt, gyro_z - n->s[TT_NAV_BG], v_odo, ranges, n_ranges);
         if (n->travel >= g->init_travel_m) try_init(n, v_odo, n->s[TT_NAV_BG]);
         return;
+    }
+
+    /* A seeded start: the same search, once, as a check on the seed. */
+    if (n->check == TT_NAV_CHECK_WAIT) {
+        float th, x0, y0;
+        record(n, dt, gyro_z - n->s[TT_NAV_BG], v_odo, ranges, n_ranges);
+        if (n->travel >= g->init_travel_m && search(n, &th, &x0, &y0)) {
+            float c = cosf(th), sn = sinf(th);
+            float px = x0 + c * n->lx - sn * n->ly, py = y0 + sn * n->lx + c * n->ly;
+            float dx = px - n->s[TT_NAV_X], dy = py - n->s[TT_NAV_Y];
+            n->check_dpsi = tt_nav_wrap(th + n->lpsi - n->s[TT_NAV_PSI]);
+            n->check_dpos = sqrtf(dx * dx + dy * dy);
+            n->check = (fabsf(n->check_dpsi) > TT_NAV_CHECK_PSI_RAD ||
+                        n->check_dpos > TT_NAV_CHECK_POS_M) ? TT_NAV_CHECK_BAD : TT_NAV_CHECK_OK;
+        } else if (n->travel >= 3.0f * g->init_travel_m) {
+            /* the ranges never explained a track: nothing to check against */
+            n->check = TT_NAV_CHECK_NONE;
+        }
     }
 
     predict(n, dt, gyro_z, accel_x);
@@ -276,9 +371,10 @@ void tt_nav_step(TtNav *n, float dt, float gyro_z, float accel_x,
             update(n, gyro_z - n->s[TT_NAV_BG], H, g->r_gyro_rest * g->r_gyro_rest, 0.0f);
         } else {
             float kw = n->s[TT_NAV_KW] > 0.5f ? n->s[TT_NAV_KW] : 0.5f;
-            H[TT_NAV_V] = 1.0f / kw;
-            H[TT_NAV_KW] = -n->s[TT_NAV_V] / (kw * kw);
-            update(n, v_odo - n->s[TT_NAV_V] / kw, H, g->r_speed * g->r_speed, 0.0f);
+            float ax = odo_axle_gain(g, n->s[TT_NAV_V], gyro_z - n->s[TT_NAV_BG]);
+            H[TT_NAV_V] = ax / kw;
+            H[TT_NAV_KW] = -ax * n->s[TT_NAV_V] / (kw * kw);
+            update(n, v_odo - ax * n->s[TT_NAV_V] / kw, H, g->r_speed * g->r_speed, 0.0f);
         }
         if (flow_ok) {
             for (j = 0; j < N; j++) H[j] = 0.0f;

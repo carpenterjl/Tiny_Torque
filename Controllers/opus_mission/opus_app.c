@@ -41,6 +41,15 @@ void opus_app_init(OpusApp *a, const TtParams *p, float rate_hz)
     a->params = *p;
     tt_nav_default_cfg(&nav);
     nav.tag_z = OPUS_UWB_TAG_Z_M;
+    /* The body origin's sideslip in a turn (NAV-06): the origin is the
+     * chassis origin, midway between the axles (Hardware HW_00 section 9;
+     * the twin's wheels at +-wheelbase/2), and the rear tyres slip by
+     * a_y / (g * tyre_c_alpha). */
+    nav.rear_axle_x = -0.5f * p->wheelbase_m;
+    nav.corner_k = p->tyre_c_alpha;
+    /* ...and the odometer reads the front pair when both are odometry
+     * wheels (the mission's choice too), else the rear */
+    nav.odo_axle_x = ((p->odo_wheel_mask & 0x3u) == 0x3u ? 0.5f : -0.5f) * p->wheelbase_m;
     opus_fw_init(&a->fw, &a->params, rate_hz, &nav, 0);
     a->ready = 1;
 }
@@ -90,6 +99,43 @@ void opus_app_configure(OpusApp *a, const TtCarDesc *car)
 void opus_app_reset(OpusApp *a)
 {
     opus_fw_reset(&a->fw);
+}
+
+int opus_app_set_route(OpusApp *a, const char *spec)
+{
+    char name[32];
+    const char *at;
+    const TtRoute *r;
+    float v = 0.0f;
+    size_t n;
+    a->route_fault = 0;
+    if (spec == 0 || spec[0] == '\0') { opus_fw_set_route(&a->fw, 0, 0.0f); return 0; }
+    a->route_fault = FA_PARAMS;
+    at = strchr(spec, '@');
+    n = at ? (size_t)(at - spec) : strlen(spec);
+    if (n == 0 || n >= sizeof(name)) return -1;
+    memcpy(name, spec, n);
+    name[n] = '\0';
+    r = tt_route_find(name);
+    if (r == 0) return -1;
+    if (at) {
+        /* "@2.5": digits and one point, no locale, no strtod on the MCU */
+        float scale = 0.0f;
+        const char *c;
+        for (c = at + 1; *c; c++) {
+            if (*c >= '0' && *c <= '9') {
+                if (scale > 0.0f) { v += (float)(*c - '0') * scale; scale *= 0.1f; }
+                else v = v * 10.0f + (float)(*c - '0');
+            } else if (*c == '.' && scale == 0.0f) {
+                scale = 0.1f;
+            } else {
+                return -1;
+            }
+        }
+    }
+    a->route_fault = 0;
+    opus_fw_set_route(&a->fw, r, v);
+    return 0;
 }
 
 /* The virtual driver for a VOLTS drive: brushed motor behind a hobby ESC.
@@ -147,7 +193,7 @@ void opus_app_step(OpusApp *a, const TtMeas *m, TtAct *act)
     memset(act, 0, sizeof(*act));
     if (!a->ready) return;
 
-    st->fault |= a->cfg_fault;
+    st->fault |= a->cfg_fault | a->route_fault;
     opus_fw_step(&a->fw, m, &c);
 
     w_veh = r > 0.0f ? st->v_meas / r : 0.0f;

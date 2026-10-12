@@ -20,9 +20,18 @@
  *
  * Firmware hygiene (FW-04/05): float32 only, every literal suffixed, every
  * threshold a time or a rate, dt measured from timestamps.
+ *
+ * ROUTES (NAV-04). Given a route (opus_set_route), the same arming, launch,
+ * safety and stop drive a different middle: FOLLOW, where the path tracker
+ * (core/tt_track, L4) steers from the navigation filter's pose carried over
+ * the commands in flight, and the speed plan (core/tt_vplan, L5) sets the
+ * speed. Near the route's end the stop takes over exactly as it does after
+ * leg B: the distance left on the route becomes an odometer target, flown
+ * by BRAKE and CREEP. Without a route nothing here changes.
  */
 #include "opus_mission.h"
 #include "mission_cfg.h"
+#include "tt_nav.h"
 
 #include <math.h>
 #include <string.h>
@@ -46,6 +55,24 @@ static int finitef_(float v)
 static float lp_alpha(float dt, float tau)
 {
     return tau > 0.0f ? 1.0f - expf(-dt / tau) : 1.0f;
+}
+
+/* Phases that command the motors. FOLLOW (11) sits outside the manoeuvre's
+ * range of numbers (they are append-only), so ranges go through this. */
+static int driving(OpusPhase ph)
+{
+    return (ph >= OPUS_LAUNCH && ph <= OPUS_CREEP) || ph == OPUS_FOLLOW;
+}
+
+/* Where the car is meant to be going straight: the manoeuvre's launch and
+ * measured legs, or a straight stretch of a route. The steering trim and the
+ * odometry pair's left/right scale are learned only there (FW-15). */
+static int straight(const OpusState *st)
+{
+    if (st->route == 0)
+        return st->phase == OPUS_LAUNCH || st->phase == OPUS_CRUISE_A || st->phase == OPUS_CRUISE_B;
+    return (st->phase == OPUS_LAUNCH || st->phase == OPUS_FOLLOW) &&
+           fabsf(st->trk.kappa_route) < RT_STRAIGHT_K;
 }
 
 static int popcount4(uint32_t m)
@@ -113,7 +140,7 @@ void opus_set_odo_scale(OpusState *st, float k)
 {
     /* Up to the brake: the stop is flown on one scale, the one it started
      * with, so the target cannot move under the braking profile. */
-    if (st->phase < OPUS_LAUNCH || st->phase > OPUS_CRUISE_B) return;
+    if ((st->phase < OPUS_LAUNCH || st->phase > OPUS_CRUISE_B) && st->phase != OPUS_FOLLOW) return;
     if (!(k >= NV_KW_MIN && k <= NV_KW_MAX)) return;
     st->odo_scale = k;
     if (st->phase == OPUS_CRUISE_B)
@@ -207,7 +234,8 @@ void opus_init(OpusState *st, const TtParams *p, float rate_hz)
 void opus_reset(OpusState *st)
 {
     const TtParams *p = st->p;
-    float rate = st->rate_hz;
+    const TtRoute *route = st->route;
+    float rate = st->rate_hz, vmax = st->route_vmax;
     int l = st->odo_l, r = st->odo_r;
 
     memset(st, 0, sizeof(*st));
@@ -215,17 +243,45 @@ void opus_reset(OpusState *st)
     st->rate_hz = rate;
     st->odo_l = l;
     st->odo_r = r;
+    st->route = route;
+    st->route_vmax = vmax;
     st->phase = OPUS_BOOT;
     st->drive_ok = 1;
     st->odo_scale = 1.0f;
     st->f_gain = 1.0f;
     st->mu_nom = p->tyre_mu > 0.0f ? p->tyre_mu : 1.0f;
     st->mu_est = st->mu_nom;
-    st->a_brake = LI_A_BRAKE;
+    st->a_brake_nom = route ? route->a_brake : LI_A_BRAKE;
+    st->a_brake = st->a_brake_nom;
 
     pid_init(&st->spd_pid, GA_SPD_KP, GA_SPD_KI, 0.0f, -GA_SPD_TRIM, GA_SPD_TRIM);
     pid_init(&st->yaw_pid, GA_YAW_KP, GA_YAW_KI, 0.0f, -GA_YAW_TRIM, GA_YAW_TRIM);
     tt_alloc_reset(&st->alloc);
+
+    if (route) {
+        TtTrackCfg tc;
+        tt_track_default_cfg(&tc);
+        if (p->wheelbase_m > 0.0f && p->max_steer_rad > 0.0f)
+            tc.kappa_max = tanf(p->max_steer_rad) / p->wheelbase_m;
+        tt_track_reset(&st->trk, &tc, route);
+        tt_vplan_build(&st->plan, route, vmax, RT_LAT_USE * route->a_lat_max, 0.0f, 0.0f, -1.0f);
+        st->plan_mu = st->mu_est;
+    }
+}
+
+void opus_set_route(OpusState *st, const TtRoute *r, float v_max)
+{
+    st->route = r;
+    st->route_vmax = v_max > 0.0f ? v_max : 0.0f;
+    opus_reset(st);
+}
+
+void opus_set_pose(OpusState *st, float x, float y, float psi, int ok)
+{
+    st->pose[0] = x;
+    st->pose[1] = y;
+    st->pose[2] = psi;
+    st->pose_ok = ok;
 }
 
 static void enter(OpusState *st, OpusPhase ph)
@@ -254,6 +310,11 @@ static void arm_checks(OpusState *st, const TtMeas *m)
     int f = 0, w;
 
     if (tt_params_validate(p) != 0) f |= FA_PARAMS;
+    /* A route must have a surveyed start, and the car must be able to
+     * drive it: its tightest curve within the steering lock. */
+    if (st->route && (!st->route->has_start ||
+                      tt_route_validate(st->route, st->trk.cfg.kappa_max) != TT_RTE_OK))
+        f |= FA_PARAMS;
 
     for (w = 0; w < TT_MAX_WHEELS; w++) {
         if ((p->driven_mask & (1u << w)) && !m->drv[w].st.valid)    f |= FA_NO_MOTORS;
@@ -453,6 +514,62 @@ static float heading_hold(const OpusState *st)
                   -GA_HEAD_MAX_RATE, GA_HEAD_MAX_RATE);
 }
 
+/* L4 (NAV-02): the yaw rate the route asks for. The filter's pose is from
+ * its last step: carry it over this tick's motion (the gyro, the odometer on
+ * the filter's scale), then over the commands still in flight, which is
+ * where this tick's command lands; steer from there. Steer the COURSE, the
+ * heading plus the body origin's sideslip: on a curve the car rightly
+ * points outside the tangent (1.4 deg on the oval at 3 m/s), and a tracker
+ * holding the heading to the tangent settles 5-6 cm to the inside.
+ *
+ * The yaw rate that drives a curvature is then v * kappa less the rate the
+ * sideslip itself changes at: on a spiral the sideslip grows with the
+ * curvature, and the course turns faster than the heading (0.11 rad/s more
+ * on the oval's 1 m spirals at 3 m/s), so r = v * kappa alone turns in
+ * early and comes out late. That rate is taken from the route ahead, where
+ * the command lands.
+ *
+ * Also where the car is on the route now, and the speed plan where the
+ * command lands. */
+static float route_rate(OpusState *st, float ds, float dt)
+{
+    const float l_r = -0.5f * st->p->wheelbase_m, ck = st->p->tyre_c_alpha;
+    float psi0 = st->pose[2], dpsi = st->psi_dot * dt, psi1, pp, x, y, xp, yp, v, k, beta, bdot = 0.0f;
+    ds *= st->odo_scale;
+    v = st->v_pred > 0.0f ? st->v_pred : 0.0f;
+    beta = tt_nav_sideslip(l_r, ck, v, st->psi_dot_f);
+    psi1 = psi0 + dpsi;
+    x = st->pose[0] + ds * cosf(psi0 + 0.5f * dpsi + beta);
+    y = st->pose[1] + ds * sinf(psi0 + 0.5f * dpsi + beta);
+    pp = psi1 + st->psi_fly + beta;
+    xp = x + st->s_pred * cosf(psi1 + 0.5f * st->psi_fly + beta);
+    yp = y + st->s_pred * sinf(psi1 + 0.5f * st->psi_fly + beta);
+    k = tt_track_step(&st->trk, xp, yp, pp, v);
+    if (dt > 0.0f && v > 0.3f) {
+        float s0 = st->trk.s + v * st->trk.cfg.t_ff, k0, k1;
+        uint32_t h = st->trk.i;
+        tt_route_at(st->route, s0, &h, 0, 0, 0, &k0);
+        tt_route_at(st->route, s0 + v * dt, &h, 0, 0, 0, &k1);
+        bdot = (tt_nav_sideslip(l_r, ck, v, v * k1) - tt_nav_sideslip(l_r, ck, v, v * k0)) / dt;
+    }
+    st->route_s = st->trk.s - st->s_pred;
+    {
+        float vp = tt_vplan_at(&st->plan, st->route, st->trk.s, &st->plan_hint, 0);
+        st->v_plan = vp > RT_V_MIN ? vp : RT_V_MIN;
+    }
+    return v * k - bdot;
+}
+
+/* The speed plan's own acceleration where the command lands: half the slope
+ * of v^2 along the route. */
+static float plan_accel(OpusState *st)
+{
+    float dv2 = 0.0f;
+    uint32_t h = st->plan_hint;
+    (void)tt_vplan_at(&st->plan, st->route, st->trk.s, &h, &dv2);
+    return 0.5f * dv2;
+}
+
 static void fill_log(OpusState *st, const TtMeas *m)
 {
     OpusLog *g = &st->log;
@@ -481,6 +598,13 @@ static void fill_log(OpusState *st, const TtMeas *m)
     g->mu_est       = st->mu_est;
     g->drive_slip   = st->drive_slip;
     g->launch_slip  = st->launch_slip;
+    g->route        = st->route ? (float)st->route->id : 0.0f;
+    g->trk_s        = st->trk.s;
+    g->trk_ey       = st->trk.ey;
+    g->trk_epsi     = st->trk.epsi;
+    g->trk_kappa    = st->trk.kappa;
+    g->trk_ld       = st->trk.ld;
+    g->v_plan       = st->v_plan;
 }
 
 /* -------------------------------------------------------------------- step --*/
@@ -490,7 +614,7 @@ void opus_step(OpusState *st, const TtMeas *m, TtCmd *out)
     const TtParams *p = st->p;
     float dt = m->dt_s;
     float ds_l, ds_r, ds, psi_dot_enc, psi_dot_ref = 0.0f;
-    float v_ref = 0.0f, a_ff = 0.0f, odo_eff, mpc_l, mpc_r;
+    float v_ref = 0.0f, a_ff = 0.0f, odo_eff, mpc_l, mpc_r, rt_rate = 0.0f;
     int32_t dl, dr;
     int   allow_brake = 1, glitch = 0, w, n_fly;
     OpusSent now;
@@ -596,8 +720,7 @@ void opus_step(OpusState *st, const TtMeas *m, TtCmd *out)
         int slip = 0;
         uint32_t odo_pair = (1u << st->odo_l) | (1u << st->odo_r);
         st->ax_corr = ok ? ax : 0.0f;   /* pitch removed below, where tracked */
-        if (!(p->driven_mask & odo_pair) ||
-            st->phase < OPUS_LAUNCH || st->phase > OPUS_CREEP || !ok) {
+        if (!(p->driven_mask & odo_pair) || !driving(st->phase) || !ok) {
             st->v_est = st->v_meas;
             st->pitch = 0.0f;
         } else {
@@ -658,7 +781,8 @@ void opus_step(OpusState *st, const TtMeas *m, TtCmd *out)
     }
     /* Each wheel's slip at cruise is its radius error; then judge the floor
      * once, on the launch's slip less it (FW-16). */
-    if (st->phase == OPUS_CRUISE_A && !st->mu_judged && st->phase_t > GA_MU_CAL_T0) {
+    if ((st->phase == OPUS_CRUISE_A || st->phase == OPUS_FOLLOW) &&
+        !st->mu_judged && st->phase_t > GA_MU_CAL_T0) {
         if (st->phase_t < GA_MU_CAL_T1) {
             for (w = 0; w < TT_MAX_WHEELS; w++) st->mu_cs[w] += st->alloc.slip[w];
             st->mu_cn++;
@@ -687,8 +811,16 @@ void opus_step(OpusState *st, const TtMeas *m, TtCmd *out)
      * mark anyway. */
     if (st->mu_est < st->mu_nom && p->mass_eff_kg > 0.0f) {
         float ab = GA_MU_USE * st->mu_est * p->mass_kg * 9.80665f / p->mass_eff_kg;
-        st->a_brake = ab < LI_A_BRAKE ? ab : LI_A_BRAKE;
-        if (st->a_brake < LI_A_BRAKE - 1e-3f) st->fault |= FA_GRIP_LOW;
+        st->a_brake = ab < st->a_brake_nom ? ab : st->a_brake_nom;
+        if (st->a_brake < st->a_brake_nom - 1e-3f) st->fault |= FA_GRIP_LOW;
+    }
+    /* A route's speeds come from its grip budget: replan on the floor
+     * measured (FW-16), lateral and braking limits scaled alike. */
+    if (st->route && fabsf(st->mu_est - st->plan_mu) > RT_MU_REPLAN * st->mu_nom) {
+        float sc = st->mu_est / st->mu_nom;
+        tt_vplan_build(&st->plan, st->route, st->route_vmax, RT_LAT_USE * st->route->a_lat_max * sc,
+                       0.0f, st->route->a_brake * sc, -1.0f);
+        st->plan_mu = st->mu_est;
     }
 
     /* Driven-wheel speed, for the slip diagnostic only. */
@@ -723,8 +855,7 @@ void opus_step(OpusState *st, const TtMeas *m, TtCmd *out)
         float gz = m->imu.gyro[2] - st->gyro_bias;
         float va = st->v_meas < 0.0f ? -st->v_meas : st->v_meas;
         psi_dot_enc = (ds_r - ds_l) / (p->track_front_m * dt);
-        if (gz_ok && !glitch && !st->odo_slip && va > GA_LR_MIN_V &&
-            (st->phase == OPUS_LAUNCH || st->phase == OPUS_CRUISE_A || st->phase == OPUS_CRUISE_B)) {
+        if (gz_ok && !glitch && !st->odo_slip && va > GA_LR_MIN_V && straight(st)) {
             float e = (psi_dot_enc - gz) * p->track_front_m / st->v_meas;
             st->lr_eps = clampf(st->lr_eps + (e - st->lr_eps) * lp_alpha(dt, GA_LR_TAU_S),
                                 -GA_LR_MAX, GA_LR_MAX);
@@ -745,8 +876,7 @@ void opus_step(OpusState *st, const TtMeas *m, TtCmd *out)
         float lag = p->steer_lag_s > 0.0f ? p->steer_lag_s : GA_TRIM_LAG_S;
         float ay = st->v_est * st->psi_dot_f;
         st->steer_act_f += (now.steer - st->steer_act_f) * lp_alpha(dt, lag);
-        if ((st->phase == OPUS_LAUNCH || st->phase == OPUS_CRUISE_A || st->phase == OPUS_CRUISE_B) &&
-            st->v_est > GA_TRIM_MIN_V && ay < GA_TRIM_MAX_AY && ay > -GA_TRIM_MAX_AY) {
+        if (straight(st) && st->v_est > GA_TRIM_MIN_V && ay < GA_TRIM_MAX_AY && ay > -GA_TRIM_MAX_AY) {
             /* The plant's offset, measured directly: independent of the trim
              * already applied (it is inside the command acting). */
             float off = atan2f(p->wheelbase_m * st->psi_dot_f, st->v_est) - st->steer_act_f;
@@ -783,7 +913,7 @@ void opus_step(OpusState *st, const TtMeas *m, TtCmd *out)
     {
         float tof = (m->tof.st.valid && m->tof.zones > 0 && m->tof.status[0] == 0)
                   ? m->tof.range_m[0] : 1e6f;
-        if (st->phase >= OPUS_LAUNCH && st->phase <= OPUS_BRAKE &&
+        if (((st->phase >= OPUS_LAUNCH && st->phase <= OPUS_BRAKE) || st->phase == OPUS_FOLLOW) &&
             tof > 0.0f && tof < SF_TOF_ABORT_M) {
             st->tof_t += dt;
             if (st->tof_t >= SF_TOF_S - 1e-4f) st->fault |= FA_OBSTACLE;
@@ -793,10 +923,14 @@ void opus_step(OpusState *st, const TtMeas *m, TtCmd *out)
     }
 
     if (st->fault & (FA_IMPACT | FA_OBSTACLE | FA_ENC_DEAD | FA_NO_ENCODERS |
-                     FA_NO_MOTORS | FA_NAN | FA_PARAMS | FA_SAFETY))
+                     FA_NO_MOTORS | FA_NAN | FA_PARAMS | FA_SAFETY | FA_NAV))
         st->phase = OPUS_FAULT;
 
     st->phase_t += dt;
+
+    /* On a route the tracker steers whatever the phase (L4). */
+    if (st->route && st->pose_ok && driving(st->phase))
+        rt_rate = route_rate(st, ds, dt);
 
     /* ---- phase machine -------------------------------------------------- */
 
@@ -831,6 +965,11 @@ void opus_step(OpusState *st, const TtMeas *m, TtCmd *out)
 
     case OPUS_ARMED:
         out->brake_01 = 1.0f;
+        /* A route is flown on the filter's pose: none, no launch. */
+        if (st->route && !st->pose_ok) {
+            if (st->phase_t > RT_POSE_WAIT_S) st->fault |= FA_NAV;
+            break;
+        }
         /* Launch only once the safety layer has armed the drives. */
         if (st->phase_t > SQ_ARM_DWELL_S && st->drive_ok) {
             st->v_ref = 0.0f;
@@ -843,10 +982,21 @@ void opus_step(OpusState *st, const TtMeas *m, TtCmd *out)
         /* Ramp the reference rather than the command: the speed loop then has a
          * feasible target at every instant instead of a step it must saturate
          * against. */
-        v_ref = st->v_ref + LI_A_LAUNCH * dt;
-        if (v_ref > MI_V_CRUISE) v_ref = MI_V_CRUISE;
-        a_ff = (v_ref < MI_V_CRUISE) ? LI_A_LAUNCH : 0.0f;
-        psi_dot_ref = heading_hold(st);
+        if (st->route) {
+            /* Up to the speed plan, at the route's own acceleration; the
+             * tracker steers from the first metre. */
+            float a = st->plan.a_drive;
+            float vt = st->v_plan;
+            v_ref = st->v_ref + a * dt;
+            if (v_ref > vt) v_ref = vt;
+            a_ff = (v_ref < vt) ? a : 0.0f;
+            psi_dot_ref = rt_rate;
+        } else {
+            v_ref = st->v_ref + LI_A_LAUNCH * dt;
+            if (v_ref > MI_V_CRUISE) v_ref = MI_V_CRUISE;
+            a_ff = (v_ref < MI_V_CRUISE) ? LI_A_LAUNCH : 0.0f;
+            psi_dot_ref = heading_hold(st);
+        }
 
         /* The only real encoder-liveness test: both counters must advance once
          * the car is definitely moving. Judged on ACCUMULATED distance over the
@@ -864,12 +1014,32 @@ void opus_step(OpusState *st, const TtMeas *m, TtCmd *out)
             if (lo <= 0.01f || lo < 0.60f * hi) st->fault |= FA_ENC_DEAD;
         }
 
-        if (st->v_meas > MI_V_CRUISE - 0.05f) st->settle_t += dt; else st->settle_t = 0.0f;
+        if (st->v_meas > (st->route ? st->v_plan : MI_V_CRUISE) - 0.05f) st->settle_t += dt;
+        else st->settle_t = 0.0f;
         if (st->settle_t > SQ_SETTLE_S) {
             begin_leg(st);
-            enter(st, OPUS_CRUISE_A);
+            enter(st, st->route ? OPUS_FOLLOW : OPUS_CRUISE_A);
         }
         break;
+
+    case OPUS_FOLLOW: {
+        /* The speed plan where this command lands, and its own acceleration
+         * as the feed-forward; the tracker steers. */
+        const float s_end = st->route->pt[st->route->n - 1u].s;
+        v_ref = st->v_plan;
+        a_ff = clampf(plan_accel(st), -st->a_brake, st->plan.a_drive);
+        psi_dot_ref = rt_rate;
+        /* The stop: as after leg B, it starts where it can still be made at
+         * a_brake, and the distance left on the route becomes an odometer
+         * target, so BRAKE and CREEP fly it on the encoders. */
+        if (st->route->stop_at_end &&
+            s_end - st->trk.s - st->v_pred * EN_DEAD_TIME_S - 0.5f * st->v_meas * dt
+                <= st->v_pred * st->v_pred / (2.0f * st->a_brake)) {
+            st->stop_target_m = odo_eff + (s_end - st->route_s) / st->odo_scale;
+            enter(st, OPUS_BRAKE);
+        }
+        break;
+    }
 
     case OPUS_CRUISE_A:
         v_ref = MI_V_CRUISE;
@@ -950,9 +1120,9 @@ void opus_step(OpusState *st, const TtMeas *m, TtCmd *out)
         float s_rem = (st->stop_target_m - odo_eff - st->s_pred) - st->v_pred * EN_DEAD_TIME_S;
         if (s_rem < 0.0f) s_rem = 0.0f;
         v_ref = sqrtf(2.0f * st->a_brake * s_rem);
-        if (v_ref > MI_V_CRUISE) v_ref = MI_V_CRUISE;
+        if (v_ref > (st->route ? st->v_plan : MI_V_CRUISE)) v_ref = st->route ? st->v_plan : MI_V_CRUISE;
         a_ff = -st->a_brake;
-        psi_dot_ref = heading_hold(st);
+        psi_dot_ref = st->route ? rt_rate : heading_hold(st);
 
         /* The friction brake acts on ALL FOUR wheels, so it slips the very
          * wheels the odometer reads. Give it up for the last 40 mm and coast
@@ -966,7 +1136,7 @@ void opus_step(OpusState *st, const TtMeas *m, TtCmd *out)
          * stay in BRAKE: s_rem clamps to zero, v_ref goes to zero, and the loop
          * asks for everything it has. */
         if (st->stop_target_m - odo_eff < EN_CREEP_M && st->v_filt < EN_CREEP_V * 2.0f) {
-            st->brake_actual = leg_m(st, odo_eff, st->stop_target_m) + MI_BRAKE_M;
+            st->brake_actual = leg_m(st, odo_eff, st->stop_target_m) + (st->route ? 0.0f : MI_BRAKE_M);
             enter(st, OPUS_CREEP);
         }
         break;
@@ -980,6 +1150,7 @@ void opus_step(OpusState *st, const TtMeas *m, TtCmd *out)
         float s_rem = st->stop_target_m - odo_eff;
         allow_brake = 0;
         v_ref = clampf(EN_CREEP_KV * (s_rem - st->s_pred), -EN_CREEP_V, EN_CREEP_V);
+        if (st->route) psi_dot_ref = rt_rate;
         if (st->v_filt < EN_DONE_V && st->v_filt > -EN_DONE_V && s_rem < EN_STALL_M) st->stall_t += dt;
         else st->stall_t = 0.0f;
         if ((s_rem < EN_DONE_M || st->stall_t > EN_STALL_S) &&
@@ -1019,12 +1190,13 @@ void opus_step(OpusState *st, const TtMeas *m, TtCmd *out)
     case OPUS_CRUISE_B: st->leg_rem = MI_LEG_B_M - leg_m(st, odo_eff, st->leg_start_m); break;
     case OPUS_BRAKE:
     case OPUS_CREEP:    st->leg_rem = -leg_m(st, odo_eff, st->stop_target_m); break;
+    case OPUS_FOLLOW:   st->leg_rem = st->route->pt[st->route->n - 1u].s - st->route_s; break;
     default:            st->leg_rem = 0.0f; break;
     }
 
     /* ---- actuate --------------------------------------------------------- */
 
-    if (st->phase >= OPUS_LAUNCH && st->phase <= OPUS_CREEP) {
+    if (driving(st->phase)) {
         longitudinal(st, m, v_ref, a_ff, allow_brake, out);
         lateral(st, m, psi_dot_ref, out);
         out->arm = 1;

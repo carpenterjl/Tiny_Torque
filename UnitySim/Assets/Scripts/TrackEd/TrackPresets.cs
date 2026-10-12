@@ -62,6 +62,9 @@ namespace AIHWSim.TrackEd
             // Not a circuit: a straight-line measurement range for the Opus Vector
             // mission firmware.
             ("Opus Proving Ground", TrackKind.Circuit, OpusProvingGround),
+            // The routes' pad (NAV-06): the firmware follows Controllers/routes/*.json
+            // here — oval, figure-8, slalom, hairpin.
+            ("Opus Test Pad", TrackKind.Circuit, OpusTestPad),
         };
 
         /// <summary>
@@ -2087,6 +2090,44 @@ namespace AIHWSim.TrackEd
             // 0.5 m), so they stand beyond the run-off, where a car that
             // overshoots its stop (a turn that ends on its timeout carries it
             // ~3.6 m further) still has room before the fence.
+            d.items.Add(It("uwb_anchor", -19.5f, -9.5f));
+            d.items.Add(It("uwb_anchor",  19.5f, -9.5f));
+            d.items.Add(It("uwb_anchor",  19.5f,  9.5f));
+            d.items.Add(It("uwb_anchor", -19.5f,  9.5f));
+            return d;
+        }
+
+        /// <summary>
+        /// Opus Test Pad — where the firmware follows routes (NAV-01/06): the
+        /// proving ground's field (40 × 20 m, the same four UWB anchors at its
+        /// corners and the same spawn, Unity (−15, −5) heading +X), paved end
+        /// to end so a route may go anywhere inside the geofence without the
+        /// surface changing under the car. Every route in
+        /// Controllers/routes/ that names this track starts at that spawn; in
+        /// the anchors' site frame it is (−5, 15) heading −90°.
+        ///
+        /// Nothing solid stands where a route goes: the routes keep to site
+        /// x −5.3..3.1 (Unity z) and y −15..17.5 (Unity −x). The finish and
+        /// the checkpoint a circuit must have sit on the far side of the pad
+        /// (Unity z = +8), outside the routes and beyond the ToF's 4 m.
+        /// </summary>
+        private static TrackDesign OpusTestPad()
+        {
+            var d = New("Opus Test Pad", 40, 20, Asphalt);
+
+            d.items.Add(It("finish", 12f, 8f, 90f));
+            d.items.Add(It("checkpoint", -12f, 8f, 90f, 0f, 0));
+            d.items.Add(It("spawn", -15.000f, -5.000f, 90f));           // heading +X
+
+            // Low cones at the pad's long edges, well outside every route and
+            // the geofence: a visual frame, never in a beam's path.
+            for (float x = -16f; x <= 16f; x += 8f)
+            {
+                d.items.Add(It("cone", x, -9.0f));
+                d.items.Add(It("cone", x,  9.0f));
+            }
+
+            // The same anchors as the proving ground: the routes' site frame.
             d.items.Add(It("uwb_anchor", -19.5f, -9.5f));
             d.items.Add(It("uwb_anchor",  19.5f, -9.5f));
             d.items.Add(It("uwb_anchor",  19.5f,  9.5f));

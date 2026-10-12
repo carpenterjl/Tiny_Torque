@@ -26,10 +26,16 @@
  * every leg must land within TOL_DELAY_MM of the run without it: the core
  * predicts over the commands in flight, so a known delay costs nothing.
  *
- * Last, the car is not what its parameters say (FW-15, FW-16): the motors
+ * Then the car is not what its parameters say (FW-15, FW-16): the motors
  * give 10 % less torque, and the gyro reads 0.5 deg/s off with the steering
  * 2 deg off centre. The mission must still pass, having learned the force
  * gain, the gyro bias and the steering trim.
+ *
+ * Last, routes (NAV-04): the oval and the figure-8 at 2 and 3 m/s and the
+ * Opus manoeuvre's route, followed through the same arming, launch and stop,
+ * steered by the tracker from the plant's own pose (the navigation filter is
+ * tt_nav_unit's business). Each must finish, hold the line within
+ * TOL_RT_XTE_MM and stop within TOL_RT_STOP_MM of the route's end.
  *
  * Build:
  *   gcc -std=c11 -O2 -I opus_mission -I common -I core -o test_mission \
@@ -78,6 +84,10 @@ typedef struct {
 } CarErr;
 static CarErr g_err = { 0, 1.0, 0.0, 0.0 };
 #define TOL_GAIN          0.02   /* learned force gain vs the torque scale */
+#define TOL_RT_XTE_MM     40.0   /* route: max cross-track error (regression bound; the
+                                    sim judges NAV-02: 50 mm RMS, 150 mm max) */
+#define TOL_RT_RMS_MM     20.0   /* route: RMS cross-track error            */
+#define TOL_RT_STOP_MM    25.0   /* route: stop along the route vs its end  */
 #define TOL_BIAS          1e-4   /* rad/s, learned gyro bias               */
 
 typedef struct {
@@ -90,6 +100,69 @@ typedef struct {
 static int32_t counts(const TtParams *p, int w, double accum)
 {
     return (int32_t)floor(accum / (2.0 * OPUS_PI / (p->enc_cpr[w] * p->enc_ratio[w])));
+}
+
+/* One plant step under command c: a kinematic bicycle referenced midway
+ * between the axles (the twin's chassis origin, where the firmware's pose
+ * is: it moves at the sideslip atan(tan(delta) / 2) to its heading), an
+ * ideal current drive, the drag polynomial, the friction brake. */
+static void plant_step(Plant *p, const TtParams *pp, const TtCmd *c, double dt,
+                       double *psi_dot_out, double *a_out)
+{
+    const double r = pp->wheel_radius_m;
+    double psi_dot, f_motor = 0.0, f_brake, f_drag, a, v_l, v_r;
+    int w;
+    double td = tan((double)c->steer_rad + g_err.steer_offset), beta = atan(0.5 * td);
+    psi_dot = (fabs(p->v) > 0.05) ? p->v * cos(beta) / pp->wheelbase_m * td : 0.0;
+
+    /* An ideal current-controlled drive: the commanded wheel torque,
+     * limited by the drive's current. */
+    for (w = 0; w < TT_MAX_WHEELS; w++) {
+        double t_max = PLANT_I_MAX_A * pp->gear[w] * pp->kt[w] * pp->eta_drive;
+        double tw = c->arm ? (double)c->wheel_torque_nm[w] : 0.0;
+        if (tw >  t_max) tw =  t_max;
+        if (tw < -t_max) tw = -t_max;
+        f_motor += tw * g_err.torque_scale / r;
+    }
+
+    f_drag = pp->drag_c0 + pp->drag_c1 * fabs(p->v) + pp->drag_c2 * p->v * p->v;
+    if (p->v < 0.0) f_drag = -f_drag;
+    if (fabs(p->v) < 0.01 && fabs(f_motor) < pp->drag_c0) f_drag = f_motor;  /* stiction */
+
+    f_brake = (double)c->brake_01 * 4.0 * pp->brake_max_nm / r;
+    if (p->v > 0.0) f_brake = -f_brake; else if (p->v < 0.0) f_brake = -f_brake * -1.0;
+    if (fabs(p->v) < 0.01) f_brake = 0.0;
+
+    a = (f_motor - f_drag + f_brake) / pp->mass_kg;
+
+    /* Encoders integrate the CURRENT speed over the step — the same
+     * left-endpoint sum WheelEncoderSensor.Sample uses. */
+    v_l = p->v - psi_dot * pp->track_front_m * 0.5;
+    v_r = p->v + psi_dot * pp->track_front_m * 0.5;
+    p->acc[TT_FL] += (v_l / r) * dt;
+    p->acc[TT_FR] += (v_r / r) * dt;
+    p->acc[TT_RL] += (v_l / r) * dt;
+    p->acc[TT_RR] += (v_r / r) * dt;
+
+    p->x += p->v * cos(p->psi + beta) * dt;
+    p->z += p->v * sin(p->psi + beta) * dt;
+    p->psi += psi_dot * dt;
+
+    /* Ground truth must NOT use the same left-endpoint sum the encoder does,
+     * or it inherits the very bias the controller is correcting for and the
+     * comparison becomes circular. Trapezoid it. */
+    {
+        double v_next = p->v + a * dt;
+        p->path += 0.5 * (fabs(p->v) + fabs(v_next)) * dt;
+    }
+    p->v += a * dt;
+    /* Static friction: below a few mm/s, a drive force smaller than the
+     * Coulomb breakaway cannot keep the car moving. Without this the plant
+     * glides forever at millimetres per second and nothing ever stops. */
+    if (fabs(p->v) < 0.02 && fabs(f_motor) < pp->drag_c0) p->v = 0.0;
+    if (p->v < 0.0 && f_motor >= 0.0) p->v = 0.0;
+    *psi_dot_out = psi_dot;
+    *a_out = a;
 }
 
 /* glitch: from 1 s into the first measured leg, the left odometry encoder
@@ -115,6 +188,7 @@ static int run(double rate_hz, int glitch, int delay, Legs *out_legs)
     double a_prev = 0.0;            /* last step's acceleration, for the accelerometer */
     TtCmd  fly[16];                 /* commands in flight, oldest first */
     int    n_fly = 0;
+    (void)r;
 
     /* Calibration is measured against a plant, and this plant has no tyre
      * slip: the sim's measured brake-slip term would make the odometer
@@ -133,7 +207,7 @@ static int run(double rate_hz, int glitch, int delay, Legs *out_legs)
     for (steps = 0; steps < (int)(60.0 * rate_hz); steps++) {    /* 60 s ceiling */
         TtMeas m;
         TtCmd  c;
-        double v_l, v_r, psi_dot, f_motor, f_brake, f_drag, a;
+        double psi_dot, a;
 
         /* --- sample the plant EXACTLY as the host does: before stepping it,
          *     using the current speed (left-endpoint integration). --- */
@@ -185,57 +259,9 @@ static int run(double rate_hz, int glitch, int delay, Legs *out_legs)
         }
 
         /* --- plant --- */
-        psi_dot = (fabs(p.v) > 0.05) ? p.v / pp->wheelbase_m * tan((double)c.steer_rad + g_err.steer_offset) : 0.0;
-
-        /* An ideal current-controlled drive: the commanded wheel torque,
-         * limited by the drive's current. */
-        f_motor = 0.0;
-        for (w = 0; w < TT_MAX_WHEELS; w++) {
-            double t_max = PLANT_I_MAX_A * pp->gear[w] * pp->kt[w] * pp->eta_drive;
-            double tw = c.arm ? (double)c.wheel_torque_nm[w] : 0.0;
-            if (tw >  t_max) tw =  t_max;
-            if (tw < -t_max) tw = -t_max;
-            f_motor += tw * g_err.torque_scale / r;
-        }
-
-        f_drag = pp->drag_c0 + pp->drag_c1 * fabs(p.v) + pp->drag_c2 * p.v * p.v;
-        if (p.v < 0.0) f_drag = -f_drag;
-        if (fabs(p.v) < 0.01 && fabs(f_motor) < pp->drag_c0) f_drag = f_motor;  /* stiction */
-
-        f_brake = (double)c.brake_01 * 4.0 * pp->brake_max_nm / r;
-        if (p.v > 0.0) f_brake = -f_brake; else if (p.v < 0.0) f_brake = -f_brake * -1.0;
-        if (fabs(p.v) < 0.01) f_brake = 0.0;
-
-        a = (f_motor - f_drag + f_brake) / pp->mass_kg;
-
-        /* Encoders integrate the CURRENT speed over the step — the same
-         * left-endpoint sum WheelEncoderSensor.Sample uses. */
-        v_l = p.v - psi_dot * pp->track_front_m * 0.5;
-        v_r = p.v + psi_dot * pp->track_front_m * 0.5;
-        p.acc[TT_FL] += (v_l / r) * dt;
-        p.acc[TT_FR] += (v_r / r) * dt;
-        p.acc[TT_RL] += (v_l / r) * dt;
-        p.acc[TT_RR] += (v_r / r) * dt;
-
-        p.x += p.v * cos(p.psi) * dt;
-        p.z += p.v * sin(p.psi) * dt;
-        p.psi += psi_dot * dt;
+        plant_step(&p, pp, &c, dt, &psi_dot, &a);
         psi_dot_prev = psi_dot;
-
-        /* Ground truth must NOT use the same left-endpoint sum the encoder does,
-         * or it inherits the very bias the controller is correcting for and the
-         * comparison becomes circular. Trapezoid it. */
-        {
-            double v_next = p.v + a * dt;
-            p.path += 0.5 * (fabs(p.v) + fabs(v_next)) * dt;
-        }
-        p.v += a * dt;
         a_prev = a;
-        /* Static friction: below a few mm/s, a drive force smaller than the
-         * Coulomb breakaway cannot keep the car moving. Without this the plant
-         * glides forever at millimetres per second and nothing ever stops. */
-        if (fabs(p.v) < 0.02 && fabs(f_motor) < pp->drag_c0) p.v = 0.0;
-        if (p.v < 0.0 && f_motor >= 0.0) p.v = 0.0;
 
         t += dt;
 #ifdef OPUS_TRACE
@@ -313,6 +339,98 @@ static int run(double rate_hz, int glitch, int delay, Legs *out_legs)
     }
 }
 
+/* NAV-04: a route through the same mission, one command period late as the
+ * twin's are, steered from the plant's pose as the navigation filter would
+ * give it (the pose after the last step). */
+static int run_route(const char *name, float v_max)
+{
+    TtParams bench = tt_params_opus_vector;
+    const TtParams *pp = &bench;
+    const TtRoute *rt = tt_route_find(name);
+    const double rate_hz = 100.0, dt = 1.0 / rate_hz;
+    OpusState st;
+    Plant p;
+    TtCmd fly[2];
+    int n_fly = 0, steps, w, failures = 0;
+    double psi_dot_prev = 0.0, a_prev = 0.0, t = 0.0, sum2 = 0.0, mx = 0.0, prev[3];
+    uint32_t tick = 0, i_proj = 0, n = 0;
+
+    bench.cal_scale = 0.0f;
+    bench.cal_brake = 0.0f;
+    bench.mass_eff_kg = bench.mass_kg;
+    bench.cmd_delay_s = (float)dt;
+    bench.tyre_c_alpha = 0.0f;      /* no tyres here: only the kinematic sideslip */
+    memset(&p, 0, sizeof(p));
+    p.x = rt->start[0];
+    p.z = rt->start[1];
+    p.psi = rt->start[2];
+    prev[0] = p.x; prev[1] = p.z; prev[2] = p.psi;
+    opus_init(&st, pp, (float)rate_hz);
+    opus_set_route(&st, rt, v_max);
+
+    for (steps = 0; steps < (int)(90.0 * rate_hz); steps++) {
+        TtMeas m;
+        TtCmd c;
+        double psi_dot, a;
+        memset(&m, 0, sizeof(m));
+        m.now_us = (tt_us_t)llround(t * 1e6);
+        m.dt_s = (float)dt;
+        for (w = 0; w < TT_MAX_WHEELS; w++) {
+            m.enc[w].count = counts(pp, w, p.acc[w]);
+            m.enc[w].st.valid = 1;
+            m.enc[w].st.seq = tick;
+            m.enc[w].st.t_us = m.now_us;
+            if (pp->driven_mask & (1u << w)) { m.drv[w].st.valid = 1; m.drv[w].vbus_v = 7.4f; }
+        }
+        m.imu.st.valid = 1;
+        m.imu.gyro[2] = (float)psi_dot_prev;
+        m.imu.accel[0] = (float)a_prev;
+        m.imu.accel[2] = 9.81f;
+        m.batt.st.valid = 1;
+        m.batt.v = 7.4f;
+
+        opus_set_pose(&st, (float)prev[0], (float)prev[1], (float)prev[2], 1);
+        prev[0] = p.x; prev[1] = p.z; prev[2] = p.psi;
+        opus_step(&st, &m, &c);
+        tick++;
+        fly[n_fly++] = c;
+        if (n_fly > 1) { c = fly[0]; fly[0] = fly[1]; n_fly = 1; } else memset(&c, 0, sizeof(c));
+
+        plant_step(&p, pp, &c, dt, &psi_dot, &a);
+        psi_dot_prev = psi_dot;
+        a_prev = a;
+        t += dt;
+        if (st.phase == OPUS_FOLLOW || st.phase == OPUS_BRAKE || st.phase == OPUS_CREEP) {
+            TtRouteProj pr;
+            tt_route_project(rt, (float)p.x, (float)p.z, i_proj, 10u, 40u, &pr);
+            i_proj = pr.i;
+            sum2 += (double)pr.ey * pr.ey;
+            if (fabs(pr.ey) > mx) mx = fabs(pr.ey);
+            n++;
+        }
+        if (st.phase == OPUS_DONE || st.phase == OPUS_FAULT) break;
+    }
+    {
+        TtRouteProj pr;
+        double stop_mm, rms = n ? sqrt(sum2 / n) * 1e3 : 1e9, end_deg;
+        tt_route_project(rt, (float)p.x, (float)p.z, i_proj, 10u, 40u, &pr);
+        stop_mm = ((double)pr.s - rt->pt[rt->n - 1u].s) * 1e3;
+        end_deg = tt_route_wrap((float)p.psi - rt->pt[rt->n - 1u].psi) * OPUS_RAD2DEG;
+        printf("=== route %s%s%.1f m/s: phase %d after %.2f s, fault 0x%X ===\n", name,
+               v_max > 0.0f ? " @ " : " at its own ", v_max > 0.0f ? (double)v_max : (double)rt->v_max,
+               st.phase, t, st.fault);
+        printf("cross-track rms %.1f mm, max %.1f mm; stop %+.1f mm along, %+.1f mm across; "
+               "heading at the end %+.2f deg\n\n", rms, mx * 1e3, stop_mm, (double)pr.ey * 1e3, end_deg);
+#define CHECK(nm, cond) do { if (!(cond)) { printf("FAIL: %s\n", nm); failures++; } } while (0)
+        CHECK("route completed", st.phase == OPUS_DONE);
+        CHECK("route cross-track rms", rms <= TOL_RT_RMS_MM);
+        CHECK("route cross-track max", mx * 1e3 <= TOL_RT_XTE_MM);
+        CHECK("route stop", fabs(stop_mm) <= TOL_RT_STOP_MM);
+#undef CHECK
+    }
+    return failures;
+}
+
 /* FW-13: the same mission with a known command delay must land where the
  * undelayed one does. */
 static int compare(const char *what, const Legs *a, const Legs *b)
@@ -349,6 +467,17 @@ int main(void)
                                      1.0, 0.5 * OPUS_DEG2RAD, 2.0 * OPUS_DEG2RAD };
         g_err = weak; fails += run(100.0, 0, 1, NULL);
         g_err = skew; fails += run(100.0, 0, 1, NULL);
+    }
+    {
+        static const CarErr none = { 0, 1.0, 0.0, 0.0 };
+        g_err = none;
+        fails += run_route("oval", 2.0f);
+        fails += run_route("oval", 3.0f);
+        fails += run_route("figure8", 2.0f);
+        fails += run_route("figure8", 3.0f);
+        fails += run_route("hairpin", 0.0f);
+        fails += run_route("slalom", 0.0f);
+        fails += run_route("opus", 0.0f);
     }
     return fails ? 1 : 0;
 }

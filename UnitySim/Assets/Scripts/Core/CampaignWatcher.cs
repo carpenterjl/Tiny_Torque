@@ -50,13 +50,16 @@ namespace AIHWSim.Core
             public float leg_mm = 60f;       // p95 |legA|, |legB|
             public float turn_deg = 1.0f;    // p95 |turn_err|
             public int safety = 0;           // runs with a safety fault allowed
+            // On a route (NAV-06) these replace total / stop / leg / turn:
+            public float xte_mm = 100f;      // p95 of each run's p95 cross-track error
+            public float rstop_mm = 50f;     // p95 |stop along the route vs its end|
         }
 
         [Serializable]
         public class CampaignResult
         {
             public bool pass;
-            public string vehicle = "", note = "";
+            public string vehicle = "", note = "", route = "";
             public int seed, planned, done;
             public float width;
             public Gate gate = new Gate();
@@ -75,12 +78,15 @@ namespace AIHWSim.Core
         private CarVehicle _car;
         private MissionScorer _score;
         private RunResult _cur;
+        private RouteTable _route;      // NAV-06: every run follows it
 
         public void Configure(MissionAutorun.Request req, List<Campaign.RunSpec> plan)
         {
             _req = req;
             _plan = plan;
             _out.vehicle = req.vehicle;
+            _out.route = req.route ?? "";
+            _route = RouteTable.Load(req.route);
             _out.seed = req.campaignSeed;
             _out.width = req.campaignWidth;
             _out.planned = plan.Count;
@@ -114,7 +120,7 @@ namespace AIHWSim.Core
                     if (_wait > 10f) { EndRun(false, "no runner/car in scene"); }
                     return;
                 }
-                _score = new MissionScorer(_car, _runner.Hub);
+                _score = new MissionScorer(_car, _runner.Hub, _route);
             }
 
             _elapsed += Time.fixedDeltaTime;
@@ -165,10 +171,16 @@ namespace AIHWSim.Core
                 }
                 catch (Exception e) { Debug.LogWarning($"[CAMPAIGN] trace write failed: {e.Message}"); }
             }
-            Debug.Log(string.Format(CultureInfo.InvariantCulture,
-                "[CAMPAIGN] {0,3}/{1} {2,-22} {3} A={4:+0.0;-0.0} turn={5:+0.00;-0.00} B={6:+0.0;-0.0} total={7:+0.0;-0.0} stop={8:+0.0;-0.0} slip={9:0.00} {10}",
-                _k + 1, _plan.Count, _cur.label, ok ? "done" : "FAIL", res.legA_err_mm, res.turn_err_deg,
-                res.legB_err_mm, res.total_err_mm, res.controllerStopErr_mm, _cur.maxSlipBrake, note));
+            if (_route != null)
+                Debug.Log(string.Format(CultureInfo.InvariantCulture,
+                    "[CAMPAIGN] {0,3}/{1} {2,-22} {3} xte rms={4:0.0} p95={5:0.0} max={6:0.0} mm stop={7:+0.0;-0.0}/{8:+0.0;-0.0} mm head end={9:+0.00;-0.00} {10}",
+                    _k + 1, _plan.Count, _cur.label, ok ? "done" : "FAIL", res.xte_rms_mm, res.xte_p95_mm,
+                    res.xte_max_mm, res.route_stop_mm, res.route_stop_lat_mm, res.head_end_deg, note));
+            else
+                Debug.Log(string.Format(CultureInfo.InvariantCulture,
+                    "[CAMPAIGN] {0,3}/{1} {2,-22} {3} A={4:+0.0;-0.0} turn={5:+0.00;-0.00} B={6:+0.0;-0.0} total={7:+0.0;-0.0} stop={8:+0.0;-0.0} slip={9:0.00} {10}",
+                    _k + 1, _plan.Count, _cur.label, ok ? "done" : "FAIL", res.legA_err_mm, res.turn_err_deg,
+                    res.legB_err_mm, res.total_err_mm, res.controllerStopErr_mm, _cur.maxSlipBrake, note));
 
             _k++;
             if (_k >= _plan.Count) { Finish(""); return; }
@@ -209,6 +221,8 @@ namespace AIHWSim.Core
                     case "leg": g.leg_mm = v; break;
                     case "turn": g.turn_deg = v; break;
                     case "safety": g.safety = (int)v; break;
+                    case "xte": g.xte_mm = v; break;
+                    case "rstop": g.rstop_mm = v; break;
                 }
             }
             return g;
@@ -237,7 +251,14 @@ namespace AIHWSim.Core
             if (frac < g.complete) fails.Add($"completed {ok.Count}/{judged.Count} < {g.complete:P0}");
             int safety = judged.Count(r => r.mission.safeFault != 0);
             if (safety > g.safety) fails.Add($"{safety} runs with a safety fault > {g.safety}");
-            if (ok.Count > 0)
+            if (ok.Count > 0 && _route != null)
+            {
+                float x95 = Pct(ok.Select(r => r.mission.xte_p95_mm), 95f);
+                float r95 = Pct(ok.Select(r => r.mission.route_stop_mm), 95f);
+                if (x95 > g.xte_mm) fails.Add($"p95 of p95 cross-track {x95:0.0} mm > {g.xte_mm}");
+                if (r95 > g.rstop_mm) fails.Add($"p95 |route stop| {r95:0.0} mm > {g.rstop_mm}");
+            }
+            else if (ok.Count > 0)
             {
                 float t95 = Pct(ok.Select(r => r.mission.total_err_mm), 95f);
                 float s95 = Pct(ok.Select(r => r.mission.controllerStopErr_mm), 95f);
@@ -276,7 +297,9 @@ namespace AIHWSim.Core
 
         private static readonly string[] Metrics =
             { "completed", "legA_err_mm", "turn_err_deg", "legB_err_mm", "brake_err_mm", "total_err_mm",
-              "stop_err_mm", "drift_mm", "max_slip_brake", "turn_speed_min", "min_pack_v", "nav_rmse_m", "nav_max_m", "mission_fault", "safe_fault", "elapsed_s", "note" };
+              "stop_err_mm", "drift_mm", "max_slip_brake", "turn_speed_min", "min_pack_v", "nav_rmse_m", "nav_max_m",
+              "xte_rms_mm", "xte_p95_mm", "xte_max_mm", "head_end_deg", "v_err_rms", "lat_acc_max", "lap_s",
+              "route_stop_mm", "route_stop_lat_mm", "mission_fault", "safe_fault", "elapsed_s", "note" };
 
         private string Csv()
         {
@@ -298,7 +321,9 @@ namespace AIHWSim.Core
                         ? f(r.u[j]).ToString("0.######", CultureInfo.InvariantCulture) : "");
                 sb.Append(',').Append(c.completed ? 1 : 0);
                 foreach (float v in new[] { c.legA_err_mm, c.turn_err_deg, c.legB_err_mm, c.brake_err_mm, c.total_err_mm,
-                                            c.controllerStopErr_mm, c.drift_mm, r.maxSlipBrake, r.minTurnSpeed, r.minPackV, r.navRmse, r.navMax })
+                                            c.controllerStopErr_mm, c.drift_mm, r.maxSlipBrake, r.minTurnSpeed, r.minPackV, r.navRmse, r.navMax,
+                                            c.xte_rms_mm, c.xte_p95_mm, c.xte_max_mm, c.head_end_deg, c.v_err_rms, c.lat_acc_max, c.lap_s,
+                                            c.route_stop_mm, c.route_stop_lat_mm })
                     sb.Append(',').Append(v.ToString("0.###", CultureInfo.InvariantCulture));
                 sb.Append(',').Append(c.fault).Append(',').Append(c.safeFault).Append(',').Append(c.elapsedSec.ToString("0.00", CultureInfo.InvariantCulture));
                 sb.Append(',').Append((c.note ?? "").Replace(',', ';')).Append('\n');
@@ -349,7 +374,8 @@ namespace AIHWSim.Core
         {
             var sb = new StringBuilder();
             var ic = CultureInfo.InvariantCulture;
-            sb.AppendLine($"Opus mission campaign — {_out.vehicle}, seed {_out.seed}, width {_out.width.ToString("0.##", ic)}, {_out.runs.Count} runs");
+            sb.AppendLine($"Opus mission campaign — {_out.vehicle}" + (_route != null ? $", route {_out.route}" : "") +
+                          $", seed {_out.seed}, width {_out.width.ToString("0.##", ic)}, {_out.runs.Count} runs");
             sb.AppendLine();
             var ok = judged.Where(r => r.mission.completed).ToList();
             sb.AppendLine($"completed {ok.Count}/{judged.Count}, safety faults {judged.Count(r => r.mission.safeFault != 0)}");
@@ -363,6 +389,21 @@ namespace AIHWSim.Core
                     Pct(v, 50f), Pct(v, 95f), Pct(v, 100f), gate));
             }
             var g = _out.gate;
+            if (_route != null)
+            {
+                Row("xte rms mm", r => r.mission.xte_rms_mm, "");
+                Row("xte p95 mm", r => r.mission.xte_p95_mm, g.xte_mm.ToString(ic));
+                Row("xte max mm", r => r.mission.xte_max_mm, "");
+                Row("stop along mm", r => r.mission.route_stop_mm, g.rstop_mm.ToString(ic));
+                Row("stop across mm", r => r.mission.route_stop_lat_mm, "");
+                Row("head end deg", r => r.mission.head_end_deg, "");
+                Row("v err rms m/s", r => r.mission.v_err_rms, "");
+                Row("lat acc max", r => r.mission.lat_acc_max, "");
+                Row("lap s", r => r.mission.lap_s, "");
+                Row("EKF rmse cm", r => r.navRmse * 100f, "", r => r.navRmse >= 0f);
+                Row("EKF max cm", r => r.navMax * 100f, "", r => r.navRmse >= 0f);
+            }
+            else {
             Row("leg A mm", r => r.mission.legA_err_mm, g.leg_mm.ToString(ic));
             Row("turn deg", r => r.mission.turn_err_deg, g.turn_deg.ToString(ic));
             Row("leg B mm", r => r.mission.legB_err_mm, g.leg_mm.ToString(ic));
@@ -373,9 +414,22 @@ namespace AIHWSim.Core
             Row("brake slip", r => r.maxSlipBrake, "");
             Row("EKF rmse cm", r => r.navRmse * 100f, "", r => r.navRmse >= 0f);
             Row("EKF max cm", r => r.navMax * 100f, "", r => r.navRmse >= 0f);
+            }
             sb.AppendLine();
             sb.AppendLine(_out.gateFails.Length == 0 ? "GATE: PASS" : "GATE: FAIL — " + string.Join("; ", _out.gateFails));
             sb.AppendLine();
+            if (_route != null)
+            {
+                sb.AppendLine("Worst runs by p95 cross-track (failures first):");
+                foreach (var r in _out.runs.OrderBy(r => r.mission.completed ? 1 : 0)
+                                           .ThenByDescending(r => r.mission.xte_p95_mm).Take(8))
+                    sb.AppendLine(string.Format(ic, "  {0,-28} {1,-5} xte p95 {2,6:0.0} max {3,6:0.0} stop {4,7:0.0} head {5,6:0.00} {6}",
+                        r.label, r.mission.completed ? "done" : "FAIL", r.mission.xte_p95_mm, r.mission.xte_max_mm,
+                        r.mission.route_stop_mm, r.mission.head_end_deg,
+                        r.mission.completed ? "" : $"{r.mission.note} (mission 0x{r.mission.fault:X4}, safety 0x{r.mission.safeFault:X4})"));
+            }
+            else
+            {
             sb.AppendLine("Worst runs by |total| (failures first):");
             foreach (var r in _out.runs.OrderBy(r => r.mission.completed ? 1 : 0)
                                        .ThenByDescending(r => Mathf.Abs(r.mission.total_err_mm)).Take(8))
@@ -383,6 +437,7 @@ namespace AIHWSim.Core
                     r.label, r.mission.completed ? "done" : "FAIL", r.mission.total_err_mm,
                     r.mission.controllerStopErr_mm, r.mission.turn_err_deg, r.maxSlipBrake,
                     r.mission.completed ? "" : $"{r.mission.note} (mission 0x{r.mission.fault:X4}, safety 0x{r.mission.safeFault:X4})"));
+            }
             sb.AppendLine();
             Sensitivity(sb, judged);
             sb.AppendLine("Parameters (uniform within the range):");

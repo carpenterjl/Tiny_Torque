@@ -84,8 +84,14 @@ namespace AIHWSim.Core
             public string campaignOnly = "";
             /// <summary>Range width: 1 = the §9.2 ranges, 0.5 = half as wide.</summary>
             public float campaignWidth = 1f;
-            /// <summary>Gate overrides, "total=50,stop=10,leg=60,turn=1,complete=1,safety=0".</summary>
+            /// <summary>Gate overrides, "total=50,stop=10,leg=60,turn=1,complete=1,safety=0"
+            /// (on a route: "xte=100,rstop=50,complete=1,safety=0").</summary>
             public string campaignGate = "";
+            /// <summary>NAV-06: follow this route ("oval", or "oval@2" for a lower
+            /// top speed) instead of flying the fixed manoeuvre. The firmware is
+            /// told through the TT_ROUTE environment variable; the run is scored
+            /// against the route (MissionScorer). Empty = the manoeuvre.</summary>
+            public string route = "";
         }
 
         [Serializable]
@@ -111,6 +117,16 @@ namespace AIHWSim.Core
             public string note = "";
             /// <summary>The lockstep link's statistics; "" in-process.</summary>
             public string link = "";
+
+            // NAV-06: a route run, scored against the route ("" otherwise).
+            public string route = "";
+            public int route_id;
+            public float xte_rms_mm, xte_p95_mm, xte_max_mm;   // true position vs the route
+            public float head_rms_deg, head_end_deg;
+            public float v_err_rms, v_err_p95;                 // true speed vs the firmware's plan, following
+            public float lat_acc_max;                          // m/s^2, true
+            public float lap_s;                                // launch to done
+            public float route_stop_mm, route_stop_lat_mm;     // where it stopped vs the route's end
         }
 
         public static string RequestPath =>
@@ -173,6 +189,20 @@ namespace AIHWSim.Core
                 Debug.LogError($"[MissionAutorun] unknown vehicle '{_req.vehicle}' or track '{_req.track}'");
                 _req = null;
                 return;
+            }
+
+            // The firmware's route (NAV-06): set or cleared, so an editor
+            // process never carries one run's route into the next.
+            Environment.SetEnvironmentVariable("TT_ROUTE", string.IsNullOrEmpty(_req.route) ? null : _req.route);
+            if (!string.IsNullOrEmpty(_req.route))
+            {
+                if (RouteTable.Load(_req.route) == null)
+                {
+                    Debug.LogError($"[MissionAutorun] no route '{_req.route}' in Resources/Routes (node Tools/gen_route.js)");
+                    _req = null;
+                    return;
+                }
+                Debug.Log($"[MissionAutorun] route {_req.route}");
             }
 
             SimulationRunner.NoiseSeedOverride = _req.noiseSeed;
@@ -323,7 +353,7 @@ namespace AIHWSim.Core
                     return;
                 }
                 _hub = _runner.Hub;
-                _score = new MissionScorer(_car, _hub);
+                _score = new MissionScorer(_car, _hub, RouteTable.Load(_req.route));
                 if (!string.IsNullOrEmpty(_req.faults))
                 {
                     var specs = new System.Collections.Generic.List<Sensors.FaultSpec>();

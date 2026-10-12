@@ -27,6 +27,7 @@
 #include "controller_api.h"
 #include "sim_hal.h"
 #include "opus_app.h"
+#include "../route_env.h"
 
 #include <string.h>
 
@@ -39,6 +40,13 @@ static SimHal  g_hal;
 static int     g_ready = 0;
 static int     g_hal_up = 0;
 
+/* The route the sim asked for (TT_ROUTE, set by -opusRoute; NAV-04). */
+static void apply_route(void)
+{
+    char spec[64];
+    (void)opus_app_set_route(&g_app, tt_route_env(spec, sizeof(spec)));
+}
+
 /* ------------------------------------------------------------- lifecycle --*/
 
 CTRL_DEFINE_ABI_VERSION()
@@ -47,6 +55,7 @@ CTRL_EXPORT int ctrl_init(float control_rate_hz)
 {
     if (!g_hal_up) { sim_hal_init(&g_hal); g_hal_up = 1; }
     opus_app_init(&g_app, &OPUS_PARAMS, control_rate_hz);
+    apply_route();
     sim_hal_restart_clock(&g_hal);
     g_ready = 1;
     return 0;
@@ -54,6 +63,7 @@ CTRL_EXPORT int ctrl_init(float control_rate_hz)
 
 CTRL_EXPORT void ctrl_reset(void)
 {
+    apply_route();
     opus_app_reset(&g_app);
     sim_hal_restart_clock(&g_hal);
 }

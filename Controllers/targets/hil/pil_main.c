@@ -21,6 +21,7 @@
  * for exercising the bridge's and the sim's handling of late answers.
  */
 #include "opus_hil.h"
+#include "../route_env.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -73,12 +74,15 @@ int main(void)
     static HilApp ha;
     static HilDev dev;
     static uint8_t buf[4096];
+    static char route[64];
 
 #ifdef _WIN32
     _setmode(0, _O_BINARY);
     _setmode(1, _O_BINARY);
 #endif
     opus_hil_app(&ctx, &app, &OPUS_PARAMS, OPUS_PIL_NAME, &ha);
+    /* the route the sim asked for, inherited through the bridge (NAV-04) */
+    ctx.route = tt_route_env(route, sizeof(route));
     if (getenv("TT_PIL_STALL_EVERY") && getenv("TT_PIL_STALL_MS")) {
         g_stall_every = atol(getenv("TT_PIL_STALL_EVERY"));
         g_stall_ms = atol(getenv("TT_PIL_STALL_MS"));
