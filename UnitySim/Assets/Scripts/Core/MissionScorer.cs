@@ -222,6 +222,7 @@ namespace AIHWSim.Core
                 res.total_err_mm = (res.total_actual - res.total_target) * 1000f;
             }
             res.drift_mm = (res.odo_final - res.truth_final) * 1000f;
+            res.cmd_delay_ms = DbgF("dbg/cmd_delay_ms");
 
             if (_route != null)
             {

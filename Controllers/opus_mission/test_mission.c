@@ -26,6 +26,10 @@
  * every leg must land within TOL_DELAY_MM of the run without it: the core
  * predicts over the commands in flight, so a known delay costs nothing.
  *
+ * And with the commands two periods late while the parameters say they are
+ * not, the drives reporting their current (FW-17): the mission must measure
+ * the delay at the launch and land within TOL_DELAY_MM of the undelayed run.
+ *
  * Then the car is not what its parameters say (FW-15, FW-16): the motors
  * give 10 % less torque, and the gyro reads 0.5 deg/s off with the steering
  * 2 deg off centre. The mission must still pass, having learned the force
@@ -83,6 +87,9 @@ typedef struct {
     double steer_offset;            /* rad the wheels sit off the command  */
 } CarErr;
 static CarErr g_err = { 0, 1.0, 0.0, 0.0 };
+/* FW-17: the parameters claim no delay, and the drives report the current
+ * of the torque acting; the mission must measure the delay itself. */
+static int g_measure_delay = 0;
 #define TOL_GAIN          0.02   /* learned force gain vs the torque scale */
 #define TOL_RT_XTE_MM     40.0   /* route: max cross-track error (regression bound; the
                                     sim judges NAV-02: 50 mm RMS, 150 mm max) */
@@ -188,6 +195,7 @@ static int run(double rate_hz, int glitch, int delay, Legs *out_legs)
     double a_prev = 0.0;            /* last step's acceleration, for the accelerometer */
     TtCmd  fly[16];                 /* commands in flight, oldest first */
     int    n_fly = 0;
+    double iq_meas[TT_MAX_WHEELS] = { 0 };   /* the drives' current, sampled next tick */
     (void)r;
 
     /* Calibration is measured against a plant, and this plant has no tyre
@@ -199,10 +207,11 @@ static int run(double rate_hz, int glitch, int delay, Legs *out_legs)
      * parameters say so too (else the car answers 30 % more acceleration
      * per newton than they promise, and the force gain (FW-16) learns it). */
     bench.mass_eff_kg = bench.mass_kg;
-    bench.cmd_delay_s = (float)(delay / rate_hz);
+    bench.cmd_delay_s = g_measure_delay ? 0.0f : (float)(delay / rate_hz);
 
     memset(&p, 0, sizeof(p));
     opus_init(&st, pp, (float)rate_hz);
+    if (g_measure_delay) opus_set_drive_feedback(&st, 1);
 
     for (steps = 0; steps < (int)(60.0 * rate_hz); steps++) {    /* 60 s ceiling */
         TtMeas m;
@@ -219,7 +228,11 @@ static int run(double rate_hz, int glitch, int delay, Legs *out_legs)
             m.enc[w].st.valid = 1;
             m.enc[w].st.seq = tick;
             m.enc[w].st.t_us = m.now_us;
-            if (pp->driven_mask & (1u << w)) { m.drv[w].st.valid = 1; m.drv[w].vbus_v = 7.4f; }
+            if (pp->driven_mask & (1u << w)) {
+                m.drv[w].st.valid = 1;
+                m.drv[w].vbus_v = 7.4f;
+                m.drv[w].iq_a = (float)iq_meas[w];
+            }
         }
         /* Yaw rate of the previous step feeds the gyro. FLU: a left turn is
          * positive, no sign to learn. */
@@ -262,6 +275,10 @@ static int run(double rate_hz, int glitch, int delay, Legs *out_legs)
         plant_step(&p, pp, &c, dt, &psi_dot, &a);
         psi_dot_prev = psi_dot;
         a_prev = a;
+        for (w = 0; w < TT_MAX_WHEELS; w++) {
+            double k = (double)pp->kt[w] * pp->gear[w] * pp->eta_drive;
+            iq_meas[w] = (c.arm && k > 0.0) ? (double)c.wheel_torque_nm[w] / k : 0.0;
+        }
 
         t += dt;
 #ifdef OPUS_TRACE
@@ -313,8 +330,10 @@ static int run(double rate_hz, int glitch, int delay, Legs *out_legs)
         printf("%-26s %10.3f %10.3f %+9.1f mm\n", "total from turn exit",
                (double)MI_STOP_FROM_EXIT, mark_stop - mark_turn_exit, total);
         printf("\ncontroller's own stop error: %+.2f mm\n", (double)st.stop_err_mm);
-        printf("learned: force gain %.4f, steering trim %+.4f rad, gyro bias %+.5f rad/s\n",
-               (double)st.f_gain, (double)st.steer_trim, (double)st.gyro_bias);
+        printf("learned: force gain %.4f, steering trim %+.4f rad, gyro bias %+.5f rad/s, "
+               "command delay %.1f ms%s\n",
+               (double)st.f_gain, (double)st.steer_trim, (double)st.gyro_bias,
+               (double)st.dly_s * 1000.0, st.dly_state == 2 ? " (measured)" : "");
         printf("odometer %.4f m vs true path %.4f m (drift %+.1f mm)\n\n",
                (double)opus_odo_m(&st), p.path, drift);
 
@@ -332,6 +351,8 @@ static int run(double rate_hz, int glitch, int delay, Legs *out_legs)
         /* The trim takes what lies beyond the servo's play; the yaw loop's
          * integral holds the rest. */
         CHECK("steering trim learned", fabs(st.steer_trim - g_err.steer_offset) <= GA_TRIM_DEADZONE + 0.002);
+        if (g_measure_delay)
+            CHECK("command delay measured", st.dly_state == 2 && fabs(st.dly_s - delay / rate_hz) < 1e-4);
 
 #undef CHECK
         printf(failures ? "%d check(s) FAILED\n\n" : "all checks passed\n\n", failures);
@@ -461,6 +482,13 @@ int main(void)
     fails += run(100.0, 0, 2, &late2);
     fails += compare("one period late", &late1, &base);
     fails += compare("two periods late", &late2, &base);
+    {
+        Legs meas;
+        g_measure_delay = 1;
+        fails += run(100.0, 0, 2, &meas);
+        g_measure_delay = 0;
+        fails += compare("two periods late, the parameters saying none, measured (FW-17)", &meas, &base);
+    }
     {
         static const CarErr weak = { "motors give 10 % less torque", 0.90, 0.0, 0.0 };
         static const CarErr skew = { "gyro 0.5 deg/s off, steering 2 deg off centre",

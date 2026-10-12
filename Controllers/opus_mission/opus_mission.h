@@ -138,6 +138,16 @@ typedef struct {
     float  plan_mu;        /* mu_est the plan was built on                 */
     float  pose[3];        /* the navigation filter's x, y, psi (last tick) */
     int    pose_ok;
+
+    /* The command delay, measured on the drives (FW-17). */
+    int    drive_iq;       /* every driven wheel reports its current (an FOC
+                              drive): the delay can be measured on it      */
+    float  dly_s;          /* what the loops predict over: cmd_delay_s until
+                              the launch has measured it                   */
+    int    dly_state;      /* 0 waiting, 1 timing the launch's step, 2 measured,
+                              3 not measurable this run                     */
+    uint32_t dly_k0;       /* tick of the launch's torque step              */
+    float  dly_f0;         /* the force it asked for, N                     */
     float  route_s;        /* where the car is on the route now, m         */
     float  v_plan;         /* the plan at the predicted place              */
 
@@ -205,6 +215,11 @@ void opus_set_odo_scale(OpusState *st, float k);
  * opus_reset. A route the car cannot drive (tt_route_validate against its
  * steering lock) refuses to arm with FA_PARAMS. */
 void opus_set_route(OpusState *st, const TtRoute *r, float v_max);
+
+/* The drives report their current (every driven wheel an FOC drive): the
+ * command delay is then measured at the launch (FW-17). Survives
+ * opus_reset; set by the target from the car it was put in. */
+void opus_set_drive_feedback(OpusState *st, int iq);
 
 /* The navigation filter's pose after its last step (x, y, psi in the site
  * frame); ok = 0 while it has none. The tracker carries it over this tick's

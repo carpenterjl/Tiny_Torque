@@ -211,6 +211,20 @@
  * slip_max. 8 % is past the peak below mu = 0.68. */
 #define GA_SLIP_PEAK_FRAC  0.70f
 
+/* ------------------------------------------- the command delay (FW-17) --
+ * cmd_delay_s is what the parameters say; the delay the car really has
+ * shows on the drives' measured current. At the launch the torque steps
+ * from nothing to the launch force in one tick; the drives' current crosses
+ * half of it the first tick after the command acts. That tick, less the
+ * step's own, less the tick it takes to be sampled, is the delay in whole
+ * ticks, rounded down (26 ms reads 20): what the in-flight prediction counts
+ * in. (A step through a current loop this fast shows no finer: the current
+ * is all there or none of it at a sample. On the car, the drive bus stamps
+ * when each command reached its node: core/tt_drvbus.h.) */
+#define GA_DLY_MIN_N       2.0f      /* N: a launch step smaller than this is not timed */
+#define GA_DLY_FRAC        0.5f      /* the measured force must reach this share of the step */
+#define GA_DLY_PRE_FRAC    0.25f     /* ...from below this before it (the drives were idle) */
+
 /* ------------------------------------------------- routes (NAV-02..04) --
  * A route's limits (a_lat_max, a_drive, a_brake) come with the route; these
  * are how the mission flies one. */

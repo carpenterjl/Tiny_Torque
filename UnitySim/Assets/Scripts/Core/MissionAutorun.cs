@@ -127,6 +127,10 @@ namespace AIHWSim.Core
             public float lat_acc_max;                          // m/s^2, true
             public float lap_s;                                // launch to done
             public float route_stop_mm, route_stop_lat_mm;     // where it stopped vs the route's end
+
+            // FW-17: the command delay the firmware measured (or its
+            // parameter's, unmeasured) against the design's computeLatencyUs.
+            public float cmd_delay_ms, true_delay_ms;
         }
 
         public static string RequestPath =>
@@ -386,6 +390,7 @@ namespace AIHWSim.Core
             _res.elapsedSec = _elapsed;
             if (_score != null) _score.Fill(_res);
             else _res.phase = -99;
+            _res.true_delay_ms = GameFlow.ActiveDesign != null ? GameFlow.ActiveDesign.computeLatencyUs / 1000f : 0f;
 
             try
             {

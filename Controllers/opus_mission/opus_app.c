@@ -89,6 +89,16 @@ void opus_app_configure(OpusApp *a, const TtCarDesc *car)
     if (car->has_steer_fb && differs(car->steer_max_rad, p->max_steer_rad, 0.02f))
         a->cfg_fault |= FA_PARAMS;
 
+    /* FOC drives report their current: the command delay is measured on
+     * it (FW-17). A hobby ESC's current lags its own duty, so not there. */
+    {
+        int iq = (p->driven_mask & 0xFu) != 0u;
+        for (w = 0; w < TT_MAX_WHEELS; w++)
+            if ((p->driven_mask & (1u << w)) &&
+                (!(car->drv_mask & (1u << w)) || car->drv_kind[w] != TT_DRV_IQ)) iq = 0;
+        opus_set_drive_feedback(&a->fw.mission, iq);
+    }
+
     /* The tag's lever arm from the body origin, for the EKF. */
     if (car->has_uwb) {
         a->fw.nav.cfg.lever[0] = car->uwb_lever_m[0];

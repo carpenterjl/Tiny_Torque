@@ -157,6 +157,7 @@ namespace AIHWSim.Core
             res.controlHz = _runner != null ? _runner.controlRateHz : 0;
             res.elapsedSec = _elapsed;
             if (_score != null) _score.Fill(res); else res.phase = -99;
+            res.true_delay_ms = GameFlow.ActiveDesign != null ? GameFlow.ActiveDesign.computeLatencyUs / 1000f : 0f;
             _cur.minTurnSpeed = res.turnSpeedMin;
             if (_cur.minPackV == float.MaxValue) _cur.minPackV = 0f;
             _cur.navRmse = _cur.navN > 0 ? (float)Math.Sqrt(_cur.navSq / _cur.navN) : -1f;
@@ -299,7 +300,8 @@ namespace AIHWSim.Core
             { "completed", "legA_err_mm", "turn_err_deg", "legB_err_mm", "brake_err_mm", "total_err_mm",
               "stop_err_mm", "drift_mm", "max_slip_brake", "turn_speed_min", "min_pack_v", "nav_rmse_m", "nav_max_m",
               "xte_rms_mm", "xte_p95_mm", "xte_max_mm", "head_end_deg", "v_err_rms", "lat_acc_max", "lap_s",
-              "route_stop_mm", "route_stop_lat_mm", "mission_fault", "safe_fault", "elapsed_s", "note" };
+              "route_stop_mm", "route_stop_lat_mm", "cmd_delay_ms", "true_delay_ms",
+              "mission_fault", "safe_fault", "elapsed_s", "note" };
 
         private string Csv()
         {
@@ -323,7 +325,7 @@ namespace AIHWSim.Core
                 foreach (float v in new[] { c.legA_err_mm, c.turn_err_deg, c.legB_err_mm, c.brake_err_mm, c.total_err_mm,
                                             c.controllerStopErr_mm, c.drift_mm, r.maxSlipBrake, r.minTurnSpeed, r.minPackV, r.navRmse, r.navMax,
                                             c.xte_rms_mm, c.xte_p95_mm, c.xte_max_mm, c.head_end_deg, c.v_err_rms, c.lat_acc_max, c.lap_s,
-                                            c.route_stop_mm, c.route_stop_lat_mm })
+                                            c.route_stop_mm, c.route_stop_lat_mm, c.cmd_delay_ms, c.true_delay_ms })
                     sb.Append(',').Append(v.ToString("0.###", CultureInfo.InvariantCulture));
                 sb.Append(',').Append(c.fault).Append(',').Append(c.safeFault).Append(',').Append(c.elapsedSec.ToString("0.00", CultureInfo.InvariantCulture));
                 sb.Append(',').Append((c.note ?? "").Replace(',', ';')).Append('\n');
@@ -415,6 +417,8 @@ namespace AIHWSim.Core
             Row("EKF rmse cm", r => r.navRmse * 100f, "", r => r.navRmse >= 0f);
             Row("EKF max cm", r => r.navMax * 100f, "", r => r.navRmse >= 0f);
             }
+            // FW-17: what the firmware predicted over against what the car had
+            Row("delay err ms", r => r.mission.cmd_delay_ms - r.mission.true_delay_ms, "");
             sb.AppendLine();
             sb.AppendLine(_out.gateFails.Length == 0 ? "GATE: PASS" : "GATE: FAIL — " + string.Join("; ", _out.gateFails));
             sb.AppendLine();

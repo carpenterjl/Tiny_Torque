@@ -154,7 +154,7 @@ void opus_set_odo_scale(OpusState *st, float k)
  * one that is acting; the loops need to know what the rest will do. */
 static int delay_ticks(const OpusState *st, float dt)
 {
-    int n = dt > 0.0f ? (int)(st->p->cmd_delay_s / dt + 0.5f) : 0;
+    int n = dt > 0.0f ? (int)(st->dly_s / dt + 0.5f) : 0;
     return n < 0 ? 0 : (n > OPUS_PRED_SLOTS - 1 ? OPUS_PRED_SLOTS - 1 : n);
 }
 
@@ -236,7 +236,7 @@ void opus_reset(OpusState *st)
     const TtParams *p = st->p;
     const TtRoute *route = st->route;
     float rate = st->rate_hz, vmax = st->route_vmax;
-    int l = st->odo_l, r = st->odo_r;
+    int l = st->odo_l, r = st->odo_r, iq = st->drive_iq;
 
     memset(st, 0, sizeof(*st));
     st->p = p;
@@ -245,6 +245,8 @@ void opus_reset(OpusState *st)
     st->odo_r = r;
     st->route = route;
     st->route_vmax = vmax;
+    st->drive_iq = iq;
+    st->dly_s = p->cmd_delay_s;
     st->phase = OPUS_BOOT;
     st->drive_ok = 1;
     st->odo_scale = 1.0f;
@@ -274,6 +276,50 @@ void opus_set_route(OpusState *st, const TtRoute *r, float v_max)
     st->route = r;
     st->route_vmax = v_max > 0.0f ? v_max : 0.0f;
     opus_reset(st);
+}
+
+void opus_set_drive_feedback(OpusState *st, int iq)
+{
+    st->drive_iq = iq;
+}
+
+/* The force the driven wheels are producing, from their measured current
+ * (FW-17); valid only while every one reports a fresh sample. */
+static int drive_force(const OpusState *st, const TtMeas *m, float *f)
+{
+    const TtParams *p = st->p;
+    int w;
+    *f = 0.0f;
+    if (!(p->wheel_radius_m > 0.0f)) return 0;
+    for (w = 0; w < TT_MAX_WHEELS; w++) {
+        if (!(p->driven_mask & (1u << w))) continue;
+        if (!m->drv[w].st.valid) return 0;
+        *f += m->drv[w].iq_a * p->kt[w] * p->gear[w] * p->eta_drive / p->wheel_radius_m;
+    }
+    return 1;
+}
+
+/* FW-17: time the launch's torque step through the drives. Called at the
+ * start of a tick, with that tick's measurements; the step was commanded on
+ * an earlier tick (dly_k0). */
+static void time_delay(OpusState *st, const TtMeas *m)
+{
+    uint32_t k = st->cmd.seq + 1u;           /* this tick's number */
+    float f;
+    if (st->dly_state != 1) return;
+    if (!drive_force(st, m, &f)) { st->dly_state = 3; return; }
+    if (f >= GA_DLY_FRAC * st->dly_f0) {
+        /* sampled at tick k, it acted after tick k - 1's sample */
+        int n = (int)(k - st->dly_k0) - 1;
+        if (n >= 0 && n < OPUS_PRED_SLOTS) {
+            st->dly_s = (float)n * m->dt_s;
+            st->dly_state = 2;
+        } else {
+            st->dly_state = 3;
+        }
+    } else if (k - st->dly_k0 > (uint32_t)OPUS_PRED_SLOTS) {
+        st->dly_state = 3;          /* never arrived: keep the parameters' */
+    }
 }
 
 void opus_set_pose(OpusState *st, float x, float y, float psi, int ok)
@@ -605,6 +651,7 @@ static void fill_log(OpusState *st, const TtMeas *m)
     g->trk_kappa    = st->trk.kappa;
     g->trk_ld       = st->trk.ld;
     g->v_plan       = st->v_plan;
+    g->cmd_delay_ms = st->dly_s * 1000.0f;
 }
 
 /* -------------------------------------------------------------------- step --*/
@@ -632,6 +679,8 @@ void opus_step(OpusState *st, const TtMeas *m, TtCmd *out)
     st->has_prev_us = 1;
 
     /* ---- estimators ---------------------------------------------------- */
+
+    time_delay(st, m);
 
     mpc_l = tt_m_per_count(p, st->odo_l);
     mpc_r = tt_m_per_count(p, st->odo_r);
@@ -1219,6 +1268,23 @@ void opus_step(OpusState *st, const TtMeas *m, TtCmd *out)
         st->stop_err_mm = leg_m(st, odo_eff, st->stop_target_m) * 1000.0f;
 
     out->seq = st->cmd.seq + 1u;
+    /* FW-17: the launch's first real command is the step the delay is
+     * timed on, if the drives report current and were idle before it. */
+    if (st->dly_state == 0 && st->phase == OPUS_LAUNCH && st->drive_iq) {
+        float f = 0.0f, f_idle;
+        int w;
+        for (w = 0; w < TT_MAX_WHEELS; w++) f += out->wheel_torque_nm[w];
+        f = p->wheel_radius_m > 0.0f ? f / p->wheel_radius_m : 0.0f;
+        if (f > GA_DLY_MIN_N) {
+            if (drive_force(st, m, &f_idle) && f_idle < GA_DLY_PRE_FRAC * f) {
+                st->dly_state = 1;
+                st->dly_k0 = out->seq;
+                st->dly_f0 = f;
+            } else {
+                st->dly_state = 3;
+            }
+        }
+    }
     st->cmd = *out;
     remember(st, out);
     fill_log(st, m);
