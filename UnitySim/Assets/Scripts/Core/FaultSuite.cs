@@ -71,8 +71,11 @@ namespace AIHWSim.Core
             S("drv_hot",          "DrvHot:motor_wheel_rr@p4+1 100",     DRV_HOT, 1, 0.02f),
             S("drv_silent",       "Stale:motor_wheel_fl@p4+1",          DRV_STALE, 0, 0.07f),
             S("enc_stuck",        "Stuck:enc_fr@p4+1",                  ENC, 1, 0.25f),
-            S("enc_glitch_once",  "EncGlitch:enc_fl@p4+1 5000",         0, -1, 0f),
-            S("enc_glitching",    "EncGlitch:enc_fl@p4+1 5000 every 0.2", ENC, 1, 0.42f),
+            // 25 000 counts = 0.25 m of travel in one read on the twin's
+            // motor-shaft encoders (20 480 per wheel turn, SEN-11): the
+            // 5000-count jump these were written with on 4096-count wheels.
+            S("enc_glitch_once",  "EncGlitch:enc_fl@p4+1 25000",        0, -1, 0f),
+            S("enc_glitching",    "EncGlitch:enc_fl@p4+1 25000 every 0.2", ENC, 1, 0.42f),
             S("imu_nan",          "ImuNan@p4+1",                        IMU, 1, 0.02f),
             S("brownout_short",   "Brownout@p4+1/0.3 5.5",              0, -1, 0f),
             S("brownout_long",    "Brownout@p4+1/2 5.5",                UNDERVOLT, 1, 0.55f),

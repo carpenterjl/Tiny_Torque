@@ -912,7 +912,9 @@ namespace AIHWSim.Core.PhysicsTests
 
         /// <summary>R10 — encoder at crawl, with direction reversals: the count
         /// equals the analytic count of the physics' own wheel angle to ±1 LSB,
-        /// sampled at the control rate, at any physics rate.</summary>
+        /// sampled at the control rate, at any physics rate. On a motor-shaft
+        /// encoder (SEN-11) the shaft is the rotor, which also moves inside
+        /// the gear lash at each reversal: that is part of the analytic angle.</summary>
         private void R10EncoderCrawl(int hz)
         {
             Build(hz, 0f);
@@ -923,8 +925,13 @@ namespace AIHWSim.Core.PhysicsTests
 
             int decim = Mathf.Max(1, hz / 100);
             float sampleDt = decim * _dt;
+            MotorPart rotor = null;
+            if (enc.gearRatio > 1f)
+                foreach (var m in _car.Motors)
+                    if (m != null && m.wheelIndex == 0) { rotor = m; break; }
             var buf = new float[enc.DataCount];
             enc.Sample(sampleDt, buf, 0);                 // base the counter here
+            double gap0 = rotor != null ? rotor.LashGapRad : 0.0;
             double theta = 0.0;
             double tick = 2.0 * Math.PI / enc.EffectiveCpr / Mathf.Max(0.01f, enc.gearRatio);
             long prevRaw = (long)buf[1], cum = 0;
@@ -947,7 +954,8 @@ namespace AIHWSim.Core.PhysicsTests
                     if (d > enc.wrap / 2) d -= enc.wrap; else if (d < -enc.wrap / 2) d += enc.wrap;
                     prevRaw = raw;
                     cum += d;
-                    long expect = (long)Math.Floor(theta / tick + 1e-9);
+                    double lash = rotor != null ? rotor.LashGapRad - gap0 : 0.0;
+                    long expect = (long)Math.Floor((theta + lash) / tick + 1e-9);
                     worst = Mathf.Max(worst, (int)Math.Abs(cum - expect));
                 }
             }

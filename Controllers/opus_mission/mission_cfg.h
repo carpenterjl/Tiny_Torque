@@ -285,9 +285,11 @@
  * ticks is a crash; anything shorter is the road. */
 #define SF_ACCEL_ABORT     150.0f    /* m/s^2 */
 #define SF_ACCEL_S         0.030f    /* sustained this long (was 3 ticks) */
-/* An encoder rate this high (~4.5x cruise) is a bad read, not motion. Was
- * 4000 counts per 10 ms tick. */
-#define SF_GLITCH_CPS      400000.0f
+/* An encoder rate this high (~4.5x cruise) is a bad read, not motion. A
+ * speed, not a count rate: the same car counts 4096 per wheel turn with the
+ * encoder on the wheel and 20 480 with it on the motor shaft (SEN-11). Was
+ * 400 000 counts/s, which is this at 4096. */
+#define SF_GLITCH_MPS      20.0f
 /* The loop period may wander this far from the rate the host promised at
  * init before the standing check refuses to arm. */
 #define SF_DT_TOL          0.20f

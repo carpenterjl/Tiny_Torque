@@ -37,6 +37,9 @@ static double gauss(void)
 
 #define DT       0.01f
 #define V_TARGET 2.0f
+/* A miscount of 0.25 m in one read: 25 000 counts on the twin's motor-shaft
+ * encoders (20 480 per wheel turn, SEN-11). */
+#define GLITCH_COUNTS 25000.0f
 
 typedef struct {
     float  run_s;          /* how long to run                              */
@@ -273,7 +276,7 @@ int main(void)
     CHECK("clean drive: the core drops its arm request -> disarmed", r.bits_seen == 0u &&
           r.state_end == TT_SAFE_DISARMED);
 
-    f = mk(TT_FAULT_ENC_GLITCH, 0, TT_FL, T0, 0.0f, 5000.0f);
+    f = mk(TT_FAULT_ENC_GLITCH, 0, TT_FL, T0, 0.0f, GLITCH_COUNTS);
     r = run(&f, &o);
     CHECK("one encoder glitch: ignored, no trip", r.bits_seen == 0u);
     f = mk(TT_FAULT_BROWNOUT, 0, 0, T0, 0.3f, 5.5f);
@@ -351,7 +354,7 @@ int main(void)
     f = mk(TT_FAULT_STUCK, TT_FS_ENC, TT_FR, T0, 0.0f, 0.0f);
     r = run(&f, &o);
     expect("odometry encoder stuck (counts freeze, samples fresh)", &r, TT_SF_ENC, T0, 0.22f, 1);
-    f = mk(TT_FAULT_ENC_GLITCH, 0, TT_FR, T0, 0.0f, 5000.0f);
+    f = mk(TT_FAULT_ENC_GLITCH, 0, TT_FR, T0, 0.0f, GLITCH_COUNTS);
     f.period_s = 0.2f;
     r = run(&f, &o);
     expect("encoder glitching (3 in 0.4 s)", &r, TT_SF_ENC, T0 + 0.4f, 0.011f, 1);

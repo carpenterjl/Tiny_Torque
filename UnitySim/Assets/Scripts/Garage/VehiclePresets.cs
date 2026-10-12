@@ -732,6 +732,14 @@ namespace AIHWSim.Garage
                 w.brushEps = 0.0005f;
             }
 
+            // SEN-11: the encoders move onto the motor shafts, where the wheel
+            // nodes have them (Hardware/HW_03_NODE.html section 7): 4096 counts
+            // per motor turn, 20 480 per wheel turn through the 5:1 gear. They
+            // read the rotor, so a torque reversal crosses the gear lash
+            // without the wheel moving. enc_ratio 5 in opus_vector_foc.json.
+            foreach (var spec in d.sensors)
+                if (spec.kind == SensorType.Encoder) spec.encoderGearRatio = motor.gearRatio;
+
             // Pi 5 + sensors + servo idle, from the pack whatever the motors do.
             d.batteries[0].auxLoadA = 0.7f;
 

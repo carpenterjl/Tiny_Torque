@@ -12,7 +12,8 @@
 
   "odo_wheel_mask": ["FL", "FR"],
   "enc_cpr": [4096, 4096, 4096, 4096],
-  "enc_ratio": [1, 1, 1, 1],
+  "enc_ratio": [5, 5, 5, 5],
+  "_enc_ratio": "SEN-11: the encoders sit on the motor shafts, as on the wheel nodes (Hardware/HW_03_NODE.html): 4096 counts per motor turn, 20 480 per wheel turn through the 5:1 gear, read through the gear lash",
 
   "driven_mask": ["FL", "FR", "RL", "RR"],
   "gear": [5, 5, 5, 5],

@@ -64,12 +64,13 @@ static float drag_n(const TtParams *p, float v)
 
 /* ------------------------------------------------------------- odometry ----
  * Encoder counts arrive cumulative (the target unwraps the hardware register),
- * so a delta is one int32 subtraction. A jump faster than SF_GLITCH_CPS
+ * so a delta is one int32 subtraction. A jump faster than SF_GLITCH_MPS
  * cannot be real motion and is dropped rather than believed.
  */
 static int32_t enc_delta(OpusState *st, const TtMeas *m, int w, float dt, int *glitch)
 {
     int32_t d;
+    float mpc = tt_m_per_count(st->p, w);
     if (!m->enc[w].st.valid) return 0;
     if (!st->enc_has_prev[w]) {
         st->enc_prev[w] = m->enc[w].count;
@@ -78,7 +79,10 @@ static int32_t enc_delta(OpusState *st, const TtMeas *m, int w, float dt, int *g
     }
     d = (int32_t)((uint32_t)m->enc[w].count - (uint32_t)st->enc_prev[w]);
     st->enc_prev[w] = m->enc[w].count;
-    if ((float)(d < 0 ? -d : d) > SF_GLITCH_CPS * dt) { if (glitch) *glitch = 1; return 0; }
+    if (mpc > 0.0f && (float)(d < 0 ? -d : d) * mpc > SF_GLITCH_MPS * dt) {
+        if (glitch) *glitch = 1;
+        return 0;
+    }
     return d;
 }
 
