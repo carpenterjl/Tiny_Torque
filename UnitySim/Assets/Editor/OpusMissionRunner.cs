@@ -89,11 +89,13 @@ namespace AIHWSim.EditorTools
                 if (vehicle == null) vehicle = "Opus Vector FOC";
                 if (track == null) track = rt.track;
             }
+            // -opusObstacles "barrier@s=12,clear=3;cone@s=6,lat=0.45" puts
+            // catalogue items on the route (NAV-05, ObstacleCourse).
             Begin(result, timeout, ArgValue("-opusController") ?? "",
                   track, ArgValue("-opusCam"), seed, hz,
                   vehicle, lat, tel, ArgValue("-opusFaults") ?? "", suite,
                   ArgValue("-opusFaultOnly") ?? "", ArgValue("-opusLink") ?? "", linkMs,
-                  ArgValue("-opusLinkRecord") ?? "", camp, route);
+                  ArgValue("-opusLinkRecord") ?? "", camp, route, ArgValue("-opusObstacles") ?? "");
         }
 
         private sealed class CampaignArgs
@@ -123,7 +125,7 @@ namespace AIHWSim.EditorTools
                                   bool saveTelemetry = false, string faults = "",
                                   bool faultSuite = false, string faultOnly = "",
                                   string link = "", int linkTimeoutMs = 0, string linkRecord = "",
-                                  CampaignArgs camp = null, string route = "")
+                                  CampaignArgs camp = null, string route = "", string obstacles = "")
         {
             var req = new MissionAutorun.Request
             {
@@ -141,6 +143,7 @@ namespace AIHWSim.EditorTools
                 linkTimeoutMs = linkTimeoutMs,
                 linkRecord = linkRecord ?? "",
                 route = route ?? "",
+                obstacles = obstacles ?? "",
             };
             if (camp != null)
             {

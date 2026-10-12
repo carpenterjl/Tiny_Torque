@@ -56,6 +56,7 @@ tt_core_warnings(pidlib)
 add_library(ttcore STATIC core/tt_params.c core/tt_alloc.c core/tt_nav.c core/tt_safety.c
             core/tt_wire.c core/tt_can.c core/tt_drvbus.c core/tt_soc.c
             core/tt_route.c core/tt_track.c core/tt_vplan.c core/routes_gen.c
+            core/tt_clear.c
             core/params_opus_vector.c core/params_opus_vector_foc.c)
 target_include_directories(ttcore PUBLIC core hal)
 tt_core_warnings(ttcore)
@@ -237,6 +238,11 @@ add_test(NAME opus_mission_bench COMMAND test_mission)
 add_executable(test_core tests/test_core.c)
 target_link_libraries(test_core PRIVATE opuslib)
 add_test(NAME tt_core_unit COMMAND test_core)
+
+# The clearance ahead from a multizone ToF (NAV-05), on synthetic frames.
+add_executable(test_clear tests/test_clear.c)
+target_link_libraries(test_clear PRIVATE ttcore)
+add_test(NAME tt_clear_unit COMMAND test_clear)
 
 # The navigation EKF (UWB + odometry + gyro) on a synthetic drive.
 add_executable(test_nav tests/test_nav.c)

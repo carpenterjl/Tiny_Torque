@@ -333,6 +333,26 @@
  * nothing at rest, which is exactly why the friction brake still finishes
  * the stop.) */
 
+/* --------------------------------------------- the way ahead (NAV-05) --
+ * A car with a multizone ranger (core/tt_clear.h) measures how far the
+ * path ahead is clear, and the speed loop is held to what that distance
+ * allows: v <= sqrt(2 a_brake (clear - stop - the travel over the delay)).
+ * Short of GA_CL_STOP_M the car holds, and goes on once the way has opened
+ * by GA_CL_HYST_M more. A hold longer than SF_BLOCK_S, or a return within
+ * GA_CL_CONTACT_M of the nose, is a fault (FA_OBSTACLE). */
+#define GA_CL_MARGIN_W_M   0.08f     /* corridor half width beyond the body's:
+                                        the tracker's error and the tyres     */
+#define GA_CL_FLOOR_M      0.03f     /* a return within this of the floor is it */
+#define GA_CL_ROOF_M       0.15f     /* above this over the origin the car passes
+                                        under it (its top is 0.10 up)            */
+#define GA_CL_STOP_M       0.15f     /* the nose stops this short of the way   */
+#define GA_CL_HYST_M       0.10f     /* ...and goes on when it opens this more */
+#define GA_CL_CONTACT_M    0.02f     /* nearer is a touch                      */
+#define GA_CL_LOOK_M       5.0f      /* the corridor's reach without a route   */
+#define GA_CL_PATH_DS      0.25f     /* m between the corridor's route points  */
+#define GA_CL_PATH_N       20        /* ...and how many (5 m)                   */
+#define SF_BLOCK_S         20.0f     /* held this long: fault                  */
+
 /* -------------------------------------------------------------- sequencing --*/
 #define SQ_ARM_BRAKE_S     1.0f      /* held-brake settling window */
 #define SQ_ARM_ROLL_S      2.0f      /* brake released; counters must not move */

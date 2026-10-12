@@ -103,7 +103,8 @@ namespace AIHWSim.Bridge
         public float efficiency;
         public float wheel_radius_m;
         public int truth_only;
-        public fixed float reserved[8];
+        public float fov_rad;          // ranger: full field of view, 0 = unknown (NAV-05)
+        public fixed float reserved[7];
     }
 
     // v7: when a sensor's current value was sampled (one per manifest entry).

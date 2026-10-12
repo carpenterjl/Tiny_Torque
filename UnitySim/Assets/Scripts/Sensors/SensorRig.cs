@@ -266,6 +266,12 @@ namespace AIHWSim.Sensors
                     case SuspensionSensor sus:
                         wheel = sus.wheelIndex;
                         break;
+                    case MultizoneTofSensor mz:
+                        e.fov_rad = mz.fovDeg * Mathf.Deg2Rad;
+                        break;
+                    case TofSensor tof:
+                        e.fov_rad = tof.coneAngleDeg * Mathf.Deg2Rad;
+                        break;
                 }
                 if (wheel >= 0)
                 {

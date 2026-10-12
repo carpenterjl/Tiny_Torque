@@ -402,6 +402,13 @@ size_t tt_wire_put_car(uint8_t *p, size_t cap, const TtCarDesc *c)
     w_f32n(&w, c->drv_vmax, TT_MAX_WHEELS);
     w_f32(&w, c->steer_max_rad);
     w_f32n(&w, c->uwb_lever_m, 3);
+    /* The forward ranger (NAV-05). Left off the wire, the lockstep firmware
+     * drove without its clearance ahead while the in-process one had it. */
+    w_u8(&w, c->tof_zones_side);
+    w_f32(&w, c->tof_fov_rad);
+    w_f32n(&w, c->tof_pos_m, 3);
+    w_f32n(&w, c->tof_rpy_rad, 3);
+    w_f32(&w, c->tof_range_m);
     return w.err ? 0 : w.n;
 }
 
@@ -421,6 +428,11 @@ int tt_wire_get_car(const uint8_t *p, size_t n, TtCarDesc *c)
     r_f32n(&r, c->drv_vmax, TT_MAX_WHEELS);
     c->steer_max_rad = r_f32(&r);
     r_f32n(&r, c->uwb_lever_m, 3);
+    c->tof_zones_side = r_u8(&r);
+    c->tof_fov_rad = r_f32(&r);
+    r_f32n(&r, c->tof_pos_m, 3);
+    r_f32n(&r, c->tof_rpy_rad, 3);
+    c->tof_range_m = r_f32(&r);
     return (r.err || r.i != r.n) ? -1 : 0;
 }
 

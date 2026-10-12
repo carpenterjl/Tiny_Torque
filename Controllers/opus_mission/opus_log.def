@@ -51,3 +51,4 @@ TT_LOG(nav_check,    "",      "seeded start's check (TT_NAV_CHECK_*: 0 none, 1 w
 TT_LOG(cmd_delay_ms, "ms",    "command delay the loops predict over: cmd_delay_s until measured on the drives at the launch (FW-17)")
 TT_LOG(probe_mu,     "",      "the floor's peak friction found by leg A's probe; 0 = not probed (FW-18)")
 TT_LOG(stop_early_m, "m",     "the brake was started this far before the leg-B mark on purpose: the delay beyond the parameter's (FW-19), or a floor that cannot make the stop (FW-16); 0 = on the mark")
+TT_LOG(clear_m,      "m",     "the path ahead is clear this far from the nose, by the multizone ranger (NAV-05); 99 = nothing in the way, or no ranger")

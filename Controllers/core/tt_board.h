@@ -55,6 +55,14 @@ typedef struct {
     float   drv_vmax[TT_MAX_WHEELS];
     float   steer_max_rad;           /* full lock as the servo states it     */
     float   uwb_lever_m[3];          /* the UWB tag from the body origin, FLU */
+    /* The forward ranger (NAV-05): a multizone ToF when the car has one,
+     * else its single forward beam; tof_zones_side 0 = none. */
+    uint8_t tof_zones_side;          /* N: N*N zones per frame (1 = a beam) */
+    uint8_t pad2_[3];
+    float   tof_fov_rad;             /* full field of view                   */
+    float   tof_pos_m[3];            /* from the body origin, FLU            */
+    float   tof_rpy_rad[3];          /* mount: roll, pitch, yaw              */
+    float   tof_range_m;             /* the sensor's "no target" range       */
 } TtCarDesc;
 
 typedef struct {

@@ -37,6 +37,7 @@ const FIELDS = [
     ['slip_stiffness', 'f'],
     ['cmd_delay_s', 'f'], ['tyre_mu', 'f'], ['steer_lag_s', 'f'],
     ['steer_backlash_rad', 'f'], ['tyre_c_alpha', 'f'],
+    ['body_half_width_m', 'f'], ['body_nose_m', 'f'], ['body_floor_m', 'f'],
 ];
 const WHEELS = { FL: 0, FR: 1, RL: 2, RR: 3 };
 

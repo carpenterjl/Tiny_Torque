@@ -28,10 +28,11 @@
 extern "C" {
 #endif
 
-#define TT_PARAMS_VERSION 5u   /* 2: odo_lead_comp gone (SEN-02); allocator block (FW-06)
+#define TT_PARAMS_VERSION 6u   /* 2: odo_lead_comp gone (SEN-02); allocator block (FW-06)
                                   3: cmd_delay_s, tyre_mu, steer_lag_s (FW-13)
                                   4: steer_backlash_rad (FW-15)
-                                  5: tyre_c_alpha (NAV-06) */
+                                  5: tyre_c_alpha (NAV-06)
+                                  6: body_half_width_m, body_nose_m, body_floor_m (NAV-05) */
 
 typedef struct {
     uint32_t version;              /* TT_PARAMS_VERSION                       */
@@ -101,6 +102,11 @@ typedef struct {
     float    tyre_c_alpha;         /* cornering stiffness per load, C_alpha /
                                       F_z, 1/rad (R5): the navigation filter's
                                       tyre sideslip in a turn; 0 = unknown   */
+
+    /* the body, for the clearance ahead (NAV-05, core/tt_clear.h) */
+    float    body_half_width_m;    /* half the car's width, over the wheels  */
+    float    body_nose_m;          /* the front of the car ahead of the origin */
+    float    body_floor_m;         /* the floor below the body origin at rest */
 } TtParams;
 
 /* Defaults generated from Controllers/params/<car>.json. */

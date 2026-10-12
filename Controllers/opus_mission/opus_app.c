@@ -104,6 +104,27 @@ void opus_app_configure(OpusApp *a, const TtCarDesc *car)
         a->fw.nav.cfg.lever[0] = car->uwb_lever_m[0];
         a->fw.nav.cfg.lever[1] = car->uwb_lever_m[1];
     }
+
+    /* The forward ranger (NAV-05): a multizone one gives the mission the
+     * clear distance ahead; a single beam keeps the old abort. */
+    if (car->tof_zones_side > 1 && car->tof_fov_rad > 0.0f && p->body_nose_m > 0.0f) {
+        TtClearCfg c;
+        memset(&c, 0, sizeof(c));
+        for (w = 0; w < 3; w++) {
+            c.pos_m[w] = car->tof_pos_m[w];
+            c.rpy_rad[w] = car->tof_rpy_rad[w];
+        }
+        c.fov_rad = car->tof_fov_rad;
+        c.zones_side = car->tof_zones_side;
+        c.half_width_m = p->body_half_width_m + GA_CL_MARGIN_W_M;
+        c.floor_z_m = -p->body_floor_m;
+        c.floor_margin_m = GA_CL_FLOOR_M;
+        c.roof_z_m = GA_CL_ROOF_M;
+        c.max_range_m = car->tof_range_m;
+        opus_set_clearance(&a->fw.mission, &c, 1);
+    } else {
+        opus_set_clearance(&a->fw.mission, 0, 0);
+    }
 }
 
 void opus_app_reset(OpusApp *a)

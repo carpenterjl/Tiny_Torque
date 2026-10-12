@@ -1,7 +1,7 @@
 {
   "_about": "Opus Vector FOC twin firmware parameters (TtParams). The same chassis as opus_vector.json with one geared FOC outrunner per wheel (DEC-02 option B) and no friction brake. Mirrors the 'Opus Vector FOC' preset (VehiclePresets.cs). Motor and drag numbers are DERIVED from that design, not measured: replace them from the V2 motor bench and the R0/R2 coast-downs.",
   "name": "opus_vector_foc",
-  "version": 5,
+  "version": 6,
 
   "wheel_radius_m": 0.033,
   "wheelbase_m": 0.300,
@@ -68,5 +68,11 @@
   "steer_backlash_rad": 0.008727,
   "_steer_backlash_rad": "FW-15: 0.5 deg of road-wheel lost motion, MEASURED in the sim by R6 (the twin's servoBacklashDeg). Uncompensated, a steering reversal after the turn left the wheels 0.3 deg the wrong side of the command and the car swung 1.5 deg off. On the car: R6, a slow steering sweep each way with the steering encoder.",
   "tyre_c_alpha": 16.3,
-  "_tyre_c_alpha": "NAV-06: C_alpha / F_z per tyre, 1/rad, MEASURED in the sim by R5 (constant-steer circles at 1-2 m/s: 16.3, against 2 mu / alpha_peak = 16.7 from the longitudinal ID). The navigation filter's rear-tyre sideslip, a_y / (g * this): 0.8 deg at 2.25 m/s^2. On the car: R5."
+  "_tyre_c_alpha": "NAV-06: C_alpha / F_z per tyre, 1/rad, MEASURED in the sim by R5 (constant-steer circles at 1-2 m/s: 16.3, against 2 mu / alpha_peak = 16.7 from the longitudinal ID). The navigation filter's rear-tyre sideslip, a_y / (g * this): 0.8 deg at 2.25 m/s^2. On the car: R5.",
+  "body_half_width_m": 0.10,
+  "_body_half_width_m": "NAV-05: half the twin's bodySize.x (0.20 m); the clearance corridor is this plus a margin. On the car: a tape measure over the widest point.",
+  "body_nose_m": 0.21,
+  "_body_nose_m": "NAV-05: the front of the body ahead of the origin, half of bodySize.z (0.42 m); the ranger sits on it. On the car: the bumper from the mid-wheelbase origin.",
+  "body_floor_m": 0.093,
+  "_body_floor_m": "NAV-05: the floor below the body origin at rest: the flow sensor's bracket sits 0.068 under the origin and 0.025 off the floor. Returns from the ranger this far down (less a margin) are the floor, which a nose-down car sees in its lower zones. On the car: a ruler at the chassis plate."
 }

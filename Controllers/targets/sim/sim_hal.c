@@ -16,6 +16,7 @@ static void unbind(SimHal *h)
     h->tof_idx = h->tof_off = h->batt_idx = h->batt_off = -1;
     h->rc_idx = h->rc_off = h->uwb_idx = h->uwb_off = -1;
     h->tof_max = 0.0f;
+    h->tof_zones = 0;
 }
 
 void sim_hal_init(SimHal *h)
@@ -79,13 +80,29 @@ void sim_hal_configure(SimHal *h, const SensorInfo2 *sensors, int count, TtCarDe
             break;
 
         case SENSOR_TOF:
+        case SENSOR_TOF_MZ:
             /* The forward-looking one: aimed within 20 deg of x, in yaw and
-             * in pitch (a downward line sensor also has yaw 0). */
-            if (h->tof_idx < 0 && s->base.data_count >= 1 &&
+             * in pitch (a downward line sensor also has yaw 0). A multizone
+             * ranger takes the slot over a single beam (NAV-05). */
+            if (s->base.data_count >= 1 &&
                 fabsf(s->rpy_rad[2]) < 0.35f && fabsf(s->rpy_rad[1]) < 0.35f) {
+                int zones = s->base.type == SENSOR_TOF_MZ ? s->base.data_count / 2 : 1;
+                int side = 1;
+                if (zones > TT_TOF_MAX_ZONES) break;
+                while (side * side < zones) side++;
+                if (side * side != zones) break;
+                if (h->tof_idx >= 0 && !(zones > 1 && h->tof_zones == 1)) break;
                 h->tof_idx = i;
                 h->tof_off = s->base.data_offset;
                 h->tof_max = s->base.range_max;
+                h->tof_zones = zones;
+                car->tof_zones_side = (uint8_t)side;
+                car->tof_fov_rad = s->fov_rad;
+                car->tof_range_m = s->base.range_max;
+                for (w = 0; w < 3; w++) {
+                    car->tof_pos_m[w] = s->pos_m[w];
+                    car->tof_rpy_rad[w] = s->rpy_rad[w];
+                }
             }
             break;
 
@@ -227,11 +244,23 @@ void sim_hal_read(SimHal *h, const CtrlInputs *in, TtMeas *m)
         m->uwb_n = 1;
     }
 
-    if (h->tof_off >= 0) {
+    if (h->tof_off >= 0 && h->tof_zones == 1) {
         float r = slice(in, h->tof_off, 0.0f);
         m->tof.zones = 1;
         m->tof.range_m[0] = r;
         m->tof.status[0] = (h->tof_max > 0.0f && r >= h->tof_max - 1e-3f) ? 1 : 0; /* no target */
+        stamp(&m->tof.st, in, h->tof_idx);
+    } else if (h->tof_off >= 0) {
+        /* [d_0..d_N-1, status_0..]: status 5 valid, 4 weak, 0 none; the
+         * firmware's TtTof status is 0 = valid (NAV-05). */
+        int z = h->tof_zones;
+        for (k = 0; k < z; k++) {
+            float r = slice(in, h->tof_off + k, h->tof_max);
+            int st = (int)lroundf(slice(in, h->tof_off + z + k, 0.0f));
+            m->tof.range_m[k] = r;
+            m->tof.status[k] = (uint8_t)((st == 5 || st == 4) ? 0 : 1);
+        }
+        m->tof.zones = (uint8_t)z;
         stamp(&m->tof.st, in, h->tof_idx);
     }
 }

@@ -226,7 +226,9 @@ typedef struct SensorInfo2 {
     float   efficiency;      /* motor gearbox efficiency 0..1; 0 if n/a              */
     float   wheel_radius_m;  /* radius of the bound wheel; 0 if not wheel-bound      */
     int32_t truth_only;      /* 1 = simulator ground truth with no real counterpart  */
-    float   reserved[8];     /* zero; room to grow without changing the stride       */
+    float   fov_rad;         /* ranger: full field of view (a multizone's square side,
+                                a single beam's cone); 0 = unknown (NAV-05)          */
+    float   reserved[7];     /* zero; room to grow without changing the stride       */
 } SensorInfo2;
 
 /* v7: when a sensor's latest value was taken. One entry per manifest entry,

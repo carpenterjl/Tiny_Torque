@@ -92,6 +92,10 @@ namespace AIHWSim.Core
             /// told through the TT_ROUTE environment variable; the run is scored
             /// against the route (MissionScorer). Empty = the manoeuvre.</summary>
             public string route = "";
+            /// <summary>NAV-05: obstacles put on the track for the run
+            /// (ObstacleCourse: "barrier@s=12,clear=3;cone@s=6,lat=0.45").
+            /// Empty = none.</summary>
+            public string obstacles = "";
         }
 
         [Serializable]
@@ -139,6 +143,14 @@ namespace AIHWSim.Core
             // (a long delay, or a floor that cannot make the stop); legB and
             // brake are scored against that intent, the total against the 9 m.
             public float stop_early_mm;
+
+            // NAV-05: the gap from the nose to the obstacle the car first stood
+            // short of (-1 = never stood short of one), whether an obstacle was
+            // removed during the run, and the firmware's least clear distance
+            // while driving (-1 = no multizone ranger).
+            public float obstacle_gap_mm = -1f;
+            public int obstacle_removed;
+            public float clear_min_mm = -1f;
         }
 
         public static string RequestPath =>
@@ -146,6 +158,10 @@ namespace AIHWSim.Core
 
         private static Request _req;
         private static System.Collections.Generic.List<Campaign.RunSpec> _plan;
+        private static ObstacleCourse _course;
+
+        /// <summary>NAV-05: the run's obstacles, or null.</summary>
+        public static ObstacleCourse Course => _course;
 
         /// <summary>True when this process was launched to run a mission.</summary>
         public static bool Active => _req != null;
@@ -215,6 +231,25 @@ namespace AIHWSim.Core
                     return;
                 }
                 Debug.Log($"[MissionAutorun] route {_req.route}");
+            }
+
+            // NAV-05: obstacles go into the track design, so every load builds them.
+            _course = null;
+            if (!string.IsNullOrEmpty(_req.obstacles))
+            {
+                try
+                {
+                    _course = ObstacleCourse.Parse(_req.obstacles, RouteTable.Load(_req.route));
+                    if (_course != null && track == null) throw new ArgumentException("obstacles need a tile-map track");
+                    _course?.Place(track);
+                    Debug.Log($"[MissionAutorun] obstacles: {_req.obstacles}");
+                }
+                catch (ArgumentException e)
+                {
+                    Debug.LogError($"[MissionAutorun] {e.Message}");
+                    _req = null;
+                    return;
+                }
             }
 
             SimulationRunner.NoiseSeedOverride = _req.noiseSeed;
@@ -366,6 +401,7 @@ namespace AIHWSim.Core
                 }
                 _hub = _runner.Hub;
                 _score = new MissionScorer(_car, _hub, RouteTable.Load(_req.route));
+                _score.Course = MissionAutorun.Course;
                 if (!string.IsNullOrEmpty(_req.faults))
                 {
                     var specs = new System.Collections.Generic.List<Sensors.FaultSpec>();
@@ -382,6 +418,7 @@ namespace AIHWSim.Core
             }
 
             int phase = _score.Step(_elapsed);
+            MissionAutorun.Course?.Step(_car, MissionScorer.NoseM(), _elapsed);
             if (phase == 10) { Finish(true, ""); return; }
             if (phase == -1) { Finish(false, "controller reported FAULT"); return; }
             if (_elapsed > _req.timeoutSec) { Finish(false, "timeout"); return; }

@@ -48,12 +48,22 @@ namespace AIHWSim.Core
         private readonly System.Collections.Generic.List<float> _vErr = new System.Collections.Generic.List<float>();
         private float _xteMax, _latMax, _rateF, _psiPrev = float.NaN, _tLaunch = -1f, _tDone = -1f, _elapsed;
 
+        // NAV-05: the run's obstacles (set by the watcher; null = none) and the
+        // firmware's least clear distance while driving.
+        public ObstacleCourse Course;
+        private float _clearMin = float.MaxValue;
+
         public MissionScorer(CarVehicle car, TelemetryHub hub, RouteTable route = null)
         {
             _car = car;
             _hub = hub;
             _route = route != null && route.Count >= 2 ? route : null;
         }
+
+        /// <summary>The car's nose ahead of its origin: half the design's
+        /// body length (what the firmware's body_nose_m says of the twin).</summary>
+        public static float NoseM() =>
+            GameFlow.ActiveDesign != null ? 0.5f * GameFlow.ActiveDesign.bodySize.z : 0.21f;
 
         /// <summary>The route this run is scored against, or null.</summary>
         public RouteTable Route => _route;
@@ -78,6 +88,8 @@ namespace AIHWSim.Core
             float spd = _car.ForwardSpeed;
             _elapsed = elapsed;
             if (_route != null) RouteStep(phase, spd);
+            if (phase >= 3 && phase != 10 && _hub != null && _hub.TryGetChannel("dbg/clear_m", out var cl) && cl.Latest < 98f)
+                _clearMin = Mathf.Min(_clearMin, cl.Latest);
 
             if (phase == 4 || phase == 5 || phase == 6)
             {
@@ -230,6 +242,9 @@ namespace AIHWSim.Core
             res.drift_mm = (res.odo_final - res.truth_final) * 1000f;
             res.cmd_delay_ms = DbgF("dbg/cmd_delay_ms");
             res.probe_mu = DbgF("dbg/probe_mu");
+            res.clear_min_mm = _clearMin < float.MaxValue ? _clearMin * 1000f : -1f;
+            res.obstacle_gap_mm = Course != null ? Course.GapMm : -1f;
+            res.obstacle_removed = Course != null ? Course.Removed : 0;
 
             if (_route != null)
             {

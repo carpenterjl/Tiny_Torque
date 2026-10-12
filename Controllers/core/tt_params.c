@@ -57,6 +57,9 @@ int tt_params_validate(const TtParams *p)
     if (!(p->steer_lag_s >= 0.0f && p->steer_lag_s <= 0.5f)) bad++;
     if (!(p->steer_backlash_rad >= 0.0f && p->steer_backlash_rad < 0.05f)) bad++;
     if (!(p->tyre_c_alpha >= 0.0f && p->tyre_c_alpha < 100.0f)) bad++;
+    if (!(p->body_half_width_m >= 0.0f && p->body_half_width_m < 5.0f)) bad++;
+    if (!(p->body_nose_m >= 0.0f && p->body_nose_m < 5.0f)) bad++;
+    if (!(p->body_floor_m >= 0.0f && p->body_floor_m < 5.0f)) bad++;
 
     return bad;
 }

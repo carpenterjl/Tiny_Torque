@@ -300,6 +300,9 @@ static void test_payloads(void)
             c.drv_kt[k] = 0.01f; c.drv_r_ohm[k] = 0.1f; c.drv_gear[k] = 5; c.drv_vmax[k] = 8;
         }
         c.steer_max_rad = 0.4f; c.uwb_lever_m[0] = -0.05f; c.uwb_lever_m[2] = 0.095f;
+        /* The ranger too (NAV-05): a field left off the wire reads back as 0. */
+        c.tof_zones_side = 8; c.tof_fov_rad = 0.785f; c.tof_pos_m[0] = 0.205f; c.tof_pos_m[2] = 0.035f;
+        c.tof_rpy_rad[1] = 0.01f; c.tof_range_m = 4.0f;
         n = tt_wire_put_car(pl, sizeof(pl), &c);
         CHECK("payloads: TtCarDesc round-trips",
               n > 0 && tt_wire_get_car(pl, n, &d) == 0 && memcmp(&c, &d, sizeof(c)) == 0);

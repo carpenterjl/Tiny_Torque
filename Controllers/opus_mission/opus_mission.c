@@ -251,8 +251,13 @@ void opus_reset(OpusState *st)
     const TtRoute *route = st->route;
     float rate = st->rate_hz, vmax = st->route_vmax;
     int l = st->odo_l, r = st->odo_r, iq = st->drive_iq, bad = st->route_bad;
+    TtClearCfg clr = st->clr;
+    int clr_on = st->clr_on;
 
     memset(st, 0, sizeof(*st));
+    st->clr = clr;
+    st->clr_on = clr_on;
+    st->clear_m = TT_CLEAR_NONE;
     st->p = p;
     st->rate_hz = rate;
     st->odo_l = l;
@@ -568,6 +573,91 @@ void opus_set_pose(OpusState *st, float x, float y, float psi, int ok)
     st->pose[1] = y;
     st->pose[2] = psi;
     st->pose_ok = ok;
+}
+
+void opus_set_clearance(OpusState *st, const TtClearCfg *c, int on)
+{
+    if (c && on) { st->clr = *c; st->clr_on = 1; }
+    else { memset(&st->clr, 0, sizeof(st->clr)); st->clr_on = 0; }
+    st->clear_m = TT_CLEAR_NONE;
+}
+
+/* ------------------------------------------------------- the way ahead ---
+ * NAV-05. Every new frame of the multizone ranger is judged against the
+ * path the car is about to drive: the route ahead in the body frame, or
+ * straight ahead without one. What comes out is the clear distance from
+ * the nose. */
+static float turn_profile(float t, float *out_rate);
+
+static void clearance(OpusState *st, const TtMeas *m)
+{
+    const TtParams *p = st->p;
+    TtClearPt path[TT_CLEAR_MAX_PATH];
+    TtClearOut o;
+    int n = 0;
+
+    if (!st->clr_on || !m->tof.st.valid || m->tof.zones < 2) return;
+    if (m->tof.st.seq == st->clr_seq) return;       /* the frame already judged */
+    st->clr_seq = m->tof.st.seq;
+
+    path[n].x = 0.0f; path[n].y = 0.0f; n++;
+    if (st->route && st->pose_ok) {
+        float c = cosf(st->pose[2]), s = sinf(st->pose[2]);
+        float s_end = st->route->pt[st->route->n - 1u].s;
+        int k;
+        for (k = 1; k < GA_CL_PATH_N && n < (int)TT_CLEAR_MAX_PATH; k++) {
+            float sk = st->route_s + GA_CL_PATH_DS * (float)k, x, y, psi, kap, dx, dy;
+            if (sk > s_end) break;
+            tt_route_at(st->route, sk, &st->clr_hint, &x, &y, &psi, &kap);
+            dx = x - st->pose[0];
+            dy = y - st->pose[1];
+            path[n].x =  c * dx + s * dy;
+            path[n].y = -s * dx + c * dy;
+            n++;
+        }
+    }
+    else if (!st->route && (st->phase == OPUS_CRUISE_A || st->phase == OPUS_TURN ||
+                            st->phase == OPUS_CRUISE_B || st->phase == OPUS_BRAKE ||
+                            st->phase == OPUS_CREEP)) {
+        /* The manoeuvre: what is left of this leg, then (from leg A) the
+         * turn as its profile flies it (the steering ramps included: a pure
+         * arc put the finish post inside the corridor) and the 9 m to the
+         * stop. It ends at the stop, so what stands beyond is not in the
+         * way. */
+        float odo = odo_effective(st);
+        if (st->phase == OPUS_CRUISE_A || st->phase == OPUS_TURN) {
+            float x = 0.0f, y = 0.0f, psi = 0.0f, rate, t0, total, dt;
+            int k;
+            if (st->phase == OPUS_CRUISE_A) {
+                x = MI_LEG_A_M - leg_m(st, odo, st->leg_start_m);
+                if (x < 0.0f) x = 0.0f;
+                path[n].x = x; path[n].y = 0.0f; n++;
+                t0 = 0.0f;
+            } else {
+                t0 = st->turn_t;
+            }
+            total = turn_profile(0.0f, &rate);
+            dt = (total - t0) / 16.0f;
+            for (k = 0; k < 16 && dt > 0.0f; k++) {
+                turn_profile(t0 + ((float)k + 0.5f) * dt, &rate);
+                psi += rate * dt;
+                x += MI_V_CRUISE * cosf(psi) * dt;
+                y += MI_V_CRUISE * sinf(psi) * dt;
+                if ((k & 1) && n < (int)TT_CLEAR_MAX_PATH) { path[n].x = x; path[n].y = y; n++; }
+            }
+            path[n].x = x + MI_STOP_FROM_EXIT * cosf(psi);
+            path[n].y = y + MI_STOP_FROM_EXIT * sinf(psi);
+            n++;
+        } else {
+            float rem = leg_m(st, st->stop_target_m, odo);
+            path[n].x = rem > 0.05f ? rem : 0.05f; path[n].y = 0.0f; n++;
+        }
+    }
+    if (n < 2) { path[1].x = GA_CL_LOOK_M; path[1].y = 0.0f; n = 2; }
+
+    tt_clear_step(&st->clr, &m->tof, st->pitch, path, n, &o);
+    st->clr_out = o;
+    st->clear_m = o.clear_m < TT_CLEAR_NONE ? o.clear_m - p->body_nose_m : TT_CLEAR_NONE;
 }
 
 static void enter(OpusState *st, OpusPhase ph)
@@ -899,6 +989,7 @@ static void fill_log(OpusState *st, const TtMeas *m)
     g->cmd_delay_ms = st->dly_s * 1000.0f;
     g->probe_mu     = st->pr_mu;
     g->stop_early_m = st->stop_early_m;
+    g->clear_m      = st->clear_m < 99.0f ? st->clear_m : 99.0f;
 }
 
 /* -------------------------------------------------------------------- step --*/
@@ -1212,6 +1303,7 @@ void opus_step(OpusState *st, const TtMeas *m, TtCmd *out)
         st->wheel_omega[w] = st->wheel_omega_ok[w] ? m->drv[w].omega_m / g : 0.0f;
     }
     if (st->pr_state == 1) probe_sample(st, m);
+    clearance(st, m);
 
     /* ---- standing faults ----------------------------------------------- */
 
@@ -1225,7 +1317,9 @@ void opus_step(OpusState *st, const TtMeas *m, TtCmd *out)
             st->accel_t = 0.0f;
         }
     }
-    {
+    if (!st->clr_on) {
+        /* A single beam can only abort (a multizone ranger's car slows
+         * and holds instead, below). */
         float tof = (m->tof.st.valid && m->tof.zones > 0 && m->tof.status[0] == 0)
                   ? m->tof.range_m[0] : 1e6f;
         if (((st->phase >= OPUS_LAUNCH && st->phase <= OPUS_BRAKE) || st->phase == OPUS_FOLLOW) &&
@@ -1534,6 +1628,36 @@ void opus_step(OpusState *st, const TtMeas *m, TtCmd *out)
     case OPUS_CREEP:    st->leg_rem = -leg_m(st, odo_eff, st->stop_target_m); break;
     case OPUS_FOLLOW:   st->leg_rem = st->route->pt[st->route->n - 1u].s - st->route_s; break;
     default:            st->leg_rem = 0.0f; break;
+    }
+
+    /* ---- the way ahead (NAV-05) ------------------------------------------
+     * Whatever the phase asked for, the speed is held to what the clear
+     * distance allows: the stop profile from GA_CL_STOP_M short of what is
+     * in the way, less the travel while this command and the loop's dead
+     * time run out. Held, the car goes on once the way has opened by the
+     * hysteresis; a long hold or a touch is a fault. The stop itself
+     * (BRAKE, CREEP) is left to its own profile. */
+    if (st->clr_on && (st->phase == OPUS_LAUNCH || st->phase == OPUS_CRUISE_A ||
+                       st->phase == OPUS_CRUISE_B || st->phase == OPUS_FOLLOW)) {
+        float d = st->clear_m - GA_CL_STOP_M - st->v_pred * (st->dly_s + EN_DEAD_TIME_S);
+        float v_lim;
+        if (st->blocked) d -= GA_CL_HYST_M;
+        v_lim = d > 0.0f ? sqrtf(2.0f * st->a_brake * d) : 0.0f;
+        if (v_lim < v_ref) {
+            v_ref = v_lim;
+            a_ff = st->v_pred > v_lim + 0.05f ? -st->a_brake : 0.0f;
+        }
+        st->blocked = v_lim <= 0.0f;
+        if (st->blocked) {
+            st->block_t += dt;
+            if (st->block_t > SF_BLOCK_S) st->fault |= FA_OBSTACLE;
+        } else {
+            st->block_t = 0.0f;
+        }
+        if (st->clear_m < GA_CL_CONTACT_M) st->fault |= FA_OBSTACLE;
+    } else {
+        st->blocked = 0;
+        st->block_t = 0.0f;
     }
 
     /* ---- actuate --------------------------------------------------------- */

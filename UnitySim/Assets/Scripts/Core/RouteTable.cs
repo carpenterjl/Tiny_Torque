@@ -103,6 +103,22 @@ namespace AIHWSim.Core
             return a;
         }
 
+        /// <summary>The route at arc length <paramref name="at"/> (clamped):
+        /// position and heading, interpolated — tt_route_at.</summary>
+        public void At(float at, out float px, out float py, out float heading)
+        {
+            int n = Count;
+            if (n == 0) { px = py = heading = 0f; return; }
+            if (n == 1 || at <= s[0]) { px = x[0]; py = y[0]; heading = psi[0]; return; }
+            if (at >= s[n - 1]) { px = x[n - 1]; py = y[n - 1]; heading = psi[n - 1]; return; }
+            int i = 0;
+            while (i + 2 < n && s[i + 1] < at) i++;
+            float t = s[i + 1] > s[i] ? (at - s[i]) / (s[i + 1] - s[i]) : 0f;
+            px = x[i] + t * (x[i + 1] - x[i]);
+            py = y[i] + t * (y[i + 1] - y[i]);
+            heading = psi[i] + t * (psi[i + 1] - psi[i]);
+        }
+
         public struct Proj { public int i; public float s, ey, psi, kappa; }
 
         /// <summary>The closest point to (px, py), searched from segment

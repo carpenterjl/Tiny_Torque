@@ -48,6 +48,7 @@ typedef struct {
     SimMotBind mot[TT_MAX_WHEELS];
     int   tof_idx, tof_off;
     float tof_max;
+    int   tof_zones;        /* zones in the bound ranger (1 = a single beam) */
     int   batt_idx, batt_off;
     int   rc_idx, rc_off;
     int   uwb_idx, uwb_off;

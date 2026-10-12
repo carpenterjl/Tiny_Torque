@@ -21,6 +21,7 @@
 #include "tt_route.h"
 #include "tt_track.h"
 #include "tt_vplan.h"
+#include "tt_clear.h"
 
 /* Longest command delay the prediction carries, in ticks (FW-13). */
 #define OPUS_PRED_SLOTS 16
@@ -171,6 +172,16 @@ typedef struct {
     float  pr_ar[OPUS_PR_SAMPLES];   /* rear tyres', + = driving              */
     float  pr_d[OPUS_PR_SAMPLES];    /* rear wheels' slip less the front's    */
     int    route_bad;      /* the route cannot be driven (set with it)      */
+
+    /* The way ahead (NAV-05): a multizone ranger's clearance. */
+    TtClearCfg clr;        /* the ranger and the corridor (set with the car) */
+    int    clr_on;         /* the car has one                               */
+    uint32_t clr_seq;      /* the frame last judged                          */
+    uint32_t clr_hint;     /* route index the corridor starts from           */
+    float  clear_m;        /* clear distance from the nose; TT_CLEAR_NONE    */
+    int    blocked;        /* held short of something in the way             */
+    float  block_t;        /* s held                                         */
+    TtClearOut clr_out;    /* the last frame's verdict, for telemetry        */
     float  route_s;        /* where the car is on the route now, m         */
     float  v_plan;         /* the plan at the predicted place              */
 
@@ -248,6 +259,11 @@ void opus_set_drive_feedback(OpusState *st, int iq);
  * frame); ok = 0 while it has none. The tracker carries it over this tick's
  * motion and the commands in flight. */
 void opus_set_pose(OpusState *st, float x, float y, float psi, int ok);
+
+/* The car's multizone ranger and the corridor to judge its frames against
+ * (NAV-05); on = 0 (or c NULL) for a car without one, which keeps the
+ * single-beam abort. Survives opus_reset; set by the target. */
+void opus_set_clearance(OpusState *st, const TtClearCfg *c, int on);
 
 /* The friction probe's fit (FW-18): the floor's peak mu from n samples of
  * front and rear tyre force / load (af + = braking, ar + = driving) and the

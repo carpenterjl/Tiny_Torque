@@ -1,7 +1,7 @@
 {
   "_about": "Opus Vector firmware parameters (TtParams, Controllers/core/tt_params.h). The source of record: Tools/gen_params.js turns this into Controllers/core/params_opus_vector.c. Keys starting with _ are notes and are ignored. Values come from Opus_Car_Spec/sim_mapping.md and calibration.md.",
   "name": "opus_vector",
-  "version": 5,
+  "version": 6,
 
   "wheel_radius_m": 0.033,
   "wheelbase_m": 0.300,
@@ -66,5 +66,11 @@
   "steer_backlash_rad": 0.0,
   "_steer_backlash_rad": "FW-15: the legacy car's servo is modelled without play",
   "tyre_c_alpha": 16.3,
-  "_tyre_c_alpha": "NAV-06: the same slick tyre as the FOC twin, whose R5 measured it; the legacy car has no navigation run of its own to check it on"
+  "_tyre_c_alpha": "NAV-06: the same slick tyre as the FOC twin, whose R5 measured it; the legacy car has no navigation run of its own to check it on",
+  "body_half_width_m": 0.10,
+  "_body_half_width_m": "NAV-05: the same body as the FOC twin (bodySize 0.20 x 0.10 x 0.42)",
+  "body_nose_m": 0.21,
+  "_body_nose_m": "NAV-05: the same body as the FOC twin",
+  "body_floor_m": 0.093,
+  "_body_floor_m": "NAV-05: the same body as the FOC twin"
 }
