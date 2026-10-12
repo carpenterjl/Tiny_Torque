@@ -12,8 +12,12 @@
  *      the yaw moment as a force couple across the track.
  *   2b. A grip budget (FW-13): no wheel is asked for more than
  *      TT_ALLOC_GRIP_USE of tyre_mu times its load, estimated from the
- *      acceleration the car HAS (load moves with the body, a command later);
- *      what one wheel cannot carry goes to the wheels that can.
+ *      acceleration the caller gives for it: the one the loads will have
+ *      followed when this command lands, and, when the caller says how
+ *      long a cut takes to land, the lower of that and the load a lead
+ *      later (FW-19: an axle losing load under a late cut is otherwise
+ *      asked for what it no longer carries); what one wheel cannot carry
+ *      goes to the wheels that can.
  *   2c. A friction probe (FW-18): the front axle brakes against the rear,
  *      which drives as hard, on top of the request and outside the budget
  *      (the probe is how the budget gets measured).
@@ -49,7 +53,10 @@ typedef struct {
     float v_mps;                   /* vehicle speed at the rear-axle centre  */
     float yaw_rate;                /* rad/s, FLU (+ = left)                  */
     float ax_mps2;                 /* longitudinal acceleration estimate     */
-    float ax_meas_mps2;            /* ... measured (accelerometer), for loads */
+    float ax_meas_mps2;            /* ... the loads have followed, for the
+                                      budget: when this command lands (FW-19) */
+    float ax_next_mps2;            /* ... and lead_s later; the budget takes
+                                      the lower load of the two (FW-19)     */
     float ay_meas_mps2;            /* lateral, measured, FLU (+ = left)      */
     float wheel_omega[TT_MAX_WHEELS]; /* rad/s at the wheel, + = forward      */
     uint8_t omega_valid[TT_MAX_WHEELS];
@@ -60,6 +67,9 @@ typedef struct {
     float probe_n;                 /* friction probe, N per axle: the front
                                       brakes and the rear drives by this
                                       much, net zero; 0 = none (FW-18)      */
+    float lead_s;                  /* s from this command's landing until a
+                                      cut can land after it (the delay and
+                                      a tick); 0 = ignore ax_next (FW-19)  */
 } TtAllocIn;
 
 void tt_alloc_reset(TtAlloc *a);

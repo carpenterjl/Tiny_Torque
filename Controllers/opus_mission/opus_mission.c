@@ -171,20 +171,34 @@ static OpusSent acting(const OpusState *st, int n)
 /* Carry the estimates over the n commands still in flight: the speed the
  * car will have, and the distance and the heading it will cover, by the
  * time this tick's command lands. Steering sets a yaw rate almost at once,
- * so the heading still to come is the rates already asked for. */
+ * so the heading still to come is the rates already asked for. The axle
+ * loads too (FW-19): they follow the car's acceleration through the body's
+ * pitch (EN_LOAD_TAU_S), and the acceleration follows each command as it
+ * lands - the force it sent, at the gain the launch measured, less the
+ * drag. A budget drawn on the loads the car HAD a delay ago asks the rear
+ * axle for its standing share while the brake has already lifted it: at
+ * 30 ms the rears ran 8.5 % slip against the fronts' 4 and the limiter
+ * cut them. (A friction brake's force is not in the sent force; no car
+ * with a grip budget has one, ACT-08.) */
 static void predict(OpusState *st, int n, float dt)
 {
-    float v = st->v_est, s = 0.0f, h = 0.0f;
+    const TtParams *p = st->p;
+    float v = st->v_est, s = 0.0f, h = 0.0f, l = st->ax_load;
     int i = st->sent_n - n;
     for (i = i < 0 ? 0 : i; i < st->sent_n; i++) {
         float v1 = v + st->sent[i].a * dt;
+        float ax = p->mass_eff_kg > 0.0f
+                 ? (st->sent[i].f * st->f_gain - drag_n(p, v)) / p->mass_eff_kg
+                 : st->sent[i].a;
         s += 0.5f * (v + v1) * dt;
         v = v1;
         h += st->sent[i].r * dt;
+        l += (ax - l) * lp_alpha(dt, EN_LOAD_TAU_S);
     }
     st->v_pred = v;
     st->s_pred = s;
     st->psi_fly = h;
+    st->ax_land = l;
 }
 
 static void remember(OpusState *st, const TtCmd *out)
@@ -676,7 +690,12 @@ static void longitudinal(OpusState *st, const TtMeas *m,
         ain.v_mps = st->v_est;
         ain.yaw_rate = st->psi_dot_f;
         ain.ax_mps2 = a_cmd;
-        ain.ax_meas_mps2 = st->ax_load;
+        /* The loads when this command lands, and a lead later (the delay
+         * and a tick: until a cut for it can land), the body's pitch
+         * carrying them toward what is asked now (FW-19). */
+        ain.ax_meas_mps2 = st->ax_land;
+        ain.lead_s = st->dly_s + m->dt_s;
+        ain.ax_next_mps2 = st->ax_land + (a_cmd - st->ax_land) * lp_alpha(ain.lead_s, EN_LOAD_TAU_S);
         ain.ay_meas_mps2 = st->v_est * st->psi_dot_f;
         for (w = 0; w < TT_MAX_WHEELS; w++) {
             ain.wheel_omega[w] = st->wheel_omega[w];
@@ -879,6 +898,7 @@ static void fill_log(OpusState *st, const TtMeas *m)
     g->v_plan       = st->v_plan;
     g->cmd_delay_ms = st->dly_s * 1000.0f;
     g->probe_mu     = st->pr_mu;
+    g->stop_early_m = st->stop_early_m;
 }
 
 /* -------------------------------------------------------------------- step --*/
@@ -1394,19 +1414,45 @@ void opus_step(OpusState *st, const TtMeas *m, TtCmd *out)
         break;
     }
 
-    case OPUS_CRUISE_B:
+    case OPUS_CRUISE_B: {
+        /* The mark-started stop is laid out for the parameter's delay: the
+         * brake lands that far past the mark, and the budget's deceleration
+         * covers the rest of MI_BRAKE_M with little to spare (the 30 ms car
+         * stops 70 mm long). A longer delay, measured at the launch (FW-17),
+         * lands it further past; there is no decelerating harder, so the
+         * brake starts that much before the mark instead (FW-19). Leg B
+         * then reads short by it and the stop long, the total as before. */
+        float extra = st->dly_s - p->cmd_delay_s;
+        /* The launch's measurement is whole ticks, rounded down (26 ms
+         * reads 20): a delay found longer than the parameter's is somewhere
+         * in the tick above what it reads, and the stop is planned on the
+         * top of it. Starting early costs the total nothing (the profile
+         * is distance-based and takes up the room); starting late does. */
+        if (extra > 0.0f && st->dly_state == 2) extra += dt;
+        st->stop_early_m = extra > 0.0f ? st->v_pred * extra : 0.0f;
         v_ref = MI_V_CRUISE;
         psi_dot_ref = heading_hold(st);
         /* On a slippery floor (FW-16) the stop starts where it can still
          * be made at a_brake, the same lead the brake profile itself uses. */
-        if (leg_m(st, odo_eff + 0.5f * st->v_meas * dt, st->leg_start_m) >= MI_LEG_B_M ||
+        if (leg_m(st, odo_eff + 0.5f * st->v_meas * dt, st->leg_start_m) >= MI_LEG_B_M - st->stop_early_m ||
             (st->a_brake < LI_A_BRAKE &&
              st->stop_target_m - odo_eff - st->s_pred - st->v_pred * EN_DEAD_TIME_S - 0.5f * st->v_meas * dt
                  <= st->v_pred * st->v_pred / (2.0f * st->a_brake))) {
+            /* The lead the firing rule asked for, logged for the scorer: leg
+             * B is then judged against the mark the firmware meant, and the
+             * tick's own quantisation stays visible in it. */
+            if (st->a_brake < LI_A_BRAKE) {
+                float need = st->s_pred + st->v_pred * EN_DEAD_TIME_S +
+                             st->v_pred * st->v_pred / (2.0f * st->a_brake);
+                float lead = MI_LEG_B_M - (leg_m(st, st->stop_target_m, st->leg_start_m) - need);
+                if (lead > st->stop_early_m) st->stop_early_m = lead;
+            }
+            if (st->stop_early_m < 0.0f) st->stop_early_m = 0.0f;
             st->leg_b_actual = leg_m(st, odo_eff, st->leg_start_m);
             enter(st, OPUS_BRAKE);
         }
         break;
+    }
 
     case OPUS_BRAKE: {
         /* Parameterise the speed profile by REMAINING DISTANCE, not by time:

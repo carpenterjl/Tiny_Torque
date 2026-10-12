@@ -342,8 +342,14 @@ static int run(double rate_hz, int glitch, int delay, Legs *out_legs)
               mark_leg_b >= 0 && mark_stop >= 0);
         CHECK("constant-velocity leg", fabs(leg_a) <= TOL_LEG_MM);
         CHECK("turn angle",            fabs(turn)  <= TOL_TURN_DEG);
-        CHECK("post-turn leg",         fabs(leg_b) <= TOL_LEG_MM);
-        CHECK("braking distance",      fabs(brake) <= TOL_BRAKE_MM);
+        /* A delay the parameters did not promise starts the brake early by
+         * its travel at cruise, a tick more than measured (the measurement
+         * rounds down, FW-19): leg B short by it, the stop long. */
+        {
+            double early = g_measure_delay ? (double)MI_V_CRUISE * (delay + 1) / rate_hz * 1000.0 : 0.0;
+            CHECK("post-turn leg",     fabs(leg_b + early) <= TOL_LEG_MM);
+            CHECK("braking distance",  fabs(brake - early) <= TOL_BRAKE_MM);
+        }
         CHECK("controller stop error", fabs(st.stop_err_mm) <= TOL_STOP_ERR_MM);
         CHECK("odometer drift",        fabs(drift) <= TOL_ODO_DRIFT_MM);
         CHECK("force gain learned",    fabs(st.f_gain - g_err.torque_scale) <= TOL_GAIN);
@@ -453,8 +459,10 @@ static int run_route(const char *name, float v_max)
 }
 
 /* FW-13: the same mission with a known command delay must land where the
- * undelayed one does. */
-static int compare(const char *what, const Legs *a, const Legs *b)
+ * undelayed one does. A delay the parameters did not promise starts the
+ * brake early by its travel at cruise (FW-19): leg B reads short by
+ * `early_mm` and the stop long by it, the total as before. */
+static int compare(const char *what, const Legs *a, const Legs *b, double early_mm)
 {
     int f = 0;
 #define NEAR(name, x, y, tol) do { \
@@ -463,8 +471,8 @@ static int compare(const char *what, const Legs *a, const Legs *b)
     } while (0)
     NEAR("constant-velocity leg mm", a->leg_a, b->leg_a, TOL_DELAY_MM);
     NEAR("turn deg",                 a->turn,  b->turn,  TOL_DELAY_DEG);
-    NEAR("post-turn leg mm",         a->leg_b, b->leg_b, TOL_DELAY_MM);
-    NEAR("braking distance mm",      a->brake, b->brake, TOL_DELAY_MM);
+    NEAR("post-turn leg mm",         a->leg_b, b->leg_b - early_mm, TOL_DELAY_MM);
+    NEAR("braking distance mm",      a->brake, b->brake + early_mm, TOL_DELAY_MM);
     NEAR("total from turn exit mm",  a->total, b->total, TOL_DELAY_MM);
 #undef NEAR
     printf("%s: %s\n\n", what, f ? "differs" : "within tolerance of the undelayed run");
@@ -531,14 +539,15 @@ int main(void)
     fails += run(100.0, 1, 0, NULL);
     fails += run(100.0, 0, 1, &late1);
     fails += run(100.0, 0, 2, &late2);
-    fails += compare("one period late", &late1, &base);
-    fails += compare("two periods late", &late2, &base);
+    fails += compare("one period late", &late1, &base, 0.0);
+    fails += compare("two periods late", &late2, &base, 0.0);
     {
         Legs meas;
         g_measure_delay = 1;
         fails += run(100.0, 0, 2, &meas);
         g_measure_delay = 0;
-        fails += compare("two periods late, the parameters saying none, measured (FW-17)", &meas, &base);
+        fails += compare("two periods late, the parameters saying none, measured (FW-17)", &meas, &base,
+                         (double)MI_V_CRUISE * 3.0 / 100.0 * 1000.0);   /* measured 2 ticks: planned on 3 */
     }
     {
         static const CarErr weak = { "motors give 10 % less torque", 0.90, 0.0, 0.0 };

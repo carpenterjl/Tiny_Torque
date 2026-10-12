@@ -79,6 +79,7 @@ namespace AIHWSim.Core
         private MissionScorer _score;
         private RunResult _cur;
         private RouteTable _route;      // NAV-06: every run follows it
+        private Telemetry.CsvLogger _telemetry;   // -opusTelemetry 1: every channel, each tick, per run
 
         public void Configure(MissionAutorun.Request req, List<Campaign.RunSpec> plan)
         {
@@ -121,6 +122,11 @@ namespace AIHWSim.Core
                     return;
                 }
                 _score = new MissionScorer(_car, _runner.Hub, _route);
+                if (_req.saveTelemetry && _runner.Hub != null)
+                {
+                    _telemetry = new Telemetry.CsvLogger(_runner.Hub);
+                    _telemetry.Begin("mission", null, "mission_telemetry");
+                }
             }
 
             _elapsed += Time.fixedDeltaTime;
@@ -162,16 +168,24 @@ namespace AIHWSim.Core
             if (_cur.minPackV == float.MaxValue) _cur.minPackV = 0f;
             _cur.navRmse = _cur.navN > 0 ? (float)Math.Sqrt(_cur.navSq / _cur.navN) : -1f;
             _out.runs.Add(_cur);
-            // -opusTelemetry 1: each run's coarse trace, <result>.<n>-<label>.trace.csv.
+            // -opusTelemetry 1: each run's coarse trace, <result>.<n>-<label>.trace.csv,
+            // and every telemetry channel each control tick, <result>.<n>-<label>.telemetry.csv
+            // (the single run's .telemetry.csv, per run).
             if (_req.saveTelemetry && _score != null && !string.IsNullOrEmpty(_req.resultPath))
             {
                 try
                 {
                     string tag = _k.ToString("000", CultureInfo.InvariantCulture) + "-" + _cur.label.Replace(' ', '_');
                     File.WriteAllText(Path.ChangeExtension(_req.resultPath, "." + tag + ".trace.csv"), _score.Trace);
+                    if (_telemetry != null)
+                    {
+                        _telemetry.Flush();
+                        File.Copy(_telemetry.TempPath, Path.ChangeExtension(_req.resultPath, "." + tag + ".telemetry.csv"), true);
+                    }
                 }
                 catch (Exception e) { Debug.LogWarning($"[CAMPAIGN] trace write failed: {e.Message}"); }
             }
+            if (_telemetry != null) { _telemetry.End(); _telemetry = null; }
             if (_route != null)
                 Debug.Log(string.Format(CultureInfo.InvariantCulture,
                     "[CAMPAIGN] {0,3}/{1} {2,-22} {3} xte rms={4:0.0} p95={5:0.0} max={6:0.0} mm stop={7:+0.0;-0.0}/{8:+0.0;-0.0} mm head end={9:+0.00;-0.00} {10}",
@@ -300,7 +314,7 @@ namespace AIHWSim.Core
             { "completed", "legA_err_mm", "turn_err_deg", "legB_err_mm", "brake_err_mm", "total_err_mm",
               "stop_err_mm", "drift_mm", "max_slip_brake", "turn_speed_min", "min_pack_v", "nav_rmse_m", "nav_max_m",
               "xte_rms_mm", "xte_p95_mm", "xte_max_mm", "head_end_deg", "v_err_rms", "lat_acc_max", "lap_s",
-              "route_stop_mm", "route_stop_lat_mm", "cmd_delay_ms", "true_delay_ms", "probe_mu",
+              "route_stop_mm", "route_stop_lat_mm", "cmd_delay_ms", "true_delay_ms", "probe_mu", "stop_early_mm",
               "mission_fault", "safe_fault", "elapsed_s", "note" };
 
         private string Csv()
@@ -325,7 +339,7 @@ namespace AIHWSim.Core
                 foreach (float v in new[] { c.legA_err_mm, c.turn_err_deg, c.legB_err_mm, c.brake_err_mm, c.total_err_mm,
                                             c.controllerStopErr_mm, c.drift_mm, r.maxSlipBrake, r.minTurnSpeed, r.minPackV, r.navRmse, r.navMax,
                                             c.xte_rms_mm, c.xte_p95_mm, c.xte_max_mm, c.head_end_deg, c.v_err_rms, c.lat_acc_max, c.lap_s,
-                                            c.route_stop_mm, c.route_stop_lat_mm, c.cmd_delay_ms, c.true_delay_ms, c.probe_mu })
+                                            c.route_stop_mm, c.route_stop_lat_mm, c.cmd_delay_ms, c.true_delay_ms, c.probe_mu, c.stop_early_mm })
                     sb.Append(',').Append(v.ToString("0.###", CultureInfo.InvariantCulture));
                 sb.Append(',').Append(c.fault).Append(',').Append(c.safeFault).Append(',').Append(c.elapsedSec.ToString("0.00", CultureInfo.InvariantCulture));
                 sb.Append(',').Append((c.note ?? "").Replace(',', ';')).Append('\n');

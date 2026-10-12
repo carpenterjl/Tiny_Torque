@@ -90,6 +90,8 @@ typedef struct {
     float  ax_prev;        /* last tick's forward acceleration, m/s^2 */
     float  pitch;          /* rad, nose down +, from the gyro (FW-13) */
     float  ax_load;        /* m/s^2, ax as the axle loads have followed it */
+    float  ax_land;        /* ...as they will have when this tick's command
+                              lands, over the commands in flight (FW-19) */
     int    odo_slip;       /* the odometry pair disagrees with v_est this tick */
     float  v_pred;         /* v_est carried over the commands in flight */
     float  s_pred;         /* metres the car covers while they land */
@@ -130,6 +132,8 @@ typedef struct {
     float  launch_slip;    /* what it was judged on                       */
     float  a_brake;        /* m/s^2 the stop is planned on                */
     float  a_brake_nom;    /* ...on a floor as good as the parameters say  */
+    float  stop_early_m;   /* m before the mark the brake starts: the delay
+                              beyond the parameter's, at speed (FW-19)     */
     float  drive_slip;     /* largest driven-wheel slip, torque's way      */
 
     /* Route following (NAV-02..04). route NULL = the fixed manoeuvre. */

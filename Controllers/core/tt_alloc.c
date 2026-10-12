@@ -74,13 +74,16 @@ void tt_alloc_step(TtAlloc *a, const TtParams *p, const TtVehReq *req,
         float m = p->mass_kg, h = p->cg_height_m, L = p->wheelbase_m;
         float ff = p->front_weight_frac, cap[TT_MAX_WHEELS], need = 0.0f, room = 0.0f;
         float dlong = L > 0.0f ? m * in->ax_meas_mps2 * h / L * 0.5f : 0.0f;
+        float dnext = L > 0.0f && in->lead_s > 0.0f ? m * in->ax_next_mps2 * h / L * 0.5f : dlong;
         for (w = 0; w < TT_MAX_WHEELS; w++) {
             int front = w < 2;
             float axle = front ? ff : 1.0f - ff;
             float tr = front ? p->track_front_m : p->track_rear_m;
             float side = (w == TT_FL || w == TT_RL) ? -1.0f : 1.0f;   /* a left turn loads the right */
-            float fz = 0.5f * m * G_MPS2 * axle + (front ? -dlong : dlong)
-                     + (tr > 0.0f ? side * m * axle * in->ay_meas_mps2 * h / tr * 0.5f : 0.0f);
+            float lat = tr > 0.0f ? side * m * axle * in->ay_meas_mps2 * h / tr * 0.5f : 0.0f;
+            float fz = 0.5f * m * G_MPS2 * axle + (front ? -dlong : dlong) + lat;
+            float fn = 0.5f * m * G_MPS2 * axle + (front ? -dnext : dnext) + lat;
+            if (fn < fz) fz = fn;
             cap[w] = TT_ALLOC_GRIP_USE * mu * (fz > 0.0f ? fz : 0.0f);
             if (!driven(p, w)) continue;
             if (fabsf(force[w]) > cap[w]) {

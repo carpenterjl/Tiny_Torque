@@ -134,6 +134,11 @@ namespace AIHWSim.Core
 
             // FW-18: the floor's peak friction leg A's probe found (0 = none)
             public float probe_mu;
+
+            // FW-19: how far before the leg-B mark the firmware meant to brake
+            // (a long delay, or a floor that cannot make the stop); legB and
+            // brake are scored against that intent, the total against the 9 m.
+            public float stop_early_mm;
         }
 
         public static string RequestPath =>

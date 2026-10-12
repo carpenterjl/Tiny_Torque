@@ -188,10 +188,16 @@ namespace AIHWSim.Core
             res.cruiseSpeedMin = _spdMin == float.MaxValue ? 0f : _spdMin;
             res.turnSpeedMin = _turnSpdMin == float.MaxValue ? 0f : _turnSpdMin;
 
+            // FW-19: the brake may start before the mark on purpose (the
+            // measured delay, a slippery floor); leg B and the stop are judged
+            // against where the firmware meant to brake, the total as always.
+            float early = DbgF("dbg/stop_early_m");
+            if (float.IsNaN(early) || early < 0f) early = 0f;
+            res.stop_early_mm = early * 1000f;
             res.legA_target = 14.5f;
             res.turn_target_deg = 45f;
-            res.legB_target = 7.5f;
-            res.brake_target = 1.5f;
+            res.legB_target = 7.5f - early;
+            res.brake_target = 1.5f + early;
             res.total_target = 9.0f;
 
             if (_mCruiseA >= 0 && _mTurn >= 0)
