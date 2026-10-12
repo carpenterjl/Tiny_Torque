@@ -4,10 +4,11 @@
 #         -DCMAKE_TOOLCHAIN_FILE="$PWD/Controllers/cmake/arm-none-eabi.cmake"
 #   cmake --build build-arm
 #
-# No board is chosen yet (decision D6), so the default is a generic Cortex-M4F:
-# its FPU is single-precision only, which makes it the strictest common target
-# — code that builds clean here (no double, no promotion) also suits the
-# M7/M33 parts (STM32 G4/H5/U5/H7, RP2350). Pick a part with TT_MCU_FLAGS, e.g.
+# The car has two MCUs (D6, Hardware/HW_00_SYSTEM.html): the wheel nodes'
+# STM32G431 (Cortex-M4F) and MAIN's STM32H723 (Cortex-M7). The default is the
+# M4F: its FPU is single-precision only, which makes it the strictest — code
+# that builds clean here (no double, no promotion) also suits the M7. CI
+# builds both; MAIN's flags are
 #   -DTT_MCU_FLAGS="-mcpu=cortex-m7 -mthumb -mfpu=fpv5-d16 -mfloat-abi=hard"
 set(CMAKE_SYSTEM_NAME Generic)
 set(CMAKE_SYSTEM_PROCESSOR arm)

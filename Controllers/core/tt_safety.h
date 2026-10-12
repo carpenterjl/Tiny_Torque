@@ -88,6 +88,15 @@ typedef enum {
 #define TT_DRV_CMD_TIMEOUT 0x10u   /* no command frame in time: bridge off  */
 #define TT_DRV_SENSOR      0x20u   /* rotor position sensor lost            */
 #define TT_DRV_OVERCURRENT 0x40u   /* phase over-current trip               */
+/* Reported by the real wheel nodes only (node/tt_node.h); the sim's driver
+ * model never sets them. */
+#define TT_DRV_ESTOP       0x80u   /* stopped by an ESTOP frame (latched)   */
+#define TT_DRV_HW_OFF      0x100u  /* DRV_EN low: the hardware holds the
+                                      bridge off                            */
+#define TT_DRV_UNDERVOLT   0x200u  /* bus below the gate driver's minimum:
+                                      bridge off                            */
+#define TT_DRV_NOT_CAL     0x400u  /* encoder offset unknown: will not drive */
+#define TT_DRV_CONFIG      0x800u  /* configuration unusable: will not drive */
 
 /* TtRc.failsafe bits. */
 #define TT_RC_FAILSAFE     0x01u   /* the receiver declared failsafe        */

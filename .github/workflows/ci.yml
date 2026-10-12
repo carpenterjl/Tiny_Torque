@@ -1,9 +1,10 @@
 # Host-side checks that need no Unity licence: the controller C code (CTest:
 # Opus mission bench with tolerance asserts at 100 and 500 Hz, the core's unit
 # test, the tt_controller helper unit test, the FOC current loop against a dq
-# PMSM plant), the portable core cross-compiled
-# for an MCU and as a 32-bit program, and the Tools/ checks (verify.js, the
-# generated parameter files).
+# PMSM plant, the CAN-FD drive bus, a wheel node on the PMSM plant over that
+# bus), the portable core cross-compiled for both of the car's MCUs and as a
+# 32-bit program, and the Tools/ checks (verify.js, the generated parameter
+# files).
 #
 # The Unity-side validators (OpusMissionRunner.RunHeadless etc.) need a
 # licensed editor and stay a local step for now — see SIM_TO_REAL_PLAN VAL-02.
@@ -39,17 +40,28 @@ jobs:
         run: ctest --test-dir build -C Release --output-on-failure
 
   embedded:
-    # FW-11: the portable core (params, PID, Opus mission, FOC) for a Cortex-M4F,
-    # warnings as errors, -Wdouble-promotion included. Compile-only: no board
-    # is chosen yet, so there is nothing to link against.
-    name: Core for Cortex-M4F (arm-none-eabi)
+    # FW-11: the portable core (params, PID, Opus mission, FOC, the wheel
+    # node, the drive bus) for both MCUs the car has (D6, Hardware/HW_00):
+    # the wheel nodes' G431 (Cortex-M4F, single-precision FPU, the strictest)
+    # and MAIN's H723 (Cortex-M7, double-precision FPU; MAIN-06). Warnings as
+    # errors, -Wdouble-promotion included. Compile-only until the boards'
+    # HALs exist.
+    name: Core for ${{ matrix.mcu }} (arm-none-eabi)
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - mcu: Cortex-M4F (node, G431)
+            flags: -mcpu=cortex-m4 -mthumb -mfpu=fpv4-sp-d16 -mfloat-abi=hard
+          - mcu: Cortex-M7 (main, H723)
+            flags: -mcpu=cortex-m7 -mthumb -mfpu=fpv5-d16 -mfloat-abi=hard
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - name: Install toolchain
         run: sudo apt-get update && sudo apt-get install -y gcc-arm-none-eabi libnewlib-arm-none-eabi
       - name: Configure
-        run: cmake -S Controllers -B build-arm -DTT_TARGET=embedded -DCMAKE_TOOLCHAIN_FILE="$PWD/Controllers/cmake/arm-none-eabi.cmake" -DCMAKE_BUILD_TYPE=Release
+        run: cmake -S Controllers -B build-arm -DTT_TARGET=embedded -DCMAKE_TOOLCHAIN_FILE="$PWD/Controllers/cmake/arm-none-eabi.cmake" -DTT_MCU_FLAGS="${{ matrix.flags }}" -DCMAKE_BUILD_TYPE=Release
       - name: Build
         run: cmake --build build-arm
       - name: Size

@@ -24,8 +24,12 @@ void tt_safety_default_cfg(TtSafetyCfg *c)
     c->rc_arm_ch = 4u;                /* AUX1                              */
     c->rc_kill_ch = 5u;               /* AUX2                              */
     c->rc_lost_s = 0.200f;
+    /* NOT_CAL and CONFIG are not trips: a node that cannot drive keeps the
+     * car from arming (tt_drvbus_ready) instead of latching a fault at
+     * power-up. ESTOP and HW_OFF are MAIN's own doing. */
     c->drv_trip_mask = (uint16_t)(TT_DRV_OVERVOLT | TT_DRV_CMD_TIMEOUT |
-                                  TT_DRV_SENSOR | TT_DRV_OVERCURRENT);
+                                  TT_DRV_SENSOR | TT_DRV_OVERCURRENT |
+                                  TT_DRV_UNDERVOLT);
     c->drv_temp_max_c = 120.0f;
     c->v_plausible = 15.0f;
     c->enc_glitch_max = 3u;

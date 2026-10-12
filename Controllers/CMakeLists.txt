@@ -54,7 +54,8 @@ tt_core_warnings(pidlib)
 # and its generated defaults (Tools/gen_params.js), the log schema, and the
 # board interface every non-sim target implements (hal/tt_hal.h).
 add_library(ttcore STATIC core/tt_params.c core/tt_alloc.c core/tt_nav.c core/tt_safety.c
-            core/tt_wire.c core/params_opus_vector.c core/params_opus_vector_foc.c)
+            core/tt_wire.c core/tt_can.c core/tt_drvbus.c
+            core/params_opus_vector.c core/params_opus_vector_foc.c)
 target_include_directories(ttcore PUBLIC core hal)
 tt_core_warnings(ttcore)
 
@@ -81,6 +82,15 @@ tt_core_warnings(foclib)
 if(NOT MSVC)
     target_link_libraries(foclib PUBLIC m)
 endif()
+
+# A wheel-motor node's firmware minus its HAL (HW_03_NODE): the FOC current
+# loop, the supervisor that mirrors the twin's driver model, and the node's
+# end of the CAN-FD drive bus (core/tt_can.h). A node image links this and
+# supplies the G431 HAL (node/tt_node.h).
+add_library(nodelib STATIC node/tt_node.c)
+target_include_directories(nodelib PUBLIC node)
+target_link_libraries(nodelib PUBLIC foclib ttcore)
+tt_core_warnings(nodelib)
 
 # The firmware's end of the lockstep HIL link (HIL-03): the external-tick
 # device loop and the Opus firmware behind it. Portable: an MCU image in HIL
@@ -259,6 +269,20 @@ endif()
 add_executable(test_foc_pmsm tests/test_foc_pmsm.c)
 target_link_libraries(test_foc_pmsm PRIVATE foclib pmsmlib)
 add_test(NAME foc_pmsm COMMAND test_foc_pmsm)
+
+# The CAN-FD drive bus (SYS-03): frame vectors and round trips, the bus load
+# of the planned schedules, and MAIN's end (tt_drvbus: commands, STATUS ->
+# TtMeas with timestamps on MAIN's clock, the arming check).
+add_executable(test_can tests/test_can.c)
+target_link_libraries(test_can PRIVATE ttcore)
+add_test(NAME tt_can_bus COMMAND test_can)
+
+# A wheel node on the PMSM plant, driven over the bus by MAIN's end: boot,
+# encoder alignment, Iq following in the wheel frame, the limits, derates and
+# trips the twin's driver model has, the watchdog, ESTOP, CFG.
+add_executable(test_node tests/test_node.c)
+target_link_libraries(test_node PRIVATE nodelib pmsmlib)
+add_test(NAME tt_node_plant COMMAND test_node)
 
 # The UserScripts helper header (PID clamps, wheel radius, manifest fallback).
 add_executable(test_tt_controller tests/test_tt_controller.c)
