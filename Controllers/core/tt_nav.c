@@ -28,6 +28,7 @@ void tt_nav_default_cfg(TtNavCfg *c)
     c->q_scale = 0.0003f;
     c->r_speed = 0.05f;
     c->r_flow = 0.05f;
+    c->kf_sigma0 = 0.10f;
     c->r_range = 0.08f;
     /* An uncalibrated antenna delay is a few cm on every range. Left out, it
      * reads as an odometer scale error of ~0.3 % as the geometry turns
@@ -137,7 +138,8 @@ static void predict(TtNav *n, float dt, float gyro_z, float accel_x)
     n->P[TT_NAV_V * N + TT_NAV_V] += g->q_accel * g->q_accel * dt;
     n->P[TT_NAV_BG * N + TT_NAV_BG] += g->q_bias * g->q_bias * dt;
     n->P[TT_NAV_KW * N + TT_NAV_KW] += g->q_scale * g->q_scale * dt;
-    /* b_r: a constant (the antenna delay drifts with temperature, slowly) */
+    /* b_r: a constant (the antenna delay drifts with temperature, slowly);
+     * k_f too (the ride height moves with the load, not within a run) */
 }
 
 /* Tag position in the world and the range Jacobian. */
@@ -259,6 +261,7 @@ static int try_init(TtNav *n, float v_odo, float gyro_bias)
         s[TT_NAV_BG] = gyro_bias;
         s[TT_NAV_KW] = 1.0f;
         s[TT_NAV_BR] = 0.0f;
+        s[TT_NAV_KF] = 1.0f;
         memset(P, 0, sizeof(n->P));
         P[TT_NAV_X * N + TT_NAV_X] = 0.05f * 0.05f;
         P[TT_NAV_Y * N + TT_NAV_Y] = 0.05f * 0.05f;
@@ -267,6 +270,7 @@ static int try_init(TtNav *n, float v_odo, float gyro_bias)
         P[TT_NAV_BG * N + TT_NAV_BG] = 0.005f * 0.005f;
         P[TT_NAV_KW * N + TT_NAV_KW] = 0.03f * 0.03f;
         P[TT_NAV_BR * N + TT_NAV_BR] = n->cfg.r_bias0 * n->cfg.r_bias0;
+        P[TT_NAV_KF * N + TT_NAV_KF] = n->cfg.kf_sigma0 * n->cfg.kf_sigma0;
     }
     n->stage = TT_NAV_RUN;
     return 1;
@@ -327,6 +331,7 @@ void tt_nav_seed(TtNav *n, float x, float y, float psi, float sig_pos, float sig
     s[TT_NAV_BG] = 0.0f;
     s[TT_NAV_KW] = 1.0f;
     s[TT_NAV_BR] = 0.0f;
+    s[TT_NAV_KF] = 1.0f;
     P[TT_NAV_X * N + TT_NAV_X] = sig_pos * sig_pos;
     P[TT_NAV_Y * N + TT_NAV_Y] = sig_pos * sig_pos;
     P[TT_NAV_PSI * N + TT_NAV_PSI] = sig_psi * sig_psi;
@@ -334,6 +339,7 @@ void tt_nav_seed(TtNav *n, float x, float y, float psi, float sig_pos, float sig
     P[TT_NAV_BG * N + TT_NAV_BG] = 0.005f * 0.005f;
     P[TT_NAV_KW * N + TT_NAV_KW] = 0.03f * 0.03f;
     P[TT_NAV_BR * N + TT_NAV_BR] = c.r_bias0 * c.r_bias0;
+    P[TT_NAV_KF * N + TT_NAV_KF] = c.kf_sigma0 * c.kf_sigma0;
     n->stage = TT_NAV_RUN;
     n->check = TT_NAV_CHECK_WAIT;
 }
@@ -394,9 +400,13 @@ void tt_nav_step(TtNav *n, float dt, float gyro_z, float accel_x,
             update(n, v_odo - ax * n->s[TT_NAV_V] / kw, H, g->r_speed * g->r_speed, 0.0f);
         }
         if (flow_ok) {
+            /* z = v k_f: the sensor's own scale, so a wrong height cannot
+             * read as a wrong wheel radius (FW-14). */
+            float kf = n->s[TT_NAV_KF];
             for (j = 0; j < N; j++) H[j] = 0.0f;
-            H[TT_NAV_V] = 1.0f;
-            update(n, v_flow - n->s[TT_NAV_V], H, g->r_flow * g->r_flow, g->gate);
+            H[TT_NAV_V] = kf;
+            H[TT_NAV_KF] = n->s[TT_NAV_V];
+            if (update(n, v_flow - kf * n->s[TT_NAV_V], H, g->r_flow * g->r_flow, g->gate)) n->n_flow++;
         }
         for (i = 0; i < n_ranges; i++) {
             float rho = range_h(n, ranges[i].anchor, H);

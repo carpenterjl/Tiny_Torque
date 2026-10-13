@@ -121,7 +121,7 @@ int main(int argc, char **argv)
 #define F_(m) { #m, offsetof(TtNavCfg, m) }
             F_(q_accel), F_(q_gyro), F_(q_bias), F_(q_scale), F_(r_speed), F_(r_flow), F_(r_range),
             F_(r_bias0), F_(r_gyro_rest), F_(nlos_db), F_(nlos_scale), F_(gate), F_(init_travel_m),
-            F_(init_rms_max), F_(init_inlier_min),
+            F_(init_rms_max), F_(init_inlier_min), F_(kf_sigma0),
             F_(rear_axle_x), F_(corner_k), F_(odo_axle_x),
 #undef F_
         };
@@ -135,7 +135,7 @@ int main(int argc, char **argv)
         if (!eq || k == sizeof(F) / sizeof(F[0])) { fprintf(stderr, "unknown --cfg %s\n", cfg_set[i]); return 2; }
     }
     tt_nav_reset(&nav, &cfg);
-    if (out) { fo = fopen(out, "w"); if (fo) fprintf(fo, "t,x,y,psi,x_true,y_true,psi_true,err,k_w,k_w_sd,b_r,b_g,v,v_true\n"); }
+    if (out) { fo = fopen(out, "w"); if (fo) fprintf(fo, "t,x,y,psi,x_true,y_true,psi_true,err,k_w,k_w_sd,b_r,b_g,v,v_true,k_f\n"); }
 
     while (fgets(g_line, sizeof(g_line), fp)) {
         int nf = split(g_line, f, MAXCOL);
@@ -189,10 +189,11 @@ int main(int argc, char **argv)
                 if (e > emax) emax = e;
                 if (fabs(v) > 0.1) { se_mov += e * e; n_mov++; }
             }
-            if (fo) fprintf(fo, "%.4f,%.4f,%.4f,%.5f,%.4f,%.4f,%.5f,%.4f,%.5f,%.5f,%.4f,%.6f,%.4f,%.4f\n", t,
+            if (fo) fprintf(fo, "%.4f,%.4f,%.4f,%.5f,%.4f,%.4f,%.5f,%.4f,%.5f,%.5f,%.4f,%.6f,%.4f,%.4f,%.5f\n", t,
                             nav.s[TT_NAV_X], nav.s[TT_NAV_Y], nav.s[TT_NAV_PSI], xt, yt, pt, e,
                             nav.s[TT_NAV_KW], sqrt(nav.P[TT_NAV_KW * TT_NAV_N + TT_NAV_KW]),
-                            nav.s[TT_NAV_BR], nav.s[TT_NAV_BG], nav.s[TT_NAV_V], val(f, nf, cvt));
+                            nav.s[TT_NAV_BR], nav.s[TT_NAV_BG], nav.s[TT_NAV_V], val(f, nf, cvt),
+                            nav.s[TT_NAV_KF]);
         }
     }
     fclose(fp);
@@ -201,6 +202,8 @@ int main(int argc, char **argv)
     printf("rows %ld; init at t = %.2f s (fit rms %.3f m over the %.0f %% kept); ranges used %u, gated %u\n",
            rows, t_init, nav.init_rms, nav.init_inlier * 100.0f, nav.n_used, nav.n_gated);
     if (n == 0) { printf("NOT INITIALISED\n"); return 1; }
+    printf("flow speeds taken %u, k_f %.4f +- %.4f\n", nav.n_flow, nav.s[TT_NAV_KF],
+           sqrt(nav.P[TT_NAV_KF * TT_NAV_N + TT_NAV_KF]));
     printf("position RMSE %.3f m (moving %.3f m, max %.3f m); heading RMSE %.2f deg; k_w %.4f; b_g %.5f rad/s\n",
            sqrt(se / (double)n), n_mov ? sqrt(se_mov / (double)n_mov) : 0.0, emax,
            sqrt(sp / (double)n) * 57.29578, nav.s[TT_NAV_KW], nav.s[TT_NAV_BG]);

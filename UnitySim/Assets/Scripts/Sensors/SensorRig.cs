@@ -272,6 +272,9 @@ namespace AIHWSim.Sensors
                     case TofSensor tof:
                         e.fov_rad = tof.coneAngleDeg * Mathf.Deg2Rad;
                         break;
+                    case FlowSensor fl:
+                        e.counts_per_rad = fl.countsPerRad;
+                        break;
                 }
                 if (wheel >= 0)
                 {

@@ -104,7 +104,8 @@ namespace AIHWSim.Bridge
         public float wheel_radius_m;
         public int truth_only;
         public float fov_rad;          // ranger: full field of view, 0 = unknown (NAV-05)
-        public fixed float reserved[7];
+        public float counts_per_rad;   // flow: counts per radian of image motion (FW-14)
+        public fixed float reserved[6];
     }
 
     // v7: when a sensor's current value was sampled (one per manifest entry).

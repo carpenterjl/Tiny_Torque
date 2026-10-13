@@ -45,7 +45,8 @@ typedef struct {
     uint8_t drv_mask;                /* wheels with a drive                  */
     uint8_t has_steer_fb;
     uint8_t has_uwb;
-    uint8_t pad_[3];
+    uint8_t has_flow;                /* an optical flow sensor aimed at the floor */
+    uint8_t pad_[2];
     uint8_t drv_kind[TT_MAX_WHEELS]; /* TT_DRV_*                             */
     float   enc_radius_m[TT_MAX_WHEELS];
     float   enc_counts_per_rev[TT_MAX_WHEELS]; /* of the WHEEL: cpr x gear   */
@@ -63,6 +64,11 @@ typedef struct {
     float   tof_pos_m[3];            /* from the body origin, FLU            */
     float   tof_rpy_rad[3];          /* mount: roll, pitch, yaw              */
     float   tof_range_m;             /* the sensor's "no target" range       */
+    /* The flow sensor (FW-14): its mount from the body origin (z below the
+     * origin; the height over the floor is body_floor_m + z), and its
+     * counts per radian of image motion. */
+    float   flow_pos_m[3];
+    float   flow_counts_per_rad;
 } TtCarDesc;
 
 typedef struct {

@@ -15,6 +15,10 @@ static void unbind(SimHal *h)
     memset(h->mot, 0, sizeof(h->mot));
     h->tof_idx = h->tof_off = h->batt_idx = h->batt_off = -1;
     h->rc_idx = h->rc_off = h->uwb_idx = h->uwb_off = -1;
+    h->flow_idx = h->flow_off = -1;
+    h->flow_cpr = 0.0f;
+    h->flow_seen = 0u;
+    h->flow_x = h->flow_y = h->flow_q = 0.0f;
     h->tof_max = 0.0f;
     h->tof_zones = 0;
 }
@@ -131,6 +135,18 @@ void sim_hal_configure(SimHal *h, const SensorInfo2 *sensors, int count, TtCarDe
             }
             break;
 
+        case SENSOR_FLOW:
+            /* The first one, with its counts per radian known (FW-14). */
+            if (h->flow_idx < 0 && s->base.data_count >= 3 && s->counts_per_rad > 0.0f) {
+                h->flow_idx = i;
+                h->flow_off = s->base.data_offset;
+                h->flow_cpr = s->counts_per_rad;
+                car->has_flow = 1;
+                for (w = 0; w < 3; w++) car->flow_pos_m[w] = s->pos_m[w];
+                car->flow_counts_per_rad = s->counts_per_rad;
+            }
+            break;
+
         case SENSOR_STEER_FB:
             if (!car->has_steer_fb) {
                 car->has_steer_fb = 1;
@@ -242,6 +258,34 @@ void sim_hal_read(SimHal *h, const CtrlInputs *in, TtMeas *m)
         u->quality = slice(in, h->uwb_off + 2, 0.0f);
         for (k = 0; k < 3; k++) u->pos_m[k] = slice(in, h->uwb_off + 3 + k, 0.0f);
         m->uwb_n = 1;
+    }
+
+    if (h->flow_off >= 0) {
+        /* [dx, dy counts since the last read, squal]: a fresh read becomes
+         * image motion over the time since the one before; a held read
+         * repeats the last (FW-14). */
+        TtStamp st;
+        stamp(&st, in, h->flow_idx);
+        if (!h->flow_seen || st.seq != h->flow_seq) {
+            float span = h->flow_seen ? (float)(uint32_t)(st.t_us - h->flow_us) * 1e-6f : m->dt_s;
+            float dx = slice(in, h->flow_off, 0.0f), dy = slice(in, h->flow_off + 1, 0.0f);
+            float q = slice(in, h->flow_off + 2, 0.0f);
+            if (span > 1e-4f && h->flow_cpr > 0.0f) {
+                h->flow_x = dx / h->flow_cpr / span;
+                h->flow_y = dy / h->flow_cpr / span;
+            } else {
+                h->flow_x = h->flow_y = 0.0f;
+            }
+            h->flow_q = q > 0.0f ? q / 255.0f : 0.0f;
+            h->flow_seq = st.seq;
+            h->flow_us = st.t_us;
+            h->flow_seen = 1u;
+        }
+        m->flow.st = st;
+        m->flow.flow_x = h->flow_x;
+        m->flow.flow_y = h->flow_y;
+        m->flow.quality = h->flow_q;
+        m->flow.height_m = 0.0f;        /* the firmware knows the mount */
     }
 
     if (h->tof_off >= 0 && h->tof_zones == 1) {

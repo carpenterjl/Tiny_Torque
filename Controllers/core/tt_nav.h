@@ -1,14 +1,16 @@
 /*
  * tt_nav.h — planar navigation filter: UWB + odometry + gyro (+ flow) EKF.
  *
- * The L3 estimator of the plan's control stack (§7.1): a 7-state EKF
+ * The L3 estimator of the plan's control stack (§7.1): an 8-state EKF
  *
- *     s = [x, y, psi, v, b_g, k_w, b_r]
+ *     s = [x, y, psi, v, b_g, k_w, b_r, k_f]
  *
  * in the UWB anchors' world frame (x, y metres, psi = heading of the body x
  * axis, + = left/CCW), with the forward speed v, the gyro's yaw-rate bias
- * b_g, the odometer's scale k_w (true speed = k_w * odometer speed) and the
- * tag's range bias b_r (its antenna delay: every range reads b_r long).
+ * b_g, the odometer's scale k_w (true speed = k_w * odometer speed), the
+ * tag's range bias b_r (its antenna delay: every range reads b_r long) and
+ * the flow sensor's scale k_f (flow speed = k_f * v: the height it is told
+ * over the height it has; a millimetre of ride height is 4 % at 25 mm).
  *
  *   predict  x += v cos(psi + beta) dt, y += v sin(psi + beta) dt,
  *            psi += (gyro_z - b_g) dt, v += a_x dt
@@ -26,7 +28,13 @@
  *                            with d and l the odometry axle's and the origin's
  *                            distances ahead of the rear axle (1.5 % on a
  *                            1.5 m hairpin)
- *            optical flow    z = v           (when the flow sensor tracks)
+ *            optical flow    z = v * k_f     (when the flow sensor tracks)
+ *                            Without k_f a flow at the wrong height would
+ *                            pull k_w, and the mission measures its legs on
+ *                            k_w to 0.3 % (FW-14/FW-15); with it the ranges
+ *                            settle both scales, and the flow carries the
+ *                            speed where the wheels slip and the ranges are
+ *                            too coarse: the launch and the creep.
  *            UWB range       z = |tag - anchor| + b_r, tightly coupled, gated
  *                            by its Mahalanobis distance; the tag sits at a
  *                            lever arm from the body origin
@@ -51,7 +59,7 @@
 extern "C" {
 #endif
 
-enum { TT_NAV_X = 0, TT_NAV_Y, TT_NAV_PSI, TT_NAV_V, TT_NAV_BG, TT_NAV_KW, TT_NAV_BR, TT_NAV_N };
+enum { TT_NAV_X = 0, TT_NAV_Y, TT_NAV_PSI, TT_NAV_V, TT_NAV_BG, TT_NAV_KW, TT_NAV_BR, TT_NAV_KF, TT_NAV_N };
 enum { TT_NAV_WAIT_INIT = 0, TT_NAV_RUN = 1 };
 /* The seeded start's cross-check (tt_nav_seed). */
 enum { TT_NAV_CHECK_NONE = 0, TT_NAV_CHECK_WAIT = 1, TT_NAV_CHECK_OK = 2, TT_NAV_CHECK_BAD = 3 };
@@ -64,6 +72,8 @@ typedef struct {
     float q_scale;        /* odometer scale walk, 1/sqrt(s)                 */
     float r_speed;        /* odometer speed sigma, m/s                      */
     float r_flow;         /* flow speed sigma, m/s                          */
+    float kf_sigma0;      /* flow scale sigma before it is learned (1 = the
+                             height the sensor is told is the one it has)   */
     float r_range;        /* UWB line-of-sight sigma, m                     */
     float r_bias0;        /* UWB range bias sigma before it is learned, m   */
     float r_gyro_rest;    /* gyro sigma for the at-rest bias update, rad/s  */
@@ -104,6 +114,7 @@ typedef struct {
                                               ranges it keeps (under 0.5 m), m */
     float    init_inlier;                  /* the share of ranges it keeps  */
     uint32_t n_used, n_gated;
+    uint32_t n_flow;                       /* flow speeds taken             */
     /* seeded start (NAV-04): the heading search still runs once over the
      * first init_travel_m, as a check on where the car was said to be */
     uint8_t  check;                        /* TT_NAV_CHECK_*               */

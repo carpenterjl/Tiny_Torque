@@ -4,7 +4,10 @@
 #include "opus_fw.h"
 #include "mission_cfg.h"
 
+#include <math.h>
 #include <string.h>
+
+static int finitef_(float v) { return v == v && v - v == 0.0f; }
 
 void opus_fw_init(OpusFw *fw, const TtParams *p, float rate_hz,
                   const TtNavCfg *nav, const TtSafetyCfg *safe)
@@ -34,6 +37,29 @@ void opus_fw_set_route(OpusFw *fw, const TtRoute *r, float v_max)
     opus_fw_reset(fw);
 }
 
+void opus_fw_set_flow(OpusFw *fw, float height_m)
+{
+    fw->flow_h_m = height_m > 0.0f ? height_m : 0.0f;
+}
+
+/* The flow sensor's forward speed over the floor, when it tracks: image
+ * motion is v / h less the pitch rate (the aim swings with the body), on the
+ * height the driver states or the one the car was described with. */
+static int take_flow(OpusFw *fw, const TtMeas *m, float *v)
+{
+    const TtFlow *f = &m->flow;
+    float h;
+    if (!f->st.valid) return 0;
+    if (fw->flow_seen && f->st.seq == fw->flow_seq) return 0;   /* held over */
+    fw->flow_seen = 1u;
+    fw->flow_seq = f->st.seq;
+    h = f->height_m > 0.0f ? f->height_m : fw->flow_h_m;
+    if (!(h > 0.0f) || f->quality < NV_FLOW_QUALITY) return 0;
+    *v = h * (f->flow_x + m->imu.gyro[1]);
+    if (!finitef_(*v) || fabsf(*v) > NV_FLOW_VMAX) return 0;
+    return 1;
+}
+
 void opus_fw_reset(OpusFw *fw)
 {
     TtNavCfg nc = fw->nav.cfg;
@@ -44,6 +70,7 @@ void opus_fw_reset(OpusFw *fw)
     memset(&fw->pose, 0, sizeof(fw->pose));
     memset(fw->uwb_seen, 0, sizeof(fw->uwb_seen));
     fw->nav_used_prev = 0u;
+    fw->flow_seen = 0u;
     /* The site survey stays: the anchors did not move. */
 }
 
@@ -85,8 +112,8 @@ void opus_fw_step(OpusFw *fw, const TtMeas *m, TtCmd *out)
     OpusState *st = &fw->mission;
     TtCmd core;
     TtNavRange r[TT_MAX_UWB];
-    int nr;
-    float dt = m->dt_s > 0.0f ? m->dt_s : 0.0f;
+    int nr, flow_ok;
+    float dt = m->dt_s > 0.0f ? m->dt_s : 0.0f, v_flow = 0.0f;
 
     /* 1. The mission, told what the safety layer decided last tick. */
     st->drive_ok = fw->safe.state == TT_SAFE_ARMED || fw->safe.state == TT_SAFE_DRIVING;
@@ -95,9 +122,10 @@ void opus_fw_step(OpusFw *fw, const TtMeas *m, TtCmd *out)
 
     /* 2. Navigation. */
     nr = take_ranges(fw, m, r);
+    flow_ok = take_flow(fw, m, &v_flow);
     if (dt > 0.0f)
         tt_nav_step(&fw->nav, dt, m->imu.gyro[2], m->imu.accel[0], st->v_meas,
-                    0.0f, 0, r, nr);
+                    v_flow, flow_ok, r, nr);
     if (fw->nav.stage == TT_NAV_RUN) {
         /* The odometer's scale, once the ranges have pinned it (FW-15). */
         float var = fw->nav.P[TT_NAV_KW * TT_NAV_N + TT_NAV_KW];

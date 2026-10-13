@@ -42,6 +42,11 @@ typedef struct {
  * site; a cluttered one with multipath can run at a third (FW-20). */
 static double g_outlier = 0.01;
 
+/* The flow sensor (FW-14): it tracks below 1.14 m/s (a PAA5100 over 25 mm),
+ * and reads the speed on the height it is told: a millimetre of ride
+ * height over 25 mm is 4 %, which must land in k_f and not in k_w. */
+static const double flow_scale = 25.0 / 26.0, flow_vmax = 1.14;
+
 /* seed: 0 = find the pose; 1 = seeded at the truth; 2 = seeded dpsi off */
 static Run drive(int seed, double dpsi)
 {
@@ -99,10 +104,14 @@ static Run drive(int seed, double dpsi)
             next_uwb += 0.025;
         }
 
-        tt_nav_step(&nav, (float)dt,
-                    (float)(w + bias_g + 0.003 * gauss()), (float)(a + 0.05 * gauss()),
-                    (float)(v / odo_scale + (v > 0.0 ? 0.02 * gauss() : 0.0)),
-                    0.0f, 0, r, nr);
+        {
+            int flow_ok = v > 0.0 && v < flow_vmax;
+            double v_flow = flow_ok ? v * flow_scale + 0.02 * gauss() : 0.0;
+            tt_nav_step(&nav, (float)dt,
+                        (float)(w + bias_g + 0.003 * gauss()), (float)(a + 0.05 * gauss()),
+                        (float)(v / odo_scale + (v > 0.0 ? 0.02 * gauss() : 0.0)),
+                        (float)v_flow, flow_ok, r, nr);
+        }
 
         if (nav.stage == TT_NAV_RUN) {
             double ex = nav.s[TT_NAV_X] - x, ey = nav.s[TT_NAV_Y] - y;
@@ -143,6 +152,9 @@ int main(void)
         CHECK("odometer scale estimated within 1 %", fabs(r.nav.s[TT_NAV_KW] - odo_scale) < 0.01);
         CHECK("gyro bias estimated within 0.003 rad/s", fabs(r.nav.s[TT_NAV_BG] - bias_g) < 0.003);
         CHECK("NLOS/outlier ranges are gated out", r.nav.n_gated > 0);
+        printf("flow: %u speeds taken, k_f %.4f (true %.4f)\n", r.nav.n_flow, r.nav.s[TT_NAV_KF], flow_scale);
+        CHECK("flow speeds are taken while it tracks", r.nav.n_flow > 20);
+        CHECK("flow scale estimated within 3 %, and k_w not pulled by it", fabs(r.nav.s[TT_NAV_KF] - flow_scale) < 0.03);
     }
 
     /* FW-20: a third of the ranges multipath. The start search once judged

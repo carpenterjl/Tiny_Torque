@@ -145,6 +145,11 @@
  * odometer metre) is taken once it is known this well, and only in this band.
  * A uniform 2 % radius error is otherwise 290 mm on leg A. */
 #define NV_KW_SIGMA_MAX    0.004f
+/* The flow sensor's speed goes to the EKF above this quality (squal / 255;
+ * the twin reads 0.6-0.8 over the proving ground's asphalt) and below this
+ * speed (the PAA5100 loses track at 1.14 m/s over 25 mm) (FW-14). */
+#define NV_FLOW_QUALITY    0.4f
+#define NV_FLOW_VMAX       3.0f
 #define NV_KW_MIN          0.90f
 #define NV_KW_MAX          1.10f
 

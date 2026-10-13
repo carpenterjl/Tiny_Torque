@@ -46,6 +46,11 @@ typedef struct {
     uint32_t     uwb_seq[TT_MAX_UWB];
     uint8_t      uwb_seen[TT_MAX_UWB];
     uint32_t     nav_used_prev;
+    /* The flow sensor (FW-14): the height it was mounted at (0 = none), and
+     * the last read taken. */
+    float        flow_h_m;
+    uint32_t     flow_seq;
+    uint8_t      flow_seen;
 } OpusFw;
 
 /* Power-on. `nav` and `safe` may be NULL for the defaults. */
@@ -58,6 +63,10 @@ void opus_fw_reset(OpusFw *fw);
 /* Follow route `r` (NULL: the fixed manoeuvre) at most at v_max (<= 0: the
  * route's own); a new run on it. */
 void opus_fw_set_route(OpusFw *fw, const TtRoute *r, float v_max);
+
+/* The car has a flow sensor `height_m` over the floor (<= 0: none). Its
+ * speed goes to the EKF when it tracks (FW-14). */
+void opus_fw_set_flow(OpusFw *fw, float height_m);
 
 /* One tick. */
 void opus_fw_step(OpusFw *fw, const TtMeas *m, TtCmd *out);

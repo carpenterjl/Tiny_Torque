@@ -409,6 +409,10 @@ size_t tt_wire_put_car(uint8_t *p, size_t cap, const TtCarDesc *c)
     w_f32n(&w, c->tof_pos_m, 3);
     w_f32n(&w, c->tof_rpy_rad, 3);
     w_f32(&w, c->tof_range_m);
+    /* The flow sensor (FW-14). */
+    w_u8(&w, c->has_flow);
+    w_f32n(&w, c->flow_pos_m, 3);
+    w_f32(&w, c->flow_counts_per_rad);
     return w.err ? 0 : w.n;
 }
 
@@ -433,6 +437,9 @@ int tt_wire_get_car(const uint8_t *p, size_t n, TtCarDesc *c)
     r_f32n(&r, c->tof_pos_m, 3);
     r_f32n(&r, c->tof_rpy_rad, 3);
     c->tof_range_m = r_f32(&r);
+    c->has_flow = r_u8(&r);
+    r_f32n(&r, c->flow_pos_m, 3);
+    c->flow_counts_per_rad = r_f32(&r);
     return (r.err || r.i != r.n) ? -1 : 0;
 }
 

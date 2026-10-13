@@ -228,7 +228,9 @@ typedef struct SensorInfo2 {
     int32_t truth_only;      /* 1 = simulator ground truth with no real counterpart  */
     float   fov_rad;         /* ranger: full field of view (a multizone's square side,
                                 a single beam's cone); 0 = unknown (NAV-05)          */
-    float   reserved[7];     /* zero; room to grow without changing the stride       */
+    float   counts_per_rad;  /* flow: counts per radian of image motion; 0 = unknown
+                                (FW-14)                                              */
+    float   reserved[6];     /* zero; room to grow without changing the stride       */
 } SensorInfo2;
 
 /* v7: when a sensor's latest value was taken. One entry per manifest entry,

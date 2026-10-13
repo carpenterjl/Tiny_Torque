@@ -105,6 +105,11 @@ void opus_app_configure(OpusApp *a, const TtCarDesc *car)
         a->fw.nav.cfg.lever[1] = car->uwb_lever_m[1];
     }
 
+    /* The flow sensor's height over the floor: the body's floor clearance
+     * less how far below the origin it is mounted (FW-14). */
+    opus_fw_set_flow(&a->fw, car->has_flow && p->body_floor_m > 0.0f
+                                 ? p->body_floor_m + car->flow_pos_m[2] : 0.0f);
+
     /* The forward ranger (NAV-05): a multizone one gives the mission the
      * clear distance ahead; a single beam keeps the old abort. */
     if (car->tof_zones_side > 1 && car->tof_fov_rad > 0.0f && p->body_nose_m > 0.0f) {

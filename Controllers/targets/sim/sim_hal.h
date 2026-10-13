@@ -52,6 +52,12 @@ typedef struct {
     int   batt_idx, batt_off;
     int   rc_idx, rc_off;
     int   uwb_idx, uwb_off;
+    int   flow_idx, flow_off;   /* the flow sensor (FW-14) */
+    float flow_cpr;             /* its counts per radian */
+    uint32_t flow_seq;          /* the last read taken, and when */
+    tt_us_t  flow_us;
+    uint8_t  flow_seen;
+    float flow_x, flow_y, flow_q;   /* the last read, as image motion */
     uint32_t prev_us;
     int   has_prev_us;
 } SimHal;
