@@ -106,6 +106,9 @@ namespace AIHWSim.Vehicles
             {
                 float kp = cfg.slipStiffness > 0f ? 2f * mu / cfg.slipStiffness : KappaPeak;
                 float a0 = cfg.corneringStiffness > 0f ? 2f * mu / cfg.corneringStiffness : AlphaPeak;
+                // A stiffer tyre peaks at a smaller slip angle; the peak force
+                // stays (§9.2: C_alpha on its own, unlike muLatRatio).
+                if (cfg.corneringStiffMult > 0f) a0 /= cfg.corneringStiffMult;
                 return new Curve
                 {
                     kappaPeak = kp,

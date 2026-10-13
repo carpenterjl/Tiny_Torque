@@ -96,6 +96,9 @@ namespace AIHWSim.Garage
             car.wheelVelQuantCpr = design.wheelVelQuantCpr;
             car.computeLatencyUs = Mathf.Max(0, design.computeLatencyUs);
             car.imu.gyroNoise.bias = design.gyroBias;
+            car.imu.mountDeg = design.imuMisalignDeg;
+            car.servoDeadTimeS = Mathf.Max(0f, design.servoDeadTimeS);
+            car.busLossFrac = Mathf.Clamp01(design.busLossFrac);
             car.controlJitterUs = Mathf.Max(0f, design.controlJitterUs);
 
             // Scale-dependent constants the design now authors. The first three
@@ -174,6 +177,7 @@ namespace AIHWSim.Garage
                     corneringStiffness = Mathf.Max(0f, w.corneringStiffness),
                     slideRatio = Mathf.Clamp01(w.slideRatio),
                     muLatRatio = Mathf.Max(0f, w.muLatRatio),
+                    corneringStiffMult = Mathf.Max(0f, w.corneringStiffMult),
                     // Reflected drivetrain inertia J·gear² for powered wheels
                     // (0 on old JSON / unpowered wheels = legacy spin inertia).
                     // A motor with gear lash keeps its rotor as its own body
@@ -436,6 +440,7 @@ namespace AIHWSim.Garage
                         f.minHeightM = 0.08f;
                         f.maxHeightM = 2f;
                     }
+                    if (spec.flowTexture > 0f) f.defaultTexture = Mathf.Clamp01(spec.flowTexture);
                     sc = f;
                     PartVisualFactory.BuildColorViz(go.transform);
                     break;

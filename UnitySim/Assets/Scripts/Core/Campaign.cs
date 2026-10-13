@@ -203,18 +203,16 @@ namespace AIHWSim.Core
             return map;
         }
 
-        /// <summary>§9.2 rows not sampled yet, for the report.</summary>
-        public const string NotYet =
-            "IMU misalignment (the built-in IMU has no mount rotation), steering dead time, a pure " +
-            "cornering-stiffness change (lat_grip scales the lateral peak and slope together), " +
-            "optical-flow quality (the firmware does not use flow yet), CAN / driver-frame loss bursts.";
+        /// <summary>§9.2 rows not sampled yet, for the report (none since
+        /// VAL-13's close-out: every row of the table has a knob).</summary>
+        public const string NotYet = "";
 
         // ---------------------------------------------------------- knobs --
 
         /// <summary>
-        /// The §9.2 table, as far as the twin's design can express it today.
-        /// Each range is centred on the nominal design; draws are uniform.
-        /// Rows not here yet are listed in the report's notes.
+        /// The §9.2 table, every row. Each range is centred on the nominal
+        /// design; draws are uniform. New knobs go at the END: a run's draws
+        /// are (seed, run, slot), so an insertion would change every run.
         /// </summary>
         public static List<Knob> Knobs()
         {
@@ -279,6 +277,24 @@ namespace AIHWSim.Core
                            apply = (d, w, v) => { foreach (var s in d.sensors) if (s.kind == SensorType.Uwb) s.uwbExtraDropout = v; } },
                 new Knob { name = "uwb_outlier", unit = "", lo = 0f, nom = 0f, hi = 0.3f, oneSided = true,
                            apply = (d, w, v) => { foreach (var s in d.sensors) if (s.kind == SensorType.Uwb) s.uwbExtraOutlier = v; } },
+                // The rows added at VAL-13's close-out (2026-10-12):
+                // the IMU's mount (roll puts gravity into the lateral
+                // accelerometer, pitch into the forward one, and the yaw rate
+                // into the other gyros), the steering's dead time, the tyre's
+                // cornering stiffness on its own, the floor the flow sensor
+                // sees, the drive bus's frame loss.
+                new Knob { name = "imu_roll", unit = "deg", lo = -2f, nom = 0f, hi = 2f,
+                           apply = (d, w, v) => d.imuMisalignDeg = new Vector3(v, d.imuMisalignDeg.y, d.imuMisalignDeg.z) },
+                new Knob { name = "imu_pitch", unit = "deg", lo = -2f, nom = 0f, hi = 2f,
+                           apply = (d, w, v) => d.imuMisalignDeg = new Vector3(d.imuMisalignDeg.x, v, d.imuMisalignDeg.z) },
+                new Knob { name = "steer_dead", unit = "ms", lo = 0f, nom = 0f, hi = 20f, oneSided = true,
+                           apply = (d, w, v) => d.servoDeadTimeS += v * 0.001f },
+                new Knob { name = "c_alpha", unit = "x", lo = 0.7f, nom = 1f, hi = 1.3f,
+                           apply = (d, w, v) => { foreach (var ws in d.wheels) ws.corneringStiffMult = (ws.corneringStiffMult > 0f ? ws.corneringStiffMult : 1f) * v; } },
+                new Knob { name = "flow_texture", unit = "x", lo = 1f, nom = 1f, hi = 0.5f, oneSided = true,
+                           apply = (d, w, v) => { foreach (var s in d.sensors) if (s.kind == SensorType.Flow) s.flowTexture = (s.flowTexture > 0f ? s.flowTexture : 0.8f) * v; } },
+                new Knob { name = "bus_loss", unit = "", lo = 0f, nom = 0f, hi = 0.05f, oneSided = true,
+                           apply = (d, w, v) => d.busLossFrac = v },
             };
             return list;
         }

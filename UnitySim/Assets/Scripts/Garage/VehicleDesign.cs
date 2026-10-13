@@ -77,6 +77,10 @@ namespace AIHWSim.Garage
         public float uwbExtraDropout = 0f;        // fraction of reads lost, LOS and NLOS alike
         public float uwbExtraOutlier = 0f;        // fraction of reads that are outliers
 
+        // Optical flow (§9.2 randomization): the texture of surfaces without
+        // their own, 0..1; 0 = the part's default (0.8).
+        public float flowTexture = 0f;
+
         // Raw MEMS IMU (kind Imu6): datasheet parameters, ICM-42688-P defaults.
         public Sensors.ImuSpec imu = new Sensors.ImuSpec();
 
@@ -236,6 +240,10 @@ namespace AIHWSim.Garage
         public float corneringStiffness = 0f;
         public float slideRatio = 0f;
         public float muLatRatio = 0f;
+        /// <summary>A factor on the cornering stiffness alone (§9.2, a pure
+        /// C_α change): the peak slip angle shrinks by it, the peak force
+        /// stays. 0 or 1 = as authored.</summary>
+        public float corneringStiffMult = 0f;
 
         // Drive motor (only used when powered)
         public bool powered = false;
@@ -435,6 +443,16 @@ namespace AIHWSim.Garage
         /// <summary>Constant bias on the built-in IMU's gyro, rad/s, every
         /// axis (§9.2 randomization). 0 = none.</summary>
         public float gyroBias = 0f;
+        /// <summary>The built-in IMU's mount misalignment: the die's axes in
+        /// the body, FLU roll, pitch, yaw in degrees (§9.2). Zero = aligned.</summary>
+        public Vector3 imuMisalignDeg = Vector3.zero;
+        /// <summary>Steering: a dead time before the servo sees a command, s
+        /// (§9.2: the link and the receiver's frame). 0 = none.</summary>
+        public float servoDeadTimeS = 0f;
+        /// <summary>Drive bus: the fraction of control ticks a wheel node's
+        /// frames are lost, in bursts of up to four (§9.2,
+        /// <see cref="Sensors.DriveBusLoss"/>). 0 = none.</summary>
+        public float busLossFrac = 0f;
         public float controlJitterUs = 0f;
         // SEN-06/09 sensor realism profile. 0 = legacy (clean channels; SoC and
         // brushed-motor torque reported as truth). 1 = realistic: pack, driver

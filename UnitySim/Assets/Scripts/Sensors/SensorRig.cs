@@ -33,6 +33,8 @@ namespace AIHWSim.Sensors
         /// <summary>VAL-11: faults applied to what the firmware reads (set by
         /// the SimulationRunner; null = none).</summary>
         public FaultInjector Faults;
+        /// <summary>Frame loss on the drive bus (§9.2); null = none.</summary>
+        public DriveBusLoss Bus;
 
         public SensorInfo[] Manifest => _manifest;
         public float[] FlatData => _flat;
@@ -192,6 +194,7 @@ namespace AIHWSim.Sensors
                     // Low 32 bits of the µs clock: firmware compares by difference.
                     _stamps[i].t_sample_us = unchecked((uint)s.StampUs);
                     Faults?.ApplySensor(s, _flat, _manifest[i].data_offset, ref _stamps[i]);
+                    Bus?.ApplySensor(i, s.Type, WheelOf(s), _flat, _manifest[i].data_offset, s.DataCount, ref _stamps[i]);
                 }
             }
             float simTime = (float)(timeUs * 1e-6);
@@ -233,6 +236,19 @@ namespace AIHWSim.Sensors
         /// rates and drive constants filled in, then one SENSOR_STEER_FB entry
         /// that describes the steering actuator. FLU throughout.
         /// </summary>
+        private static int WheelOf(SensorComponent s) =>
+            s is WheelEncoderSensor enc ? enc.wheelIndex : s is MotorPart mp ? mp.wheelIndex : -1;
+
+        /// <summary>Each wheel's motor actuator slot (-1 = none), for the
+        /// drive bus's loss model.</summary>
+        public int[] ActuatorSlotOfWheel()
+        {
+            var slot = new[] { -1, -1, -1, -1 };
+            foreach (var m in _motors)
+                if (m != null && m.wheelIndex >= 0 && m.wheelIndex < 4) slot[m.wheelIndex] = m.ActuatorIndex;
+            return slot;
+        }
+
         public unsafe SensorInfo2[] BuildManifest2()
         {
             var m2 = new SensorInfo2[_sensors.Count + 1];

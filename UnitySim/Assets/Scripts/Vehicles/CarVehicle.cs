@@ -116,6 +116,14 @@ namespace AIHWSim.Vehicles
         public float servoBacklashDeg = 0f;   // road-wheel lost motion (deg)
         public float servoFrameHz = 0f;       // PWM frame rate; 0 = continuous
         public float[] steerMap = System.Array.Empty<float>(); // fraction of lock at evenly spaced commands −1..+1
+        // §9.2 randomization: a dead time before the servo sees a command
+        // (the link and the receiver's frame), and the drive bus's frame
+        // loss (read by the SimulationRunner's DriveBusLoss).
+        public float servoDeadTimeS = 0f;
+        public float busLossFrac = 0f;
+        private readonly float[] _sdT = new float[256], _sdC = new float[256];   // the dead-time queue
+        private int _sdHead, _sdN;
+        private float _sdNow, _sdOut;
 
         private float _svCmd, _svFrameT, _svPos, _svVel, _svWheel, _svLegacy;
 
@@ -1682,6 +1690,7 @@ namespace AIHWSim.Vehicles
             _launchScale = 1f;   // fresh launch, fresh governor
 
             _svCmd = _svFrameT = _svPos = _svVel = _svWheel = _svLegacy = 0f;
+            _sdHead = _sdN = 0; _sdNow = _sdOut = 0f;
             foreach (var w in _wheels)
             {
                 w.currentSteer = 0f;
@@ -1735,6 +1744,25 @@ namespace AIHWSim.Vehicles
         /// volts, [6] = steer [-1,1], [7] = brake [0,1]. Both Manual (CarInput) and
         /// Autonomous (the DLL) produce this same layout.
         /// </summary>
+        /// <summary>The steering command the servo sees now: the one sent
+        /// servoDeadTimeS ago (§9.2 dead time); nothing yet reads as centre.
+        /// A dead time of 0 is this one.</summary>
+        private float SteerDelayed(float cmd, float dt)
+        {
+            if (servoDeadTimeS <= 0f) return cmd;
+            _sdNow += dt;
+            if (_sdN == _sdT.Length) { _sdHead = (_sdHead + 1) % _sdT.Length; _sdN--; }
+            int i = (_sdHead + _sdN) % _sdT.Length;
+            _sdT[i] = _sdNow; _sdC[i] = cmd; _sdN++;
+            while (_sdN > 0 && _sdT[_sdHead] <= _sdNow - servoDeadTimeS + 1e-6f)
+            {
+                _sdOut = _sdC[_sdHead];
+                _sdHead = (_sdHead + 1) % _sdT.Length;
+                _sdN--;
+            }
+            return _sdOut;
+        }
+
         /// <summary>
         /// One physics step of the steering servo (ACT-09), in fractions of
         /// lock. <paramref name="rate"/> is the torque-speed-limited slew
@@ -1937,7 +1965,7 @@ namespace AIHWSim.Vehicles
             }
             BatteryCurrent = iTotal;
 
-            float steerCmd = Mathf.Clamp(_cmd[SteerActuator], -1f, 1f);
+            float steerCmd = SteerDelayed(Mathf.Clamp(_cmd[SteerActuator], -1f, 1f), dt);
             float brake = Mathf.Clamp01(_cmd[BrakeActuator]) * maxBrakeTorque;
             // A car with no friction brake (ACT-08) ignores the brake slot; its
             // firmware stops and holds the car with motor current.
@@ -2273,7 +2301,8 @@ namespace AIHWSim.Vehicles
                     // PHY-03: the per-tyre curve. The readout uses the µ the
                     // force path will use (the legacy constants don't need it).
                     bool authoredCurve = w.cfg.slipStiffness > 0f || w.cfg.corneringStiffness > 0f
-                                         || w.cfg.slideRatio > 0f || w.cfg.muLatRatio > 0f;
+                                         || w.cfg.slideRatio > 0f || w.cfg.muLatRatio > 0f
+                                         || w.cfg.corneringStiffMult > 0f;
                     {
                         float den = Mathf.Max(Mathf.Abs(vx), TyreModel.VLow);
                         var rc = authoredCurve

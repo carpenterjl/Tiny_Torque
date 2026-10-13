@@ -142,6 +142,8 @@ namespace AIHWSim.Core
 
         // TIM-03 control-tick jitter: the time stamp handed to the firmware.
         private System.Random _jitterRng;
+        private DriveBusLoss _bus;        // §9.2: the drive bus's frame loss
+        private int[] _busSlots;
         private long _lastReportedUs = long.MinValue;
 
         // Session noise seed: set once per process launch (before any sensor
@@ -842,6 +844,15 @@ namespace AIHWSim.Core
                 if (sensorRig != null) sensorRig.Faults = Faults;
                 if (Faults.TakeMcuReset()) PowerCycleController();
             }
+            // The drive bus's frame loss (§9.2), seeded like the jitter: the
+            // rig holds a lost node's reports, the commands below hold its slot.
+            if (_bus == null && Car != null)
+            {
+                _bus = new DriveBusLoss(Car.busLossFrac, NoiseModel.GlobalSeed);
+                _busSlots = sensorRig != null ? sensorRig.ActuatorSlotOfWheel() : null;
+                if (sensorRig != null) sensorRig.Bus = _bus.Any ? _bus : null;
+            }
+            _bus?.Tick();
 
             // 1. Sensors — built-in (wheel vel + IMU) and the configurable rig.
             _vehicle.SampleSensors(controlDt, _wheelVel, _gyro, _accel);
@@ -954,6 +965,7 @@ namespace AIHWSim.Core
                 }
 
                 for (int i = 0; i < 8; i++) _actuators[i] = _rawOut[i] = outputs.actuator[i];
+                if (_bus != null && _bus.Any) _bus.ApplyCommands(_actuators, _busSlots);   // a lost node keeps its last
 
                 // v7 steers in road-wheel radians, + = left; the car takes a
                 // servo fraction, + = right.
