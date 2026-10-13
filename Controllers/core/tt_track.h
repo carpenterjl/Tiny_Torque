@@ -29,6 +29,11 @@
  * The car's place is searched from its last one, a window back and ahead,
  * so on a figure-8 it never jumps to the other strand at the crossing.
  *
+ * With a detour set (tt_track_set_detour, NAV-08) the tracker follows the
+ * offset path instead: the route's point moved d(s) along its normal, the
+ * heading and curvature that go with it (tt_detour_point). The errors it
+ * reports stay the route's (ey, epsi); d_off is the offset it is holding.
+ *
  * Portable C11, float32, no allocation.
  */
 #ifndef TT_TRACK_H
@@ -36,6 +41,7 @@
 
 #include <stdint.h>
 #include "tt_route.h"
+#include "tt_detour.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -65,7 +71,9 @@ typedef struct {
     float          kappa_route;/* the route's curvature at the car        */
     float          kappa;      /* the command, 1/m                        */
     float          ld;         /* lookahead used, m                       */
-    uint8_t        lost;       /* |ey| > lost_m                           */
+    const TtDetour *det;       /* the detour followed; NULL = the route    */
+    float          d_off;      /* its offset at the car's place, m         */
+    uint8_t        lost;       /* |ey - d_off| > lost_m                   */
     uint8_t        at_end;     /* the car's place is the route's last pt  */
     uint8_t        pad_[2];
 } TtTrack;
@@ -74,6 +82,10 @@ void tt_track_default_cfg(TtTrackCfg *c);
 
 /* Start on `r` at its first point. */
 void tt_track_reset(TtTrack *t, const TtTrackCfg *c, const TtRoute *r);
+
+/* Follow the route offset by `d` (NAV-08); NULL, or one that is not
+ * active, is the route itself. `d` must outlive the tracker. */
+void tt_track_set_detour(TtTrack *t, const TtDetour *d);
 
 /* One tick: the pose to steer from (x, y in the site frame, and psi the
  * COURSE: the direction the car moves, its heading plus its sideslip; all

@@ -33,9 +33,16 @@ void tt_track_default_cfg(TtTrackCfg *c)
 
 void tt_track_reset(TtTrack *t, const TtTrackCfg *c, const TtRoute *r)
 {
+    const TtDetour *d = t->det;
     memset(t, 0, sizeof(*t));
     t->cfg = *c;
     t->r = r;
+    t->det = d;
+}
+
+void tt_track_set_detour(TtTrack *t, const TtDetour *d)
+{
+    t->det = d;
 }
 
 float tt_track_step(TtTrack *t, float x, float y, float psi, float v)
@@ -43,7 +50,7 @@ float tt_track_step(TtTrack *t, float x, float y, float psi, float v)
     const TtRoute *r = t->r;
     const TtTrackCfg *c = &t->cfg;
     TtRouteProj pr;
-    float va = v < 0.0f ? -v : v, k, s_end;
+    float va = v < 0.0f ? -v : v, k, s_end, off, doff, ey, epsi;
 
     if (r == 0 || r->n < 2u) { t->kappa = 0.0f; return 0.0f; }
 
@@ -53,7 +60,13 @@ float tt_track_step(TtTrack *t, float x, float y, float psi, float v)
     t->ey = pr.ey;
     t->epsi = tt_route_wrap(psi - pr.psi);
     t->kappa_route = pr.kappa;
-    t->lost = (uint8_t)(pr.ey > c->lost_m || pr.ey < -c->lost_m);
+    /* The errors against the offset path (NAV-08): the offset here and
+     * the heading its slope turns the path by. */
+    off = tt_detour_at(t->det, pr.s, &doff, 0);
+    t->d_off = off;
+    ey = pr.ey - off;
+    epsi = tt_route_wrap(t->epsi - atanf(doff));
+    t->lost = (uint8_t)(ey > c->lost_m || ey < -c->lost_m);
     s_end = r->pt[r->n - 1u].s;
     t->at_end = (uint8_t)(pr.s >= s_end - 1e-3f);
     t->ld = clampf_(c->k_v * va, c->ld_min, c->ld_max);
@@ -61,15 +74,15 @@ float tt_track_step(TtTrack *t, float x, float y, float psi, float v)
     if (c->law == TT_TRK_FRENET) {
         float kff, ky = 1.0f / (t->ld * t->ld), kp = 2.0f * c->zeta / t->ld;
         uint32_t h = t->i;
-        tt_route_at(r, pr.s + va * c->t_ff, &h, 0, 0, 0, &kff);
+        tt_detour_point(r, t->det, pr.s + va * c->t_ff, &h, 0, 0, 0, &kff);
         t->i_look = h;
-        k = kff - ky * t->ey - kp * sinf(t->epsi);
+        k = kff - ky * ey - kp * sinf(epsi);
     } else {
         /* The lookahead point along the route; past the end, the route's
          * last heading carries it on so the car still lines up. */
         float lx, ly, lpsi, dx, dy, d, ca, sa, lat, sl = pr.s + t->ld;
         uint32_t h = t->i;
-        tt_route_at(r, sl, &h, &lx, &ly, &lpsi, 0);
+        tt_detour_point(r, t->det, sl, &h, &lx, &ly, &lpsi, 0);
         if (sl > s_end) {
             lx += (sl - s_end) * cosf(lpsi);
             ly += (sl - s_end) * sinf(lpsi);

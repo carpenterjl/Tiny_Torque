@@ -22,16 +22,35 @@ static void rotate_rpy(const float rpy[3], const float v[3], float out[3])
     out[2] = r20 * v[0] + r21 * v[1] + r22 * v[2];
 }
 
-void tt_clear_zone_dir(const TtClearCfg *c, int row, int col, float dir[3])
+/* The direction at (rowf, colf) in zone units: row + 0.5 is a zone's
+ * centre, row + 1 its lower edge. */
+static void zone_dir_at(const TtClearCfg *c, float rowf, float colf, float dir[3])
 {
     int n = c->zones_side > 0 ? c->zones_side : 1;
     float zone = c->fov_rad / (float)n;
-    float yaw   = -0.5f * c->fov_rad + ((float)col + 0.5f) * zone;   /* + = right */
-    float pitch = -0.5f * c->fov_rad + ((float)row + 0.5f) * zone;   /* + = down  */
+    float yaw   = -0.5f * c->fov_rad + colf * zone;   /* + = right */
+    float pitch = -0.5f * c->fov_rad + rowf * zone;   /* + = down  */
     float cp = cosf(pitch);
     dir[0] = cp * cosf(yaw);
     dir[1] = -cp * sinf(yaw);     /* FLU: left is +y, so a zone to the right is -y */
     dir[2] = -sinf(pitch);        /* and a zone below the aim is -z             */
+}
+
+void tt_clear_zone_dir(const TtClearCfg *c, int row, int col, float dir[3])
+{
+    zone_dir_at(c, (float)row + 0.5f, (float)col + 0.5f, dir);
+}
+
+/* The height (pitch taken out) of the zone's lower edge at range d: what
+ * the roof is judged on. */
+static float lower_edge_z(const TtClearCfg *c, int row, int col, float d, float cb, float sb)
+{
+    float ds[3], db[3], px, pz;
+    zone_dir_at(c, (float)row + 1.0f, (float)col + 0.5f, ds);
+    rotate_rpy(c->rpy_rad, ds, db);
+    px = c->pos_m[0] + d * db[0];
+    pz = c->pos_m[2] + d * db[2];
+    return pz * cb - px * sb;
 }
 
 float tt_clear_step(const TtClearCfg *c, const TtTof *tof, float pitch_rad,
@@ -70,11 +89,15 @@ float tt_clear_step(const TtClearCfg *c, const TtTof *tof, float pitch_rad,
         pz = c->pos_m[2] + d * db[2];
 
         /* The floor: a nose-down body (pitch +) lowers what is ahead of it.
-         * And the ceiling: what the car passes under. */
+         * And the ceiling: what the car passes under, judged on the zone's
+         * lower edge (see tt_clear.h). */
         {
             float zw = pz * cb - px * sb;
             if (zw < c->floor_z_m + c->floor_margin_m) { out->n_floor++; continue; }
-            if (c->roof_z_m > 0.0f && zw > c->roof_z_m) { out->n_floor++; continue; }
+            if (c->roof_z_m > 0.0f && lower_edge_z(c, k / side, k % side, d, cb, sb) > c->roof_z_m) {
+                out->n_floor++;
+                continue;
+            }
         }
 
         /* Against the path: the nearest segment, its along distance. */
@@ -106,4 +129,33 @@ float tt_clear_step(const TtClearCfg *c, const TtTof *tof, float pitch_rad,
         }
     }
     return out->clear_m;
+}
+
+int tt_clear_ray(const TtClearCfg *c, const TtTof *tof, float pitch_rad, int zone,
+                 float org[3], float end[3], int *hit)
+{
+    int side = c->zones_side > 0 ? c->zones_side : 1, zones = side * side, none, k;
+    float d, ds[3], db[3];
+    *hit = 0;
+    if (!tof->st.valid || tof->zones < zones || zone < 0 || zone >= zones) return 0;
+    d = tof->range_m[zone];
+    none = tof->status[zone] != 0 || !(d > 0.0f) ||
+           (c->max_range_m > 0.0f && d >= c->max_range_m - 1e-3f);
+    if (none) {
+        if (!(c->max_range_m > 0.0f)) return 0;
+        d = c->max_range_m;
+    }
+    tt_clear_zone_dir(c, zone / side, zone % side, ds);
+    rotate_rpy(c->rpy_rad, ds, db);
+    for (k = 0; k < 3; k++) {
+        org[k] = c->pos_m[k];
+        end[k] = c->pos_m[k] + d * db[k];
+    }
+    if (!none) {
+        float cb = cosf(pitch_rad), sb = sinf(pitch_rad);
+        float zw = end[2] * cb - end[0] * sb;
+        *hit = !(zw < c->floor_z_m + c->floor_margin_m) &&
+               !(c->roof_z_m > 0.0f && lower_edge_z(c, zone / side, zone % side, d, cb, sb) > c->roof_z_m);
+    }
+    return 1;
 }

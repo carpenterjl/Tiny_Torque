@@ -358,6 +358,18 @@
 #define GA_CL_PATH_N       20        /* ...and how many (5 m)                   */
 #define SF_BLOCK_S         20.0f     /* held this long: fault                  */
 
+/* ------------------------------------------------- the detour (NAV-08) --
+ * The ranger's frames build a local map (core/tt_grid.h) the planner
+ * (core/tt_detour.h) checks the path ahead against; its own settings are
+ * the planner's defaults, the disc from the corridor's half width. */
+#define GA_DT_CELL_M       0.05f     /* the map's cell                          */
+#define GA_DT_AHEAD_M      1.8f      /* the map's window is centred this far ahead:
+                                        4.8 m of it from 0.6 m behind the car  */
+#define GA_DT_PERIOD_S     0.2f      /* the path ahead is checked at 5 Hz       */
+#define GA_DT_SPREAD_M     0.15f     /* the planner's disc beyond the corridor's:
+                                        a zone's return lands up to half a zone
+                                        (0.16 m at 3 m) from what it is on      */
+
 /* -------------------------------------------------------------- sequencing --*/
 #define SQ_ARM_BRAKE_S     1.0f      /* held-brake settling window */
 #define SQ_ARM_ROLL_S      2.0f      /* brake released; counters must not move */

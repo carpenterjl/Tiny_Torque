@@ -150,7 +150,15 @@ namespace AIHWSim.Core
             // while driving (-1 = no multizone ranger).
             public float obstacle_gap_mm = -1f;
             public int obstacle_removed;
+            public int obstacle_hit;         // NAV-08: items knocked out of place
             public float clear_min_mm = -1f;
+
+            // NAV-08: around an item placed by arc length, the most the car
+            // left the route (mm, within 6 m of the item) and how far past the
+            // item's face it was back on it, within 3 cm (m); -1 = no such
+            // item, or never back.
+            public float detour_max_mm = -1f;
+            public float rejoin_m = -1f;
         }
 
         public static string RequestPath =>

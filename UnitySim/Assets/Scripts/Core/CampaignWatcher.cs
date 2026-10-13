@@ -318,7 +318,7 @@ namespace AIHWSim.Core
               "stop_err_mm", "drift_mm", "max_slip_brake", "turn_speed_min", "min_pack_v", "nav_rmse_m", "nav_max_m",
               "xte_rms_mm", "xte_p95_mm", "xte_max_mm", "head_end_deg", "v_err_rms", "lat_acc_max", "lap_s",
               "route_stop_mm", "route_stop_lat_mm", "cmd_delay_ms", "true_delay_ms", "probe_mu", "stop_early_mm",
-              "obstacle_gap_mm", "obstacle_removed", "clear_min_mm",
+              "obstacle_gap_mm", "obstacle_removed", "obstacle_hit", "clear_min_mm", "detour_max_mm", "rejoin_m",
               "mission_fault", "safe_fault", "elapsed_s", "note" };
 
         private string Csv()
@@ -344,7 +344,7 @@ namespace AIHWSim.Core
                                             c.controllerStopErr_mm, c.drift_mm, r.maxSlipBrake, r.minTurnSpeed, r.minPackV, r.navRmse, r.navMax,
                                             c.xte_rms_mm, c.xte_p95_mm, c.xte_max_mm, c.head_end_deg, c.v_err_rms, c.lat_acc_max, c.lap_s,
                                             c.route_stop_mm, c.route_stop_lat_mm, c.cmd_delay_ms, c.true_delay_ms, c.probe_mu, c.stop_early_mm,
-                                            c.obstacle_gap_mm, c.obstacle_removed, c.clear_min_mm })
+                                            c.obstacle_gap_mm, c.obstacle_removed, c.obstacle_hit, c.clear_min_mm, c.detour_max_mm, c.rejoin_m })
                     sb.Append(',').Append(v.ToString("0.###", CultureInfo.InvariantCulture));
                 sb.Append(',').Append(c.fault).Append(',').Append(c.safeFault).Append(',').Append(c.elapsedSec.ToString("0.00", CultureInfo.InvariantCulture));
                 sb.Append(',').Append((c.note ?? "").Replace(',', ';')).Append('\n');
@@ -467,7 +467,7 @@ namespace AIHWSim.Core
             foreach (var k in Campaign.Knobs())
                 sb.AppendLine($"  {k.name,-18}{(k.perWheel ? " per wheel" : "          ")}  {k.Range}");
             sb.AppendLine();
-            sb.AppendLine("Not sampled yet: " + Campaign.NotYet);
+            if (Campaign.NotYet.Length > 0) sb.AppendLine("Not sampled yet: " + Campaign.NotYet);
             return sb.ToString();
         }
     }

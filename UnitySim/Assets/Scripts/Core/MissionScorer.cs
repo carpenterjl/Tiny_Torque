@@ -153,6 +153,7 @@ namespace AIHWSim.Core
             float psi = RouteTable.SiteHeading(_car.transform.forward);
             _rProj = _route.Project(q.x, q.y, _rIdx);
             _rIdx = _rProj.i;
+            Course?.Track(_rProj.s, _rProj.ey);
             float dt = Time.fixedDeltaTime;
             bool drive = phase == 3 || phase == 11 || phase == 7 || phase == 8;
             if (phase == 3 && _tLaunch < 0f) _tLaunch = _elapsed;
@@ -245,6 +246,9 @@ namespace AIHWSim.Core
             res.clear_min_mm = _clearMin < float.MaxValue ? _clearMin * 1000f : -1f;
             res.obstacle_gap_mm = Course != null ? Course.GapMm : -1f;
             res.obstacle_removed = Course != null ? Course.Removed : 0;
+            res.obstacle_hit = Course != null ? Course.Hit : 0;
+            res.detour_max_mm = Course != null ? Course.DetourMaxMm : -1f;
+            res.rejoin_m = Course != null ? Course.RejoinM : -1f;
 
             if (_route != null)
             {

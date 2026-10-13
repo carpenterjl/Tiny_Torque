@@ -182,6 +182,17 @@ typedef struct {
     int    blocked;        /* held short of something in the way             */
     float  block_t;        /* s held                                         */
     TtClearOut clr_out;    /* the last frame's verdict, for telemetry        */
+
+    /* A detour beside the route (NAV-08): the map the ranger's rays build,
+     * the offset profile the tracker follows, the planner's settings. */
+    TtGrid grid;
+    TtDetour det;
+    TtDetourCfg det_cfg;   /* set with the ranger                            */
+    int    det_on;         /* the car has a ranger to map with               */
+    float  det_t;          /* s since the path ahead was last checked        */
+    float  det_d;          /* the detour's offset at the car's place, m      */
+    float  det_s;          /* where the path ahead was last found blocked, m; -1 clear */
+    int    n_det;          /* detours planned this run                       */
     float  route_s;        /* where the car is on the route now, m         */
     float  v_plan;         /* the plan at the predicted place              */
 

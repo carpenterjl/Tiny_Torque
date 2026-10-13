@@ -13,7 +13,11 @@
  *      `floor_margin_m` of the floor is the floor. A nose-down car under
  *      braking sees the floor in its lower zones at a metre; this is why
  *      the old single-beam abort had to be debounced. So are points above
- *      `roof_z_m`: a banner the car passes under.
+ *      `roof_z_m`: a banner the car passes under. The roof is judged on the
+ *      zone's LOWER edge, not its centre: a return anywhere in the zone is
+ *      reported at the centre, and a barrier 0.25 m tall at 3 m lies in
+ *      the row whose centre points over the roof (NAV-08 needs it seen
+ *      there; the floor keeps the centre, which NAV-05 settled on).
  *   3. The rest are measured against the path ahead, a polyline in the body
  *      frame from the car's origin: a point within `half_width_m` of it
  *      (the car's half width plus a margin) is in the way, and the shortest
@@ -67,6 +71,14 @@ void tt_clear_zone_dir(const TtClearCfg *c, int row, int col, float dir[3]);
  * nose down +. Returns out->clear_m. */
 float tt_clear_step(const TtClearCfg *c, const TtTof *tof, float pitch_rad,
                     const TtClearPt *path, int n, TtClearOut *out);
+
+/* One zone's return as a ray for a map (NAV-08, tt_grid.h), in the body
+ * frame: from the sensor (`org`) to where the return is (`end`), or to the
+ * sensor's range when there is none. *hit = 1 when the return is something
+ * in the way (not the floor, not above the roof). Returns 0 when the zone
+ * has nothing to tell (no frame, or no range to reach). */
+int tt_clear_ray(const TtClearCfg *c, const TtTof *tof, float pitch_rad, int zone,
+                 float org[3], float end[3], int *hit);
 
 #ifdef __cplusplus
 }

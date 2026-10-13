@@ -32,12 +32,17 @@ namespace AIHWSim.Core
             public float clearAfterS = -1f;     // < 0: stays
             public float halfDepth;             // along the item's forward, to its near face
             public int index = -1;              // in TrackDesign.items
+            public float s = float.NaN;         // route arc length, when placed by s=
             // Per run:
             public GameObject go;
             public bool removed;
             public float stoppedAt = -1f;       // run time the car first stood short of it
             public float gapM = float.NaN;      // nose to the near face then
             public float stillT;
+            public float detourMax;             // NAV-08: the most the car left the route near it, m
+            public float rejoinM = -1f;         // ...and how far past its face it was back within 3 cm
+            public Vector3 placedAt;            // where it stood: a dynamic item that moved was hit
+            public bool hit;
         }
 
         public readonly List<Entry> entries = new List<Entry>();
@@ -78,6 +83,7 @@ namespace AIHWSim.Core
                 {
                     if (route == null) throw new ArgumentException($"obstacle '{p}': s= needs a route (-opusRoute)");
                     route.At(s, out sx, out sy, out psi);
+                    e.s = s;
                     // Left of the route's heading, in the site frame.
                     sx -= lat * Mathf.Sin(psi);
                     sy += lat * Mathf.Cos(psi);
@@ -113,7 +119,11 @@ namespace AIHWSim.Core
         public void Reset()
         {
             _found = false;
-            foreach (var e in entries) { e.go = null; e.removed = false; e.stoppedAt = -1f; e.gapM = float.NaN; e.stillT = 0f; }
+            foreach (var e in entries)
+            {
+                e.go = null; e.removed = false; e.stoppedAt = -1f; e.gapM = float.NaN; e.stillT = 0f;
+                e.detourMax = 0f; e.rejoinM = -1f; e.hit = false;
+            }
         }
 
         /// <summary>One physics step: watch for the car standing short of an
@@ -127,7 +137,7 @@ namespace AIHWSim.Core
                 _found = true;
                 foreach (var m in UnityEngine.Object.FindObjectsByType<PlacedItemMarker>(FindObjectsSortMode.None))
                     foreach (var e in entries)
-                        if (m.index == e.index) e.go = m.gameObject;
+                        if (m.index == e.index) { e.go = m.gameObject; e.placedAt = m.transform.position; }
             }
             Vector3 nose = car.transform.position + car.transform.forward * noseM;
             float spd = Mathf.Abs(car.ForwardSpeed);
@@ -136,6 +146,8 @@ namespace AIHWSim.Core
             {
                 if (e.removed) continue;
                 Vector3 dir = Quaternion.Euler(0f, e.yawDeg, 0f) * Vector3.forward;
+                if (e.go != null && !e.hit && (e.go.transform.position - e.placedAt).sqrMagnitude > 0.02f * 0.02f)
+                    e.hit = true;   // knocked (a cone flies; a barrier is static and stops the car instead)
                 Vector3 face = new Vector3(e.x, nose.y, e.z) - dir * e.halfDepth;
                 float gap = Vector3.Dot(face - nose, dir);
                 if (e.stoppedAt < 0f)
@@ -151,6 +163,44 @@ namespace AIHWSim.Core
             }
         }
 
+        /// <summary>The route part of a step (NAV-08): the car's place on the
+        /// route and its cross-track error. For an item placed by arc length:
+        /// the most the car left the route within 6 m of it, and how far past
+        /// its face the car was back within 3 cm.</summary>
+        public void Track(float s, float ey)
+        {
+            foreach (var e in entries)
+            {
+                if (float.IsNaN(e.s)) continue;
+                if (Mathf.Abs(s - e.s) < 6f) e.detourMax = Mathf.Max(e.detourMax, Mathf.Abs(ey));
+                if (e.rejoinM < 0f && s > e.s + e.halfDepth + 0.1f && Mathf.Abs(ey) < 0.03f) e.rejoinM = s - e.s;
+            }
+        }
+
+        /// <summary>The most the car left the route near an item placed by
+        /// arc length, mm; -1 without one.</summary>
+        public float DetourMaxMm
+        {
+            get
+            {
+                float m = -1f;
+                foreach (var e in entries) if (!float.IsNaN(e.s)) m = Mathf.Max(m, e.detourMax * 1000f);
+                return m;
+            }
+        }
+
+        /// <summary>How far past such an item's face the car was back on the
+        /// route, m (the longest of them); -1 if never.</summary>
+        public float RejoinM
+        {
+            get
+            {
+                float m = -1f;
+                foreach (var e in entries) if (e.rejoinM >= 0f) m = Mathf.Max(m, e.rejoinM);
+                return m;
+            }
+        }
+
         /// <summary>The gap at the first stop short of any item, mm; -1 if
         /// the car never stood short of one.</summary>
         public float GapMm
@@ -162,6 +212,12 @@ namespace AIHWSim.Core
                     if (e.stoppedAt >= 0f && (float.IsNaN(best) || e.gapM < best)) best = e.gapM;
                 return float.IsNaN(best) ? -1f : best * 1000f;
             }
+        }
+
+        /// <summary>Items the car knocked out of place (dynamic ones only).</summary>
+        public int Hit
+        {
+            get { int n = 0; foreach (var e in entries) if (e.hit) n++; return n; }
         }
 
         /// <summary>1 when an item was removed during the run.</summary>

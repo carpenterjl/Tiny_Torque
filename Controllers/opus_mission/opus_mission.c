@@ -252,12 +252,17 @@ void opus_reset(OpusState *st)
     float rate = st->rate_hz, vmax = st->route_vmax;
     int l = st->odo_l, r = st->odo_r, iq = st->drive_iq, bad = st->route_bad;
     TtClearCfg clr = st->clr;
-    int clr_on = st->clr_on;
+    TtDetourCfg dcfg = st->det_cfg;
+    int clr_on = st->clr_on, det_on = st->det_on;
 
     memset(st, 0, sizeof(*st));
     st->clr = clr;
     st->clr_on = clr_on;
     st->clear_m = TT_CLEAR_NONE;
+    st->det_cfg = dcfg;
+    st->det_on = det_on;
+    st->det_s = -1.0f;
+    tt_grid_init(&st->grid, GA_DT_CELL_M);
     st->p = p;
     st->rate_hz = rate;
     st->odo_l = l;
@@ -286,6 +291,7 @@ void opus_reset(OpusState *st)
         if (p->wheelbase_m > 0.0f && p->max_steer_rad > 0.0f)
             tc.kappa_max = tanf(p->max_steer_rad) / p->wheelbase_m;
         tt_track_reset(&st->trk, &tc, route);
+        tt_track_set_detour(&st->trk, &st->det);
         tt_vplan_build(&st->plan, route, vmax, RT_LAT_USE * route->a_lat_max, 0.0f, 0.0f, -1.0f);
         st->plan_mu = st->mu_est;
     }
@@ -580,6 +586,17 @@ void opus_set_clearance(OpusState *st, const TtClearCfg *c, int on)
     if (c && on) { st->clr = *c; st->clr_on = 1; }
     else { memset(&st->clr, 0, sizeof(st->clr)); st->clr_on = 0; }
     st->clear_m = TT_CLEAR_NONE;
+    /* The detour planner (NAV-08) maps with the same ranger; its discs are
+     * the corridor's half width and a cell for the map's quantisation. */
+    tt_detour_default_cfg(&st->det_cfg);
+    st->det_cfg.half_width_m = st->clr.half_width_m + GA_DT_SPREAD_M;
+    if (st->p->wheelbase_m > 0.0f && st->p->max_steer_rad > 0.0f) {
+        float kmax = tanf(st->p->max_steer_rad) / st->p->wheelbase_m;
+        if (st->det_cfg.kappa_max > 0.75f * kmax) st->det_cfg.kappa_max = 0.75f * kmax;
+    }
+    st->det_on = st->clr_on;
+    tt_grid_init(&st->grid, GA_DT_CELL_M);
+    memset(&st->det, 0, sizeof(st->det));
 }
 
 /* ------------------------------------------------------- the way ahead ---
@@ -588,6 +605,7 @@ void opus_set_clearance(OpusState *st, const TtClearCfg *c, int on)
  * straight ahead without one. What comes out is the clear distance from
  * the nose. */
 static float turn_profile(float t, float *out_rate);
+static void map_frame(OpusState *st, const TtMeas *m);
 
 static void clearance(OpusState *st, const TtMeas *m)
 {
@@ -608,7 +626,7 @@ static void clearance(OpusState *st, const TtMeas *m)
         for (k = 1; k < GA_CL_PATH_N && n < (int)TT_CLEAR_MAX_PATH; k++) {
             float sk = st->route_s + GA_CL_PATH_DS * (float)k, x, y, psi, kap, dx, dy;
             if (sk > s_end) break;
-            tt_route_at(st->route, sk, &st->clr_hint, &x, &y, &psi, &kap);
+            tt_detour_point(st->route, &st->det, sk, &st->clr_hint, &x, &y, &psi, &kap);
             dx = x - st->pose[0];
             dy = y - st->pose[1];
             path[n].x =  c * dx + s * dy;
@@ -658,6 +676,71 @@ static void clearance(OpusState *st, const TtMeas *m)
     tt_clear_step(&st->clr, &m->tof, st->pitch, path, n, &o);
     st->clr_out = o;
     st->clear_m = o.clear_m < TT_CLEAR_NONE ? o.clear_m - p->body_nose_m : TT_CLEAR_NONE;
+    if (st->det_on && st->route && st->pose_ok) map_frame(st, m);
+}
+
+/* ---------------------------------------------------------- the detour ---
+ * NAV-08. Every frame of the ranger goes into a local map as rays in the
+ * site frame: what they end on is in the way, what they pass through at
+ * the car's height is not. Every GA_DT_PERIOD_S the path ahead (the route,
+ * or the detour being driven) is checked against the map, and a block
+ * within reach sends the planner over its lattice of offsets, the side the
+ * blocking return leaves more room on first. A detour whose ease-out has
+ * not begun is dropped again if the route clears; one the car has driven
+ * ends with its ease-back. When no offset passes, nothing changes: the car
+ * holds short of the block as before. */
+static void map_frame(OpusState *st, const TtMeas *m)
+{
+    const TtClearCfg *c = &st->clr;
+    float cp = cosf(st->pose[2]), sp = sinf(st->pose[2]);
+    float cb = cosf(st->pitch), sb = sinf(st->pitch);
+    float z_lo = c->floor_z_m + c->floor_margin_m, z_hi = c->roof_z_m > 0.0f ? c->roof_z_m : 1.0f;
+    int side = c->zones_side, k;
+    /* The window sits ahead of the car, where the ranger looks. */
+    tt_grid_centre(&st->grid, st->pose[0] + GA_DT_AHEAD_M * cp, st->pose[1] + GA_DT_AHEAD_M * sp);
+    for (k = 0; k < side * side; k++) {
+        float o[3], e[3];
+        int hit;
+        if (!tt_clear_ray(c, &m->tof, st->pitch, k, o, e, &hit)) continue;
+        tt_grid_ray(&st->grid,
+                    st->pose[0] + cp * o[0] - sp * o[1], st->pose[1] + sp * o[0] + cp * o[1],
+                    o[2] * cb - o[0] * sb,
+                    st->pose[0] + cp * e[0] - sp * e[1], st->pose[1] + sp * e[0] + cp * e[1],
+                    e[2] * cb - e[0] * sb,
+                    z_lo, z_hi, hit);
+    }
+}
+
+static void detour_step(OpusState *st, float dt)
+{
+    const TtDetourCfg *c = &st->det_cfg;
+    const float s = st->route_s;
+    float s_route, y_route, s_path;
+    st->det_d = tt_detour_at(&st->det, s, 0, 0);
+    if (!st->det_on || !st->pose_ok) return;
+    if (st->det.active && s > st->det.s3) { st->det.active = 0; st->det_d = 0.0f; }
+    st->det_t += dt;
+    if (st->det_t < GA_DT_PERIOD_S) return;
+    st->det_t = 0.0f;
+    /* The route itself, and the path being driven (the route when there is
+     * no detour). */
+    s_route = tt_detour_blocked(c, &st->grid, st->route, 0, s, c->look_m, &y_route);
+    s_path = st->det.active ? tt_detour_blocked(c, &st->grid, st->route, &st->det, s, c->look_m, 0) : s_route;
+    st->det_s = s_path;
+    if (st->det.active && s_route < 0.0f && (s < st->det.s0 || s_path >= 0.0f)) {
+        /* The way opened before the detour began, or the detour is blocked
+         * and the route is not: back to the route. */
+        st->det.active = 0;
+        st->det_d = 0.0f;
+        return;
+    }
+    if (s_path >= 0.0f && s_route >= 0.0f) {
+        TtDetour nd;
+        if (tt_detour_plan(c, &st->grid, st->route, s, st->v_pred, st->det_d, s_route, y_route, &nd)) {
+            st->det = nd;
+            st->n_det++;
+        }
+    }
 }
 
 static void enter(OpusState *st, OpusPhase ph)
@@ -990,6 +1073,10 @@ static void fill_log(OpusState *st, const TtMeas *m)
     g->probe_mu     = st->pr_mu;
     g->stop_early_m = st->stop_early_m;
     g->clear_m      = st->clear_m < 99.0f ? st->clear_m : 99.0f;
+    g->det_d        = st->det_d;
+    g->det_n        = (float)st->n_det;
+    g->det_s        = st->det_on ? st->det_s : -1.0f;
+    g->map_n        = st->det_on ? (float)tt_grid_count(&st->grid) : 0.0f;
 }
 
 /* -------------------------------------------------------------------- step --*/
@@ -1435,9 +1522,18 @@ void opus_step(OpusState *st, const TtMeas *m, TtCmd *out)
         /* The speed plan where this command lands, and its own acceleration
          * as the feed-forward; the tracker steers. */
         const float s_end = st->route->pt[st->route->n - 1u].s;
+        detour_step(st, dt);
         v_ref = st->v_plan;
         a_ff = clampf(plan_accel(st), -st->a_brake, st->plan.a_drive);
         psi_dot_ref = rt_rate;
+        /* A detour's ramps add curvature the plan did not see (NAV-08). */
+        if (st->det.active && st->trk.s >= st->det.s0 - 0.5f && st->trk.s <= st->det.s3) {
+            float kr = st->trk.kappa_route < 0.0f ? -st->trk.kappa_route : st->trk.kappa_route;
+            float kk = st->det.kappa_peak + kr, v_cap = v_ref;
+            if (kk > 1e-3f) v_cap = sqrtf(st->plan.a_lat / kk);
+            if (v_cap < RT_V_MIN) v_cap = RT_V_MIN;
+            if (v_cap < v_ref) { v_ref = v_cap; if (a_ff > 0.0f) a_ff = 0.0f; }
+        }
         /* The stop: as after leg B, it starts where it can still be made at
          * a_brake, and the distance left on the route becomes an odometer
          * target, so BRAKE and CREEP fly it on the encoders. */

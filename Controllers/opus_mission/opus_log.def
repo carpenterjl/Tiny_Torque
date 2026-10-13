@@ -52,3 +52,7 @@ TT_LOG(cmd_delay_ms, "ms",    "command delay the loops predict over: cmd_delay_s
 TT_LOG(probe_mu,     "",      "the floor's peak friction found by leg A's probe; 0 = not probed (FW-18)")
 TT_LOG(stop_early_m, "m",     "the brake was started this far before the leg-B mark on purpose: the delay beyond the parameter's (FW-19), or a floor that cannot make the stop (FW-16); 0 = on the mark")
 TT_LOG(clear_m,      "m",     "the path ahead is clear this far from the nose, by the multizone ranger (NAV-05); 99 = nothing in the way, or no ranger")
+TT_LOG(det_d,        "m",     "the detour's offset from the route at the car's place, + = left (NAV-08); 0 = on the route")
+TT_LOG(det_n,        "",      "detours planned this run (NAV-08)")
+TT_LOG(det_s,        "m",     "the route ahead was last found blocked this far along it (NAV-08); -1 = clear over the look-ahead")
+TT_LOG(map_n,        "",      "occupied cells in the local map (NAV-08)")
