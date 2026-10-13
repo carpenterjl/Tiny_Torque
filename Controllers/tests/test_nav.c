@@ -38,6 +38,10 @@ typedef struct {
     TtNav  nav;
 } Run;
 
+/* The share of ranges that are outliers (0.5-3 m long): 1 % is a clean
+ * site; a cluttered one with multipath can run at a third (FW-20). */
+static double g_outlier = 0.01;
+
 /* seed: 0 = find the pose; 1 = seeded at the truth; 2 = seeded dpsi off */
 static Run drive(int seed, double dpsi)
 {
@@ -86,7 +90,7 @@ static Run drive(int seed, double dpsi)
                             (tag_z - an[2]) * (tag_z - an[2]));
             double rr = d + uwb_bias + 0.05 * gauss(), db = 2.0 + gauss();
             if (urand() < 0.03) { rr += -0.3 * log(1.0 - urand()); db = 9.0 + 3.0 * gauss(); }
-            if (urand() < 0.01) rr += 0.5 + 2.5 * urand();
+            if (urand() < g_outlier) rr += 0.5 + 2.5 * urand();
             if (urand() > 0.02 && nr < 4) {
                 r[nr].anchor[0] = (float)an[0]; r[nr].anchor[1] = (float)an[1]; r[nr].anchor[2] = (float)an[2];
                 r[nr].range_m = (float)rr; r[nr].nlos_db = (float)db; nr++;
@@ -127,8 +131,8 @@ int main(void)
 {
     const double bias_g = 0.01, odo_scale = 1.02;
     Run r = drive(0, 0.0);
-    printf("init at t = %.2f s after %.2f m (fit rms %.3f m); %u ranges used, %u gated\n",
-           r.t_init, r.travel_init, r.nav.init_rms, r.nav.n_used, r.nav.n_gated);
+    printf("init at t = %.2f s after %.2f m (fit rms %.3f m over the %.0f %% kept); %u ranges used, %u gated\n",
+           r.t_init, r.travel_init, r.nav.init_rms, r.nav.init_inlier * 100.0f, r.nav.n_used, r.nav.n_gated);
     CHECK("initialises from the UWB ranges within 5 m of travel", r.t_init > 0.0 && r.travel_init < 5.0);
     if (r.n > 0) {
         printf("position RMSE %.3f m (max %.3f), heading RMSE %.2f deg, k_w %.4f, b_g %.4f rad/s\n",
@@ -140,6 +144,21 @@ int main(void)
         CHECK("gyro bias estimated within 0.003 rad/s", fabs(r.nav.s[TT_NAV_BG] - bias_g) < 0.003);
         CHECK("NLOS/outlier ranges are gated out", r.nav.n_gated > 0);
     }
+
+    /* FW-20: a third of the ranges multipath. The start search once judged
+     * its fit on every range, capped outliers included, and such a site
+     * never passed: the filter ran on no odometer scale, and the mission
+     * measured its legs on the raw radius (110-160 mm off at 14.5 m). */
+    g_outlier = 0.30;
+    r = drive(0, 0.0);
+    printf("a third of the ranges outliers: init at t = %.2f s after %.2f m (fit rms %.3f m over the %.0f %% kept); "
+           "RMSE %.3f m (max %.3f), k_w %.4f\n",
+           r.t_init, r.travel_init, r.nav.init_rms, r.nav.init_inlier * 100.0f, r.rmse, r.emax, r.nav.s[TT_NAV_KW]);
+    CHECK("outliers: still initialises within 5 m of travel", r.t_init > 0.0 && r.travel_init < 5.0);
+    CHECK("outliers: the fit keeps 60-80 % of the ranges", r.nav.init_inlier >= 0.6f && r.nav.init_inlier <= 0.8f);
+    CHECK("outliers: position RMSE below 0.15 m, never above 0.40", r.n > 0 && r.rmse < 0.15 && r.emax < 0.40);
+    CHECK("outliers: odometer scale within 1 %", r.n > 0 && fabs(r.nav.s[TT_NAV_KW] - odo_scale) < 0.01);
+    g_outlier = 0.01;
 
     r = drive(1, 0.0);
     printf("seeded at the truth: RMSE %.3f m (max %.3f), heading %.2f deg; check %d (dpsi %.2f deg, dpos %.3f m)\n",

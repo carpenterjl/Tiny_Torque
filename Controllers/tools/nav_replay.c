@@ -121,6 +121,7 @@ int main(int argc, char **argv)
 #define F_(m) { #m, offsetof(TtNavCfg, m) }
             F_(q_accel), F_(q_gyro), F_(q_bias), F_(q_scale), F_(r_speed), F_(r_flow), F_(r_range),
             F_(r_bias0), F_(r_gyro_rest), F_(nlos_db), F_(nlos_scale), F_(gate), F_(init_travel_m),
+            F_(init_rms_max), F_(init_inlier_min),
             F_(rear_axle_x), F_(corner_k), F_(odo_axle_x),
 #undef F_
         };
@@ -197,8 +198,8 @@ int main(int argc, char **argv)
     fclose(fp);
     if (fo) fclose(fo);
 
-    printf("rows %ld; init at t = %.2f s (fit rms %.3f m); ranges used %u, gated %u\n",
-           rows, t_init, nav.init_rms, nav.n_used, nav.n_gated);
+    printf("rows %ld; init at t = %.2f s (fit rms %.3f m over the %.0f %% kept); ranges used %u, gated %u\n",
+           rows, t_init, nav.init_rms, nav.init_inlier * 100.0f, nav.n_used, nav.n_gated);
     if (n == 0) { printf("NOT INITIALISED\n"); return 1; }
     printf("position RMSE %.3f m (moving %.3f m, max %.3f m); heading RMSE %.2f deg; k_w %.4f; b_g %.5f rad/s\n",
            sqrt(se / (double)n), n_mov ? sqrt(se_mov / (double)n_mov) : 0.0, emax,

@@ -73,6 +73,9 @@ typedef struct {
     float lever[2];       /* UWB tag in the body frame (x fwd, y left), m   */
     float tag_z;          /* tag height above the ground plane, m           */
     float init_travel_m;  /* odometer travel before the heading search      */
+    float init_rms_max;   /* the search accepts a fit whose kept ranges (the
+                             ones within 0.5 m of it) have this rms, m ...  */
+    float init_inlier_min;/* ... and are this share of all recorded (FW-20) */
     float rest_speed;     /* below this the car is at rest, m/s             */
     float rear_axle_x;    /* rear axle in the body frame (x fwd), m; 0 = the
                              origin is on it (no kinematic sideslip)        */
@@ -97,7 +100,9 @@ typedef struct {
     float    rec_t[TT_NAV_MAX_REC][2];     /* tag, local frame             */
     float    rec_a[TT_NAV_MAX_REC][3];
     float    rec_r[TT_NAV_MAX_REC];
-    float    init_rms;                     /* range residual of the fit, m */
+    float    init_rms;                     /* range residual of the fit over the
+                                              ranges it keeps (under 0.5 m), m */
+    float    init_inlier;                  /* the share of ranges it keeps  */
     uint32_t n_used, n_gated;
     /* seeded start (NAV-04): the heading search still runs once over the
      * first init_travel_m, as a check on where the car was said to be */

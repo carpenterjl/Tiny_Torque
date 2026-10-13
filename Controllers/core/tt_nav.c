@@ -39,6 +39,8 @@ void tt_nav_default_cfg(TtNavCfg *c)
     c->gate = 9.0f;
     c->tag_z = 0.0f;
     c->init_travel_m = 3.0f;
+    c->init_rms_max = 0.25f;
+    c->init_inlier_min = 0.6f;
     c->rest_speed = 0.02f;
 }
 
@@ -160,17 +162,20 @@ static float range_h(const TtNav *n, const float a[3], float H[N])
 
 /* ---- initialisation: heading search over the recorded track --------------- */
 
-/* Fit the start position for heading th; returns the robust cost. */
-static float fit_start(const TtNav *n, float th, float *x0, float *y0)
+/* Fit the start position for heading th; returns the robust cost (every
+ * capped outlier counts cap^2), and the ranges the fit explains: how many
+ * lie under the cap and their rms. */
+static float fit_start(const TtNav *n, float th, float *x0, float *y0,
+                       int *n_in, float *rms_in)
 {
-    float c = cosf(th), sn = sinf(th), cost = 0.0f;
-    int it, i;
+    float c = cosf(th), sn = sinf(th), cost = 0.0f, sq_in = 0.0f;
+    int it, i, k_in = 0;
     for (it = 0; it < 10; it++) {
         /* Plain least squares first (from a far guess every residual is
          * large), then cap outliers once the fit is close. */
         float cap = it < 5 ? 1e6f : 0.5f;
         float a11 = 0.0f, a12 = 0.0f, a22 = 0.0f, b1 = 0.0f, b2 = 0.0f, det, d1, d2;
-        cost = 0.0f;
+        cost = 0.0f; sq_in = 0.0f; k_in = 0;
         for (i = 0; i < n->rec_n; i++) {
             const float *t = n->rec_t[i], *a = n->rec_a[i];
             float wx = *x0 + c * t[0] - sn * t[1] - a[0];
@@ -180,7 +185,7 @@ static float fit_start(const TtNav *n, float th, float *x0, float *y0)
             if (rho < 1e-3f) rho = 1e-3f;
             e = rho - n->rec_r[i];
             if (fabsf(e) > cap) { cost += cap * cap; continue; }   /* outlier: capped */
-            cost += e * e;
+            cost += e * e; sq_in += e * e; k_in++;
             jx = wx / rho; jy = wy / rho;
             a11 += jx * jx; a12 += jx * jy; a22 += jy * jy;
             b1 += jx * e; b2 += jy * e;
@@ -192,6 +197,8 @@ static float fit_start(const TtNav *n, float th, float *x0, float *y0)
         *x0 -= d1; *y0 -= d2;
         if (it >= 5 && fabsf(d1) + fabsf(d2) < 1e-4f) break;
     }
+    if (n_in) *n_in = k_in;
+    if (rms_in) *rms_in = k_in > 0 ? sqrtf(sq_in / (float)k_in) : 1e30f;
     return cost;
 }
 
@@ -200,29 +207,39 @@ static float fit_start(const TtNav *n, float th, float *x0, float *y0)
  * Returns 0 while the ranges are not explained yet. */
 static int search(TtNav *n, float *th_out, float *x_out, float *y_out)
 {
-    float best = 1e30f, bth = 0.0f, bx = 0.0f, by = 0.0f, cx = 0.0f, cy = 0.0f;
-    int i, k;
+    float best = 1e30f, bth = 0.0f, bx = 0.0f, by = 0.0f, cx = 0.0f, cy = 0.0f, rms = 1e30f;
+    int i, k, n_in = 0;
     if (n->rec_n < 12) return 0;
     for (i = 0; i < n->rec_n; i++) { cx += n->rec_a[i][0]; cy += n->rec_a[i][1]; }
     cx /= (float)n->rec_n; cy /= (float)n->rec_n;
     for (k = 0; k < 72; k++) {
-        float th = -PI_F + (float)k * (2.0f * PI_F / 72.0f), x0 = cx, y0 = cy;
-        float cst = fit_start(n, th, &x0, &y0);
-        if (cst < best) { best = cst; bth = th; bx = x0; by = y0; }
+        float th = -PI_F + (float)k * (2.0f * PI_F / 72.0f), x0 = cx, y0 = cy, r1;
+        int k1;
+        float cst = fit_start(n, th, &x0, &y0, &k1, &r1);
+        if (cst < best) { best = cst; bth = th; bx = x0; by = y0; n_in = k1; rms = r1; }
     }
     /* refine the heading around the best coarse cell */
     {
         float lo = bth - 2.0f * PI_F / 72.0f, hi = bth + 2.0f * PI_F / 72.0f;
         for (k = 0; k < 20; k++) {
             float m1 = lo + (hi - lo) * 0.382f, m2 = lo + (hi - lo) * 0.618f;
-            float x1 = bx, y1 = by, x2 = bx, y2 = by;
-            float c1 = fit_start(n, m1, &x1, &y1), c2 = fit_start(n, m2, &x2, &y2);
-            if (c1 < c2) { hi = m2; if (c1 < best) { best = c1; bth = m1; bx = x1; by = y1; } }
-            else         { lo = m1; if (c2 < best) { best = c2; bth = m2; bx = x2; by = y2; } }
+            float x1 = bx, y1 = by, x2 = bx, y2 = by, r1, r2;
+            int k1, k2;
+            float c1 = fit_start(n, m1, &x1, &y1, &k1, &r1), c2 = fit_start(n, m2, &x2, &y2, &k2, &r2);
+            if (c1 < c2) { hi = m2; if (c1 < best) { best = c1; bth = m1; bx = x1; by = y1; n_in = k1; rms = r1; } }
+            else         { lo = m1; if (c2 < best) { best = c2; bth = m2; bx = x2; by = y2; n_in = k2; rms = r2; } }
         }
     }
-    n->init_rms = sqrtf(best / (float)n->rec_n);
-    if (n->init_rms > 0.25f) return 0;      /* not explained yet: keep driving */
+    /* Explained when the ranges the fit keeps agree with it and are most of
+     * what was recorded. Judged on those, not on the capped cost: a site
+     * where a third of the ranges are multipath (every one long by 0.5 m or
+     * more) can never bring the whole set's rms under the bar, however right
+     * the heading is, and the filter would then run on no scale at all
+     * (FW-20: leg A 110-160 mm off, on the raw radius). */
+    n->init_rms = rms;
+    n->init_inlier = (float)n_in / (float)n->rec_n;
+    if (n_in < 12 || n->init_inlier < n->cfg.init_inlier_min || rms > n->cfg.init_rms_max)
+        return 0;                           /* not explained yet: keep driving */
     *th_out = bth;
     *x_out = bx;
     *y_out = by;
