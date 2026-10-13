@@ -180,6 +180,8 @@ typedef struct {
     float    steer_hold;        /* last good steer command                      */
     int32_t  enc_prev[TT_MAX_WHEELS];
     uint8_t  enc_has_prev[TT_MAX_WHEELS];
+    tt_us_t  enc_prev_us[TT_MAX_WHEELS];    /* the last report's stamp (FW-21) */
+    uint32_t enc_prev_seq[TT_MAX_WHEELS];
     float    glitch_t[4];       /* times of the latest glitches (ring)          */
     float    mismatch_t[TT_MAX_WHEELS];
     uint32_t glitch_n, glitches;

@@ -82,6 +82,8 @@ typedef struct {
      * where it is used — never a float accumulating millimetres. */
     int32_t enc_prev[TT_MAX_WHEELS];
     uint8_t enc_has_prev[TT_MAX_WHEELS];
+    tt_us_t enc_prev_us[TT_MAX_WHEELS];    /* the last report's stamp (FW-21) */
+    uint32_t enc_prev_seq[TT_MAX_WHEELS];
     int32_t odo_cnt_l, odo_cnt_r;  /* accepted counts since arm */
     float  odo_corr_m;     /* calibration corrections since arm (slip)        */
     float  v_meas;         /* m/s from the tick delta */

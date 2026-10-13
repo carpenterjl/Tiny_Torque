@@ -92,24 +92,39 @@ static float drag_n(const TtParams *p, float v)
 /* ------------------------------------------------------------- odometry ----
  * Encoder counts arrive cumulative (the target unwraps the hardware register),
  * so a delta is one int32 subtraction. A jump faster than SF_GLITCH_MPS
- * cannot be real motion and is dropped rather than believed.
+ * cannot be real motion and is dropped rather than believed. The time a
+ * delta spans is the reports' own (FW-21): a report held over (the node's
+ * frames lost on the bus) brings nothing, and the one that follows spans
+ * every tick since, so its count is no glitch and its speed no spike. A
+ * stamp within a quarter tick of the tick is the tick.
  */
-static int32_t enc_delta(OpusState *st, const TtMeas *m, int w, float dt, int *glitch)
+static int32_t enc_delta(OpusState *st, const TtMeas *m, int w, float dt, int *glitch, float *span)
 {
+    const TtEnc *e = &m->enc[w];
     int32_t d;
-    float mpc = tt_m_per_count(st->p, w);
-    if (!m->enc[w].st.valid) return 0;
+    float mpc = tt_m_per_count(st->p, w), sp;
+    *span = 0.0f;
+    if (!e->st.valid) return 0;
     if (!st->enc_has_prev[w]) {
-        st->enc_prev[w] = m->enc[w].count;
+        st->enc_prev[w] = e->count;
+        st->enc_prev_us[w] = e->st.t_us;
+        st->enc_prev_seq[w] = e->st.seq;
         st->enc_has_prev[w] = 1;
         return 0;
     }
-    d = (int32_t)((uint32_t)m->enc[w].count - (uint32_t)st->enc_prev[w]);
-    st->enc_prev[w] = m->enc[w].count;
-    if (mpc > 0.0f && (float)(d < 0 ? -d : d) * mpc > SF_GLITCH_MPS * dt) {
+    if (e->st.seq == st->enc_prev_seq[w] && e->st.t_us == st->enc_prev_us[w] && e->st.t_us != 0u)
+        return 0;                                  /* held over: nothing new */
+    sp = (float)(uint32_t)(e->st.t_us - st->enc_prev_us[w]) * 1e-6f;
+    if (!(sp > 0.0f) || sp > 0.5f || (sp > 0.75f * dt && sp < 1.25f * dt)) sp = dt;
+    st->enc_prev_us[w] = e->st.t_us;
+    st->enc_prev_seq[w] = e->st.seq;
+    d = (int32_t)((uint32_t)e->count - (uint32_t)st->enc_prev[w]);
+    st->enc_prev[w] = e->count;
+    if (mpc > 0.0f && (float)(d < 0 ? -d : d) * mpc > SF_GLITCH_MPS * sp) {
         if (glitch) *glitch = 1;
         return 0;
     }
+    *span = sp;
     return d;
 }
 
@@ -1088,7 +1103,8 @@ void opus_step(OpusState *st, const TtMeas *m, TtCmd *out)
     float ds_l, ds_r, ds, psi_dot_enc, psi_dot_ref = 0.0f;
     float v_ref = 0.0f, a_ff = 0.0f, odo_eff, mpc_l, mpc_r, rt_rate = 0.0f;
     int32_t dl, dr;
-    int   allow_brake = 1, glitch = 0, w, n_fly;
+    int   allow_brake = 1, glitch = 0, gap = 0, w, n_fly;
+    float sl = 0.0f, sr = 0.0f;
     OpusSent now;
 
     memset(out, 0, sizeof(*out));
@@ -1111,15 +1127,20 @@ void opus_step(OpusState *st, const TtMeas *m, TtCmd *out)
     mpc_r = tt_m_per_count(p, st->odo_r);
     {
         int gl = 0, gr = 0;
-        dl = enc_delta(st, m, st->odo_l, dt, &gl);
-        dr = enc_delta(st, m, st->odo_r, dt, &gr);
+        dl = enc_delta(st, m, st->odo_l, dt, &gl, &sl);
+        dr = enc_delta(st, m, st->odo_r, dt, &gr, &sr);
         glitch = gl || gr;
         /* A rejected delta is a MISSING one, not a zero: a zero beside the
          * other wheel's real travel reads as a sharp yaw (a 4.5 cm step
          * turned the heading 3.6 deg, VAL-11). Take the other wheel's travel
          * for it; the heading below then leans on the gyro for this tick. */
-        if (gl && !gr && mpc_l > 0.0f) dl = (int32_t)lroundf((float)dr * mpc_r / mpc_l);
-        else if (gr && !gl && mpc_r > 0.0f) dr = (int32_t)lroundf((float)dl * mpc_l / mpc_r);
+        if (gl && !gr && mpc_l > 0.0f) { dl = (int32_t)lroundf((float)dr * mpc_r / mpc_l); sl = sr; }
+        else if (gr && !gl && mpc_r > 0.0f) { dr = (int32_t)lroundf((float)dl * mpc_l / mpc_r); sr = sl; }
+        /* A report held over (FW-21) brings no travel this tick and all of
+         * it with the next: the odometer takes the counts as they come
+         * (they are exact), the speed each wheel's over its own span, and
+         * the differential's yaw is not learned from. */
+        gap = sl != sr || (sl > 0.0f && sl != dt);
     }
     if (glitch) st->fault |= FA_TICK_GLITCH;
     ds_l = (float)dl * mpc_l;
@@ -1177,9 +1198,14 @@ void opus_step(OpusState *st, const TtMeas *m, TtCmd *out)
         float k = p->cal_scale + p->cal_brake * st->cmd.brake_01;
         st->odo_corr_m += ds * k;
         ds *= 1.0f + k;
+        if (!gap) {
+            st->v_meas = ds / dt;
+        } else if (sl > 0.0f || sr > 0.0f) {
+            float vl = sl > 0.0f ? ds_l / sl : 0.0f, vr = sr > 0.0f ? ds_r / sr : 0.0f;
+            st->v_meas = (sl > 0.0f && sr > 0.0f ? 0.5f * (vl + vr) : vl + vr) * (1.0f + k);
+        }
+        /* both reports held over: the last speed stands */
     }
-
-    st->v_meas = ds / dt;
     /* While the friction probe slips the odometry pair on purpose (FW-18),
      * the car's speed is all four driven wheels': the front pair brakes and
      * the rear drives about as hard, so their slips nearly cancel. (Not the
@@ -1325,7 +1351,8 @@ void opus_step(OpusState *st, const TtMeas *m, TtCmd *out)
             if (w == st->odo_l || w == st->odo_r) continue;
             if ((p->driven_mask & (1u << w)) && m->enc[w].st.valid) {
                 int g2 = 0;
-                sum += (float)enc_delta(st, m, w, dt, &g2) * tt_m_per_count(p, w);
+                float s2;
+                sum += (float)enc_delta(st, m, w, dt, &g2, &s2) * tt_m_per_count(p, w);
                 n++;
             }
         }
@@ -1347,7 +1374,7 @@ void opus_step(OpusState *st, const TtMeas *m, TtCmd *out)
         float gz = m->imu.gyro[2] - st->gyro_bias;
         float va = st->v_meas < 0.0f ? -st->v_meas : st->v_meas;
         psi_dot_enc = (ds_r - ds_l) / (p->track_front_m * dt);
-        if (gz_ok && !glitch && !st->odo_slip && st->pr_state != 1 && va > GA_LR_MIN_V && straight(st)) {
+        if (gz_ok && !glitch && !gap && !st->odo_slip && st->pr_state != 1 && va > GA_LR_MIN_V && straight(st)) {
             float e = (psi_dot_enc - gz) * p->track_front_m / st->v_meas;
             st->lr_eps = clampf(st->lr_eps + (e - st->lr_eps) * lp_alpha(dt, GA_LR_TAU_S),
                                 -GA_LR_MAX, GA_LR_MAX);

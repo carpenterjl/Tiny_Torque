@@ -354,6 +354,10 @@ int main(void)
     f = mk(TT_FAULT_STUCK, TT_FS_ENC, TT_FR, T0, 0.0f, 0.0f);
     r = run(&f, &o);
     expect("odometry encoder stuck (counts freeze, samples fresh)", &r, TT_SF_ENC, T0, 0.22f, 1);
+    f = mk(TT_FAULT_STALE, TT_FS_ENC, TT_FL, T0, 0.03f, 0.0f);
+    r = run(&f, &o);
+    CHECK("odometry reports lost for 30 ms: the count that follows spans them, no glitch (FW-21)",
+          r.ever_armed && r.bits_seen == 0u);
     f = mk(TT_FAULT_ENC_GLITCH, 0, TT_FR, T0, 0.0f, GLITCH_COUNTS);
     f.period_s = 0.2f;
     r = run(&f, &o);

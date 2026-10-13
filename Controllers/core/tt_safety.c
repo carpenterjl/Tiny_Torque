@@ -153,7 +153,7 @@ static uint32_t check(TtSafety *s, const TtMeas *m, const TtCmd *core,
         int evn = 0;
         for (w = 0; w < TT_MAX_WHEELS; w++) {
             const TtEnc *e = &m->enc[w];
-            float mpc;
+            float mpc, span;
             int32_t d;
             if (!(p->odo_wheel_mask & (1u << w)) || !e->st.valid) continue;
             if (fresh_step(&s->f_enc[w], &e->st, dt, c->stale_enc_s)) f |= TT_SF_ENC;
@@ -161,15 +161,26 @@ static uint32_t check(TtSafety *s, const TtMeas *m, const TtCmd *core,
             if (!s->enc_has_prev[w]) {
                 s->enc_has_prev[w] = 1u;
                 s->enc_prev[w] = e->count;
+                s->enc_prev_us[w] = e->st.t_us;
+                s->enc_prev_seq[w] = e->st.seq;
                 continue;
             }
+            /* A report held over (its frames lost on the bus) brings
+             * nothing; the one that follows spans every tick since, and its
+             * count is judged over that span (FW-21). A stamp within a
+             * quarter tick of the tick is the tick. */
+            if (e->st.seq == s->enc_prev_seq[w] && e->st.t_us == s->enc_prev_us[w] && e->st.t_us != 0u) continue;
+            span = (float)(uint32_t)(e->st.t_us - s->enc_prev_us[w]) * 1e-6f;
+            if (!(span > 0.0f) || span > 0.5f || (span > 0.75f * dt && span < 1.25f * dt)) span = dt;
+            s->enc_prev_us[w] = e->st.t_us;
+            s->enc_prev_seq[w] = e->st.seq;
             d = (int32_t)((uint32_t)e->count - (uint32_t)s->enc_prev[w]);
             s->enc_prev[w] = e->count;
-            if (mpc > 0.0f && dt > 0.0f) {
-                float lim = c->v_plausible * dt / mpc + 2.0f;
+            if (mpc > 0.0f && span > 0.0f) {
+                float lim = c->v_plausible * span / mpc + 2.0f;
                 float ad = (float)(d < 0 ? -d : d), ve;
                 if (ad > lim) { *glitch_now = 1; continue; }
-                ve = (float)d * mpc / dt;
+                ve = (float)d * mpc / span;
                 evsum += ve;
                 evn++;
                 /* A driven odometry wheel has two speed sensors on the same
