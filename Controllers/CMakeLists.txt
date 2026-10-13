@@ -20,6 +20,16 @@ if(NOT TT_TARGET MATCHES "^(sim|host|embedded)$")
     message(FATAL_ERROR "TT_TARGET must be sim, host or embedded (got '${TT_TARGET}')")
 endif()
 
+# On Linux the static libraries end up inside the controller shared
+# libraries, so their objects must be position-independent: GNU ld refuses a
+# PC-relative reference from one object to a global in another (tt_route.c's
+# tt_routes, since NAV-01) when making a shared object. MSVC has no such
+# notion and lld lets it pass, so only the Ubuntu CI job sees it. Not for
+# the MCU build, where -fPIC would cost code.
+if(TT_TARGET STREQUAL "sim" AND NOT WIN32)
+    set(CMAKE_POSITION_INDEPENDENT_CODE ON)
+endif()
+
 # Firmware hygiene for the portable core (FW-04). GCC/Clang only; MSVC has no
 # equivalent of -Wdouble-promotion. -ffast-math is deliberately absent: it
 # deletes the NaN checks the core relies on. Warnings are errors on the

@@ -33,11 +33,13 @@ void tt_track_default_cfg(TtTrackCfg *c)
 
 void tt_track_reset(TtTrack *t, const TtTrackCfg *c, const TtRoute *r)
 {
-    const TtDetour *d = t->det;
+    /* Everything, the detour pointer included: a reset tracker follows the
+     * route until tt_track_set_detour says otherwise. (It once kept the
+     * pointer across the reset, which read whatever an uninitialised
+     * TtTrack held — fine on one machine's stack, a crash on CI's.) */
     memset(t, 0, sizeof(*t));
     t->cfg = *c;
     t->r = r;
-    t->det = d;
 }
 
 void tt_track_set_detour(TtTrack *t, const TtDetour *d)
