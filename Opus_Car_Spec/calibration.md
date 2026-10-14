@@ -186,6 +186,30 @@ controller's own stop error latched at +19 mm. A visual editor rerun reproduced
 legA to the same −13.6 mm — the run is deterministic. The mission is now flown
 on constants a physical 1/10 car would recognise.
 
+## The FOC car (VAL-08)
+
+The procedures above assume a brushed motor and a friction brake. The four-motor
+FOC car stops on its motors, commands current rather than voltage, and carries
+four encoders on the motor shafts, so the Calibration Companion
+(`Tools/calibration.html`) gained six stages for it, E–J, with the fits in
+`Tools/shared/tt-cal.js` (checked in CI by `Tools/tt_cal_selftest.js` on
+synthetic logs with noise). Each writes a firmware parameter
+(`Controllers/params/<car>.json`, FW-07), with the same `MEASURED` note and
+`_provenance` entry that `Tools/sysid.py` leaves.
+
+| Stage | Procedure | Fit | Sets |
+|---|---|---|---|
+| E · Motor constant | The driver's self-commissioning (λ, pole pairs), or a scope on the open-phase back-EMF at several speeds, or a torque bench | kt = 1.5·p·λ = (√3/2)·V_ll,peak/ω | `kt` (every driven wheel) |
+| F · Motor friction, inertia | Wheels off the ground: Iq at steady speeds, then a zero-current run-down | kt·Iq = T_c + b·ω; J·ω̇ = −(T_c + b·ω) | the reflected rotor mass in `mass_eff_kg` |
+| G · Regen efficiency | Brake on the motors from speed; log pack V and I | returned energy over the motors' share of the kinetic energy, the drag (B) removed | an upper bound on `eta_back`; the SoC model |
+| H · Roll-out radius | Push a taped 10 m; read each wheel's counts | r = s / (2π·counts/cpr_wheel), per wheel | `wheel_radius_m` (the mean; the spread is the odometry pair's disagreement) |
+| I · Steering map | Step the command up and down; read the road-wheel angle, or yaw rate and speed on a slow circle | a centre u₀, a gain each side, the up/down split | `max_steer_rad`, `steer_backlash_rad`, the servo trim |
+| J · Gyro noise | Ten minutes still, one gyro axis at the IMU's rate | the Allan deviation: N at τ = 1 s, B at the floor | the navigation filter's gyro noise density and bias instability |
+
+Coast-down (B) no longer needs the odometer trick on this car: at zero current
+an FOC drive is an open circuit, so the firmware can run the coast itself.
+What the twin's own logs give for these is in `SIM_TO_REAL_PLAN.md` (`VAL-08`).
+
 ## Measurements that would improve the physical model
 
 Unrelated to the odometer, these are the **estimated** rows in

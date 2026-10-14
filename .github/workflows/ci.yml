@@ -99,6 +99,15 @@ jobs:
         run: node Tools/gen_route.js --check
       - name: Log decoder self-test
         run: node Tools/tt_log_decode.js --selftest
+      - name: Calibration fits self-test (VAL-08)
+        run: node Tools/tt_cal_selftest.js
+      - name: Parameter image round trip (FW-07)
+        run: |
+          node Tools/gen_params.js --image opus_vector_foc /tmp/foc.ttp 1
+          gcc -std=c11 -Wall -I Controllers/core -I Controllers/hal Controllers/tools/tt_pstore_check.c \
+              Controllers/core/tt_pstore.c Controllers/core/tt_params.c \
+              Controllers/core/params_opus_vector.c Controllers/core/params_opus_vector_foc.c -o /tmp/ttp
+          /tmp/ttp /tmp/foc.ttp opus_vector_foc
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'

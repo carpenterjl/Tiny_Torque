@@ -302,6 +302,7 @@
             ctx.font = '12px system-ui, sans-serif';
             ctx.fillText(o.title, x0 + 4, y0 + 2);
         }
+        return this;
     };
 
     /* Render a <div> legend next to the canvas (kept out of the canvas so

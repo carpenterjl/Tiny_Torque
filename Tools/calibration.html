@@ -53,10 +53,11 @@
 <script src="shared/tt-ui.js"></script>
 <script src="shared/tt-export.js"></script>
 <script src="shared/tt-jgraph.js"></script>
+<script src="shared/tt-cal.js"></script>
 <script>
 (function () {
 'use strict';
-const S = TT.Schema, M = TT.Motor, Sim = TT.Sim, U = TT.UI, X = TT.Export, JG = TT.JGraph;
+const S = TT.Schema, M = TT.Motor, Sim = TT.Sim, U = TT.UI, X = TT.Export, JG = TT.JGraph, Cal = TT.Cal;
 const el = U.el, $ = U.$;
 
 // ---------------------------------------------------------------- state ----
@@ -72,6 +73,14 @@ let cal = X.loadLocal('calibration', null) || {
     tractionRows: '',
     // D: brake slip
     brakeRows: '',
+    // The FOC car (VAL-08): E motor constant, F friction and inertia,
+    // G regen, H roll-out, I steering map, J gyro noise.
+    ktMode: 'bemf', polePairs: 7, lambda: 0.00065, kv: 1400, bemfRows: '', dynoRows: '',
+    fricRows: '', rundownRows: '',
+    regenRows: '',
+    rolloutRows: '', cprWheel: 20480,
+    steerMode: 'delta', steerRows: '', wheelbase: 0.3,
+    allanRows: '', allanFs: 400,
     results: {}
 };
 function save() { X.saveLocal('calibration', cal); }
@@ -85,6 +94,12 @@ const STAGES = [
     { key: 'drag', label: 'B · Coast-down drag', render: stageDrag },
     { key: 'traction', label: 'C · Traction efficiency', render: stageTraction },
     { key: 'brake', label: 'D · Brake slip', render: stageBrake },
+    { key: 'kt', label: 'E · Motor constant', render: stageKt },
+    { key: 'friction', label: 'F · Motor friction, inertia', render: stageFriction },
+    { key: 'regen', label: 'G · Regen efficiency', render: stageRegen },
+    { key: 'rollout', label: 'H · Roll-out radius', render: stageRollout },
+    { key: 'steer', label: 'I · Steering map', render: stageSteer },
+    { key: 'allan', label: 'J · Gyro noise', render: stageAllan },
     { key: 'results', label: 'Results', render: stageResults }
 ];
 
@@ -158,17 +173,37 @@ function stageAbout(root) {
         'What you get out is a handful of constants that make the feed-forward honest — after which ' +
         'the PID is genuinely trimming rather than quietly covering for a wrong model.' }));
 
-    p.appendChild(el('h3', { text: 'The four measurements' }));
+    p.appendChild(el('h3', { text: 'The measurements' }));
     const t = el('table', { class: 'compact' });
     [
-        ['A · Encoder scale', 'Drive a measured distance at a steady speed', 'CAL_SCALE',
+        ['A · Encoder scale', 'Drive a measured distance at a steady speed', 'cal_scale',
             'How much your odometry under-reads. Usually the single largest error in dead reckoning.'],
-        ['B · Coast-down drag', 'Get to speed, cut power, log the slowdown', 'VE_DRAG_C0/C1/C2',
-            'The force opposing you at any speed. Feed-forward cannot hold a speed without it.'],
-        ['C · Traction efficiency', 'Hold a steady speed and note the current', 'CAL_TRACTION_EFF',
+        ['B · Coast-down drag', 'Get to speed, cut power, log the slowdown', 'drag_c0 / c1 / c2',
+            'The force opposing you at any speed. Feed-forward cannot hold a speed without it. ' +
+            'On an FOC car the power is genuinely off at zero current (no shorted winding), so the ' +
+            'firmware itself can run this: command zero Iq and log.'],
+        ['C · Traction efficiency', 'Hold a steady speed and note the current', 'traction_eff',
             'What fraction of commanded force actually reaches the road.'],
-        ['D · Brake slip', 'Brake over a measured distance', 'CAL_BRAKE',
-            'Extra odometry error while the brake is on. Small, and it matters when stopping on a mark.']
+        ['D · Brake slip', 'Brake over a measured distance', 'cal_brake',
+            'Extra odometry error while the brake is on. Small, and it matters when stopping on a mark. ' +
+            'Not for a car that stops on its motors alone.'],
+        ['E · Motor constant', 'The driver\'s commissioning, a scope on the back-EMF, or a torque bench', 'kt',
+            'Torque per amp of Iq. Every force the firmware commands is divided by it, so a 5 % error ' +
+            'here is a 5 % error in every launch and stop.'],
+        ['F · Motor friction, inertia', 'Wheels off the ground: steady speeds, then a run-down', '(Tc, b, J)',
+            'What the motor spends on itself before any of its torque reaches the gear: the Coulomb and ' +
+            'viscous terms, and the rotor inertia from how it spins down.'],
+        ['G · Regen efficiency', 'Brake on the motors from speed; log pack volts and amps', '(η_regen, bounds eta_back)',
+            'How much of the car\'s motion comes back into the pack. The SoC model and the regen ceiling ' +
+            'depend on it; a full pack must not be asked to take it.'],
+        ['H · Roll-out radius', 'Push the car a taped distance; read each wheel\'s counts', 'wheel_radius_m',
+            'The effective rolling radius, per wheel. A loaded tyre is smaller than its moulding says.'],
+        ['I · Steering map', 'Step the steering command; read the road-wheel angle or a steady circle', 'max_steer_rad, steer_backlash_rad',
+            'Centre offset, a gain each side (the linkage is rarely symmetric), and the play between ' +
+            'servo horn and wheels.'],
+        ['J · Gyro noise', 'Leave the car still for ten minutes and log the gyro', '(N, B for the filter)',
+            'The Allan deviation: the white noise the navigation filter should expect, and the bias ' +
+            'instability that sets how far dead reckoning can be trusted between fixes.']
     ].forEach(function (r) {
         t.appendChild(el('tr', {}, [
             el('td', { html: '<b>' + r[0] + '</b>' }),
@@ -272,9 +307,398 @@ function stageSetup(root) {
         cal.vehicleName = d.name;
         cal.forcePerAmpAll = pl.forcePerAmpAll;
         cal.bemfVPerMs = pl.bemfVPerMs;
+        // What the design believes, for the FOC stages to compare against.
+        cal.ktDesign = motor.kt;
+        if (motor.polePairs > 0) cal.polePairs = motor.polePairs;
+        cal.gearRatio = motor.gearRatio || 1;
         save();
         render();
     }
+}
+
+// ---- stage E: the motor constant (VAL-08) ----------------------------------
+
+function stageKt(root) {
+    const p = el('div', { class: 'panel' });
+    p.appendChild(el('h2', { text: 'E · How much torque per amp?' }));
+    p.appendChild(el('p', { class: 'small', html:
+        'An FOC drive commands current, and the firmware turns the force it wants into that current ' +
+        'through <code>kt</code>. The datasheet gives a Kv; the motor gives something a few percent ' +
+        'different, and every launch and every stop is scaled by the difference. Three ways to measure ' +
+        'it, from cheapest to most direct.' }));
+    p.appendChild(el('div', { class: 'eq', html:
+        'kt = 1.5 · p · λ &nbsp;=&nbsp; (√3 / 2) · V<sub>ll,peak</sub> / ω<sub>mech</sub>' +
+        '<div class="note">Amplitude-invariant Clarke, as the firmware\'s FOC uses: torque = kt · Iq with Iq ' +
+        'the phase-current amplitude. The back-EMF form uses the line-to-line PEAK on a scope and the ' +
+        'MECHANICAL speed in rad/s.</div>' }));
+
+    p.appendChild(U.chipRow({
+        label: 'Measured how?',
+        options: [
+            { value: 'flux', label: 'Driver commissioning (λ)' },
+            { value: 'bemf', label: 'Back-EMF on a scope' },
+            { value: 'dyno', label: 'Torque bench' },
+            { value: 'kv', label: 'Just the Kv rating' }
+        ],
+        get: function () { return cal.ktMode; },
+        set: function (v) { cal.ktMode = v; save(); },
+        onChange: function () { render(); },
+        hint: 'The G431 driver\'s self-commissioning reports λ directly (S3). The scope method needs the ' +
+              'motor spun by hand or by another motor with the phases open.'
+    }));
+
+    let kt = NaN, how = '';
+    if (cal.ktMode === 'flux') {
+        p.appendChild(el('div', { class: 'grid2' }, [
+            U.numberField({ label: 'Pole pairs', get: function () { return cal.polePairs; },
+                set: function (v) { cal.polePairs = v; }, onChange: function () { save(); render(); } }),
+            U.numberField({ label: 'Flux linkage λ', unit: 'Wb', get: function () { return cal.lambda; },
+                set: function (v) { cal.lambda = v; }, onChange: function () { save(); render(); },
+                hint: 'Per phase, peak, as the driver reports it.' })
+        ]));
+        if (cal.polePairs > 0 && cal.lambda > 0) { kt = Cal.ktFromFlux(cal.polePairs, cal.lambda); how = 'E · driver λ'; }
+    } else if (cal.ktMode === 'bemf') {
+        p.appendChild(dataField('Spins — one per line: mechanical speed (rad/s), line-to-line peak voltage (V)',
+            'bemfRows', 2, '# omega_rad_s, v_ll_peak\n100, 0.79\n200, 1.58\n300, 2.36', 'Several speeds: the fit is through the origin.'));
+        const rows = parseRows(cal.bemfRows, 2);
+        const f = rows.length >= 2 ? Cal.ktFromBemf(rows) : null;
+        if (f) {
+            kt = f.kt; how = 'E · back-EMF';
+            p.appendChild(el('div', { class: 'metrics', html:
+                '<span>Ke (ll peak) <b>' + f.kePeakLL.toFixed(5) + ' V·s</b></span>' +
+                '<span>Kv <b>' + f.kvRpmPerV.toFixed(0) + ' rpm/V</b></span>' +
+                '<span>fit r² <b>' + f.r2.toFixed(4) + '</b></span>' }));
+        }
+    } else if (cal.ktMode === 'dyno') {
+        p.appendChild(dataField('Bench points — one per line: Iq (A), torque at the motor shaft (N·m)',
+            'dynoRows', 2, '# iq_A, torque_Nm\n1.0, 0.0068\n2.0, 0.0137\n4.0, 0.0271', 'At the MOTOR shaft; divide a wheel-side reading by the gear ratio and its efficiency.'));
+        const rows = parseRows(cal.dynoRows, 2);
+        const f = rows.length >= 2 ? Cal.ktFromDyno(rows) : null;
+        if (f) {
+            kt = f.kt; how = 'E · torque bench';
+            p.appendChild(el('div', { class: 'metrics', html: '<span>fit r² <b>' + f.r2.toFixed(4) + '</b></span>' }));
+        }
+    } else {
+        p.appendChild(U.numberField({ label: 'Kv', unit: 'rpm/V', get: function () { return cal.kv; },
+            set: function (v) { cal.kv = v; }, onChange: function () { save(); render(); },
+            hint: 'The rating, not a measurement: kt = 60 / (2π Kv). Expect the real motor within ±10 %.' }));
+        if (cal.kv > 0) { kt = Cal.ktFromKv(cal.kv); how = 'E · Kv rating'; }
+    }
+
+    if (isFinite(kt)) {
+        cal.results.kt = kt;
+        cal.results.ktHow = how;
+        save();
+        const dev = cal.ktDesign ? (kt / cal.ktDesign - 1) * 100 : NaN;
+        p.appendChild(el('div', { class: 'metrics', html:
+            '<span>kt <b>' + kt.toPrecision(5) + ' N·m/A</b></span>' +
+            (cal.ktDesign ? '<span>the design says <b>' + cal.ktDesign.toPrecision(5) + '</b> (' +
+                (dev >= 0 ? '+' : '') + dev.toFixed(1) + ' %)</span>' : '') }));
+        if (isFinite(dev) && Math.abs(dev) > 10) {
+            p.appendChild(el('div', { class: 'callout warn small', html:
+                'More than 10 % from the design\'s figure. Check the pole pairs and whether the voltage ' +
+                'was line-to-line peak (not RMS, not phase) before believing it.' }));
+        } else if (cal.ktMode === 'kv') {
+            p.appendChild(el('div', { class: 'callout small', html:
+                'A rating. Measure it when the car exists — this is the one number the whole force path hangs on.' }));
+        } else {
+            p.appendChild(el('div', { class: 'callout good small', html: 'Measured. Goes into <code>kt</code> for every driven wheel.' }));
+        }
+    }
+    root.appendChild(p);
+}
+
+// ---- stage F: motor friction and inertia -----------------------------------
+
+function stageFriction(root) {
+    const p = el('div', { class: 'panel' });
+    p.appendChild(el('h2', { text: 'F · What does the motor spend on itself?' }));
+    p.appendChild(el('p', { class: 'small', html:
+        'Wheels off the ground, the motor only has to turn itself and its gear. At each steady speed the ' +
+        'current it needs is its own friction: a constant part (Coulomb, bearings and brush-less cogging ' +
+        'averaged out) and a part that grows with speed (viscous, eddy). Then cut the current and the ' +
+        'run-down gives the rotor inertia, because the only thing slowing it is the friction just measured.' }));
+    p.appendChild(el('div', { class: 'eq', html:
+        'kt · Iq = T<sub>c</sub> + b · ω &nbsp;&nbsp;&nbsp; J · dω/dt = −(T<sub>c</sub> + b · ω)' }));
+    if (!(cal.results.kt > 0)) {
+        p.appendChild(el('div', { class: 'callout warn', html: 'Do stage <b>E</b> first — the sweep needs kt to turn amps into torque.' }));
+        root.appendChild(p);
+        return;
+    }
+    const kt = cal.results.kt;
+    p.appendChild(dataField('Steady sweep — one per line: motor speed (rad/s), Iq (A)', 'fricRows', 2,
+        '# omega_rad_s, iq_A\n100, 0.74\n200, 0.88\n400, 1.18\n600, 1.47', 'Motor side, wheels off the ground, each point held until the current is flat.'));
+    const rows = parseRows(cal.fricRows, 2);
+    const fr = rows.length >= 3 ? Cal.fitFriction(rows, kt) : null;
+    if (fr) {
+        cal.results.fricTc = fr.tc; cal.results.fricB = fr.b; save();
+        const canvas = el('canvas', { class: 'tt-plot' });
+        p.appendChild(el('div', { class: 'plotwrap' }, [canvas]));
+        const legend = el('div', {});
+        p.appendChild(legend);
+        const w = rows.map(function (r) { return r[0]; }), wMax = Math.max.apply(null, w) * 1.05;
+        new TT.Plot(canvas, { height: 220, xLabel: 'motor speed (rad/s)', yLabel: 'torque (mN·m)' }).setSeries([
+            { name: 'measured', x: w, y: rows.map(function (r) { return kt * r[1] * 1000; }), style: 'dots' },
+            { name: 'fit', x: [0, wMax], y: [fr.tc * 1000, (fr.tc + fr.b * wMax) * 1000], color: '#5aa9f0' }
+        ]).draw().renderLegend(legend);
+        p.appendChild(el('div', { class: 'metrics', html:
+            '<span>T<sub>c</sub> <b>' + (fr.tc * 1000).toFixed(3) + ' mN·m</b></span>' +
+            '<span>b <b>' + (fr.b * 1e6).toFixed(2) + ' µN·m·s</b></span>' +
+            '<span>fit r² <b>' + fr.r2.toFixed(4) + '</b></span>' +
+            '<span>at 600 rad/s <b>' + ((fr.tc + fr.b * 600) * 1000).toFixed(2) + ' mN·m</b></span>' }));
+        if (fr.tc < 0) p.appendChild(el('div', { class: 'callout warn small', html:
+            'A negative constant term is not friction. The low-speed points are probably inside the driver\'s ' +
+            'minimum current or the cogging was not averaged out; drop them and re-fit.' }));
+
+        p.appendChild(dataField('Run-down — one per line: time (s), motor speed (rad/s), after the current is cut', 'rundownRows', 2,
+            '# t_s, omega_rad_s\n0.000, 600\n0.010, 582\n0.020, 565', 'The encoder on the motor shaft at the driver\'s rate; smoothed lightly for you.'));
+        const rd = parseRows(cal.rundownRows, 2);
+        if (rd.length >= 10) {
+            const sm = rd.map(function (r, i) {
+                let s = 0, c = 0;
+                for (let k = -3; k <= 3; k++) if (rd[i + k]) { s += rd[i + k][1]; c++; }
+                return [r[0], s / c];
+            });
+            const f = Cal.fitRunDown(sm, fr.tc, fr.b);
+            if (f) {
+                cal.results.J = f.J; save();
+                const g = cal.gearRatio || 1, r = cal.wheelRadius || 0.033;
+                p.appendChild(el('div', { class: 'metrics', html:
+                    '<span>J <b>' + (f.J * 1e6).toFixed(3) + ' µkg·m²</b></span>' +
+                    '<span>fit r² <b>' + f.r2.toFixed(4) + '</b></span>' +
+                    '<span>reflected to the road, per motor <b>' + (f.J * g * g / (r * r)).toFixed(4) + ' kg</b></span>' }));
+                p.appendChild(el('div', { class: 'callout small', html:
+                    'The reflected mass goes into <code>mass_eff_kg</code> (times the number of motors) — the mass ' +
+                    'the firmware accelerates that never shows on the scales.' }));
+            }
+        }
+    } else if (rows.length) {
+        p.appendChild(el('div', { class: 'callout warn small', text: 'Need at least three steady points.' }));
+    }
+    root.appendChild(p);
+}
+
+// ---- stage G: regen efficiency ---------------------------------------------
+
+function stageRegen(root) {
+    const p = el('div', { class: 'panel' });
+    p.appendChild(el('h2', { text: 'G · How much of the stop comes back?' }));
+    p.appendChild(el('p', { class: 'small', html:
+        'Brake from speed on the motors alone and log the pack. The car lost kinetic energy; the drag ' +
+        'took its share (stage B says how much); the motors took the rest, and what came back into the ' +
+        'pack over that is the regen efficiency — motor, inverter and gear together, back-driven.' }));
+    p.appendChild(el('div', { class: 'eq', html:
+        'η<sub>regen</sub> = ∫ −V·I dt / ( ½ m<sub>eff</sub> (v₀² − v₁²) − ∫ F<sub>drag</sub>(v) v dt )' }));
+    if (cal.results.dragC0 === undefined) {
+        p.appendChild(el('div', { class: 'callout warn', html: 'Do stage <b>B</b> first — without the drag curve the motors get the drag\'s credit.' }));
+        root.appendChild(p);
+        return;
+    }
+    p.appendChild(dataField('Braking log — one per line: time (s), speed (m/s), pack volts (V), pack amps (A, + = out of the pack)',
+        'regenRows', 4, '# t_s, v_mps, v_pack, i_pack\n0.00, 3.00, 7.40, -1.9\n0.05, 2.85, 7.42, -1.8',
+        'Only the window with the motors braking: from the brake command to a stop or a steady lower speed.'));
+    const rows = parseRows(cal.regenRows, 4);
+    if (rows.length >= 3) {
+        const f = Cal.fitRegen(rows, cal.massEff, { c0: cal.results.dragC0, c1: cal.results.dragC1, c2: cal.results.dragC2 });
+        if (f && isFinite(f.eta)) {
+            cal.results.regenEta = f.eta; save();
+            p.appendChild(el('div', { class: 'metrics', html:
+                '<span>η<sub>regen</sub> <b>' + (f.eta * 100).toFixed(1) + ' %</b></span>' +
+                '<span>returned <b>' + f.eRet.toFixed(2) + ' J</b></span>' +
+                '<span>kinetic energy lost <b>' + f.dKe.toFixed(2) + ' J</b></span>' +
+                '<span>drag\'s share <b>' + f.wDrag.toFixed(2) + ' J</b></span>' }));
+            if (f.eta > 0.95) p.appendChild(el('div', { class: 'callout bad small', html:
+                'Over 95 % is not regen. The current sign is probably the wrong way round, or the window ' +
+                'includes driving.' }));
+            else if (f.eta < 0.3) p.appendChild(el('div', { class: 'callout warn small', html:
+                'Under 30 %: at low speed the back-EMF is below the pack and nothing comes back (the sim ' +
+                'found regen below ~1.2 m/s discharges the pack). Start the window from a higher speed, or ' +
+                'accept that this car brakes mostly into heat.' }));
+            else p.appendChild(el('div', { class: 'callout good small', html:
+                'Plausible for a geared outrunner. <code>eta_back</code> (the gear back-driven) cannot be ' +
+                'above this; the electrical part is the rest.' }));
+        }
+    }
+    root.appendChild(p);
+}
+
+// ---- stage H: roll-out radius -----------------------------------------------
+
+function stageRollout(root) {
+    const p = el('div', { class: 'panel' });
+    p.appendChild(el('h2', { text: 'H · How big is a loaded wheel, really?' }));
+    p.appendChild(el('p', { class: 'small', html:
+        'Push the car along a taped straight — ten metres is good — and read every wheel\'s count. The ' +
+        'effective rolling radius is what the odometry and the force-to-torque conversion actually use, ' +
+        'and a loaded tyre is a little smaller than its moulding; the four wheels differ by a percent or ' +
+        'two, which is why it is per wheel.' }));
+    p.appendChild(el('div', { class: 'eq', html: 'r = s / ( 2π · counts / counts-per-wheel-turn )' }));
+    p.appendChild(U.numberField({ label: 'Counts per WHEEL turn', get: function () { return cal.cprWheel; },
+        set: function (v) { cal.cprWheel = v; }, onChange: function () { save(); render(); },
+        hint: 'Encoder cpr × gear ratio when the encoder is on the motor shaft (4096 × 5 = 20480 on the wheel nodes).' }));
+    p.appendChild(dataField('Runs — one per line: wheel (0 FL, 1 FR, 2 RL, 3 RR), counts, true distance (m)', 'rolloutRows', 3,
+        '# wheel, counts, metres\n0, 987650, 10.0\n1, 985400, 10.0\n2, 990100, 10.0\n3, 988200, 10.0', 'Repeat each wheel; both directions if the tape allows.'));
+    const rows = parseRows(cal.rolloutRows, 3);
+    if (rows.length && cal.cprWheel > 0) {
+        const f = Cal.fitRollout(rows, cal.cprWheel);
+        if (f.n) {
+            cal.results.radius = f.radius; cal.results.radiusMean = f.mean; cal.results.radiusSpread = f.spreadFrac; save();
+            const t = el('table', { class: 'compact' });
+            t.appendChild(el('tr', {}, ['Wheel', 'Radius', 'vs mean'].map(function (h) { return el('th', { class: h === 'Wheel' ? '' : 'num', text: h }); })));
+            ['FL', 'FR', 'RL', 'RR'].forEach(function (w, i) {
+                const r = f.radius[i];
+                t.appendChild(el('tr', {}, [
+                    el('td', { text: w }),
+                    el('td', { class: 'num', text: isFinite(r) ? (r * 1000).toFixed(2) + ' mm' : '—' }),
+                    el('td', { class: 'num', text: isFinite(r) ? ((r / f.mean - 1) * 100).toFixed(2) + ' %' : '' })
+                ]));
+            });
+            p.appendChild(t);
+            p.appendChild(el('div', { class: 'metrics', html:
+                '<span>mean <b>' + (f.mean * 1000).toFixed(2) + ' mm</b></span>' +
+                '<span>largest difference <b>' + (f.spreadFrac * 100).toFixed(2) + ' %</b></span>' +
+                (cal.wheelRadius ? '<span>the design says <b>' + (cal.wheelRadius * 1000).toFixed(2) + ' mm</b></span>' : '') }));
+            if (f.spreadFrac > 0.03) p.appendChild(el('div', { class: 'callout warn small', html:
+                'Over 3 % between wheels is more than tyres do. A wrong counts-per-turn for one wheel, or a ' +
+                'wheel that slipped on the push, looks like this.' }));
+            else p.appendChild(el('div', { class: 'callout good small', html:
+                'The mean goes into <code>wheel_radius_m</code>; the firmware has one radius, so the ' +
+                'per-wheel spread is what its odometry pair will disagree by.' }));
+        }
+    }
+    root.appendChild(p);
+}
+
+// ---- stage I: the steering map ---------------------------------------------
+
+function stageSteer(root) {
+    const p = el('div', { class: 'panel' });
+    p.appendChild(el('h2', { text: 'I · Where do the wheels point for a command?' }));
+    p.appendChild(el('p', { class: 'small', html:
+        'Step the steering command across its range, up and then down, and read where the road wheels ' +
+        'actually point — on a stand with a protractor or a camera, or on the ground from a steady circle ' +
+        '(yaw rate and speed give the angle). The result is a centre offset, a gain each side, and the ' +
+        'play between horn and wheels from how far the up and down sweeps disagree.' }));
+    p.appendChild(el('div', { class: 'eq', html:
+        'δ = k<sub>L</sub> · (u − u₀) for u &lt; u₀, &nbsp; k<sub>R</sub> · (u − u₀) for u &gt; u₀ ' +
+        '&nbsp;&nbsp;&nbsp; backlash = the up/down split' +
+        '<div class="note">From a circle: δ = atan(L · r / v), kinematic, so keep it slow (under 1.5 m/s).</div>' }));
+    p.appendChild(U.chipRow({
+        label: 'What did you read?',
+        options: [{ value: 'delta', label: 'Road-wheel angle' }, { value: 'yaw', label: 'Yaw rate and speed' }],
+        get: function () { return cal.steerMode; }, set: function (v) { cal.steerMode = v; save(); },
+        onChange: function () { render(); }
+    }));
+    if (cal.steerMode === 'yaw') {
+        p.appendChild(U.numberField({ label: 'Wheelbase', unit: 'm', get: function () { return cal.wheelbase; },
+            set: function (v) { cal.wheelbase = v; }, onChange: function () { save(); render(); } }));
+        p.appendChild(dataField('Steps — one per line: command (−1..1), yaw rate (rad/s), speed (m/s), direction (+1 rising, −1 falling)',
+            'steerRows', 4, '# u, r_rad_s, v_mps, dir\n-1.0, -1.52, 1.0, 1\n-0.5, -0.78, 1.0, 1\n0.0, 0.03, 1.0, 1', 'Direction is optional but it is what gives the backlash.'));
+    } else {
+        p.appendChild(dataField('Steps — one per line: command (−1..1), road-wheel angle (rad), direction (+1 rising, −1 falling)',
+            'steerRows', 3, '# u, delta_rad, dir\n-1.0, -0.45, 1\n-0.5, -0.23, 1\n0.0, 0.01, 1\n0.5, 0.26, 1\n1.0, 0.49, 1', 'Direction is optional but it is what gives the backlash.'));
+    }
+    const cols = cal.steerMode === 'yaw' ? 3 : 2;
+    const raw = parseRowsLoose(cal.steerRows, cols);
+    const rows = raw.map(function (r) {
+        if (cal.steerMode === 'yaw') return [r[0], Cal.steerFromYaw(r[1], r[2], cal.wheelbase)].concat(r.length > 3 ? [r[3]] : []);
+        return r;
+    }).filter(function (r) { return isFinite(r[1]); });
+    if (rows.length >= 4) {
+        const f = Cal.fitSteerMap(rows);
+        if (f) {
+            cal.results.steerU0 = f.u0; cal.results.steerKL = f.kL; cal.results.steerKR = f.kR;
+            cal.results.maxSteer = f.maxSteerRad; cal.results.backlash = f.backlashRad; save();
+            const canvas = el('canvas', { class: 'tt-plot' });
+            p.appendChild(el('div', { class: 'plotwrap' }, [canvas]));
+            const legend = el('div', {});
+            p.appendChild(legend);
+            new TT.Plot(canvas, { height: 230, xLabel: 'command', yLabel: 'road-wheel angle (deg)' }).setSeries([
+                { name: 'measured', x: rows.map(function (r) { return r[0]; }), y: rows.map(function (r) { return r[1] * 180 / Math.PI; }), style: 'dots' },
+                { name: 'fit', x: [-1, f.u0, 1], y: [f.kL * (-1 - f.u0) * 180 / Math.PI, 0, f.kR * (1 - f.u0) * 180 / Math.PI], color: '#5aa9f0' }
+            ]).draw().renderLegend(legend);
+            p.appendChild(el('div', { class: 'metrics', html:
+                '<span>centre u₀ <b>' + f.u0.toFixed(3) + '</b></span>' +
+                '<span>left <b>' + (Math.abs(f.kL) * 180 / Math.PI).toFixed(1) + '°</b> at full lock</span>' +
+                '<span>right <b>' + (Math.abs(f.kR) * 180 / Math.PI).toFixed(1) + '°</b></span>' +
+                '<span>asymmetry <b>' + (f.asymFrac * 100).toFixed(1) + ' %</b></span>' +
+                '<span>backlash <b>' + (isFinite(f.backlashRad) ? (f.backlashRad * 180 / Math.PI).toFixed(2) + '°' : 'needs the direction column') + '</b></span>' +
+                '<span>fit r² <b>' + f.r2.toFixed(4) + '</b></span>' }));
+            if (Math.abs(f.asymFrac) > 0.1) p.appendChild(el('div', { class: 'callout warn small', html:
+                'More than 10 % between the sides: the firmware has one gain (<code>max_steer_rad</code>), ' +
+                'so one side will be ' + (Math.abs(f.asymFrac) * 50).toFixed(0) + ' % off. Centre the servo horn ' +
+                'mechanically before trimming it in software.' }));
+            else p.appendChild(el('div', { class: 'callout good small', html:
+                'The mean gain goes into <code>max_steer_rad</code>, the play into <code>steer_backlash_rad</code> ' +
+                '(the firmware steps the horn across it on a reversal, FW-15), the centre into the servo trim.' }));
+        }
+    }
+    root.appendChild(p);
+}
+
+/* parseRows with a trailing optional column: rows of `columns` or `columns + 1` numbers. */
+function parseRowsLoose(text, columns) {
+    const rows = [];
+    String(text || '').split(/\r?\n/).forEach(function (line) {
+        const t = line.trim();
+        if (!t || t[0] === '#') return;
+        const nums = t.split(/[,\t;]+|\s{1,}/).filter(function (p) { return p !== ''; }).map(Number);
+        if (nums.length < columns || nums.some(function (n) { return !isFinite(n); })) return;
+        rows.push(nums.slice(0, columns + 1));
+    });
+    return rows;
+}
+
+// ---- stage J: gyro noise (Allan deviation) ---------------------------------
+
+function stageAllan(root) {
+    const p = el('div', { class: 'panel' });
+    p.appendChild(el('h2', { text: 'J · How much can the gyro be trusted, and for how long?' }));
+    p.appendChild(el('p', { class: 'small', html:
+        'Leave the car perfectly still for ten minutes and log one gyro axis at the IMU\'s rate. The Allan ' +
+        'deviation of that record, against the averaging time, has two numbers on it the navigation filter ' +
+        'needs: where it falls as 1/√τ it is white noise (the angle random walk, the filter\'s gyro noise ' +
+        'density), and where it stops falling is the bias instability — how well a bias learned now holds ' +
+        'in a minute.' }));
+    p.appendChild(el('div', { class: 'eq', html:
+        'σ(τ) = √( ½ ⟨ (ȳ<sub>k+1</sub> − ȳ<sub>k</sub>)² ⟩ ) &nbsp;&nbsp; N = σ(1 s), &nbsp; B = min σ / 0.664' }));
+    p.appendChild(U.numberField({ label: 'Sample rate', unit: 'Hz', get: function () { return cal.allanFs; },
+        set: function (v) { cal.allanFs = v; }, onChange: function () { save(); render(); } }));
+    p.appendChild(dataField('Still log — one value per line: gyro rate (rad/s); a time column first is fine too',
+        'allanRows', 1, '# gyro_z_rad_s\n0.0012\n-0.0031\n0.0007', 'Thousands of samples: the floor only shows past a minute of averaging.'));
+    const rows = parseRows(cal.allanRows, 1);
+    const raw = String(cal.allanRows || '').split(/\r?\n/).filter(function (l) { return l.trim() && l.trim()[0] !== '#'; });
+    const twoCol = raw.length && raw[0].split(/[,\t;]+|\s{1,}/).filter(function (p) { return p !== ''; }).length >= 2;
+    const x = twoCol ? parseRows(cal.allanRows, 2).map(function (r) { return r[1]; }) : rows.map(function (r) { return r[0]; });
+    if (x.length >= 200 && cal.allanFs > 0) {
+        const av = Cal.allanDeviation(x, cal.allanFs);
+        const fig = Cal.allanFigures(av);
+        if (av && fig) {
+            cal.results.gyroN = fig.N; cal.results.gyroB = fig.B; cal.results.gyroTauB = fig.tauB; save();
+            const canvas = el('canvas', { class: 'tt-plot' });
+            p.appendChild(el('div', { class: 'plotwrap' }, [canvas]));
+            const legend = el('div', {});
+            p.appendChild(legend);
+            new TT.Plot(canvas, { height: 240, xLabel: 'log10 averaging time (s)', yLabel: 'log10 Allan deviation (rad/s)' }).setSeries([
+                { name: 'measured', x: av.tau.map(function (t) { return Math.log10(t); }), y: av.adev.map(function (a) { return Math.log10(a); }) },
+                { name: 'white noise N/√τ', x: [Math.log10(av.tau[0]), Math.log10(av.tau[av.tau.length - 1])],
+                  y: [Math.log10(fig.N / Math.sqrt(av.tau[0])), Math.log10(fig.N / Math.sqrt(av.tau[av.tau.length - 1]))], color: '#565d6a', style: 'dashed' }
+            ]).draw().renderLegend(legend);
+            p.appendChild(el('div', { class: 'metrics', html:
+                '<span>N <b>' + (fig.N * 180 / Math.PI * 60).toFixed(3) + ' °/√h</b> (' + fig.N.toExponential(2) + ' rad/s/√Hz)</span>' +
+                '<span>B <b>' + (fig.B * 180 / Math.PI * 3600).toFixed(1) + ' °/h</b> at τ ' + fig.tauB.toFixed(0) + ' s</span>' +
+                '<span>record <b>' + (x.length / cal.allanFs / 60).toFixed(1) + ' min</b></span>' }));
+            if (!fig.atFloor) p.appendChild(el('div', { class: 'callout warn small', html:
+                'The curve was still falling at the longest averaging time: the record is too short to see ' +
+                'the bias floor. B above is an upper bound; log for longer.' }));
+            else p.appendChild(el('div', { class: 'callout good small', html:
+                'N is the filter\'s gyro noise density (<code>tt_nav</code> gyro σ at its rate = N · √rate); B says how ' +
+                'often a heading fix must correct the bias.' }));
+        }
+    } else if (x.length) {
+        p.appendChild(el('div', { class: 'callout warn small', text: 'Need at least 200 samples (and a sample rate) to say anything.' }));
+    }
+    root.appendChild(p);
 }
 
 // ---- stage A: encoder scale -------------------------------------------------
@@ -676,11 +1100,26 @@ function stageResults(root) {
         ['VE_DRAG_C1', 'dragC1', 'B · coast-down'],
         ['VE_DRAG_C2', 'dragC2', 'B · coast-down'],
         ['CAL_TRACTION_EFF', 'tractionEff', 'C · steady speed'],
-        ['CAL_BRAKE', 'calBrake', 'D · braking runs']
+        ['CAL_BRAKE', 'calBrake', 'D · braking runs'],
+        ['kt', 'kt', r.ktHow || 'E · motor constant'],
+        ['T_c (mN·m)', 'fricTcMilli', 'F · steady sweep'],
+        ['b (µN·m·s)', 'fricBMicro', 'F · steady sweep'],
+        ['J (µkg·m²)', 'JMicro', 'F · run-down'],
+        ['η_regen', 'regenEta', 'G · braking on the motors'],
+        ['wheel_radius_m', 'radiusMean', 'H · roll-out, mean of the wheels'],
+        ['max_steer_rad', 'maxSteer', 'I · steering map, mean gain'],
+        ['steer_backlash_rad', 'backlash', 'I · up/down split'],
+        ['steer centre u₀', 'steerU0', 'I · steering map'],
+        ['gyro N (rad/s/√Hz)', 'gyroN', 'J · Allan, white noise'],
+        ['gyro B (rad/s)', 'gyroB', 'J · Allan, bias floor']
     ].forEach(function (row) {
+        // the display scalings of the small motor terms
+        const v = row[1] === 'fricTcMilli' ? r.fricTc * 1000 : row[1] === 'fricBMicro' ? r.fricB * 1e6 :
+                  row[1] === 'JMicro' ? r.J * 1e6 : r[row[1]];
+        const got = v !== undefined && isFinite(v);
         t.appendChild(el('tr', {}, [
             el('td', { html: '<code>' + row[0] + '</code>' }),
-            el('td', { class: 'num', text: have(row[1]) ? r[row[1]].toPrecision(5) : 'not measured' }),
+            el('td', { class: 'num', text: got ? v.toPrecision(5) : 'not measured' }),
             el('td', { class: 'tiny muted', text: row[2] })
         ]));
     });
@@ -711,6 +1150,50 @@ function stageResults(root) {
         '#define VE_MASS_EFF        ' + fnum(cal.massEff, 4) + '    /* kg, incl. reflected rotor inertia */\n';
     p.appendChild(el('pre', {}, [el('code', { text: block })]));
 
+    // The firmware parameter file (FW-07): the fields these stages measured,
+    // each with the note and provenance Tools/sysid.py writes, so the two
+    // tools leave the same trail. Paste over the fields in
+    // Controllers/params/<car>.json, then node Tools/gen_params.js.
+    p.appendChild(el('h3', { text: 'Or into the firmware parameter file' }));
+    const today = new Date().toISOString().slice(0, 10);
+    const who = 'the Calibration Companion on ' + (cal.vehicleName || 'this vehicle');
+    const fields = [], prov = [];
+    function put(name, value, stage, dp) {
+        if (value === undefined || !isFinite(value)) return;
+        const v = Number(value.toPrecision(dp || 6));
+        fields.push('  "' + name + '": ' + JSON.stringify(v) + ',');
+        fields.push('  "_' + name + '": "MEASURED ' + today + ' by ' + who + ', stage ' + stage + '",');
+        prov.push('    "' + name + '": "measured: ' + stage + ', ' + today + '"');
+    }
+    if (have('kt')) put('kt', r.kt, r.ktHow || 'E', 6);
+    put('wheel_radius_m', r.radiusMean, 'H roll-out', 5);
+    put('max_steer_rad', r.maxSteer, 'I steering map', 5);
+    put('steer_backlash_rad', r.backlash, 'I steering map', 4);
+    put('drag_c0', r.dragC0, 'B coast-down', 5);
+    put('drag_c1', r.dragC1, 'B coast-down', 5);
+    put('drag_c2', r.dragC2, 'B coast-down', 5);
+    put('traction_eff', r.tractionEff, 'C steady speed', 4);
+    put('cal_scale', r.calScale, 'A encoder scale', 5);
+    put('cal_brake', r.calBrake, 'D braking', 4);
+    if (fields.length) {
+        // kt is per wheel in the file
+        const kIdx = fields.findIndex(function (l) { return l.indexOf('"kt": ') === 2; });
+        if (kIdx >= 0) {
+            const v = JSON.stringify(Number(r.kt.toPrecision(6)));
+            fields[kIdx] = '  "kt": [' + v + ', ' + v + ', ' + v + ', ' + v + '],';
+        }
+        const notes = [];
+        if (have('regenEta')) notes.push('eta_back cannot exceed the measured regen efficiency ' + r.regenEta.toFixed(3));
+        if (have('J') && cal.gearRatio && cal.wheelRadius)
+            notes.push('mass_eff_kg = mass_kg + motors x ' + (r.J * cal.gearRatio * cal.gearRatio / (cal.wheelRadius * cal.wheelRadius)).toFixed(4) + ' kg (J from F)');
+        if (have('gyroN')) notes.push('navigation filter gyro noise density ' + r.gyroN.toExponential(3) + ' rad/s/sqrt(Hz), bias instability ' + r.gyroB.toExponential(3) + ' rad/s (J)');
+        const jblock = fields.join('\n') + '\n\n  "_provenance": {\n' + prov.join(',\n') + '\n  }' +
+            (notes.length ? '\n\n  // also: ' + notes.join('\n  // also: ') : '') + '\n';
+        p.appendChild(el('pre', {}, [el('code', { text: jblock })]));
+    } else {
+        p.appendChild(el('p', { class: 'small muted', text: 'Nothing measured for it yet.' }));
+    }
+
     const btns = el('div', { class: 'btn-row' });
     const copy = el('button', { class: 'primary', text: 'Copy' });
     const status = el('span', { class: 'status' });
@@ -736,6 +1219,8 @@ function stageResults(root) {
     reset.addEventListener('click', function () {
         if (!confirm('Discard every measurement on this page?')) return;
         cal.scaleRows = cal.coastRows = cal.tractionRows = cal.brakeRows = '';
+        cal.bemfRows = cal.dynoRows = cal.fricRows = cal.rundownRows = cal.regenRows = '';
+        cal.rolloutRows = cal.steerRows = cal.allanRows = '';
         cal.results = {};
         save(); stage = 0; render();
     });
