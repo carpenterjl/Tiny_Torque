@@ -36,7 +36,7 @@
 extern "C" {
 #endif
 
-#define TT_LOG_MAX     48   /* 32 until NAV-04 */
+#define TT_LOG_MAX     64   /* 32 until NAV-04, 48 until FW-22 */
 #define TT_LOG_MAGIC   0x47544C54u     /* "TLTG" little-endian */
 
 /* The binary frame. Fixed layout, 32-bit fields only: written raw to SD /

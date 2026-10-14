@@ -1105,6 +1105,7 @@ static void fill_log(OpusState *st, const TtMeas *m)
     g->v_est        = st->v_est;
     g->v_pred       = st->v_pred;
     g->gyro_bias    = st->gyro_bias;
+    g->ax_bias      = st->ax_bias;
     g->steer_trim   = st->steer_trim;
     g->odo_scale    = st->odo_scale;
     g->f_gain       = st->f_gain;
@@ -1263,7 +1264,7 @@ void opus_step(OpusState *st, const TtMeas *m, TtCmd *out)
      * (their brake slip is cal_brake's), and the odometer stays the whole
      * story — as it is outside the driven phases, at rest or nearly. */
     {
-        float ax = m->imu.accel[0];
+        float ax = m->imu.accel[0] - st->ax_bias;
         int ok = m->imu.st.valid && finitef_(ax) && finitef_(m->imu.gyro[1]);
         int slip = 0;
         uint32_t odo_pair = (1u << st->odo_l) | (1u << st->odo_r);
@@ -1275,7 +1276,9 @@ void opus_step(OpusState *st, const TtMeas *m, TtCmd *out)
             float e, band;
             /* FLU: +y is left, so a positive pitch rate is nose down, and a
              * nose-down car's accelerometer reads g*sin(pitch) of braking. */
-            st->pitch += (m->imu.gyro[1] - st->pitch / EN_PITCH_TAU_S) * dt;
+            float ay_t = st->v_est * st->psi_dot_f;
+            float q = (ay_t < EN_PITCH_AY_MAX && ay_t > -EN_PITCH_AY_MAX) ? m->imu.gyro[1] : 0.0f;
+            st->pitch += (q - st->pitch / EN_PITCH_TAU_S) * dt;
             ax += 9.80665f * st->pitch;
             st->ax_corr = ax;
             st->v_est += 0.5f * (ax + st->ax_prev) * dt;
@@ -1283,6 +1286,12 @@ void opus_step(OpusState *st, const TtMeas *m, TtCmd *out)
             band = EN_VOBS_BAND_MPS + EN_VOBS_BAND_FRAC * fabsf(st->v_est);
             slip = e > band || e < -band;
             st->v_est += e * lp_alpha(dt, slip ? EN_VOBS_SLIP_TAU_S : EN_VOBS_TAU_S);
+            /* What the pull leaves over, steadily, is the bias (FW-22). */
+            float ay = st->v_est * st->psi_dot_f;
+            if (!slip && st->pr_state != 1 && !(st->pr_hold_t > 0.0f) &&
+                ax < EN_AB_AX_MAX && ax > -EN_AB_AX_MAX && ay < EN_AB_AY_MAX && ay > -EN_AB_AY_MAX)
+                st->ax_bias = clampf(st->ax_bias - e * dt / (EN_VOBS_TAU_S * EN_AB_TAU_S),
+                                     -EN_AB_MAX, EN_AB_MAX);
         }
         st->ax_prev = ok ? ax : 0.0f;
         st->ax_load += (st->ax_prev - st->ax_load) * lp_alpha(dt, EN_LOAD_TAU_S);
@@ -1509,10 +1518,17 @@ void opus_step(OpusState *st, const TtMeas *m, TtCmd *out)
             st->gb_sum += m->imu.gyro[2];
             st->gb_n++;
         }
+        /* ...and what the accelerometer reads forward is its bias, the
+         * die's pitch and the floor's slope (FW-22). */
+        if (st->phase_t > GA_GB_SETTLE_S && m->imu.st.valid && finitef_(m->imu.accel[0])) {
+            st->ab_sum += m->imu.accel[0];
+            st->ab_n++;
+        }
         if (st->phase_t > SQ_ARM_BRAKE_S + SQ_ARM_ROLL_S) {
             arm_checks(st, m);
             if (st->fault) { st->phase = OPUS_FAULT; break; }
             if (st->gb_n > 0) st->gyro_bias = st->gb_sum / (float)st->gb_n;
+            if (st->ab_n > 0) st->ax_bias = clampf(st->ab_sum / (float)st->ab_n, -EN_AB_MAX, EN_AB_MAX);
             /* Zero the estimators so the mission's datum is the arm point. */
             st->odo_cnt_l = 0; st->odo_cnt_r = 0; st->odo_corr_m = 0.0f;
             st->psi = 0.0f; st->psi_ref = 0.0f;

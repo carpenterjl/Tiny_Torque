@@ -22,7 +22,7 @@
 const fs = require('fs');
 
 const MAGIC = 0x47544C54;
-const LOG_MAX = 48;   // TT_LOG_MAX (32 until NAV-04)
+const LOG_MAX = 64;   // TT_LOG_MAX (32 until NAV-04, 48 until FW-22)
 const FRAME_BYTES = 5 * 4 + LOG_MAX * 4;
 
 /** Channel names, in order, from TT_LOG(name, unit, desc) rows. */

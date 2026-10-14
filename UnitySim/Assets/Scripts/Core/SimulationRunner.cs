@@ -125,7 +125,7 @@ namespace AIHWSim.Core
 
         private string[] _debugNames = Array.Empty<string>();
         // Debug channels past the 16 of CtrlOutputs (ctrl_get_debug_ext).
-        private readonly float[] _debugExt = new float[32];
+        private readonly float[] _debugExt = new float[48];
         private int _debugExtN;
         // What the firmware reported last, held while it does not run (a
         // core stall or an MCU reset) — the drivers hold its last frame too.

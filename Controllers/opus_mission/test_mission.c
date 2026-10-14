@@ -85,8 +85,10 @@ typedef struct {
     double torque_scale;            /* torque delivered / torque commanded */
     double gyro_bias;               /* rad/s added to the gyro             */
     double steer_offset;            /* rad the wheels sit off the command  */
+    double accel_bias;              /* m/s^2 added to the forward accelerometer
+                                       (a die pitched in the body, FW-22) */
 } CarErr;
-static CarErr g_err = { 0, 1.0, 0.0, 0.0 };
+static CarErr g_err = { 0, 1.0, 0.0, 0.0, 0.0 };
 /* FW-17: the parameters claim no delay, and the drives report the current
  * of the torque acting; the mission must measure the delay itself. */
 static int g_measure_delay = 0;
@@ -96,6 +98,7 @@ static int g_measure_delay = 0;
 #define TOL_RT_RMS_MM     20.0   /* route: RMS cross-track error            */
 #define TOL_RT_STOP_MM    25.0   /* route: stop along the route vs its end  */
 #define TOL_BIAS          1e-4   /* rad/s, learned gyro bias               */
+#define TOL_ABIAS         0.02   /* m/s^2, learned accelerometer bias (FW-22) */
 
 typedef struct {
     double x, z, psi;               /* world pose, psi positive = left */
@@ -238,7 +241,7 @@ static int run(double rate_hz, int glitch, int delay, Legs *out_legs)
          * positive, no sign to learn. */
         m.imu.st.valid = 1;
         m.imu.gyro[2] = (float)(psi_dot_prev + g_err.gyro_bias);
-        m.imu.accel[0] = (float)a_prev;
+        m.imu.accel[0] = (float)(a_prev + g_err.accel_bias);
         m.imu.accel[2] = 9.81f;
         m.batt.st.valid = 1;
         m.batt.v = 7.4f;
@@ -331,8 +334,8 @@ static int run(double rate_hz, int glitch, int delay, Legs *out_legs)
                (double)MI_STOP_FROM_EXIT, mark_stop - mark_turn_exit, total);
         printf("\ncontroller's own stop error: %+.2f mm\n", (double)st.stop_err_mm);
         printf("learned: force gain %.4f, steering trim %+.4f rad, gyro bias %+.5f rad/s, "
-               "command delay %.1f ms%s\n",
-               (double)st.f_gain, (double)st.steer_trim, (double)st.gyro_bias,
+               "accel bias %+.3f m/s^2, command delay %.1f ms%s\n",
+               (double)st.f_gain, (double)st.steer_trim, (double)st.gyro_bias, (double)st.ax_bias,
                (double)st.dly_s * 1000.0, st.dly_state == 2 ? " (measured)" : "");
         printf("odometer %.4f m vs true path %.4f m (drift %+.1f mm)\n\n",
                (double)opus_odo_m(&st), p.path, drift);
@@ -354,6 +357,7 @@ static int run(double rate_hz, int glitch, int delay, Legs *out_legs)
         CHECK("odometer drift",        fabs(drift) <= TOL_ODO_DRIFT_MM);
         CHECK("force gain learned",    fabs(st.f_gain - g_err.torque_scale) <= TOL_GAIN);
         CHECK("gyro bias learned",     fabs(st.gyro_bias - g_err.gyro_bias) <= TOL_BIAS);
+        CHECK("accel bias learned",    fabs(st.ax_bias - g_err.accel_bias) <= TOL_ABIAS);
         /* The trim takes what lies beyond the servo's play; the yaw loop's
          * integral holds the rest. */
         CHECK("steering trim learned", fabs(st.steer_trim - g_err.steer_offset) <= GA_TRIM_DEADZONE + 0.002);
@@ -553,11 +557,16 @@ int main(void)
         static const CarErr weak = { "motors give 10 % less torque", 0.90, 0.0, 0.0 };
         static const CarErr skew = { "gyro 0.5 deg/s off, steering 2 deg off centre",
                                      1.0, 0.5 * OPUS_DEG2RAD, 2.0 * OPUS_DEG2RAD };
+        /* FW-22: the die pitched 2 deg nose up, gravity in the forward axis. */
+        static const CarErr pitched = { "IMU pitched 2 deg in the body", 1.0, 0.0, 0.0, 0.3423 };
+        Legs lp;
         g_err = weak; fails += run(100.0, 0, 1, NULL);
         g_err = skew; fails += run(100.0, 0, 1, NULL);
+        g_err = pitched; fails += run(100.0, 0, 1, &lp);
+        fails += compare("IMU pitched 2 deg in the body (FW-22)", &lp, &late1, 0.0);
     }
     {
-        static const CarErr none = { 0, 1.0, 0.0, 0.0 };
+        static const CarErr none = { 0, 1.0, 0.0, 0.0, 0.0 };
         g_err = none;
         fails += run_route("oval", 2.0f);
         fails += run_route("oval", 3.0f);

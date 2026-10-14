@@ -56,3 +56,4 @@ TT_LOG(det_d,        "m",     "the detour's offset from the route at the car's p
 TT_LOG(det_n,        "",      "detours planned this run (NAV-08)")
 TT_LOG(det_s,        "m",     "the route ahead was last found blocked this far along it (NAV-08); -1 = clear over the look-ahead")
 TT_LOG(map_n,        "",      "occupied cells in the local map (NAV-08)")
+TT_LOG(ax_bias,      "m/s^2", "forward accelerometer bias: read at rest while arming, then kept by the odometer while the car runs steadily (FW-22)")

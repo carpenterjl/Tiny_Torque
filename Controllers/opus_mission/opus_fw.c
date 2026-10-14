@@ -124,7 +124,7 @@ void opus_fw_step(OpusFw *fw, const TtMeas *m, TtCmd *out)
     nr = take_ranges(fw, m, r);
     flow_ok = take_flow(fw, m, &v_flow);
     if (dt > 0.0f)
-        tt_nav_step(&fw->nav, dt, m->imu.gyro[2], m->imu.accel[0], st->v_meas,
+        tt_nav_step(&fw->nav, dt, m->imu.gyro[2], st->ax_corr, st->v_meas,
                     v_flow, flow_ok, r, nr);
     if (fw->nav.stage == TT_NAV_RUN) {
         /* The odometer's scale, once the ranges have pinned it (FW-15). */

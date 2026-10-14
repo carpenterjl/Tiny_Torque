@@ -111,6 +111,10 @@ typedef struct {
     float  gyro_bias;      /* rad/s, the gyro's reading at rest while arming */
     float  gb_sum;         /* ...summed over the standing check */
     int    gb_n;
+    float  ax_bias;        /* m/s^2, the forward accelerometer's bias: read
+                              at rest while arming, kept by the odometer (FW-22) */
+    float  ab_sum;         /* ...summed over the standing check */
+    int    ab_n;
     float  lr_eps;         /* right-minus-left odometry wheel scale: the
                               encoder differential's yaw is off by eps*v/track */
     float  steer_act_f;    /* steering acting on the car, through its lag */

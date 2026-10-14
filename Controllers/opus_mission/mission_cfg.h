@@ -323,8 +323,29 @@
  * pitches the nose down ~1.5 deg, which reads as 0.25 m/s^2 of extra decel —
  * enough to drag the estimate onto the very wheels it should be judging. The
  * pitch is the gyro's integral, leaking away so a gyro bias cannot build up
- * (a steady slope is the odometer correction's business). */
+ * (a steady slope is the odometer correction's business). Not while the car
+ * turns: rolled into the turn, the body's y axis takes yaw rate x sin(roll)
+ * (0.75 rad/s x 0.7 deg on the oval at 3 m/s, ~0.01 rad/s; a die rolled in
+ * its mount adds the same) and the integral builds a pitch that is not there,
+ * 0.17 m/s^2 by the end of a half-lap, that leaks out over the next two
+ * seconds as a speed error and, with FW-22, as a bias (FW-22). */
 #define EN_PITCH_TAU_S     2.0f
+#define EN_PITCH_AY_MAX    1.0f      /* m/s^2: the gyro's pitch rate is taken below this lateral */
+/* The forward accelerometer's bias (FW-22): the part's own offset, the die
+ * pitched in the chassis (2 deg is 0.34 m/s^2 of gravity), the floor's slope.
+ * Proportional alone, the pull above leaves the speed bias*tau off, and once
+ * it goes slack (a stop's slip) the bias integrates straight into the speed
+ * and the odometer the stop is judged on. Read at rest while arming, then
+ * kept by the odometer while the car runs steadily: the spot it armed on may
+ * tilt where the road does not (the twin's spawn arrow lifts its front axle
+ * 1.2 deg), and the pitch above leaks a lasting attitude change away. Held
+ * while it launches, brakes, slips or probes — exactly when the speed leans
+ * on the accelerometer. */
+#define EN_AB_TAU_S        1.0f      /* s, the bias estimate's time constant      */
+#define EN_AB_AX_MAX       1.5f      /* m/s^2: learned only below this acceleration */
+#define EN_AB_AY_MAX       1.0f      /* m/s^2, and this lateral: in a turn the body's
+                                        sideslip puts v*psi_dot*sin(beta) forward */
+#define EN_AB_MAX          1.0f      /* m/s^2 clamp (6 deg of mount)              */
 /* Load moves onto the front axle as the body pitches, not when the brake
  * goes on: the allocator's grip budget sees the measured acceleration
  * through this lag. */
