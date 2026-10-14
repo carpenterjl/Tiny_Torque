@@ -344,7 +344,22 @@
  * allows: v <= sqrt(2 a_brake (clear - stop - the travel over the delay)).
  * Short of GA_CL_STOP_M the car holds, and goes on once the way has opened
  * by GA_CL_HYST_M more. A hold longer than SF_BLOCK_S, or a return within
- * GA_CL_CONTACT_M of the nose, is a fault (FA_OBSTACLE). */
+ * GA_CL_CONTACT_M of the nose, is a fault (FA_OBSTACLE).
+ *
+ * Held and below GA_CL_STAND_V the car STANDS: the speed loop is dropped
+ * and the motors command nothing, so it neither creeps back on the loop
+ * settling at zero nor forward on the drag feed-forward. What is in the
+ * way may be coming: between two frames the clearance should shrink by
+ * the car's own travel, and what it shrinks beyond that is the closing
+ * speed, which the stop profile then allows for (the way v <= -v_c +
+ * sqrt(v_c^2 + 2 a d)) and which eats the clearance over the next frame
+ * and the delay. A clearance that jumps by more than GA_CL_CLOSE_JUMP_M
+ * is a different thing in the way, not the same one moving. */
+#define GA_CL_STAND_V      0.05f     /* m/s: held and slower than this = stand  */
+#define GA_CL_CLOSE_JUMP_M 1.0f      /* a larger change between frames = a new
+                                        target, closing speed starts again     */
+#define GA_CL_FRAME_MAX_S  0.2f      /* frames further apart carry no closing
+                                        speed (a frame was missed)             */
 #define GA_CL_MARGIN_W_M   0.08f     /* corridor half width beyond the body's:
                                         the tracker's error and the tyres     */
 #define GA_CL_FLOOR_M      0.03f     /* a return within this of the floor is it */

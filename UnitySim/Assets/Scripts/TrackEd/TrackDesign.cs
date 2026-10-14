@@ -22,6 +22,10 @@ namespace AIHWSim.TrackEd
         // JsonUtility gives a missing field 0, so TrackDesign.EnsureItems has
         // to repair it or every pre-scale save would build items at zero size.
         public float scale = 1f;
+        // The item will be moved during the run (a mission harness obstacle,
+        // ObstacleCourse), so it must not be static-batched: a batched mesh
+        // stays where it was built whatever its transform does.
+        public bool mobile;
         // "Scenery, whatever the catalog says." A dynamic ItemDef normally gets
         // a Rigidbody per collidered piece; the ported maps place hundreds of
         // dominoes, bricks and pumpkins as decorative fill, and that many live

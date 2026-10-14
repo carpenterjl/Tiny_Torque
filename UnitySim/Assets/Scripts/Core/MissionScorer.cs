@@ -249,6 +249,7 @@ namespace AIHWSim.Core
             res.obstacle_hit = Course != null ? Course.Hit : 0;
             res.detour_max_mm = Course != null ? Course.DetourMaxMm : -1f;
             res.rejoin_m = Course != null ? Course.RejoinM : -1f;
+            res.obstacle_creep_mm = Course != null ? Course.CreepMm : -1f;
 
             if (_route != null)
             {

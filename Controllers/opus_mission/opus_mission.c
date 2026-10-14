@@ -274,6 +274,7 @@ void opus_reset(OpusState *st)
     st->clr = clr;
     st->clr_on = clr_on;
     st->clear_m = TT_CLEAR_NONE;
+    st->clr_prev_m = TT_CLEAR_NONE;
     st->det_cfg = dcfg;
     st->det_on = det_on;
     st->det_s = -1.0f;
@@ -601,6 +602,8 @@ void opus_set_clearance(OpusState *st, const TtClearCfg *c, int on)
     if (c && on) { st->clr = *c; st->clr_on = 1; }
     else { memset(&st->clr, 0, sizeof(st->clr)); st->clr_on = 0; }
     st->clear_m = TT_CLEAR_NONE;
+    st->clr_prev_m = TT_CLEAR_NONE;
+    st->v_close = 0.0f;
     /* The detour planner (NAV-08) maps with the same ranger; its discs are
      * the corridor's half width and a cell for the map's quantisation. */
     tt_detour_default_cfg(&st->det_cfg);
@@ -691,6 +694,29 @@ static void clearance(OpusState *st, const TtMeas *m)
     tt_clear_step(&st->clr, &m->tof, st->pitch, path, n, &o);
     st->clr_out = o;
     st->clear_m = o.clear_m < TT_CLEAR_NONE ? o.clear_m - p->body_nose_m : TT_CLEAR_NONE;
+
+    /* Is it coming? Over the frame the clearance should have shrunk by
+     * the car's own travel; what it shrank beyond that is the closing
+     * speed of what is in the way. Two frames of the same thing (a jump
+     * of more than GA_CL_CLOSE_JUMP_M is another), close enough in time
+     * that none was missed; receding counts as standing still. Averaged
+     * over two frames against the ranger's own noise. */
+    {
+        float dt_f = (float)(m->tof.st.t_us - st->clr_prev_us) * 1e-6f;
+        float v_obs = 0.0f;
+        if (st->clr_prev_m < TT_CLEAR_NONE && st->clear_m < TT_CLEAR_NONE &&
+            dt_f > 1e-3f && dt_f < GA_CL_FRAME_MAX_S) {
+            float d = st->clear_m - st->clr_prev_m;
+            if (d > -GA_CL_CLOSE_JUMP_M && d < GA_CL_CLOSE_JUMP_M) {
+                v_obs = -d / dt_f - st->v_est;
+                if (v_obs < 0.0f) v_obs = 0.0f;
+            }
+            st->clr_dt = dt_f;
+        }
+        st->v_close = st->clear_m < TT_CLEAR_NONE ? 0.5f * (st->v_close + v_obs) : 0.0f;
+        st->clr_prev_m = st->clear_m;
+        st->clr_prev_us = m->tof.st.t_us;
+    }
     if (st->det_on && st->route && st->pose_ok) map_frame(st, m);
 }
 
@@ -829,17 +855,25 @@ static void longitudinal(OpusState *st, const TtMeas *m,
     float a_trim, a_cmd, f_req, f_motor, f_fric, t_each, g;
 
     /* On the speed the car will have when this command lands (FW-13). */
-    a_trim = pid_update(&st->spd_pid, v_ref, st->v_pred, m->dt_s);
-    a_cmd  = clampf(a_ff + a_trim, -LI_A_MAX, LI_A_MAX);
-
-    /* Total longitudinal force the car needs, coast drag included. Note the
-     * EFFECTIVE mass: a fifth of what has to be accelerated is spinning rotor,
-     * not translating car, and ignoring it makes every force command small.
-     * Over the force gain the car has shown (FW-16), from the end of the
-     * launch it is measured on: a gain stepping in mid-launch would move
-     * where the launch ends. */
     g = (st->phase > OPUS_LAUNCH && !(st->mu_est < st->mu_nom)) ? st->f_gain : 1.0f;
-    f_req = (p->mass_eff_kg * a_cmd + drag_n(p, st->v_pred)) / g;
+    if (st->standing) {
+        /* Stopped short of what is in the way (NAV-05): no loop, no force,
+         * and the loop starts afresh when the way opens. */
+        pid_reset(&st->spd_pid);
+        a_cmd = 0.0f;
+        f_req = 0.0f;
+    } else {
+        a_trim = pid_update(&st->spd_pid, v_ref, st->v_pred, m->dt_s);
+        a_cmd  = clampf(a_ff + a_trim, -LI_A_MAX, LI_A_MAX);
+
+        /* Total longitudinal force the car needs, coast drag included. Note
+         * the EFFECTIVE mass: a fifth of what has to be accelerated is
+         * spinning rotor, not translating car, and ignoring it makes every
+         * force command small. Over the force gain the car has shown
+         * (FW-16), from the end of the launch it is measured on: a gain
+         * stepping in mid-launch would move where the launch ends. */
+        f_req = (p->mass_eff_kg * a_cmd + drag_n(p, st->v_pred)) / g;
+    }
 
     if (f_req >= 0.0f) {
         /* Driving. The driven tyres run at slip, so slightly more force is
@@ -1762,10 +1796,15 @@ void opus_step(OpusState *st, const TtMeas *m, TtCmd *out)
      * (BRAKE, CREEP) is left to its own profile. */
     if (st->clr_on && (st->phase == OPUS_LAUNCH || st->phase == OPUS_CRUISE_A ||
                        st->phase == OPUS_CRUISE_B || st->phase == OPUS_FOLLOW)) {
-        float d = st->clear_m - GA_CL_STOP_M - st->v_pred * (st->dly_s + EN_DEAD_TIME_S);
+        /* What is in the way keeps coming at v_close while the next frame,
+         * this command and the loop's dead time run out, and while the car
+         * stops: the profile is against the closing speed, not the car's. */
+        float lead = st->dly_s + EN_DEAD_TIME_S;
+        float vc = st->v_close;
+        float d = st->clear_m - GA_CL_STOP_M - st->v_pred * lead - vc * (st->clr_dt + lead);
         float v_lim;
         if (st->blocked) d -= GA_CL_HYST_M;
-        v_lim = d > 0.0f ? sqrtf(2.0f * st->a_brake * d) : 0.0f;
+        v_lim = d > 0.0f ? sqrtf(vc * vc + 2.0f * st->a_brake * d) - vc : 0.0f;
         if (v_lim < v_ref) {
             v_ref = v_lim;
             a_ff = st->v_pred > v_lim + 0.05f ? -st->a_brake : 0.0f;
@@ -1774,13 +1813,19 @@ void opus_step(OpusState *st, const TtMeas *m, TtCmd *out)
         if (st->blocked) {
             st->block_t += dt;
             if (st->block_t > SF_BLOCK_S) st->fault |= FA_OBSTACLE;
+            /* Stopped at the hold: stand, rather than let the speed loop
+             * settle at zero (it crept back a few cm) or the drag
+             * feed-forward push (a few cm forward). */
+            if (st->v_pred < GA_CL_STAND_V && st->v_pred > -GA_CL_STAND_V) st->standing = 1;
         } else {
             st->block_t = 0.0f;
+            st->standing = 0;
         }
         if (st->clear_m < GA_CL_CONTACT_M) st->fault |= FA_OBSTACLE;
     } else {
         st->blocked = 0;
         st->block_t = 0.0f;
+        st->standing = 0;
     }
 
     /* ---- actuate --------------------------------------------------------- */

@@ -183,6 +183,11 @@ typedef struct {
     float  clear_m;        /* clear distance from the nose; TT_CLEAR_NONE    */
     int    blocked;        /* held short of something in the way             */
     float  block_t;        /* s held                                         */
+    int    standing;       /* stopped at the hold: no speed loop, no torque  */
+    float  clr_prev_m;     /* the frame before's clearance (closing speed)   */
+    uint32_t clr_prev_us;  /* ...and its stamp                               */
+    float  clr_dt;         /* s between the last two frames                  */
+    float  v_close;        /* m/s what is in the way comes at the car, >= 0  */
     TtClearOut clr_out;    /* the last frame's verdict, for telemetry        */
 
     /* A detour beside the route (NAV-08): the map the ranger's rays build,

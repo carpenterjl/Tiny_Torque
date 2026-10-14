@@ -323,7 +323,7 @@ namespace AIHWSim.TrackEd
                 // and so is anything animated (a batched ghost cannot bob).
                 // A pinned dynamic prop is inert by definition, so it batches too.
                 bool live = def.dynamic && !it.pinned;
-                if (!live && def.behavior == ItemBehavior.None && !def.animated)
+                if (!live && def.behavior == ItemBehavior.None && !def.animated && !it.mobile)
                     batchable.Add(go);
 
                 if (live)
