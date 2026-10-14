@@ -6,6 +6,7 @@
  */
 #include "tt_types.h"
 #include "tt_params.h"
+#include "tt_pstore.h"
 #include "tt_log.h"
 #include "tt_alloc.h"
 #include "opus_mission.h"
@@ -38,6 +39,51 @@ int main(void)
     q = *p;
     q.driven_mask = 0u;
     CHECK("no driven wheel is rejected", tt_params_validate(&q) != 0);
+
+    /* ---- the parameter image (FW-07, tt_pstore.h) ----------------------- */
+    {
+        static uint8_t a[TT_PSTORE_SIZE], b[TT_PSTORE_SIZE];
+        TtParams r;
+        uint32_t seq = 0;
+        size_t n = tt_pstore_write(a, sizeof(a), p, 7u);
+        CHECK("image: written at its size", n == TT_PSTORE_SIZE);
+        CHECK("image: a small buffer is refused", tt_pstore_write(b, 10, p, 1u) == 0);
+        memset(&r, 0, sizeof(r));
+        CHECK("image: reads back", tt_pstore_read(a, n, &r, &seq) == TT_PSTORE_OK);
+        CHECK("image: the set and its hash come back", seq == 7u && tt_params_hash(&r) == tt_params_hash(p));
+        CHECK("image: a short read is refused", tt_pstore_read(a, n - 1u, &r, 0) == TT_PSTORE_E_SHORT);
+        memcpy(b, a, n);
+        b[0] ^= 0xFFu;
+        CHECK("image: blank or foreign bytes are not an image", tt_pstore_read(b, n, &r, 0) == TT_PSTORE_E_MAGIC);
+        memcpy(b, a, n);
+        b[TT_PSTORE_HDR + 20u] ^= 0x01u;
+        CHECK("image: one flipped bit is damage", tt_pstore_read(b, n, &r, 0) == TT_PSTORE_E_CRC);
+        memcpy(b, a, n);
+        b[4] = (uint8_t)(TT_PARAMS_VERSION + 1u);
+        b[TT_PSTORE_HDR + sizeof(TtParams)] = 0u;   /* its CRC no longer holds either */
+        CHECK("image: a damaged version word reads as damage", tt_pstore_read(b, n, &r, 0) == TT_PSTORE_E_CRC);
+        /* An older/newer layout: written whole with its own version. */
+        memcpy(b, a, n);
+        b[4] = (uint8_t)(TT_PARAMS_VERSION + 1u);
+        {
+            uint32_t c = tt_crc32(b, TT_PSTORE_HDR + sizeof(TtParams));
+            uint8_t *t = b + TT_PSTORE_HDR + sizeof(TtParams);
+            t[0] = (uint8_t)c; t[1] = (uint8_t)(c >> 8); t[2] = (uint8_t)(c >> 16); t[3] = (uint8_t)(c >> 24);
+        }
+        CHECK("image: another layout's version is refused", tt_pstore_read(b, n, &r, 0) == TT_PSTORE_E_VERSION);
+        q = *p;
+        q.wheel_radius_m = 0.0f;
+        CHECK("image: a set that does not validate is not written", tt_pstore_write(b, sizeof(b), &q, 1u) == 0);
+        /* Two slots: the newer valid one wins, a damaged newer one loses. */
+        tt_pstore_write(b, sizeof(b), p, 9u);
+        CHECK("slots: the higher write number is taken", tt_pstore_pick(a, n, b, n, &r, &seq) == 2 && seq == 9u);
+        CHECK("slots: ...whichever side it is on", tt_pstore_pick(b, n, a, n, &r, &seq) == 1 && seq == 9u);
+        b[TT_PSTORE_HDR + 8u] ^= 0x10u;
+        CHECK("slots: a damaged newer slot falls back to the older",
+              tt_pstore_pick(a, n, b, n, &r, &seq) == 1 && seq == 7u);
+        a[3] ^= 0x01u;
+        CHECK("slots: neither usable = none", tt_pstore_pick(a, n, b, n, &r, &seq) == 0);
+    }
     q = *p;
     q.version = TT_PARAMS_VERSION + 1u;
     CHECK("a different layout version is rejected", tt_params_validate(&q) != 0);

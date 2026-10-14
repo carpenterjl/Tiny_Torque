@@ -45,10 +45,11 @@
  * HOST LINK (Unity <-> bridge), little-endian. Every message is
  *     u32 len | u8 type | payload[len - 1]
  * Bridge -> Unity first, unsolicited:
- *   'h'  u32 proto(1), i32 sizeof SensorInfo2, CtrlInputs, CtrlOutputs,
+ *   'h'  u32 proto(2), i32 sizeof SensorInfo2, CtrlInputs, CtrlOutputs,
  *        f32 wanted rate, str mode, str firmware, i32 ok
  * Requests (Unity -> bridge) and replies:
- *   'I' f32 rate                         -> 'i' i32 rc, str debug names
+ *   'I' f32 rate                         -> 'i' i32 rc, str debug names,
+ *                                           u32 params hash (v2, FW-07)
  *   'C' i32 n, n x SensorInfo2 (raw)     -> 'c' i32 status
  *   'R'                                  -> 'r' i32 status
  *   'X'                                  -> 'x' i32 status
@@ -82,7 +83,7 @@
 #include <stdlib.h>
 #include <string.h>
 
-#define LINK_PROTO 1u
+#define LINK_PROTO 2u   /* 2: the init reply carries the params hash (FW-07) */
 
 enum { MODE_NONE = 0, MODE_DLL, MODE_EXE, MODE_SERIAL };
 enum { ST_OK = 0, ST_TIMEOUT = 1, ST_NOT_READY = 2, ST_GONE = 3 };
@@ -243,11 +244,12 @@ typedef const char *(*FnNames)(void);
 typedef void (*FnConf2)(const SensorInfo2 *, int);
 typedef float (*FnRate)(void);
 typedef int  (*FnExt)(float *, int);
+typedef uint32_t (*FnHash)(void);
 
 static struct {
     HMODULE m;
     FnInit init; FnStep step; FnVoid shutdown, reset; FnNames names;
-    FnConf2 configure2; FnRate rate; FnExt ext;
+    FnConf2 configure2; FnRate rate; FnExt ext; FnHash phash;
 } g_dll;
 
 static int dll_open(const char *path, char *why, size_t whyn)
@@ -272,6 +274,7 @@ static int dll_open(const char *path, char *why, size_t whyn)
     g_dll.configure2 = (FnConf2)(void *)GetProcAddress(g_dll.m, "ctrl_configure2");
     g_dll.rate = (FnRate)(void *)GetProcAddress(g_dll.m, "ctrl_get_control_rate");
     g_dll.ext = (FnExt)(void *)GetProcAddress(g_dll.m, "ctrl_get_debug_ext");
+    g_dll.phash = (FnHash)(void *)GetProcAddress(g_dll.m, "ctrl_get_params_hash");
     if (!g_dll.init || !g_dll.step || !g_dll.shutdown || !g_dll.names) {
         snprintf(why, whyn, "a required export is missing");
         return -1;
@@ -577,10 +580,12 @@ static void on_init(Rd *r)
     Buf b = { 0, 0, 0 };
     int32_t rc = -1;
     const char *names = "";
+    uint32_t phash = 0;
 
     if (g_mode == MODE_DLL) {
         rc = g_dll.init(rate);
         names = g_dll.names ? g_dll.names() : "";
+        phash = g_dll.phash ? g_dll.phash() : 0u;
     } else {
         TtWireHdr h;
         size_t pn = 0;
@@ -597,12 +602,14 @@ static void on_init(Rd *r)
             g_dev_ready = rc == 0;
             strncpy(g_names, info.log_names, sizeof(g_names) - 1u);
             names = g_names;
+            phash = info.params_hash;
         } else {
             fprintf(stderr, "tt_bridge: the firmware did not answer INIT\n");
         }
     }
     b_i32(&b, rc);
     b_str(&b, names);
+    b_u32(&b, phash);           /* link v2: which parameter set (FW-07) */
     up_send('i', &b);
     free(b.p);
 }

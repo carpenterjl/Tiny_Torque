@@ -363,6 +363,13 @@ CTRL_EXPORT float       ctrl_get_control_rate(void);
  */
 CTRL_EXPORT int         ctrl_get_debug_ext(float* dst, int max);
 
+/*
+ * OPTIONAL v7 export: the identity of the parameter set the firmware runs on
+ * (tt_params_hash(), FW-07), for the run's sidecar. 0 = none / not a
+ * parameterised firmware.
+ */
+CTRL_EXPORT uint32_t    ctrl_get_params_hash(void);
+
 #define CTRL_DEFINE_ABI_VERSION()                                             \
     CTRL_EXPORT int ctrl_abi_version(int* sizeof_inputs, int* sizeof_outputs) \
     {                                                                         \

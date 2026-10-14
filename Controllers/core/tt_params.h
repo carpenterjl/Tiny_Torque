@@ -21,6 +21,7 @@
 #ifndef TT_PARAMS_H
 #define TT_PARAMS_H
 
+#include <stddef.h>
 #include <stdint.h>
 #include "tt_types.h"
 
@@ -119,6 +120,9 @@ int      tt_params_validate(const TtParams *p);
 
 /* CRC-32 (IEEE) over the whole struct: the identity of a parameter set. */
 uint32_t tt_params_hash(const TtParams *p);
+
+/* The same CRC-32/IEEE over any bytes (the parameter image, tt_pstore.h). */
+uint32_t tt_crc32(const void *data, size_t n);
 
 /* Wheel torque -> motor Iq through this car's believed kt, gear and
  * efficiency. Shared by every target, so the sim exercises exactly the

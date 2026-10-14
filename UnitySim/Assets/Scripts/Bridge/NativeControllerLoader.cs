@@ -52,6 +52,19 @@ namespace AIHWSim.Bridge
         public CtrlResetDelegate Reset { get; private set; }
         public CtrlGetControlRateDelegate GetControlRate { get; private set; }
         public CtrlGetDebugExtDelegate GetDebugExt { get; private set; }
+        public CtrlGetParamsHashDelegate GetParamsHash { get; private set; }
+
+        /// <summary>FW-07: the hash of the parameter set the firmware runs on
+        /// (after Init), 0 when it does not say.</summary>
+        public uint ParamsHash
+        {
+            get
+            {
+                if (_link != null) return _link.ParamsHash;
+                try { return GetParamsHash != null ? GetParamsHash() : 0u; }
+                catch (Exception) { return 0u; }
+            }
+        }
 
         /// <summary>
         /// The ABI the loaded DLL was built against: what ctrl_abi_version()
@@ -161,6 +174,7 @@ namespace AIHWSim.Bridge
                 Reset = BindOptional<CtrlResetDelegate>("ctrl_reset");
                 GetControlRate = BindOptional<CtrlGetControlRateDelegate>("ctrl_get_control_rate");
                 GetDebugExt = BindOptional<CtrlGetDebugExtDelegate>("ctrl_get_debug_ext");
+                GetParamsHash = BindOptional<CtrlGetParamsHashDelegate>("ctrl_get_params_hash");
             }
             return true;
         }

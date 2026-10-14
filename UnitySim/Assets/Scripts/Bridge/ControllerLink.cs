@@ -81,7 +81,7 @@ namespace AIHWSim.Bridge
     /// </summary>
     public sealed class ControllerLink : IDisposable
     {
-        public const uint Proto = 1;
+        public const uint Proto = 2;   // 2: the init reply carries the params hash (FW-07)
 
         public string Mode { get; private set; }
         /// <summary>What the firmware says it is (the DLL path, or the INFO name).</summary>
@@ -215,10 +215,14 @@ namespace AIHWSim.Bridge
             int p = 1;
             int rc = (int)U32(r, ref p);
             string names = Str(r, ref p);
+            ParamsHash = p + 4 <= r.Length ? U32(r, ref p) : 0u;
             if (_names != IntPtr.Zero) Marshal.FreeHGlobal(_names);
             _names = Marshal.StringToHGlobalAnsi(names);
             return rc;
         }
+
+        /// <summary>FW-07: the firmware's parameter-set hash from the init reply; 0 = not given.</summary>
+        public uint ParamsHash { get; private set; }
 
         public IntPtr GetDebugNames() => _names;
 

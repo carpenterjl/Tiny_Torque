@@ -64,21 +64,26 @@ int tt_params_validate(const TtParams *p)
     return bad;
 }
 
-uint32_t tt_params_hash(const TtParams *p)
+uint32_t tt_crc32(const void *data, size_t n)
 {
-    /* Bitwise CRC-32/IEEE: tiny, table-free, and the same on every target
-     * because the struct is all 32-bit fields with no padding (and every
-     * target so far is little-endian). */
-    const uint8_t *b = (const uint8_t *)p;
+    /* Bitwise CRC-32/IEEE: tiny, table-free, the same on every target. */
+    const uint8_t *b = (const uint8_t *)data;
     uint32_t crc = 0xFFFFFFFFu;
     size_t i;
     int k;
 
-    if (p == NULL) return 0u;
-    for (i = 0; i < sizeof(*p); i++) {
+    for (i = 0; i < n; i++) {
         crc ^= b[i];
         for (k = 0; k < 8; k++)
             crc = (crc >> 1) ^ (0xEDB88320u & (0u - (crc & 1u)));
     }
     return ~crc;
+}
+
+uint32_t tt_params_hash(const TtParams *p)
+{
+    /* The struct as it lies: all 32-bit fields with no padding (and every
+     * target so far is little-endian), so the hash is the same everywhere. */
+    if (p == NULL) return 0u;
+    return tt_crc32(p, sizeof(*p));
 }

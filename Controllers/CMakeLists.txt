@@ -66,7 +66,7 @@ tt_core_warnings(pidlib)
 add_library(ttcore STATIC core/tt_params.c core/tt_alloc.c core/tt_nav.c core/tt_safety.c
             core/tt_wire.c core/tt_can.c core/tt_drvbus.c core/tt_soc.c
             core/tt_route.c core/tt_track.c core/tt_vplan.c core/routes_gen.c
-            core/tt_clear.c core/tt_grid.c core/tt_detour.c
+            core/tt_clear.c core/tt_grid.c core/tt_detour.c core/tt_pstore.c
             core/params_opus_vector.c core/params_opus_vector_foc.c)
 target_include_directories(ttcore PUBLIC core hal)
 tt_core_warnings(ttcore)
@@ -287,6 +287,12 @@ target_link_libraries(nav_replay PRIVATE ttcore)
 # Replay a wire capture through the firmware and diff its commands (VAL-03).
 add_executable(tt_replay tools/tt_replay.c)
 target_link_libraries(tt_replay PRIVATE opuslib)
+
+# Read a parameter image (FW-07): what a car's flash or a TT_PARAMS_STORE
+# file holds, as the firmware reads it. CI checks the one gen_params.js
+# --image writes against the built-in set.
+add_executable(tt_pstore_check tools/tt_pstore_check.c)
+target_link_libraries(tt_pstore_check PRIVATE ttcore)
 
 # The wire protocol and the firmware's end of the link (HIL-02/03): vectors,
 # damaged frames, payload round trips, and a whole drive in lockstep through

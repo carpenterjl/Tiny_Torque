@@ -177,6 +177,16 @@ namespace AIHWSim.Core
         /// <summary>The link's statistics (round trips, misses, wire errors),
         /// or "" when the firmware runs in-process.</summary>
         public string LinkStats => _loader?.Link != null ? _loader.Link.Stats() : "";
+
+        /// <summary>FW-07: the firmware's parameter-set hash as 8 hex digits; "" when it does not say.</summary>
+        public string ParamsHashHex
+        {
+            get
+            {
+                uint h = _loader != null && _loader.IsLoaded ? _loader.ParamsHash : 0u;
+                return h != 0u ? h.ToString("x8") : "";
+            }
+        }
         /// <summary>Make the next session take its noise seed afresh (from
         /// <see cref="NoiseSeedOverride"/>): a campaign gives every run its own.</summary>
         public static void ReseedNextSession() => _seedApplied = false;
@@ -441,6 +451,9 @@ namespace AIHWSim.Core
                 }
                 try { md["dll_sha256"] = Sha256(File.ReadAllBytes(_loader.SourcePath)); }
                 catch (Exception) { /* the file may be mid-rebuild; leave it out */ }
+                // FW-07: which parameter set the firmware ran on (its tt_params_hash).
+                uint ph = _loader.ParamsHash;
+                if (ph != 0u) md["params_hash"] = ph.ToString("x8");
             }
             var design = GameFlow.ActiveDesign;
             if (design != null)

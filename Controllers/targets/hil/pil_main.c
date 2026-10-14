@@ -20,8 +20,10 @@
  * make every Nth tick take M ms longer — a firmware that misses deadlines,
  * for exercising the bridge's and the sim's handling of late answers.
  */
+#define _CRT_SECURE_NO_WARNINGS   /* plain C stdio (the store file) on MSVC too */
 #include "opus_hil.h"
 #include "../route_env.h"
+#include "../host_params.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -80,7 +82,20 @@ int main(void)
     _setmode(0, _O_BINARY);
     _setmode(1, _O_BINARY);
 #endif
-    opus_hil_app(&ctx, &app, &OPUS_PARAMS, OPUS_PIL_NAME, &ha);
+    {
+        /* The parameter store (FW-07): TT_PARAMS_STORE's image when it is
+         * usable, else the set built in; the bridge's INFO carries the hash
+         * either way. */
+        static TtParams stored;
+        uint32_t seq = 0;
+        int rc = tt_host_params_load(&stored, &seq);
+        const TtParams *p = rc == 0 ? &stored : &OPUS_PARAMS;
+        if (rc == 0) fprintf(stderr, "%s: parameters from TT_PARAMS_STORE (write %lu, hash %08lX)\n",
+                             OPUS_PIL_NAME, (unsigned long)seq, (unsigned long)tt_params_hash(p));
+        else if (rc < 0) fprintf(stderr, "%s: TT_PARAMS_STORE is not a usable image (%d); built-in set\n",
+                                 OPUS_PIL_NAME, rc);
+        opus_hil_app(&ctx, &app, p, OPUS_PIL_NAME, &ha);
+    }
     /* the route the sim asked for, inherited through the bridge (NAV-04) */
     ctx.route = tt_route_env(route, sizeof(route));
     if (getenv("TT_PIL_STALL_EVERY") && getenv("TT_PIL_STALL_MS")) {

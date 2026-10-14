@@ -4,6 +4,10 @@
  *
  *   node Tools/gen_params.js            regenerate every Controllers/params/*.json
  *   node Tools/gen_params.js --check    exit 1 if any generated file is stale (CI)
+ *   node Tools/gen_params.js --image <name> <out.ttp> [seq]
+ *                                       the set as the firmware's store image
+ *                                       (core/tt_pstore.h): what a car's flash
+ *                                       or a host's TT_PARAMS_STORE file holds
  *
  * Each Controllers/params/<name>.json becomes Controllers/core/params_<name>.c,
  * defining `const TtParams tt_params_<name>`. The FIELDS list below must match
@@ -94,8 +98,87 @@ function generate(jsonPath) {
     ].join('\n');
 }
 
+// ---- the parameter image (FW-07, Controllers/core/tt_pstore.h) ----------
+// The same bytes the firmware's store holds: a 16-byte header (magic "TTPS",
+// layout version, struct size, write number), the struct as it lies
+// (little-endian 32-bit fields, FIELDS order), then CRC-32/IEEE over all of
+// it. What the car reads back from flash is what this writes.
+
+const PSTORE_MAGIC = 0x53505454;
+
+function crc32(bytes) {
+    let crc = 0xFFFFFFFF;
+    for (let i = 0; i < bytes.length; i++) {
+        crc ^= bytes[i];
+        for (let k = 0; k < 8; k++) crc = (crc >>> 1) ^ (0xEDB88320 & -(crc & 1));
+    }
+    return (~crc) >>> 0;
+}
+
+function wheelMask(v, where) {
+    if (!Array.isArray(v)) throw new Error(`${where}: needs a list of wheels`);
+    let m = 0;
+    for (const w of v) {
+        if (!(w in WHEELS)) throw new Error(`${where}: unknown wheel '${w}'`);
+        m |= 1 << WHEELS[w];
+    }
+    return m;
+}
+
+/* The struct's bytes for a parameter JSON object. */
+function structBytes(src) {
+    const words = [];
+    for (const [f, kind] of FIELDS) {
+        if (!(f in src)) throw new Error(`missing '${f}'`);
+        const v = src[f];
+        switch (kind) {
+        case 'f': words.push(['f', v]); break;
+        case 'u': words.push(['u', v]); break;
+        case 'f4':
+            if (!Array.isArray(v) || v.length !== 4) throw new Error(`${f}: needs 4 values`);
+            for (const x of v) words.push(['f', x]);
+            break;
+        case 'mask': words.push(['u', wheelMask(v, f)]); break;
+        }
+    }
+    const buf = Buffer.alloc(words.length * 4);
+    words.forEach(([k, v], i) => {
+        if (typeof v !== 'number' || !isFinite(v)) throw new Error(`field ${i}: not a finite number`);
+        if (k === 'f') buf.writeFloatLE(v, i * 4); else buf.writeUInt32LE(v >>> 0, i * 4);
+    });
+    return buf;
+}
+
+function image(src, seq) {
+    const body = structBytes(src);
+    const hdr = Buffer.alloc(16);
+    hdr.writeUInt32LE(PSTORE_MAGIC, 0);
+    hdr.writeUInt32LE(src.version >>> 0, 4);
+    hdr.writeUInt32LE(body.length, 8);
+    hdr.writeUInt32LE(seq >>> 0, 12);
+    const all = Buffer.concat([hdr, body]);
+    const tail = Buffer.alloc(4);
+    tail.writeUInt32LE(crc32(all), 0);
+    return Buffer.concat([all, tail]);
+}
+
+/* tt_params_hash() of the set: the CRC of the struct's bytes. */
+function paramsHash(src) { return crc32(structBytes(src)); }
+
 function main() {
     const check = process.argv.includes('--check');
+    const img = process.argv.indexOf('--image');
+    if (img >= 0) {
+        // node Tools/gen_params.js --image <name> <out.ttp> [seq]
+        const name = process.argv[img + 1], out = process.argv[img + 2];
+        const seq = Number(process.argv[img + 3] || 1);
+        if (!name || !out) { console.error('usage: gen_params.js --image <name> <out.ttp> [seq]'); process.exit(2); }
+        const src = JSON.parse(fs.readFileSync(path.join(PARAMS_DIR, name + '.json'), 'utf8'));
+        const bytes = image(src, seq);
+        fs.writeFileSync(out, bytes);
+        console.log(`wrote ${out}: ${bytes.length} bytes, ${name} v${src.version}, write ${seq}, hash ${paramsHash(src).toString(16).padStart(8, '0')}`);
+        process.exit(0);
+    }
     const files = fs.readdirSync(PARAMS_DIR).filter(f => f.endsWith('.json')).sort();
     let stale = 0;
     for (const f of files) {
@@ -112,4 +195,4 @@ function main() {
 }
 
 if (require.main === module) main();
-module.exports = { FIELDS, generate };
+module.exports = { FIELDS, generate, image, paramsHash, crc32 };

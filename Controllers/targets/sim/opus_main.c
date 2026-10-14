@@ -24,10 +24,12 @@
  * (opus_controller.dll = the brushed Opus Vector, opus_foc_controller.dll =
  * the four-motor FOC twin), as a board config would on the MCU.
  */
+#define _CRT_SECURE_NO_WARNINGS   /* plain C stdio (the store file) on MSVC too */
 #include "controller_api.h"
 #include "sim_hal.h"
 #include "opus_app.h"
 #include "../route_env.h"
+#include "../host_params.h"
 
 #include <string.h>
 
@@ -39,6 +41,14 @@ static OpusApp g_app;
 static SimHal  g_hal;
 static int     g_ready = 0;
 static int     g_hal_up = 0;
+
+/* The parameter set: the store's when TT_PARAMS_STORE names a usable image
+ * (FW-07), else the one built in. */
+static const TtParams *params(void)
+{
+    static TtParams stored;
+    return tt_host_params_load(&stored, 0) == 0 ? &stored : &OPUS_PARAMS;
+}
 
 /* The route the sim asked for (TT_ROUTE, set by -opusRoute; NAV-04). */
 static void apply_route(void)
@@ -54,11 +64,17 @@ CTRL_DEFINE_ABI_VERSION()
 CTRL_EXPORT int ctrl_init(float control_rate_hz)
 {
     if (!g_hal_up) { sim_hal_init(&g_hal); g_hal_up = 1; }
-    opus_app_init(&g_app, &OPUS_PARAMS, control_rate_hz);
+    opus_app_init(&g_app, params(), control_rate_hz);
     apply_route();
     sim_hal_restart_clock(&g_hal);
     g_ready = 1;
     return 0;
+}
+
+/* Which parameter set this run is on (the sidecar records it, FW-07). */
+CTRL_EXPORT uint32_t ctrl_get_params_hash(void)
+{
+    return g_app.params.version != 0u ? tt_params_hash(&g_app.params) : 0u;
 }
 
 CTRL_EXPORT void ctrl_reset(void)

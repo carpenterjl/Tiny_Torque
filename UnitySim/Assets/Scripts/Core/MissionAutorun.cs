@@ -121,6 +121,8 @@ namespace AIHWSim.Core
             public string note = "";
             /// <summary>The lockstep link's statistics; "" in-process.</summary>
             public string link = "";
+            /// <summary>FW-07: the firmware's parameter-set hash (8 hex digits); "" when it does not say.</summary>
+            public string params_hash = "";
 
             // NAV-06: a route run, scored against the route ("" otherwise).
             public string route = "";
@@ -159,6 +161,10 @@ namespace AIHWSim.Core
             // item, or never back.
             public float detour_max_mm = -1f;
             public float rejoin_m = -1f;
+
+            // NAV-05 close-out: how much the car moved while it stood short
+            // of a static item, mm (-1 = never stood short of one).
+            public float obstacle_creep_mm = -1f;
         }
 
         public static string RequestPath =>
@@ -440,6 +446,7 @@ namespace AIHWSim.Core
             _res.noiseSeed = Sensors.NoiseModel.GlobalSeed;
             _res.controlHz = _runner != null ? _runner.controlRateHz : 0;
             _res.link = _runner != null ? _runner.LinkStats : "";
+            _res.params_hash = _runner != null ? _runner.ParamsHashHex : "";
             _res.elapsedSec = _elapsed;
             if (_score != null) _score.Fill(_res);
             else _res.phase = -99;

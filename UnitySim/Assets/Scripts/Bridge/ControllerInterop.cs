@@ -190,6 +190,10 @@ namespace AIHWSim.Bridge
     [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
     public unsafe delegate int CtrlGetDebugExtDelegate(float* dst, int max);
 
+    /// <summary>Optional v7: the hash of the parameter set the firmware runs on (FW-07).</summary>
+    [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+    public delegate uint CtrlGetParamsHashDelegate();
+
     /// <summary>
     /// Mirror of the CTRL_VEHICLE_* enum in controller_api.h — the cars a
     /// controller may ask to be loaded into.
