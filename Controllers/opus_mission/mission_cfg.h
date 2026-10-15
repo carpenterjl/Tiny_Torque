@@ -197,8 +197,14 @@
  * lands on the mark. */
 #define GA_MU_SLIP_FRAC    0.65f
 /* A wheel slipping past this share of slip_max keeps its tick out of the
- * force-gain fit: the force it carried is the floor's, not the motor's. */
-#define GA_FG_SLIP_FRAC    0.75f
+ * force-gain fit: the force it carried is the floor's, not the motor's.
+ * At the limiter's own threshold, not below it (FW-23): the launch's slip
+ * is read against a speed that runs on the accelerometer and lags 0.05-0.1
+ * m/s, and through each wheel's radius error (+-2 %, learned only at
+ * cruise), so a nominal launch's 4.5 % reads 6-8 % on many cars. At 0.75
+ * the fit starved on 6 of 8 heavy cars, kept a gain of 1, budgeted their
+ * stop for the nominal mass and overran it by 50-140 mm. */
+#define GA_FG_SLIP_FRAC    1.00f
 /* Above this speed only: the firmware's slip is the wheel against v_est,
  * which trails a hard launch (the odometer's slip model over-corrects there)
  * and inflates slip most at low speed. At 1 m/s a nominal launch read past

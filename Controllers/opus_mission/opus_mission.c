@@ -1700,15 +1700,19 @@ void opus_step(OpusState *st, const TtMeas *m, TtCmd *out)
         v_ref = MI_V_CRUISE;
         psi_dot_ref = heading_hold(st);
         /* On a slippery floor (FW-16) the stop starts where it can still
-         * be made at a_brake, the same lead the brake profile itself uses. */
+         * be made at a_brake, the same lead the brake profile itself uses.
+         * So on any floor measured below the nominal one (FW-23): the
+         * mark-started stop asks ~7.4 m/s^2 (it lands s_pred and the dead
+         * time into its 1.5 m), which a budget on 0.86-0.9 of grip cannot
+         * give, while a_brake there still reads the nominal 6.75. */
         if (leg_m(st, odo_eff + 0.5f * st->v_meas * dt, st->leg_start_m) >= MI_LEG_B_M - st->stop_early_m ||
-            (st->a_brake < LI_A_BRAKE &&
+            (st->mu_est < st->mu_nom &&
              st->stop_target_m - odo_eff - st->s_pred - st->v_pred * EN_DEAD_TIME_S - 0.5f * st->v_meas * dt
                  <= st->v_pred * st->v_pred / (2.0f * st->a_brake))) {
             /* The lead the firing rule asked for, logged for the scorer: leg
              * B is then judged against the mark the firmware meant, and the
              * tick's own quantisation stays visible in it. */
-            if (st->a_brake < LI_A_BRAKE) {
+            if (st->mu_est < st->mu_nom) {
                 float need = st->s_pred + st->v_pred * EN_DEAD_TIME_S +
                              st->v_pred * st->v_pred / (2.0f * st->a_brake);
                 float lead = MI_LEG_B_M - (leg_m(st, st->stop_target_m, st->leg_start_m) - need);
