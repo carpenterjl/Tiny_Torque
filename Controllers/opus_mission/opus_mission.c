@@ -135,13 +135,15 @@ float opus_odo_m(const OpusState *st)
                    (float)st->odo_cnt_r * tt_m_per_count(p, st->odo_r)) + st->odo_corr_m;
 }
 
-/* The odometer the mission measures legs with. (Until SEN-02 this added a
- * correction for the sim encoder's integration bias — 22.5 mm over the
- * braking leg. The sim now counts the angle the physics integrated, as a
- * real encoder does, so there is nothing left to correct.) */
+/* The odometer the mission measures legs with: the counts, and the travel
+ * reports held over on the bus have yet to bring (FW-24). Without it a leg
+ * whose datum or end falls in a burst of lost frames is measured on an
+ * odometer 50-100 mm behind the car. (Until SEN-02 this added a correction
+ * for the sim encoder's integration bias; the sim now counts the angle the
+ * physics integrated, as a real encoder does.) */
 static float odo_effective(const OpusState *st)
 {
-    return opus_odo_m(st);
+    return opus_odo_m(st) + st->odo_pend_m;
 }
 
 /* True metres covered since odometer value `from`, on the scale the
@@ -1161,10 +1163,20 @@ void opus_step(OpusState *st, const TtMeas *m, TtCmd *out)
     mpc_l = tt_m_per_count(p, st->odo_l);
     mpc_r = tt_m_per_count(p, st->odo_r);
     {
-        int gl = 0, gr = 0;
+        int gl = 0, gr = 0, both_held;
         dl = enc_delta(st, m, st->odo_l, dt, &gl, &sl);
         dr = enc_delta(st, m, st->odo_r, dt, &gr, &sr);
         glitch = gl || gr;
+        /* Both reports held over is a gap too, not a stop (FW-24): read as
+         * one, the speed fell to zero, the slip guard counted the tick on
+         * the accelerometer, and the held counts were counted again when
+         * they came, 45 mm at cruise each time. */
+        both_held = !glitch && sl == 0.0f && sr == 0.0f &&
+                    m->enc[st->odo_l].st.valid && m->enc[st->odo_r].st.valid;
+        st->enc_held_s[st->odo_l] = (sl > 0.0f || gl || !m->enc[st->odo_l].st.valid)
+                                    ? 0.0f : st->enc_held_s[st->odo_l] + dt;
+        st->enc_held_s[st->odo_r] = (sr > 0.0f || gr || !m->enc[st->odo_r].st.valid)
+                                    ? 0.0f : st->enc_held_s[st->odo_r] + dt;
         /* A rejected delta is a MISSING one, not a zero: a zero beside the
          * other wheel's real travel reads as a sharp yaw (a 4.5 cm step
          * turned the heading 3.6 deg, VAL-11). Take the other wheel's travel
@@ -1175,7 +1187,7 @@ void opus_step(OpusState *st, const TtMeas *m, TtCmd *out)
          * it with the next: the odometer takes the counts as they come
          * (they are exact), the speed each wheel's over its own span, and
          * the differential's yaw is not learned from. */
-        gap = sl != sr || (sl > 0.0f && sl != dt);
+        gap = sl != sr || (sl > 0.0f && sl != dt) || both_held;
     }
     if (glitch) st->fault |= FA_TICK_GLITCH;
     ds_l = (float)dl * mpc_l;
@@ -1450,6 +1462,11 @@ void opus_step(OpusState *st, const TtMeas *m, TtCmd *out)
         }
     }
 
+    /* What the held reports will bring: each odometry wheel has rolled on at
+     * the car's speed since its last (FW-24). */
+    st->odo_pend_m = 0.5f * st->v_meas *
+                     (clampf(st->enc_held_s[st->odo_l], 0.0f, SF_ODO_HOLD_MAX_S) +
+                      clampf(st->enc_held_s[st->odo_r], 0.0f, SF_ODO_HOLD_MAX_S));
     odo_eff = odo_effective(st);
 
     /* Wheel speeds for the slip limiter, from the drives' own speed

@@ -441,6 +441,10 @@
  * encoder on the wheel and 20 480 with it on the motor shaft (SEN-11). Was
  * 400 000 counts/s, which is this at 4096. */
 #define SF_GLITCH_MPS      20.0f
+/* An odometry wheel whose reports are held over (frames lost on the bus) is
+ * taken to have rolled on at the car's speed this long at most; the safety
+ * layer calls it stale at 50 ms (FW-24). */
+#define SF_ODO_HOLD_MAX_S  0.10f
 /* The loop period may wander this far from the rate the host promised at
  * init before the standing check refuses to arm. */
 #define SF_DT_TOL          0.20f

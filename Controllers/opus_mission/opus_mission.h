@@ -86,6 +86,8 @@ typedef struct {
     uint32_t enc_prev_seq[TT_MAX_WHEELS];
     int32_t odo_cnt_l, odo_cnt_r;  /* accepted counts since arm */
     float  odo_corr_m;     /* calibration corrections since arm (slip)        */
+    float  enc_held_s[TT_MAX_WHEELS];  /* s since the wheel's last report (FW-24) */
+    float  odo_pend_m;     /* travel its held reports have yet to bring       */
     float  v_meas;         /* m/s from the tick delta */
     float  v_rear;         /* m/s from the driven wheels — slip diagnostic only */
     float  v_filt;         /* lightly filtered, for the creep loop */

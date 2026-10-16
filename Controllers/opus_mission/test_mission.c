@@ -35,6 +35,11 @@
  * 2 deg off centre. The mission must still pass, having learned the force
  * gain, the gyro bias and the steering trim.
  *
+ * And with the odometry wheels' reports lost on the bus in bursts, one wheel
+ * at a time and both together (FW-24): a report held over brings no travel
+ * and the next brings it all, and every leg must land within TOL_DELAY_MM of
+ * the run without the losses.
+ *
  * Last, routes (NAV-04): the oval and the figure-8 at 2 and 3 m/s and the
  * Opus manoeuvre's route, followed through the same arming, launch and stop,
  * steered by the tracker from the plant's own pose (the navigation filter is
@@ -92,6 +97,14 @@ static CarErr g_err = { 0, 1.0, 0.0, 0.0, 0.0 };
 /* FW-17: the parameters claim no delay, and the drives report the current
  * of the torque acting; the mission must measure the delay itself. */
 static int g_measure_delay = 0;
+/* FW-24: the odometry wheels' reports lost on the bus, in bursts: a held
+ * report keeps its count, sequence and stamp. */
+static int g_bus_loss = 0;
+static int bus_held(uint32_t tick, int right)
+{
+    if (tick % 41u < 2u) return 1;                       /* both, two ticks */
+    return right ? tick % 29u - 11u < 2u : tick % 17u - 5u < 3u;
+}
 #define TOL_GAIN          0.02   /* learned force gain vs the torque scale */
 #define TOL_RT_XTE_MM     40.0   /* route: max cross-track error (regression bound; the
                                     sim judges NAV-02: 50 mm RMS, 150 mm max) */
@@ -199,6 +212,7 @@ static int run(double rate_hz, int glitch, int delay, Legs *out_legs)
     TtCmd  fly[16];                 /* commands in flight, oldest first */
     int    n_fly = 0;
     double iq_meas[TT_MAX_WHEELS] = { 0 };   /* the drives' current, sampled next tick */
+    TtEnc  enc_last[TT_MAX_WHEELS];          /* the last report sent (FW-24) */
     (void)r;
 
     /* Calibration is measured against a plant, and this plant has no tyre
@@ -231,6 +245,10 @@ static int run(double rate_hz, int glitch, int delay, Legs *out_legs)
             m.enc[w].st.valid = 1;
             m.enc[w].st.seq = tick;
             m.enc[w].st.t_us = m.now_us;
+            if (g_bus_loss && tick > 0u && (w == st.odo_l || w == st.odo_r) &&
+                bus_held(tick, w == st.odo_r))
+                m.enc[w] = enc_last[w];
+            enc_last[w] = m.enc[w];
             if (pp->driven_mask & (1u << w)) {
                 m.drv[w].st.valid = 1;
                 m.drv[w].vbus_v = 7.4f;
@@ -294,8 +312,9 @@ static int run(double rate_hz, int glitch, int delay, Legs *out_legs)
         if (st.phase == OPUS_DONE || st.phase == OPUS_FAULT) break;
     }
 
-    printf("=== Opus mission bench @ %.0f Hz%s%s%s ===\n", rate_hz,
+    printf("=== Opus mission bench @ %.0f Hz%s%s%s%s ===\n", rate_hz,
            delay ? (delay == 1 ? ", commands one period late" : ", commands two periods late") : "",
+           g_bus_loss ? ", odometry frames lost in bursts" : "",
            g_err.label ? ", " : "", g_err.label ? g_err.label : "");
     printf("terminated in phase %d after %.2f s, fault=0x%04X\n\n", st.phase, t, st.fault);
 
@@ -552,6 +571,13 @@ int main(void)
         g_measure_delay = 0;
         fails += compare("two periods late, the parameters saying none, measured (FW-17)", &meas, &base,
                          (double)MI_V_CRUISE * 3.0 / 100.0 * 1000.0);   /* measured 2 ticks: planned on 3 */
+    }
+    {
+        Legs lost;
+        g_bus_loss = 1;
+        fails += run(100.0, 0, 0, &lost);
+        g_bus_loss = 0;
+        fails += compare("odometry frames lost in bursts (FW-24)", &lost, &base, 0.0);
     }
     {
         static const CarErr weak = { "motors give 10 % less torque", 0.90, 0.0, 0.0 };
