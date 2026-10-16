@@ -2898,6 +2898,10 @@ namespace AIHWSim.Vehicles
             hub.SetValue("veh/pos_x", p.x);
             hub.SetValue("veh/pos_z", p.z);
             hub.SetValue("veh/yaw_deg", transform.eulerAngles.y);
+            // The body's pitch (nose down +) and its origin's height: what the
+            // forward ranger's floor returns depend on (FW-25).
+            hub.SetValue("veh/pitch_deg", Mathf.DeltaAngle(0f, transform.eulerAngles.x));
+            hub.SetValue("veh/height", p.y);
             // SEN-06: truths the firmware is not given on a realistic design.
             hub.SetValue("veh/soc", BatterySoc);
             hub.SetValue("veh/batt_v", BatteryTerminalV);

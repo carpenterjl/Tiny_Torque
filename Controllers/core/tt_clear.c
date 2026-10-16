@@ -5,6 +5,10 @@
 #include "tt_clear.h"
 
 #include <math.h>
+#include <string.h>
+
+#define TT_CLEAR_DIP_MAX    0.10f   /* rad: the fit's reach either side of the centre */
+#define TT_CLEAR_FLOOR_MOVE 0.04f   /* m: ...and of the cfg's floor                    */
 
 /* Rotate a vector by Z-Y-X Euler angles (yaw about z, then pitch about y,
  * then roll about x), the convention SensorInfo2.rpy_rad uses. */
@@ -53,9 +57,102 @@ static float lower_edge_z(const TtClearCfg *c, int row, int col, float d, float 
     return pz * cb - px * sb;
 }
 
-float tt_clear_step(const TtClearCfg *c, const TtTof *tof, float pitch_rad,
-                    const TtClearPt *path, int n, TtClearOut *out)
+/* A return's height over the world's level (pitch taken out) as the floor
+ * would put it: on the ray `dip` below the zone's centre direction `db`
+ * (body frame), at range d. *g is how much lower it goes per radian more
+ * dip, for the fit. With no dip it is the centre's point exactly. */
+static float floor_zw(const TtClearCfg *c, const float db[3], float dip, float d,
+                      float cb, float sb, float *g)
 {
+    float h = sqrtf(db[0] * db[0] + db[1] * db[1]), hx, z, px, pz;
+    if (dip == 0.0f || !(h > 1e-6f)) {
+        hx = db[0];
+        z = db[2];
+        if (g) *g = d * (h * cb + (h > 1e-6f ? db[0] / h : 0.0f) * z * sb);
+    } else {
+        float cd = cosf(dip), sd = sinf(dip), hd = h * cd + db[2] * sd;
+        z = db[2] * cd - h * sd;            /* the ray tipped down by dip */
+        hx = db[0] / h * hd;
+        if (g) *g = d * (hd * cb + db[0] / h * z * sb);
+    }
+    px = c->pos_m[0] + d * hx;
+    pz = c->pos_m[2] + d * z;
+    return pz * cb - px * sb;
+}
+
+static int is_none(const TtClearCfg *c, const TtTof *tof, int k)
+{
+    float d = tof->range_m[k];
+    return tof->status[k] != 0 || !(d > 0.0f) || (c->max_range_m > 0.0f && d >= c->max_range_m - 1e-3f);
+}
+
+/* The prior's dip: a quarter zone, the middle of a zone's nearer half. */
+static float dip_prior(const TtClearCfg *c)
+{
+    return 0.25f * c->fov_rad / (float)(c->zones_side > 0 ? c->zones_side : 1);
+}
+
+void tt_clear_floor_init(TtClearFloor *f, const TtClearCfg *c)
+{
+    memset(f, 0, sizeof(*f));
+    f->floor_z_m = c->floor_z_m;
+    f->dip_rad = dip_prior(c);
+}
+
+int tt_clear_floor_learn(TtClearFloor *f, const TtClearCfg *c, const TtTof *tof,
+                         float pitch_rad, float keep)
+{
+    /* The prior: a hundredth of a return at a metre on each number, enough
+     * to keep the fit solvable on one row. More drags the dip: the floor's
+     * rows lie between 0.35 and 0.75 m, where its height and the dip all but
+     * trade for each other. */
+    const float w_z = 0.01f, w_dip = 0.01f;
+    int side = c->zones_side > 0 ? c->zones_side : 1, zones = side * side, k, taken = 0;
+    float cb = cosf(pitch_rad), sb = sinf(pitch_rad);
+    if (!tof->st.valid || tof->zones < zones || zones > TT_TOF_MAX_ZONES) return 0;
+    if (!(keep >= 0.0f && keep <= 1.0f)) keep = 1.0f;
+    f->s1 *= keep; f->sg *= keep; f->sgg *= keep; f->sy *= keep; f->sgy *= keep;
+    for (k = 0; k < zones; k++) {
+        float ds[3], db[3], g, zw, d = tof->range_m[k], d0 = f->d_prev[k];
+        if (is_none(c, tof, k)) { f->d_prev[k] = 0.0f; continue; }
+        f->d_prev[k] = d;
+        if (d > TT_CLEAR_FLOOR_NEAR_M || !(d0 > 0.0f) || fabsf(d - d0) >= TT_CLEAR_FLOOR_STILL_M)
+            continue;                                   /* far, or coming at the car */
+        tt_clear_zone_dir(c, k / side, k % side, ds);
+        rotate_rpy(c->rpy_rad, ds, db);
+        if (!(db[2] < 0.0f)) continue;                 /* only a zone looking down meets the floor */
+        zw = floor_zw(c, db, f->dip_rad, d, cb, sb, &g);
+        if (zw - f->floor_z_m >= c->floor_margin_m || f->floor_z_m - zw >= c->floor_margin_m)
+            continue;                                   /* not the floor as it stands */
+        /* zw(dip) - g (dip' - dip) = floor': y = floor' + g dip' */
+        {
+            float y = zw + g * f->dip_rad;
+            f->s1 += 1.0f; f->sg += g; f->sgg += g * g; f->sy += y; f->sgy += g * y;
+        }
+        taken++;
+    }
+    {
+        float a = f->s1 + w_z, b = f->sg, e = f->sgg + w_dip;
+        float r0 = f->sy + w_z * c->floor_z_m, r1 = f->sgy + w_dip * dip_prior(c);
+        float det = a * e - b * b;
+        if (det > 1e-9f) {
+            float z = (r0 * e - b * r1) / det, dip = (a * r1 - b * r0) / det;
+            if (dip > TT_CLEAR_DIP_MAX) dip = TT_CLEAR_DIP_MAX;
+            if (dip < -TT_CLEAR_DIP_MAX) dip = -TT_CLEAR_DIP_MAX;
+            if (z > c->floor_z_m + TT_CLEAR_FLOOR_MOVE) z = c->floor_z_m + TT_CLEAR_FLOOR_MOVE;
+            if (z < c->floor_z_m - TT_CLEAR_FLOOR_MOVE) z = c->floor_z_m - TT_CLEAR_FLOOR_MOVE;
+            f->floor_z_m = z;
+            f->dip_rad = dip;
+        }
+        f->w = f->s1;
+    }
+    return taken;
+}
+
+float tt_clear_step(const TtClearCfg *c, const TtClearFloor *fl, const TtTof *tof,
+                    float pitch_rad, const TtClearPt *path, int n, TtClearOut *out)
+{
+    float fz = fl ? fl->floor_z_m : c->floor_z_m, dip = fl ? fl->dip_rad : 0.0f;
     int side = c->zones_side > 0 ? c->zones_side : 1;
     int zones = side * side, k;
     float cb = cosf(pitch_rad), sb = sinf(pitch_rad);
@@ -74,11 +171,10 @@ float tt_clear_step(const TtClearCfg *c, const TtTof *tof, float pitch_rad,
     }
 
     for (k = 0; k < zones; k++) {
-        float d = tof->range_m[k], ds[3], db[3], px, py, pz;
+        float d = tof->range_m[k], ds[3], db[3], px, py;
         float best = TT_CLEAR_NONE, best_y = 0.0f;
         int i;
-        if (tof->status[k] != 0 || !(d > 0.0f) || (c->max_range_m > 0.0f && d >= c->max_range_m - 1e-3f))
-            continue;
+        if (is_none(c, tof, k)) continue;
         out->n_valid++;
 
         /* The return in the body frame. */
@@ -86,14 +182,14 @@ float tt_clear_step(const TtClearCfg *c, const TtTof *tof, float pitch_rad,
         rotate_rpy(c->rpy_rad, ds, db);
         px = c->pos_m[0] + d * db[0];
         py = c->pos_m[1] + d * db[1];
-        pz = c->pos_m[2] + d * db[2];
 
-        /* The floor: a nose-down body (pitch +) lowers what is ahead of it.
-         * And the ceiling: what the car passes under, judged on the zone's
-         * lower edge (see tt_clear.h). */
+        /* The floor: a nose-down body (pitch +) lowers what is ahead of it,
+         * and a floor return lies on the floor's ray (TtClearFloor). And the
+         * ceiling: what the car passes under, judged on the zone's lower
+         * edge (see tt_clear.h). */
         {
-            float zw = pz * cb - px * sb;
-            if (zw < c->floor_z_m + c->floor_margin_m) { out->n_floor++; continue; }
+            float zw = floor_zw(c, db, dip, d, cb, sb, 0);
+            if (zw < fz + c->floor_margin_m) { out->n_floor++; continue; }
             if (c->roof_z_m > 0.0f && lower_edge_z(c, k / side, k % side, d, cb, sb) > c->roof_z_m) {
                 out->n_floor++;
                 continue;
@@ -131,16 +227,15 @@ float tt_clear_step(const TtClearCfg *c, const TtTof *tof, float pitch_rad,
     return out->clear_m;
 }
 
-int tt_clear_ray(const TtClearCfg *c, const TtTof *tof, float pitch_rad, int zone,
-                 float org[3], float end[3], int *hit)
+int tt_clear_ray(const TtClearCfg *c, const TtClearFloor *fl, const TtTof *tof,
+                 float pitch_rad, int zone, float org[3], float end[3], int *hit)
 {
     int side = c->zones_side > 0 ? c->zones_side : 1, zones = side * side, none, k;
     float d, ds[3], db[3];
     *hit = 0;
     if (!tof->st.valid || tof->zones < zones || zone < 0 || zone >= zones) return 0;
     d = tof->range_m[zone];
-    none = tof->status[zone] != 0 || !(d > 0.0f) ||
-           (c->max_range_m > 0.0f && d >= c->max_range_m - 1e-3f);
+    none = is_none(c, tof, zone);
     if (none) {
         if (!(c->max_range_m > 0.0f)) return 0;
         d = c->max_range_m;
@@ -152,10 +247,24 @@ int tt_clear_ray(const TtClearCfg *c, const TtTof *tof, float pitch_rad, int zon
         end[k] = c->pos_m[k] + d * db[k];
     }
     if (!none) {
-        float cb = cosf(pitch_rad), sb = sinf(pitch_rad);
-        float zw = end[2] * cb - end[0] * sb;
-        *hit = !(zw < c->floor_z_m + c->floor_margin_m) &&
+        float cb = cosf(pitch_rad), sb = sinf(pitch_rad), dip = fl ? fl->dip_rad : 0.0f;
+        float zw = floor_zw(c, db, dip, d, cb, sb, 0);
+        int on_floor = zw < (fl ? fl->floor_z_m : c->floor_z_m) + c->floor_margin_m;
+        *hit = !on_floor &&
                !(c->roof_z_m > 0.0f && lower_edge_z(c, zone / side, zone % side, d, cb, sb) > c->roof_z_m);
+        /* The floor's return ends on the floor's ray: a map takes what the
+         * ray crosses at the car's height as free, and on the zone's centre
+         * the end would lie up to a zone's quarter higher than the floor
+         * judged it, at the foot of whatever stands there. */
+        if (on_floor && dip != 0.0f) {
+            float h = sqrtf(db[0] * db[0] + db[1] * db[1]);
+            if (h > 1e-6f) {
+                float cd = cosf(dip), sd = sinf(dip), hd = h * cd + db[2] * sd;
+                end[0] = c->pos_m[0] + d * db[0] / h * hd;
+                end[1] = c->pos_m[1] + d * db[1] / h * hd;
+                end[2] = c->pos_m[2] + d * (db[2] * cd - h * sd);
+            }
+        }
     }
     return 1;
 }

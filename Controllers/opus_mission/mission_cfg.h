@@ -390,6 +390,19 @@
 #define GA_CL_MARGIN_W_M   0.08f     /* corridor half width beyond the body's:
                                         the tracker's error and the tyres     */
 #define GA_CL_FLOOR_M      0.03f     /* a return within this of the floor is it */
+/* Where the floor is and the angle its returns come in at below their
+ * zones' centres (core/tt_clear.h, TtClearFloor) are fitted to the frames
+ * the car runs steadily through: moving, straight, neither braking nor
+ * pushing hard, where the gyro's pitch is the body's (FW-25). The twin's
+ * floor returns lie a quarter zone below the centre, 18 mm high at 0.75 m
+ * on the centre: 12 of the 30 mm margin, and a car a little nose down under
+ * a long brake, or on its creep with the gyro's pitch leaked away, saw the
+ * floor 0.7 m ahead as something in the way. */
+#define GA_FL_V_MIN        1.0f      /* m/s: slower is not learned from         */
+#define GA_FL_AX_MAX       1.0f      /* m/s^2: ...nor harder acceleration       */
+#define GA_FL_TAU_S        0.5f      /* s: the fit forgets at this (the gyro's
+                                        pitch leaks at EN_PITCH_TAU_S, and the
+                                        fit follows what it leaks)              */
 #define GA_CL_ROOF_M       0.15f     /* above this over the origin the car passes
                                         under it (its top is 0.10 up)            */
 #define GA_CL_STOP_M       0.15f     /* the nose stops this short of the way   */

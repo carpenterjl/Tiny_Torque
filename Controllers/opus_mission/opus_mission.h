@@ -113,6 +113,11 @@ typedef struct {
     float  gyro_bias;      /* rad/s, the gyro's reading at rest while arming */
     float  gb_sum;         /* ...summed over the standing check */
     int    gb_n;
+    float  gq_bias;        /* rad/s, the pitch gyro's bias, read with it: the
+                              pitch integrator leaks over EN_PITCH_TAU_S, and
+                              0.5 deg/s left in it is a degree of pitch that is
+                              not there (FW-25) */
+    float  gq_sum;
     float  ax_bias;        /* m/s^2, the forward accelerometer's bias: read
                               at rest while arming, kept by the odometer (FW-22) */
     float  ab_sum;         /* ...summed over the standing check */
@@ -195,6 +200,7 @@ typedef struct {
     float  clr_dt;         /* s between the last two frames                  */
     float  v_close;        /* m/s what is in the way comes at the car, >= 0  */
     TtClearOut clr_out;    /* the last frame's verdict, for telemetry        */
+    TtClearFloor clr_floor; /* the floor as the ranger sees it (FW-25)       */
 
     /* A detour beside the route (NAV-08): the map the ranger's rays build,
      * the offset profile the tracker follows, the planner's settings. */

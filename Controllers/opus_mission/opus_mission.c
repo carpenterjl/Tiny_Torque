@@ -275,6 +275,7 @@ void opus_reset(OpusState *st)
     memset(st, 0, sizeof(*st));
     st->clr = clr;
     st->clr_on = clr_on;
+    tt_clear_floor_init(&st->clr_floor, &st->clr);
     st->clear_m = TT_CLEAR_NONE;
     st->clr_prev_m = TT_CLEAR_NONE;
     st->det_cfg = dcfg;
@@ -603,6 +604,7 @@ void opus_set_clearance(OpusState *st, const TtClearCfg *c, int on)
 {
     if (c && on) { st->clr = *c; st->clr_on = 1; }
     else { memset(&st->clr, 0, sizeof(st->clr)); st->clr_on = 0; }
+    tt_clear_floor_init(&st->clr_floor, &st->clr);
     st->clear_m = TT_CLEAR_NONE;
     st->clr_prev_m = TT_CLEAR_NONE;
     st->v_close = 0.0f;
@@ -693,7 +695,14 @@ static void clearance(OpusState *st, const TtMeas *m)
     }
     if (n < 2) { path[1].x = GA_CL_LOOK_M; path[1].y = 0.0f; n = 2; }
 
-    tt_clear_step(&st->clr, &m->tof, st->pitch, path, n, &o);
+    /* The floor (FW-25), from the frames the car runs steadily through. */
+    if (driving(st->phase) && st->v_est > GA_FL_V_MIN &&
+        fabsf(st->v_est * st->psi_dot_f) < EN_PITCH_AY_MAX && fabsf(st->ax_corr) < GA_FL_AX_MAX) {
+        float dt_f = (float)(m->tof.st.t_us - st->clr_prev_us) * 1e-6f;
+        if (!(dt_f > 1e-3f && dt_f < GA_CL_FRAME_MAX_S)) dt_f = GA_CL_FRAME_MAX_S;
+        tt_clear_floor_learn(&st->clr_floor, &st->clr, &m->tof, st->pitch, expf(-dt_f / GA_FL_TAU_S));
+    }
+    tt_clear_step(&st->clr, &st->clr_floor, &m->tof, st->pitch, path, n, &o);
     st->clr_out = o;
     st->clear_m = o.clear_m < TT_CLEAR_NONE ? o.clear_m - p->body_nose_m : TT_CLEAR_NONE;
 
@@ -744,7 +753,7 @@ static void map_frame(OpusState *st, const TtMeas *m)
     for (k = 0; k < side * side; k++) {
         float o[3], e[3];
         int hit;
-        if (!tt_clear_ray(c, &m->tof, st->pitch, k, o, e, &hit)) continue;
+        if (!tt_clear_ray(c, &st->clr_floor, &m->tof, st->pitch, k, o, e, &hit)) continue;
         tt_grid_ray(&st->grid,
                     st->pose[0] + cp * o[0] - sp * o[1], st->pose[1] + sp * o[0] + cp * o[1],
                     o[2] * cb - o[0] * sb,
@@ -1108,6 +1117,9 @@ static void fill_log(OpusState *st, const TtMeas *m)
     g->v_pred       = st->v_pred;
     g->gyro_bias    = st->gyro_bias;
     g->ax_bias      = st->ax_bias;
+    g->pitch_deg    = st->pitch * OPUS_RAD2DEG;
+    g->fl_dip_deg   = st->clr_floor.dip_rad * OPUS_RAD2DEG;
+    g->fl_z_m       = st->clr_floor.floor_z_m;
     g->steer_trim   = st->steer_trim;
     g->odo_scale    = st->odo_scale;
     g->f_gain       = st->f_gain;
@@ -1289,7 +1301,7 @@ void opus_step(OpusState *st, const TtMeas *m, TtCmd *out)
             /* FLU: +y is left, so a positive pitch rate is nose down, and a
              * nose-down car's accelerometer reads g*sin(pitch) of braking. */
             float ay_t = st->v_est * st->psi_dot_f;
-            float q = (ay_t < EN_PITCH_AY_MAX && ay_t > -EN_PITCH_AY_MAX) ? m->imu.gyro[1] : 0.0f;
+            float q = (ay_t < EN_PITCH_AY_MAX && ay_t > -EN_PITCH_AY_MAX) ? m->imu.gyro[1] - st->gq_bias : 0.0f;
             st->pitch += (q - st->pitch / EN_PITCH_TAU_S) * dt;
             ax += 9.80665f * st->pitch;
             st->ax_corr = ax;
@@ -1531,8 +1543,10 @@ void opus_step(OpusState *st, const TtMeas *m, TtCmd *out)
             if (ds > 0.002f || ds < -0.002f) st->fault |= FA_ROLLING;
         }
         /* Standing still: whatever the gyro reads is its bias (FW-15). */
-        if (st->phase_t > GA_GB_SETTLE_S && m->imu.st.valid && finitef_(m->imu.gyro[2])) {
+        if (st->phase_t > GA_GB_SETTLE_S && m->imu.st.valid && finitef_(m->imu.gyro[2]) &&
+            finitef_(m->imu.gyro[1])) {
             st->gb_sum += m->imu.gyro[2];
+            st->gq_sum += m->imu.gyro[1];   /* and the pitch gyro's (FW-25) */
             st->gb_n++;
         }
         /* ...and what the accelerometer reads forward is its bias, the
@@ -1544,7 +1558,10 @@ void opus_step(OpusState *st, const TtMeas *m, TtCmd *out)
         if (st->phase_t > SQ_ARM_BRAKE_S + SQ_ARM_ROLL_S) {
             arm_checks(st, m);
             if (st->fault) { st->phase = OPUS_FAULT; break; }
-            if (st->gb_n > 0) st->gyro_bias = st->gb_sum / (float)st->gb_n;
+            if (st->gb_n > 0) {
+                st->gyro_bias = st->gb_sum / (float)st->gb_n;
+                st->gq_bias = st->gq_sum / (float)st->gb_n;
+            }
             if (st->ab_n > 0) st->ax_bias = clampf(st->ab_sum / (float)st->ab_n, -EN_AB_MAX, EN_AB_MAX);
             /* Zero the estimators so the mission's datum is the arm point. */
             st->odo_cnt_l = 0; st->odo_cnt_r = 0; st->odo_corr_m = 0.0f;

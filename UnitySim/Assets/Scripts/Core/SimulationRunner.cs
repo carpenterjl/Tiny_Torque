@@ -669,6 +669,8 @@ namespace AIHWSim.Core
             // live channel set, so a channel that appears later writes rows wider
             // than the header.
             Hub.RegisterChannel("veh/yaw_deg");
+            Hub.RegisterChannel("veh/pitch_deg");
+            Hub.RegisterChannel("veh/height");
             Hub.RegisterChannel("veh/soc");
             Hub.RegisterChannel("veh/batt_v");
             Hub.RegisterChannel("veh/batt_a");
