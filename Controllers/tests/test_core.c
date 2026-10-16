@@ -260,6 +260,27 @@ int main(void)
         CHECK("lash: the reversal completes within ~10 ms",
               near(c.wheel_torque_nm[TT_RL], -2.0f * r * 0.5f, 1e-3) ||
               c.wheel_torque_nm[TT_RL] < -TT_ALLOC_LASH_BAND_NM);
+
+        /* FW-27: at the mission rate the crossing is exactly one tick's
+         * step, and the measured dt jitters around the period. The brake's
+         * first tick must land the same a hair either side of it. */
+        {
+            float t_short;
+            tt_alloc_reset(&a);
+            req.fx_n = 8.0f;
+            for (k = 0; k < 20; k++) tt_alloc_step(&a, fp, &req, &in, 0.01f, &c);
+            req.fx_n = -8.0f;
+            tt_alloc_step(&a, fp, &req, &in, 0.0099987f, &c);
+            t_short = c.wheel_torque_nm[TT_RL];
+            tt_alloc_reset(&a);
+            req.fx_n = 8.0f;
+            for (k = 0; k < 20; k++) tt_alloc_step(&a, fp, &req, &in, 0.01f, &c);
+            req.fx_n = -8.0f;
+            tt_alloc_step(&a, fp, &req, &in, 0.0100013f, &c);
+            CHECK("lash: the brake's first tick is the same a hair either side of dt",
+                  t_short == c.wheel_torque_nm[TT_RL] &&
+                  t_short < -TT_ALLOC_LASH_BAND_NM);
+        }
     }
 
     printf(g_fail ? "%d check(s) FAILED\n" : "all checks passed\n", g_fail);

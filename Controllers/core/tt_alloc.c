@@ -168,12 +168,17 @@ void tt_alloc_step(TtAlloc *a, const TtParams *p, const TtVehReq *req,
             if (fabsf(prev) <= band || (prev > 0.0f) != (t > 0.0f)) {
                 /* Walk from where we are (or the band edge on our side)
                  * toward where the request meets the band; once there, the
-                 * request is free again. */
+                 * request is free again. The end is judged with half a
+                 * step's tolerance, not an exact compare: a cruise-to-brake
+                 * crossing is exactly one tick's step at the mission rate,
+                 * and the measured dt jitters around the period, so x == to
+                 * held the brake's first tick at the band edge whenever the
+                 * tick ran a hair short (FW-27). */
                 float from = clampf(prev, -band, band);
                 float to = clampf(t, -band, band);
                 float step = TT_ALLOC_LASH_SLEW_NMS * dt;
                 float x = from + clampf(to - from, -step, step);
-                t = (x == to) ? t : x;
+                if (fabsf(to - x) > 0.5f * step) t = x;
             }
         }
 
