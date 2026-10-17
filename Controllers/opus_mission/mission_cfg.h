@@ -420,7 +420,9 @@
 #define GA_DT_CELL_M       0.05f     /* the map's cell                          */
 #define GA_DT_AHEAD_M      1.8f      /* the map's window is centred this far ahead:
                                         4.8 m of it from 0.6 m behind the car  */
-#define GA_DT_PERIOD_S     0.2f      /* the path ahead is checked at 5 Hz       */
+#define GA_DT_PERIOD_S     0.2f      /* the path ahead is checked at 5 Hz — and
+                                        every frame while a block holds the car
+                                        with no detour planned (NAV-10)         */
 #define GA_DT_SPREAD_M     0.15f     /* the planner's disc beyond the corridor's:
                                         a zone's return lands up to half a zone
                                         (0.16 m at 3 m) from what it is on      */

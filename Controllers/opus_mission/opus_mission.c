@@ -737,7 +737,9 @@ static void clearance(OpusState *st, const TtMeas *m)
  * the car's height is not. Every GA_DT_PERIOD_S the path ahead (the route,
  * or the detour being driven) is checked against the map, and a block
  * within reach sends the planner over its lattice of offsets, the side the
- * blocking return leaves more room on first. A detour whose ease-out has
+ * blocking return leaves more room on first; while a block holds the route
+ * and no detour is planned, the planner is asked every frame instead, since
+ * at speed the whole plannable window fits inside one period (NAV-10). A detour whose ease-out has
  * not begun is dropped again if the route clears; one the car has driven
  * ends with its ease-back. When no offset passes, nothing changes: the car
  * holds short of the block as before. */
@@ -791,6 +793,14 @@ static void detour_step(OpusState *st, float dt)
         if (tt_detour_plan(c, &st->grid, st->route, s, st->v_pred, st->det_d, s_route, y_route, &nd)) {
             st->det = nd;
             st->n_det++;
+        } else if (!st->det.active) {
+            /* Refused with the way shut and nothing to drive: ask again next
+             * frame, not next period. At 3 m/s everything between "two cells
+             * mapped" and "no ramp room left" fits inside one period, and the
+             * first look lands on the block's first cell as often as not
+             * (NAV-10). The planner's early gates keep the retries cheap, and
+             * a car already driving a detour keeps the period. */
+            st->det_t = GA_DT_PERIOD_S;
         }
     }
 }
