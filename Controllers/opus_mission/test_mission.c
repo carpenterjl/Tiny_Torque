@@ -523,9 +523,9 @@ static int probe_fit_checks(void)
     for (kind = 0; kind < 2; kind++) {
         for (i = 0; i < (int)(sizeof(mus) / sizeof(mus[0])); i++) {
             float af[OPUS_PR_SAMPLES], ar[OPUS_PR_SAMPLES], d[OPUS_PR_SAMPLES];
-            float mu = mus[i], est;
+            float mu = mus[i], est, slope = 0.0f, worst = 0.0f;
             uint32_t seed = 12345u + (uint32_t)i;
-            int n = 0, ok;
+            int n = 0, ok, k;
             for (j = 0; j < 45; j++) {
                 float a_f = j < 5 ? 0.0f : GA_PR_A_MAX * (float)(j - 5) / 40.0f;
                 float a_r = a_f * 0.484f / 0.516f;
@@ -539,12 +539,24 @@ static int probe_fit_checks(void)
                 if (j == 8) d[n] += 0.008f;     /* the gear lash crossed: a tick off */
                 n++;
             }
-            est = opus_probe_mu(af, ar, d, n);
+            est = opus_probe_mu(af, ar, d, n, &slope);
             /* a floor well above what the probe asks reads as good, no more */
             ok = mu > 1.5f ? est > 1.2f : fabsf(est - mu) < 0.05f * mu;
-            printf("  %-28s mu %.2f: the probe finds %.3f from %d samples%s\n",
-                   kind ? "sim tyre (peak slip 10 %)," : "brush tyre (C/Fz 19),", mu, est, n,
-                   ok ? "" : "  <-- FAIL");
+            /* FW-26: the curve the fit kept (slope * g(a, est)) is the slip the
+             * tyre really has at the forces the probe reached, within a tenth
+             * of it, whether or not mu itself was pinned (the 1.6 floor): the
+             * odometry pair's brake slip is read off it. */
+            for (k = 1; k <= 4 && est > 0.0f; k++) {
+                float a = af[n - 1] * 0.2f * (float)k;
+                float fit = slope * 2.0f * est * (1.0f - sqrtf(1.0f - (a / est < 0.999f ? a / est : 0.999f)));
+                float tru = pr_slip(kind, a, mu);
+                float e = fabsf(fit - tru) / tru;
+                if (e > worst) worst = e;
+            }
+            if (!(worst < 0.10f)) ok = 0;
+            printf("  %-28s mu %.2f: the probe finds %.3f, C/Fz %.1f, from %d samples; its curve within %.1f %% of the tyre's slip%s\n",
+                   kind ? "sim tyre (peak slip 10 %)," : "brush tyre (C/Fz 19),", mu, est,
+                   slope > 0.0f ? 1.0f / slope : 0.0f, n, worst * 100.0f, ok ? "" : "  <-- FAIL");
             if (!ok) failures++;
         }
     }

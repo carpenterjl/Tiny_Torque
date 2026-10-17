@@ -420,6 +420,25 @@ static float pr_g(float a, float mu)
     return a < 0.0f ? -s : s;
 }
 
+/* An odometry wheel's slip at a = tyre force / load. The parameters' linear
+ * stiffness is a secant taken where the nominal car brakes; a tyre's curve
+ * bends well before its peak, and on a poor floor the stop runs where it
+ * bends (at 0.6x grip the front pair ran 4 % where the secant said 3 %, and
+ * the odometer read the brake 2 % short, FW-26). Once leg A's probe has
+ * fitted the floor's own curve (FW-18) the slip is read off that: whatever
+ * the tyre, it is the slip the probe measured at these forces. */
+static float odo_slip_k(const OpusState *st, float f, float fz)
+{
+    /* The probe's a is the force the tyre really carries per newton of its
+     * load — the command over the force gain (a heavy car's wheels are
+     * loaded harder than the parameters say), so its curve is read at the
+     * same. Fed the raw command, a car 10 % heavy was read 15 % up the
+     * curve's bend, its speed 1-2 % high, and the slip limiter cut the
+     * stop (run 71: 149 mm past its mark). */
+    if (st->pr_state == 2 && st->pr_slope > 0.0f) return st->pr_slope * pr_g(f / fz * st->f_gain, st->pr_mu);
+    return f / (st->p->slip_stiffness * fz);
+}
+
 /* For each mu the model is a straight line in g, so least squares gives the
  * offset and 1/C at once; the mu with the smallest residual wins, searched
  * coarse and then fine about the best (a few thousand square roots). */
@@ -475,12 +494,13 @@ static float probe_grid(const float *af, const float *ar, const float *d, int n,
 }
 
 /* The fit, then again without the samples it misses by far (GA_PR_OUTLIER). */
-float opus_probe_mu(const float *af, const float *ar, const float *d, int n)
+float opus_probe_mu(const float *af, const float *ar, const float *d, int n, float *slope_out)
 {
     float slope = 0.0f, c = 0.0f, res[OPUS_PR_SAMPLES], srt[OPUS_PR_SAMPLES], med, lim;
     float af2[OPUS_PR_SAMPLES], ar2[OPUS_PR_SAMPLES], d2[OPUS_PR_SAMPLES];
     float mu = probe_grid(af, ar, d, n, &slope, &c);
     int i, j, n2 = 0;
+    if (slope_out) *slope_out = 0.0f;
     if (!(mu > 0.0f)) return 0.0f;
     for (i = 0; i < n; i++) {
         float r = d[i] - c - slope * (pr_g(ar[i], mu) + pr_g(af[i], mu));
@@ -499,9 +519,11 @@ float opus_probe_mu(const float *af, const float *ar, const float *d, int n)
         n2++;
     }
     if (n2 < n && n2 >= GA_PR_MIN_N) {
-        float mu2 = probe_grid(af2, ar2, d2, n2, &slope, &c);
-        if (mu2 > 0.0f) mu = mu2;
+        float slope2 = 0.0f, c2 = 0.0f;
+        float mu2 = probe_grid(af2, ar2, d2, n2, &slope2, &c2);
+        if (mu2 > 0.0f) { mu = mu2; slope = slope2; }
     }
+    if (slope_out) *slope_out = slope;
     return mu;
 }
 
@@ -571,13 +593,18 @@ static void probe_run(OpusState *st)
         st->pr_last_t = -1.0f;
     }
     if (st->pr_state == 1 && (st->pr_bad || st->pr_abort || t >= GA_PR_RAMP_S)) {
+        float slope = 0.0f;
         float mu = (!st->pr_bad && st->pr_cnt >= GA_PR_MIN_N)
-                 ? opus_probe_mu(st->pr_af, st->pr_ar, st->pr_d, st->pr_cnt) : 0.0f;
+                 ? opus_probe_mu(st->pr_af, st->pr_ar, st->pr_d, st->pr_cnt, &slope) : 0.0f;
         st->pr_hold_t = GA_PR_SETTLE_S + st->dly_s;
         if (mu > 0.0f) {
             /* the stop and the budget take GA_PR_USE of it, not GA_MU_USE */
             float mu_use = mu * GA_PR_USE / GA_MU_USE;
             st->pr_mu = mu;
+            /* The curve itself is kept for the odometer (FW-26): a stiffness
+             * off by half (a poor floor, a soft tyre) reads straight off the
+             * fit, within the forces the probe reached. */
+            st->pr_slope = slope > 0.0f ? slope : 0.0f;
             st->pr_state = 2;
             if (mu_use < st->mu_est) st->mu_est = mu_use;
         } else {
@@ -949,12 +976,20 @@ static void longitudinal(OpusState *st, const TtMeas *m,
          * force the parameters promise. Low kt or a heavy car alike, a
          * wheel's real limit is then mu * Fz / f_gain of command (heavier
          * means loaded harder). On a floor measured slippery, also keep the
-         * slip below where the tyre peaks. */
+         * slip below where the tyre peaks: on the curve the probe fitted
+         * (2 mu / C of its own mu and C) where there is one — the
+         * parameters' stiffness put the peak at 7.5 % on a 0.65x floor
+         * whose tyre peaks at 10, and the limiter held the stop a fifth
+         * short of its deceleration (FW-26) — else on the parameters'. */
         ain.mu = p->tyre_mu > 0.0f ? st->mu_est / g : 0.0f;
         ain.slip_max = 0.0f;
         ain.probe_n = st->phase == OPUS_CRUISE_A ? st->pr_n : 0.0f;
-        if (st->mu_est < st->mu_nom && p->slip_stiffness > 0.0f)
-            ain.slip_max = GA_SLIP_PEAK_FRAC * 2.0f * st->mu_est / p->slip_stiffness;
+        if (st->mu_est < st->mu_nom) {
+            if (st->pr_state == 2 && st->pr_slope > 0.0f)
+                ain.slip_max = GA_SLIP_PEAK_FRAC * 2.0f * st->pr_mu * st->pr_slope;
+            else if (p->slip_stiffness > 0.0f)
+                ain.slip_max = GA_SLIP_PEAK_FRAC * 2.0f * st->mu_est / p->slip_stiffness;
+        }
         tt_alloc_step(&st->alloc, p, &req, &ain, m->dt_s, out);
     }
     t_each = n_driven > 0 ? f_motor * p->wheel_radius_m / (float)n_driven : 0.0f;
@@ -1145,6 +1180,7 @@ static void fill_log(OpusState *st, const TtMeas *m)
     g->v_plan       = st->v_plan;
     g->cmd_delay_ms = st->dly_s * 1000.0f;
     g->probe_mu     = st->pr_mu;
+    g->probe_c      = st->pr_slope > 0.0f ? 1.0f / st->pr_slope : 0.0f;
     g->stop_early_m = st->stop_early_m;
     g->clear_m      = st->clear_m < 99.0f ? st->clear_m : 99.0f;
     g->det_d        = st->det_d;
@@ -1225,7 +1261,9 @@ void opus_step(OpusState *st, const TtMeas *m, TtCmd *out)
      * bearings, motor friction — the c0 + c1*v of the drag model, shared by
      * four wheels); only aero is the body's. At cruise that leaves almost
      * nothing, which is why this matters under braking and launch. (A
-     * friction-braked wheel is the separate cal_brake term below.) */
+     * friction-braked wheel is the separate cal_brake term below.)
+     * The stiffness is the parameters' until leg A's probe has fitted the
+     * floor's own curve (FW-18), then that curve (odo_slip_k, FW-26). */
     if (p->slip_stiffness > 0.0f) {
         const float g = 9.80665f;
         float tr = (st->odo_l < 2) ? p->track_front_m : p->track_rear_m;
@@ -1240,9 +1278,9 @@ void opus_step(OpusState *st, const TtMeas *m, TtCmd *out)
         float k_l = 0.0f, k_r = 0.0f, c_l, c_r;
         if (st->v_meas < 0.0f) own = -own;
         if ((p->driven_mask & (1u << st->odo_l)) && fz_l > 0.1f && va > 0.05f)
-            k_l = (now.t_odo[0] / p->wheel_radius_m - own) / (p->slip_stiffness * fz_l);
+            k_l = odo_slip_k(st, now.t_odo[0] / p->wheel_radius_m - own, fz_l);
         if ((p->driven_mask & (1u << st->odo_r)) && fz_r > 0.1f && va > 0.05f)
-            k_r = (now.t_odo[1] / p->wheel_radius_m - own) / (p->slip_stiffness * fz_r);
+            k_r = odo_slip_k(st, now.t_odo[1] / p->wheel_radius_m - own, fz_r);
         k_l = clampf(k_l, -0.3f, 0.3f);
         k_r = clampf(k_r, -0.3f, 0.3f);
         c_l = -ds_l * k_l / (1.0f + k_l);

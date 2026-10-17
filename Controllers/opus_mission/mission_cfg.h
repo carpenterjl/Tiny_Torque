@@ -219,7 +219,9 @@
 #define GA_MU_USE          0.85f
 /* The slip limiter's threshold on a slippery floor: this share of the slip
  * at which the tyre peaks (2 mu / C for the brush tyre), never above
- * slip_max. 8 % is past the peak below mu = 0.68. */
+ * slip_max. 8 % is past the peak below mu = 0.68 on the parameters' C; a
+ * car that probed the floor (FW-18) uses the mu and C the probe fitted
+ * (FW-26: the twin's peak stays at 10 % on every floor). */
 #define GA_SLIP_PEAK_FRAC  0.70f
 
 /* ------------------------------------------- the command delay (FW-17) --

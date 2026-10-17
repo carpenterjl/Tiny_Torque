@@ -180,6 +180,11 @@ typedef struct {
     float  pr_hold_t;      /* s more the odometer stays on v_est            */
     float  pr_amax;        /* the front tyres' force / load reached          */
     float  pr_mu;          /* the floor's peak friction found; 0 = none      */
+    float  pr_slope;       /* 1 / (C/Fz) the fit found with it: the slip a
+                              tyre on this floor adds per unit of force over
+                              load, well below the peak. The odometry pair's
+                              slip under the brake is read off that curve
+                              (FW-26); 0 = the parameters' linear stiffness */
     float  mu_launch;      /* the launch's verdict (FW-16), for if the probe cannot judge */
     float  pr_af[OPUS_PR_SAMPLES];   /* front tyres' force / load, + = braking */
     float  pr_ar[OPUS_PR_SAMPLES];   /* rear tyres', + = driving              */
@@ -298,7 +303,9 @@ void opus_set_clearance(OpusState *st, const TtClearCfg *c, int on);
 /* The friction probe's fit (FW-18): the floor's peak mu from n samples of
  * front and rear tyre force / load (af + = braking, ar + = driving) and the
  * rear-less-front slip d, on the brush tyre d = c + (g(ar) + g(af)) / C,
- * g(a) = 2 mu (1 - sqrt(1 - a / mu)). 0 if they do not fit. */
-float opus_probe_mu(const float *af, const float *ar, const float *d, int n);
+ * g(a) = 2 mu (1 - sqrt(1 - a / mu)). 0 if they do not fit. slope_out (may be
+ * NULL) takes the 1 / C found with it: the slip curve is then
+ * slope * g(a, mu), and the odometry pair's brake slip is read off it (FW-26). */
+float opus_probe_mu(const float *af, const float *ar, const float *d, int n, float *slope_out);
 
 #endif /* OPUS_MISSION_H */

@@ -60,3 +60,4 @@ TT_LOG(ax_bias,      "m/s^2", "forward accelerometer bias: read at rest while ar
 TT_LOG(pitch_deg,    "deg",   "body pitch, nose down +: the gyro's, leaking to 0 (FW-13); the ranger's returns are judged with it (NAV-05)")
 TT_LOG(fl_dip_deg,   "deg",   "the ranger's floor returns come in this far below their zones' centres, as learned (FW-25)")
 TT_LOG(fl_z_m,       "m",     "the floor below the body origin as the ranger sees it, learned (FW-25)")
+TT_LOG(probe_c,      "",      "C/Fz the probe fitted with its mu: the tyre's slip stiffness per unit load on this floor, which the odometry pair's brake slip is read with (FW-26); 0 = not probed")
